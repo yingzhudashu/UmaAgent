@@ -6,18 +6,22 @@ import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core"
 import type {
   Approval,
   Attachment,
+  AuditRecord,
+  BackgroundTask,
   KnowledgeSource,
+  MemoryFact,
   ModelRef,
   PlanStep,
   Run,
   RunStatus,
   Session,
+  SessionMode,
   SessionSnapshot,
   TranscriptItem,
 } from "@uma-agent/protocol";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 type Row = Record<string, unknown>;
 
 function rows(statement: StatementSync, ...params: SQLInputValue[]): Row[] {
@@ -45,11 +49,31 @@ function parseJson<T>(value: unknown, fallback: T): T {
   }
 }
 
+function redactAudit(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value
+      .replace(/(Bearer\s+)[^\s]+/gi, "$1[REDACTED]")
+      .replace(/(api[_-]?key|password|secret|token)(\s*[:=]\s*)[^\s,}]+/gi, "$1$2[REDACTED]");
+  }
+  if (Array.isArray(value)) return value.map(redactAudit);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) =>
+        /(authorization|cookie|api[_-]?key|password|secret|token)/i.test(key)
+          ? [key, "[REDACTED]"]
+          : [key, redactAudit(item)],
+      ),
+    );
+  }
+  return value;
+}
+
 function toSession(value: Row): Session {
   return {
     id: text(value.id),
+    mode: text(value.mode) as SessionMode,
     title: text(value.title),
-    workspace: text(value.workspace),
+    ...(value.workspace ? { workspace: text(value.workspace) } : {}),
     model: { provider: text(value.model_provider), id: text(value.model_id) },
     thinkingLevel: text(value.thinking_level) as ThinkingLevel,
     createdAt: integer(value.created_at),
@@ -70,8 +94,12 @@ function toAttachment(value: Row): Attachment {
 function toPlanStep(value: Row): PlanStep {
   return {
     id: text(value.id),
+    position: integer(value.position),
     title: text(value.title),
     status: text(value.status) as PlanStep["status"],
+    ...(value.started_at ? { startedAt: integer(value.started_at) } : {}),
+    ...(value.completed_at ? { completedAt: integer(value.completed_at) } : {}),
+    ...(value.error ? { error: text(value.error) } : {}),
   };
 }
 
@@ -100,6 +128,7 @@ export class UmaDatabase {
     this.db
       .prepare("UPDATE messages SET status = 'cancelled', updated_at = ? WHERE status = 'streaming'")
       .run(now);
+    this.markActiveBackgroundTasksInterrupted();
   }
 
   close(): void {
@@ -111,8 +140,9 @@ export class UmaDatabase {
   }
 
   createSession(input: {
+    mode: SessionMode;
     title: string;
-    workspace: string;
+    workspace?: string;
     model: ModelRef;
     thinkingLevel: ThinkingLevel;
   }): Session {
@@ -120,12 +150,13 @@ export class UmaDatabase {
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO sessions(id,title,workspace,model_provider,model_id,thinking_level,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO sessions(id,mode,title,workspace,model_provider,model_id,thinking_level,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
+        input.mode,
         input.title,
-        input.workspace,
+        input.workspace ?? null,
         input.model.provider,
         input.model.id,
         input.thinkingLevel,
@@ -143,16 +174,17 @@ export class UmaDatabase {
 
   updateSession(
     id: string,
-    patch: { title?: string; model?: ModelRef; thinkingLevel?: ThinkingLevel },
+    patch: { title?: string; mode?: SessionMode; model?: ModelRef; thinkingLevel?: ThinkingLevel },
   ): Session {
     const current = this.getSession(id);
     const now = Date.now();
     this.db
       .prepare(
-        "UPDATE sessions SET title=?, model_provider=?, model_id=?, thinking_level=?, revision=revision+1, updated_at=? WHERE id=?",
+        "UPDATE sessions SET title=?, mode=?, model_provider=?, model_id=?, thinking_level=?, revision=revision+1, updated_at=? WHERE id=?",
       )
       .run(
         patch.title ?? current.title,
+        patch.mode ?? current.mode,
         patch.model?.provider ?? current.model.provider,
         patch.model?.id ?? current.model.id,
         patch.thinkingLevel ?? current.thinkingLevel,
@@ -329,16 +361,25 @@ export class UmaDatabase {
 
   updateRun(
     id: string,
-    patch: { status?: RunStatus; route?: Run["route"]; reasoningSummary?: string; error?: string },
+    patch: {
+      status?: RunStatus;
+      route?: Run["route"];
+      reasoningSummary?: string;
+      error?: string;
+      clarificationCount?: number;
+    },
   ): Run {
     const current = this.getRun(id);
     this.db
-      .prepare("UPDATE runs SET status=?, route=?, reasoning_summary=?, error=?, updated_at=? WHERE id=?")
+      .prepare(
+        "UPDATE runs SET status=?, route=?, reasoning_summary=?, error=?, clarification_count=?, updated_at=? WHERE id=?",
+      )
       .run(
         patch.status ?? current.status,
         patch.route ?? current.route ?? null,
         patch.reasoningSummary ?? current.reasoningSummary ?? null,
         patch.error ?? current.error ?? null,
+        patch.clarificationCount ?? current.clarificationCount ?? 0,
         Date.now(),
         id,
       );
@@ -356,8 +397,13 @@ export class UmaDatabase {
     return this.listPlan(runId);
   }
 
-  updatePlanStep(id: string, status: PlanStep["status"]): void {
-    this.db.prepare("UPDATE plan_steps SET status=? WHERE id=?").run(status, id);
+  updatePlanStep(id: string, status: PlanStep["status"], error?: string): void {
+    const now = Date.now();
+    this.db
+      .prepare(
+        "UPDATE plan_steps SET status=?, started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END, completed_at=CASE WHEN ? IN ('completed','failed') THEN ? ELSE completed_at END, error=? WHERE id=?",
+      )
+      .run(status, status, now, status, now, error ?? null, id);
   }
 
   listPlan(runId: string): PlanStep[] {
@@ -376,6 +422,7 @@ export class UmaDatabase {
       status: text(value.status) as RunStatus,
       ...(value.route ? { route: text(value.route) as Exclude<Run["route"], undefined> } : {}),
       ...(value.reasoning_summary ? { reasoningSummary: text(value.reasoning_summary) } : {}),
+      clarificationCount: integer(value.clarification_count),
       plan: this.listPlan(id),
       ...(value.error ? { error: text(value.error) } : {}),
       createdAt: integer(value.created_at),
@@ -451,7 +498,7 @@ export class UmaDatabase {
       runId: text(value.run_id),
       toolCallId: text(value.tool_call_id),
       toolName: text(value.tool_name),
-      input: parseJson(value.input_json, null),
+      input: redactAudit(parseJson(value.input_json, null)),
       status: text(value.status) as Approval["status"],
       createdAt: integer(value.created_at),
       ...(value.resolved_at ? { resolvedAt: integer(value.resolved_at) } : {}),
@@ -614,5 +661,240 @@ export class UmaDatabase {
 
   deleteWebSession(hash: string): void {
     this.db.prepare("DELETE FROM web_sessions WHERE id_hash=?").run(hash);
+  }
+
+  findAwaitingRun(sessionId: string): Run | undefined {
+    const value = row(
+      this.db.prepare(
+        "SELECT id FROM runs WHERE session_id=? AND status='awaiting_input' ORDER BY updated_at DESC LIMIT 1",
+      ),
+      sessionId,
+    );
+    return value ? this.getRun(text(value.id)) : undefined;
+  }
+
+  createBackgroundTask(input: {
+    id: string;
+    parentSessionId?: string;
+    sessionId: string;
+    prompt: string;
+  }): BackgroundTask {
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO background_tasks(id,parent_session_id,session_id,prompt,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+      )
+      .run(input.id, input.parentSessionId ?? null, input.sessionId, input.prompt, "pending", now, now);
+    return this.getBackgroundTask(input.id);
+  }
+
+  getBackgroundTask(id: string): BackgroundTask {
+    const value = row(this.db.prepare("SELECT * FROM background_tasks WHERE id=?"), id);
+    if (!value) throw new Error(`Background task not found: ${id}`);
+    return {
+      id: text(value.id),
+      ...(value.parent_session_id ? { parentSessionId: text(value.parent_session_id) } : {}),
+      sessionId: text(value.session_id),
+      prompt: text(value.prompt),
+      status: text(value.status) as BackgroundTask["status"],
+      ...(value.result ? { result: text(value.result) } : {}),
+      ...(value.error ? { error: text(value.error) } : {}),
+      createdAt: integer(value.created_at),
+      updatedAt: integer(value.updated_at),
+    };
+  }
+
+  listBackgroundTasks(): BackgroundTask[] {
+    return rows(this.db.prepare("SELECT id FROM background_tasks ORDER BY updated_at DESC")).map((value) =>
+      this.getBackgroundTask(text(value.id)),
+    );
+  }
+
+  updateBackgroundTask(
+    id: string,
+    patch: { status?: BackgroundTask["status"]; result?: string; error?: string },
+  ): BackgroundTask {
+    const current = this.getBackgroundTask(id);
+    this.db
+      .prepare("UPDATE background_tasks SET status=?,result=?,error=?,updated_at=? WHERE id=?")
+      .run(
+        patch.status ?? current.status,
+        patch.result ?? current.result ?? null,
+        patch.error ?? current.error ?? null,
+        Date.now(),
+        id,
+      );
+    return this.getBackgroundTask(id);
+  }
+
+  addMemoryFact(input: {
+    sessionId?: string;
+    scope: MemoryFact["scope"];
+    content: string;
+    confidence: number;
+    sourceRunId?: string;
+    status: MemoryFact["status"];
+  }): MemoryFact {
+    const id = randomUUID();
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO memory_facts(id,session_id,scope,content,confidence,source_run_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        input.sessionId ?? null,
+        input.scope,
+        input.content,
+        input.confidence,
+        input.sourceRunId ?? null,
+        input.status,
+        now,
+        now,
+      );
+    return this.getMemoryFact(id);
+  }
+
+  getMemoryFact(id: string): MemoryFact {
+    const value = row(this.db.prepare("SELECT * FROM memory_facts WHERE id=?"), id);
+    if (!value) throw new Error(`Memory fact not found: ${id}`);
+    return {
+      id: text(value.id),
+      scope: text(value.scope) as MemoryFact["scope"],
+      content: text(value.content),
+      confidence: Number(value.confidence),
+      ...(value.source_run_id ? { sourceRunId: text(value.source_run_id) } : {}),
+      status: text(value.status) as MemoryFact["status"],
+      createdAt: integer(value.created_at),
+      updatedAt: integer(value.updated_at),
+    };
+  }
+
+  listMemoryFacts(status?: MemoryFact["status"]): MemoryFact[] {
+    const values = status
+      ? rows(this.db.prepare("SELECT id FROM memory_facts WHERE status=? ORDER BY updated_at DESC"), status)
+      : rows(this.db.prepare("SELECT id FROM memory_facts ORDER BY updated_at DESC"));
+    return values.map((value) => this.getMemoryFact(text(value.id)));
+  }
+
+  updateMemoryFact(id: string, status: MemoryFact["status"]): MemoryFact {
+    const result = this.db
+      .prepare("UPDATE memory_facts SET status=?,updated_at=? WHERE id=?")
+      .run(status, Date.now(), id);
+    if (result.changes === 0) throw new Error(`Memory fact not found: ${id}`);
+    return this.getMemoryFact(id);
+  }
+
+  deleteMemoryFact(id: string): void {
+    const result = this.db.prepare("DELETE FROM memory_facts WHERE id=?").run(id);
+    if (result.changes === 0) throw new Error(`Memory fact not found: ${id}`);
+  }
+
+  addAudit(input: {
+    runId: string;
+    kind: AuditRecord["kind"];
+    name: string;
+    input?: unknown;
+    output?: unknown;
+    status: string;
+    durationMs?: number;
+    usage?: unknown;
+    error?: string;
+  }): AuditRecord {
+    const id = randomUUID();
+    this.db
+      .prepare(
+        "INSERT INTO audit_events(id,run_id,kind,name,input_json,output_json,status,duration_ms,usage_json,error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        input.runId,
+        input.kind,
+        input.name,
+        input.input === undefined ? null : JSON.stringify(redactAudit(input.input)),
+        input.output === undefined ? null : JSON.stringify(redactAudit(input.output)),
+        input.status,
+        input.durationMs ?? null,
+        input.usage === undefined ? null : JSON.stringify(input.usage),
+        input.error ?? null,
+        Date.now(),
+      );
+    return this.getAudit(id);
+  }
+
+  addModelCall(input: {
+    runId: string;
+    provider: string;
+    model: string;
+    role: string;
+    status: string;
+    durationMs?: number;
+    usage?: unknown;
+    error?: string;
+  }): void {
+    this.db
+      .prepare(
+        "INSERT INTO model_calls(id,run_id,provider,model,role,status,duration_ms,usage_json,error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        randomUUID(),
+        input.runId,
+        input.provider,
+        input.model,
+        input.role,
+        input.status,
+        input.durationMs ?? null,
+        input.usage === undefined ? null : JSON.stringify(redactAudit(input.usage)),
+        input.error ?? null,
+        Date.now(),
+      );
+  }
+
+  listAudit(runId: string): AuditRecord[] {
+    return rows(this.db.prepare("SELECT * FROM audit_events WHERE run_id=? ORDER BY created_at"), runId).map(
+      (value) => ({
+        id: text(value.id),
+        runId: text(value.run_id),
+        kind: text(value.kind) as AuditRecord["kind"],
+        name: text(value.name),
+        ...(value.input_json ? { input: parseJson(value.input_json, null) } : {}),
+        ...(value.output_json ? { output: parseJson(value.output_json, null) } : {}),
+        status: text(value.status),
+        ...(value.duration_ms !== null && value.duration_ms !== undefined
+          ? { durationMs: integer(value.duration_ms) }
+          : {}),
+        ...(value.usage_json ? { usage: parseJson(value.usage_json, null) } : {}),
+        ...(value.error ? { error: text(value.error) } : {}),
+        createdAt: integer(value.created_at),
+      }),
+    );
+  }
+
+  private getAudit(id: string): AuditRecord {
+    const value = row(this.db.prepare("SELECT * FROM audit_events WHERE id=?"), id);
+    if (!value) throw new Error(`Audit record not found: ${id}`);
+    return {
+      id: text(value.id),
+      runId: text(value.run_id),
+      kind: text(value.kind) as AuditRecord["kind"],
+      name: text(value.name),
+      ...(value.input_json ? { input: parseJson(value.input_json, null) } : {}),
+      ...(value.output_json ? { output: parseJson(value.output_json, null) } : {}),
+      status: text(value.status),
+      ...(value.duration_ms !== null && value.duration_ms !== undefined
+        ? { durationMs: integer(value.duration_ms) }
+        : {}),
+      ...(value.usage_json ? { usage: parseJson(value.usage_json, null) } : {}),
+      ...(value.error ? { error: text(value.error) } : {}),
+      createdAt: integer(value.created_at),
+    };
+  }
+
+  markActiveBackgroundTasksInterrupted(): void {
+    this.db
+      .prepare(
+        "UPDATE background_tasks SET status='interrupted',error='Server restarted during execution',updated_at=? WHERE status IN ('pending','running')",
+      )
+      .run(Date.now());
   }
 }

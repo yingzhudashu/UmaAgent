@@ -65,7 +65,7 @@ describe("UmaClient", () => {
     socket.open();
     await tick();
     socket.message({
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: "session-1",
       sequence: 1,
       timestamp: 2,
@@ -73,7 +73,7 @@ describe("UmaClient", () => {
       payload: {},
     });
     socket.message({
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: "session-1",
       sequence: 3,
       timestamp: 3,

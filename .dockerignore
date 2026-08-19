@@ -4,4 +4,5 @@ node_modules
 **/dist
 coverage
 uma.config.json
+!docker/uma.config.json
 workspace

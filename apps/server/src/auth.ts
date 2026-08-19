@@ -19,11 +19,18 @@ export class AuthService {
     return actual.length === expected.length && timingSafeEqual(actual, expected);
   }
 
-  requestAuthenticated(request: FastifyRequest): boolean {
+  bearerAuthenticated(request: FastifyRequest): boolean {
     const bearer = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-    if (bearer && this.tokenMatches(bearer)) return true;
+    return Boolean(bearer && this.tokenMatches(bearer));
+  }
+
+  webSessionAuthenticated(request: FastifyRequest): boolean {
     const cookie = request.cookies[COOKIE_NAME];
     return Boolean(cookie && this.runtime.database.hasWebSession(hash(cookie)));
+  }
+
+  requestAuthenticated(request: FastifyRequest): boolean {
+    return this.bearerAuthenticated(request) || this.webSessionAuthenticated(request);
   }
 
   loginAllowed(ip: string): boolean {
@@ -44,23 +51,30 @@ export class AuthService {
     );
   }
 
-  createWebSession(reply: FastifyReply): void {
+  createWebSession(reply: FastifyReply, options: { crossOrigin: boolean; secure: boolean }): void {
     const token = randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + this.runtime.config.auth.webSessionHours * 3_600_000;
     this.runtime.database.putWebSession(hash(token), expiresAt);
     reply.setCookie(COOKIE_NAME, token, {
       httpOnly: true,
-      sameSite: "strict",
-      secure:
-        this.runtime.config.server.host !== "127.0.0.1" && this.runtime.config.server.host !== "localhost",
+      sameSite: options.crossOrigin && options.secure ? "none" : "strict",
+      secure: options.secure,
       path: "/",
       expires: new Date(expiresAt),
     });
   }
 
-  logout(request: FastifyRequest, reply: FastifyReply): void {
+  logout(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    options: { crossOrigin: boolean; secure: boolean },
+  ): void {
     const token = request.cookies[COOKIE_NAME];
     if (token) this.runtime.database.deleteWebSession(hash(token));
-    reply.clearCookie(COOKIE_NAME, { path: "/" });
+    reply.clearCookie(COOKIE_NAME, {
+      path: "/",
+      sameSite: options.crossOrigin && options.secure ? "none" : "strict",
+      secure: options.secure,
+    });
   }
 }

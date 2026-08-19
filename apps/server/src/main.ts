@@ -7,12 +7,22 @@ const configPath =
   "uma.config.json";
 const config = await loadConfig(configPath);
 const runtime = new UmaRuntime(config);
-await runtime.start();
-const app = await createServer(runtime);
-await app.listen({ host: config.server.host, port: config.server.port });
+let app: Awaited<ReturnType<typeof createServer>> | undefined;
+try {
+  await runtime.start();
+  app = await createServer(runtime);
+  await app.listen({ host: config.server.host, port: config.server.port });
+} catch (error) {
+  await app?.close().catch(() => {});
+  await runtime.stop().catch(() => {});
+  throw error;
+}
 
+let stopping = false;
 const shutdown = async () => {
-  await app.close();
+  if (stopping) return;
+  stopping = true;
+  await app?.close();
   await runtime.stop();
   process.exit(0);
 };

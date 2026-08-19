@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL_VERSION = 2 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -8,6 +8,9 @@ const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T
 
 export const ModelRefSchema = Strict({ provider: Id, id: Id });
 export type ModelRef = Static<typeof ModelRefSchema>;
+
+export const SessionModeSchema = Type.Union([Type.Literal("workspace"), Type.Literal("assistant")]);
+export type SessionMode = Static<typeof SessionModeSchema>;
 
 export const ThinkingLevelSchema = Type.Union([
   Type.Literal("off"),
@@ -21,6 +24,7 @@ export const ThinkingLevelSchema = Type.Union([
 
 export const PlanStepSchema = Strict({
   id: Id,
+  position: Type.Integer({ minimum: 0 }),
   title: Type.String({ minLength: 1, maxLength: 500 }),
   status: Type.Union([
     Type.Literal("pending"),
@@ -28,6 +32,9 @@ export const PlanStepSchema = Strict({
     Type.Literal("completed"),
     Type.Literal("failed"),
   ]),
+  startedAt: Type.Optional(Timestamp),
+  completedAt: Type.Optional(Timestamp),
+  error: Type.Optional(Type.String()),
 });
 export type PlanStep = Static<typeof PlanStepSchema>;
 
@@ -79,6 +86,7 @@ export const RunSchema = Strict({
   status: RunStatusSchema,
   route: Type.Optional(Type.Union([Type.Literal("direct"), Type.Literal("clarify"), Type.Literal("plan")])),
   reasoningSummary: Type.Optional(Type.String()),
+  clarificationCount: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })),
   plan: Type.Array(PlanStepSchema),
   error: Type.Optional(Type.String()),
   createdAt: Timestamp,
@@ -88,8 +96,9 @@ export type Run = Static<typeof RunSchema>;
 
 export const SessionSchema = Strict({
   id: Id,
+  mode: SessionModeSchema,
   title: Type.String({ minLength: 1, maxLength: 200 }),
-  workspace: Type.String({ minLength: 1 }),
+  workspace: Type.Optional(Type.String({ minLength: 1 })),
   model: ModelRefSchema,
   thinkingLevel: ThinkingLevelSchema,
   createdAt: Timestamp,
@@ -153,6 +162,10 @@ export const EventTypeSchema = Type.Union([
   Type.Literal("approval.requested"),
   Type.Literal("approval.resolved"),
   Type.Literal("server.status"),
+  Type.Literal("run.awaiting_input"),
+  Type.Literal("run.resumed"),
+  Type.Literal("task.updated"),
+  Type.Literal("memory.updated"),
 ]);
 export type AgentEventType = Static<typeof EventTypeSchema>;
 
@@ -173,6 +186,7 @@ export const ErrorResponseSchema = Strict({
 export type ErrorResponse = Static<typeof ErrorResponseSchema>;
 
 export const CreateSessionRequestSchema = Strict({
+  mode: Type.Optional(SessionModeSchema),
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
   workspace: Type.Optional(Type.String({ minLength: 1 })),
   model: Type.Optional(ModelRefSchema),
@@ -204,3 +218,58 @@ export const HealthSchema = Strict({
   activeRuns: Type.Integer({ minimum: 0 }),
 });
 export type Health = Static<typeof HealthSchema>;
+
+export const BackgroundTaskStatusSchema = Type.Union([
+  Type.Literal("pending"),
+  Type.Literal("running"),
+  Type.Literal("completed"),
+  Type.Literal("failed"),
+  Type.Literal("cancelled"),
+  Type.Literal("interrupted"),
+]);
+export type BackgroundTaskStatus = Static<typeof BackgroundTaskStatusSchema>;
+
+export const BackgroundTaskSchema = Strict({
+  id: Id,
+  parentSessionId: Type.Optional(Id),
+  sessionId: Id,
+  prompt: Type.String({ minLength: 1, maxLength: 1_000_000 }),
+  status: BackgroundTaskStatusSchema,
+  result: Type.Optional(Type.String()),
+  error: Type.Optional(Type.String()),
+  createdAt: Timestamp,
+  updatedAt: Timestamp,
+});
+export type BackgroundTask = Static<typeof BackgroundTaskSchema>;
+
+export const MemoryFactSchema = Strict({
+  id: Id,
+  scope: Type.Union([Type.Literal("global"), Type.Literal("session")]),
+  content: Type.String({ minLength: 1 }),
+  confidence: Type.Number({ minimum: 0, maximum: 1 }),
+  sourceRunId: Type.Optional(Id),
+  status: Type.Union([Type.Literal("active"), Type.Literal("candidate"), Type.Literal("rejected")]),
+  createdAt: Timestamp,
+  updatedAt: Timestamp,
+});
+export type MemoryFact = Static<typeof MemoryFactSchema>;
+
+export const AuditRecordSchema = Strict({
+  id: Id,
+  runId: Id,
+  kind: Type.Union([
+    Type.Literal("model"),
+    Type.Literal("tool"),
+    Type.Literal("approval"),
+    Type.Literal("run"),
+  ]),
+  name: Id,
+  input: Type.Optional(Type.Unknown()),
+  output: Type.Optional(Type.Unknown()),
+  status: Type.String({ minLength: 1 }),
+  durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  usage: Type.Optional(Type.Unknown()),
+  error: Type.Optional(Type.String()),
+  createdAt: Timestamp,
+});
+export type AuditRecord = Static<typeof AuditRecordSchema>;

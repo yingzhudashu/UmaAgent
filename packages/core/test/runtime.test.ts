@@ -47,6 +47,12 @@ async function runtimeWith(responses: FauxResponseStep[]): Promise<UmaRuntime> {
     skillsDirs: [],
     mcpServers: [],
     runtime: { maxParallelSessions: 2, approvalTimeoutMs: 2_000, toolTimeoutMs: 2_000 },
+    roles: {
+      default: { provider: "faux", id: "model" },
+      reasoning: { provider: "faux", id: "model" },
+      fast: { provider: "faux", id: "model" },
+      vision: { provider: "faux", id: "model" },
+    },
   };
   const runtime = new UmaRuntime(config);
   const faux = fauxProvider({
@@ -143,5 +149,27 @@ describe("UmaRuntime preflight", () => {
     await approval;
     expect((await terminal).status).toBe("completed");
     expect(runtime.getSnapshot(session.id).transcript.at(-1)?.content).toBe("approved result");
+  });
+
+  it("denies pending approvals and cancels the run during shutdown", async () => {
+    const runtime = await runtimeWith([
+      decision("direct"),
+      fauxAssistantMessage([fauxToolCall("shell", { command: "echo ok" })]),
+    ]);
+    const session = await runtime.createSession();
+    let approvalStatus: string | undefined;
+    const requested = new Promise<void>((resolve) => {
+      runtime.subscribe((event) => {
+        if (event.sessionId !== session.id) return;
+        if (event.type === "approval.requested") resolve();
+        if (event.type === "approval.resolved") approvalStatus = (event.payload as { status: string }).status;
+      });
+    });
+    const terminal = waitForTerminal(runtime, session.id);
+    runtime.sendMessage(session.id, { messageId: crypto.randomUUID(), text: "run shell" });
+    await requested;
+    await runtime.stop();
+    expect((await terminal).status).toBe("cancelled");
+    expect(approvalStatus).toBe("denied");
   });
 });

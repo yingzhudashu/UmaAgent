@@ -3,8 +3,9 @@ PRAGMA journal_mode = WAL;
 
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
+  mode TEXT NOT NULL CHECK (mode IN ('workspace','assistant')),
   title TEXT NOT NULL,
-  workspace TEXT NOT NULL,
+  workspace TEXT,
   model_provider TEXT NOT NULL,
   model_id TEXT NOT NULL,
   thinking_level TEXT NOT NULL,
@@ -23,6 +24,7 @@ CREATE TABLE runs (
   route TEXT,
   reasoning_summary TEXT,
   error TEXT,
+  clarification_count INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -34,6 +36,9 @@ CREATE TABLE plan_steps (
   position INTEGER NOT NULL,
   title TEXT NOT NULL,
   status TEXT NOT NULL
+  ,started_at INTEGER
+  ,completed_at INTEGER
+  ,error TEXT
 );
 CREATE UNIQUE INDEX plan_steps_position ON plan_steps(run_id, position);
 
@@ -98,6 +103,61 @@ CREATE TABLE memory_items (
 );
 CREATE VIRTUAL TABLE memory_fts USING fts5(id UNINDEXED, content, tokenize='trigram');
 
+CREATE TABLE memory_facts (
+  id TEXT PRIMARY KEY,
+  session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL CHECK (scope IN ('global','session')),
+  content TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  source_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  status TEXT NOT NULL CHECK (status IN ('active','candidate','rejected')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX memory_facts_scope_status ON memory_facts(scope,status,updated_at DESC);
+
+CREATE TABLE background_tasks (
+  id TEXT PRIMARY KEY,
+  parent_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  prompt TEXT NOT NULL,
+  status TEXT NOT NULL,
+  result TEXT,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX background_tasks_updated ON background_tasks(updated_at DESC);
+
+CREATE TABLE audit_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  input_json TEXT,
+  output_json TEXT,
+  status TEXT NOT NULL,
+  duration_ms INTEGER,
+  usage_json TEXT,
+  error TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX audit_events_run_created ON audit_events(run_id,created_at);
+
+CREATE TABLE model_calls (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  role TEXT NOT NULL,
+  status TEXT NOT NULL,
+  duration_ms INTEGER,
+  usage_json TEXT,
+  error TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX model_calls_run_created ON model_calls(run_id,created_at);
+
 CREATE TABLE context_summaries (
   session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   through_sequence INTEGER NOT NULL,
@@ -127,4 +187,4 @@ CREATE TABLE web_sessions (
   created_at INTEGER NOT NULL
 );
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;

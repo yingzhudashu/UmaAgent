@@ -2,8 +2,14 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { Box, Input, ProcessTerminal, Spacer, Text, TuiMainScreen } from "@earendil-works/pi-tui";
-import { UmaClient } from "@uma-agent/client";
-import type { AgentEventEnvelope, Approval, Session, SessionSnapshot } from "@uma-agent/protocol";
+import { UmaClient, UmaClientError } from "@uma-agent/client";
+import {
+  type AgentEventEnvelope,
+  type Approval,
+  PROTOCOL_VERSION,
+  type Session,
+  type SessionSnapshot,
+} from "@uma-agent/protocol";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "chat";
@@ -203,14 +209,75 @@ async function sessionCommand(): Promise<void> {
   if (action === "list") {
     for (const session of await client.listSessions())
       console.log(
-        `${session.id}\t${session.title}\t${session.model.provider}/${session.model.id}\t${session.workspace}`,
+        `${session.id}\t${session.mode}\t${session.title}\t${session.model.provider}/${session.model.id}\t${session.workspace ?? "-"}`,
       );
   } else if (action === "create") {
-    console.log((await client.createSession(positionals[1] ? { title: positionals[1] } : {})).id);
+    const mode = valueAfter("--mode") === "assistant" ? "assistant" : "workspace";
+    console.log(
+      (await client.createSession({ mode, ...(positionals[1] ? { title: positionals[1] } : {}) })).id,
+    );
   } else if (action === "delete" && positionals[1]) await client.deleteSession(positionals[1]);
   else if (action === "rename" && positionals[1] && positionals[2])
     await client.updateSession(positionals[1], { title: positionals.slice(2).join(" ") });
   else throw new Error("uma session list|create [title]|delete <id>|rename <id> <title>");
+}
+
+async function taskCommand(): Promise<void> {
+  const action = positionals[0] ?? "list";
+  if (action === "start") {
+    const prompt = positionals.slice(1).join(" ").trim();
+    if (!prompt) throw new Error("uma task start <prompt>");
+    console.log(JSON.stringify(await client.createTask(prompt), null, 2));
+  } else if (action === "list") {
+    for (const task of await client.listTasks()) console.log(`${task.id}\t${task.status}\t${task.prompt}`);
+  } else if (action === "show" && positionals[1])
+    console.log(JSON.stringify(await client.getTask(positionals[1]), null, 2));
+  else if (action === "cancel" && positionals[1])
+    console.log(JSON.stringify(await client.cancelTask(positionals[1]), null, 2));
+  else throw new Error("uma task start <prompt>|list|show <id>|cancel <id>");
+}
+
+async function memoryCommand(): Promise<void> {
+  const action = positionals[0] ?? "list";
+  if (action === "list" || action === "review") {
+    const status = action === "review" ? "candidate" : undefined;
+    for (const fact of await client.listMemoryFacts(status))
+      console.log(`${fact.id}\t${fact.status}\t${fact.confidence.toFixed(2)}\t${fact.content}`);
+    return;
+  }
+  const id = positionals[1];
+  if (!id) throw new Error("Memory fact id is required");
+  const status = action === "accept" ? "active" : action === "reject" ? "rejected" : undefined;
+  if (!status) throw new Error("uma memory list|review|accept <id>|reject <id>");
+  console.log(JSON.stringify(await client.reviewMemoryFact(id, status), null, 2));
+}
+
+async function auditCommand(): Promise<void> {
+  if (positionals[0] !== "run" || !positionals[1]) throw new Error("uma audit run <run-id>");
+  console.log(JSON.stringify(await client.listAudit(positionals[1]), null, 2));
+}
+
+async function runCommand(): Promise<void> {
+  const prompt = positionals.join(" ").trim();
+  if (!prompt) throw new Error("uma run --json <prompt>");
+  const session = await chooseInitialSession();
+  client.connectEvents();
+  const done = new Promise<void>((resolve) => {
+    const unsubscribe = client.subscribe(session.id, (event) => {
+      console.log(JSON.stringify(event));
+      if (event.type !== "run.updated") return;
+      const status = (event.payload as { status?: string }).status;
+      if (!["completed", "failed", "cancelled", "interrupted", "awaiting_input"].includes(status ?? ""))
+        return;
+      unsubscribe();
+      resolve();
+    });
+  });
+  const run = await client.sendMessage(session.id, prompt);
+  console.log(
+    JSON.stringify({ type: "run.accepted", sessionId: session.id, runId: run.runId, status: run.status }),
+  );
+  await done;
 }
 
 async function skillCommand(): Promise<void> {
@@ -235,16 +302,47 @@ async function knowledgeCommand(): Promise<void> {
     console.log(`${item.id}\t${item.name}\t${item.documentCount}\t${item.path}`);
 }
 
+async function doctorCommand(): Promise<void> {
+  const health = await client.health();
+  let authenticated = false;
+  let models: Array<{ provider: string; id: string }> = [];
+  try {
+    models = await client.listModels();
+    authenticated = true;
+  } catch (error) {
+    if (!(error instanceof UmaClientError) || error.status !== 401) throw error;
+  }
+  const protocolCompatible = health.protocolVersion === PROTOCOL_VERSION;
+  const result = {
+    ok: health.status === "ok" && authenticated && protocolCompatible,
+    server,
+    status: health.status,
+    version: health.version,
+    protocolVersion: health.protocolVersion,
+    protocolCompatible,
+    authenticated,
+    activeRuns: health.activeRuns,
+    models,
+  };
+  console.log(JSON.stringify(result, null, 2));
+  if (!result.ok) process.exitCode = 1;
+}
+
 async function main(): Promise<void> {
   if (command === "chat") return chat();
-  if (command === "session" || command === "sessions") await sessionCommand();
+  if (command === "run") await runCommand();
+  else if (command === "session" || command === "sessions") await sessionCommand();
   else if (command === "skill" || command === "skills") await skillCommand();
   else if (command === "mcp") await mcpCommand();
   else if (command === "knowledge") await knowledgeCommand();
-  else if (command === "doctor") console.log(JSON.stringify(await client.health(), null, 2));
+  else if (command === "doctor") await doctorCommand();
+  else if (command === "status") await doctorCommand();
+  else if (command === "task") await taskCommand();
+  else if (command === "memory") await memoryCommand();
+  else if (command === "audit") await auditCommand();
   else
     console.log(
-      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa session list|create|delete|rename\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa doctor",
+      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa session list|create|delete|rename\numa task start|list|show|cancel\numa memory list|review|accept|reject\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa doctor",
     );
   client.close();
 }

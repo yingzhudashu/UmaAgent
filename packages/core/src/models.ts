@@ -1,4 +1,6 @@
 import { createModels, createProvider, envApiKeyAuth, type Model, type Models } from "@earendil-works/pi-ai";
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
+import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import type { ModelRef } from "@uma-agent/protocol";
@@ -22,7 +24,7 @@ function toModel(config: UmaModelConfig): Model<UmaModelConfig["api"]> {
 export class ModelRegistry {
   readonly models: Models;
 
-  constructor(config: UmaConfig) {
+  constructor(private readonly config: UmaConfig) {
     const models = createModels();
     const groups = new Map<string, UmaModelConfig[]>();
     for (const model of config.models)
@@ -43,6 +45,8 @@ export class ModelRegistry {
           api: {
             "openai-responses": openAIResponsesApi(),
             "openai-completions": openAICompletionsApi(),
+            "anthropic-messages": anthropicMessagesApi(),
+            "google-generative-ai": googleGenerativeAIApi(),
           },
         }),
       );
@@ -54,6 +58,10 @@ export class ModelRegistry {
     const model = this.models.getModel(ref.provider, ref.id);
     if (!model) throw new Error(`Unknown model ${ref.provider}/${ref.id}`);
     return model as Model<UmaModelConfig["api"]>;
+  }
+
+  forRole(role: keyof UmaConfig["roles"]): Model<UmaModelConfig["api"]> {
+    return this.get(this.config.roles[role]);
   }
 
   list(): ModelRef[] {

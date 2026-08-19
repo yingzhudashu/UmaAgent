@@ -1,16 +1,13 @@
 {
   "server": {
-    "host": "127.0.0.1",
+    "host": "0.0.0.0",
     "port": 3210,
-    "stateDir": ".uma",
-    "workspaceRoots": ["."],
-    "webOrigins": ["http://127.0.0.1:3210", "http://127.0.0.1:3211"],
+    "stateDir": "/data/state",
+    "workspaceRoots": ["/data/workspace"],
+    "webOrigins": ["http://127.0.0.1:3210"],
     "maxUploadBytes": 20971520
   },
-  "auth": {
-    "tokenEnv": "UMA_AUTH_TOKEN",
-    "webSessionHours": 168
-  },
+  "auth": { "tokenEnv": "UMA_AUTH_TOKEN", "webSessionHours": 168 },
   "providers": {
     "openai": { "driver": "openai", "baseUrl": "https://www.fastaitoken.com", "apiKeyEnv": "OPENAI_API_KEY" }
   },
@@ -31,11 +28,7 @@
     "vision": { "provider": "openai", "id": "gpt-5.6-sol" }
   },
   "defaultThinkingLevel": "medium",
-  "skillsDirs": [".uma/skills"],
+  "skillsDirs": ["/data/state/skills"],
   "mcpServers": [],
-  "runtime": {
-    "maxParallelSessions": 4,
-    "approvalTimeoutMs": 120000,
-    "toolTimeoutMs": 60000
-  }
+  "runtime": { "maxParallelSessions": 4, "approvalTimeoutMs": 120000, "toolTimeoutMs": 60000 }
 }

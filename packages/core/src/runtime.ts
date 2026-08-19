@@ -19,6 +19,7 @@ import {
 import type {
   Approval,
   Attachment,
+  BackgroundTask,
   CreateSessionRequest,
   ModelRef,
   Run,
@@ -33,7 +34,9 @@ import { EventHub, type EventListener } from "./events.js";
 import { KnowledgeService } from "./knowledge.js";
 import { McpManager } from "./mcp.js";
 import { ModelRegistry } from "./models.js";
+import { PermissionPolicy } from "./permissions.js";
 import { SkillRegistry } from "./skills.js";
+import { StateLock } from "./state-lock.js";
 import { createBuiltinTools } from "./tools.js";
 import type {
   ContextSummary,
@@ -104,6 +107,10 @@ function decisionFrom(value: unknown): PreflightDecision {
   };
 }
 
+function isSecretLike(value: string): boolean {
+  return /(api[_-]?key|bearer\s+|password|secret|token\s*[:=]|-----BEGIN)/i.test(value);
+}
+
 export class UmaRuntime {
   readonly database: UmaDatabase;
   readonly knowledge: KnowledgeService;
@@ -116,10 +123,22 @@ export class UmaRuntime {
   private readonly queueTails = new Map<string, Promise<void>>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly approvals = new Map<string, PendingApproval>();
+  private readonly stateLock: StateLock;
+  readonly permissions = new PermissionPolicy();
+  private readonly taskSemaphore = new Semaphore(4);
+  private readonly taskControllers = new Map<string, AbortController>();
   private started = false;
+  private stopping = false;
+  private stopPromise: Promise<void> | undefined;
 
   constructor(readonly config: UmaConfig) {
-    this.database = new UmaDatabase(config.server.stateDir);
+    this.stateLock = StateLock.acquire(config.server.stateDir);
+    try {
+      this.database = new UmaDatabase(config.server.stateDir);
+    } catch (error) {
+      this.stateLock.release();
+      throw error;
+    }
     this.knowledge = new KnowledgeService(this.database);
     this.models = new ModelRegistry(config);
     this.skills = new SkillRegistry(config.skillsDirs);
@@ -129,6 +148,7 @@ export class UmaRuntime {
   }
 
   async start(): Promise<void> {
+    if (this.stopping || this.stopPromise) throw new Error("UmaRuntime cannot restart after stopping");
     if (this.started) throw new Error("UmaRuntime is already started");
     await this.workspacePolicy.initialize();
     await this.skills.refresh();
@@ -137,15 +157,18 @@ export class UmaRuntime {
   }
 
   async stop(): Promise<void> {
+    this.stopPromise ??= this.stopInternal();
+    return this.stopPromise;
+  }
+
+  private async stopInternal(): Promise<void> {
+    this.stopping = true;
+    for (const id of [...this.approvals.keys()]) this.resolveApproval(id, false);
     for (const controller of this.controllers.values()) controller.abort();
     await Promise.allSettled(this.queueTails.values());
-    for (const [id, pending] of this.approvals) {
-      clearTimeout(pending.timer);
-      pending.resolve(false);
-      this.approvals.delete(id);
-    }
     await this.mcp.close();
     this.database.close();
+    this.stateLock.release();
     this.started = false;
   }
 
@@ -164,6 +187,67 @@ export class UmaRuntime {
   listModels(): ModelRef[] {
     return this.models.list();
   }
+  listTasks(): BackgroundTask[] {
+    return this.database.listBackgroundTasks();
+  }
+  getTask(id: string): BackgroundTask {
+    return this.database.getBackgroundTask(id);
+  }
+  async createTask(prompt: string, parentSessionId?: string): Promise<BackgroundTask> {
+    if (!prompt.trim()) throw new Error("Task prompt is required");
+    const parent = parentSessionId ? this.database.getSession(parentSessionId) : undefined;
+    const session = await this.createSession({
+      mode: parent?.mode ?? "assistant",
+      ...(parent?.workspace ? { workspace: parent.workspace } : {}),
+      ...(parent?.model ? { model: parent.model } : {}),
+    });
+    const task = this.database.createBackgroundTask({
+      id: randomUUID(),
+      sessionId: session.id,
+      prompt,
+      ...(parentSessionId ? { parentSessionId } : {}),
+    });
+    this.events.emit(session.id, undefined, "task.updated", task);
+    void this.executeTask(task.id);
+    return task;
+  }
+  cancelTask(id: string): BackgroundTask {
+    const task = this.database.getBackgroundTask(id);
+    this.taskControllers.get(id)?.abort();
+    if (task.status === "running") {
+      try {
+        this.cancel(task.sessionId);
+      } catch {
+        /* task may be between runs */
+      }
+    }
+    if (["pending", "running"].includes(task.status)) {
+      const updated = this.database.updateBackgroundTask(id, {
+        status: "cancelled",
+        error: "Cancelled by user",
+      });
+      this.events.emit(task.sessionId, undefined, "task.updated", updated);
+      return updated;
+    }
+    return task;
+  }
+  listMemoryFacts(status?: "active" | "candidate" | "rejected") {
+    return this.database.listMemoryFacts(status);
+  }
+  reviewMemoryFact(id: string, status: "active" | "candidate" | "rejected") {
+    const fact = this.database.updateMemoryFact(id, status);
+    if (fact.sourceRunId) {
+      const run = this.database.getRun(fact.sourceRunId);
+      this.events.emit(run.sessionId, run.id, "memory.updated", fact);
+    }
+    return fact;
+  }
+  deleteMemoryFact(id: string): void {
+    this.database.deleteMemoryFact(id);
+  }
+  audit(runId: string) {
+    return this.database.listAudit(runId);
+  }
   listSkills(): SkillSummary[] {
     return this.skills.list();
   }
@@ -172,17 +256,80 @@ export class UmaRuntime {
   }
 
   async createSession(input: CreateSessionRequest = {}): Promise<Session> {
-    const workspace = await this.workspacePolicy.validateWorkspace(
-      input.workspace ?? (this.config.server.workspaceRoots[0] as string),
-    );
+    const mode = input.mode ?? "workspace";
+    const workspace =
+      mode === "workspace"
+        ? await this.workspacePolicy.validateWorkspace(
+            input.workspace ?? (this.config.server.workspaceRoots[0] as string),
+          )
+        : undefined;
+    if (mode === "assistant" && input.workspace)
+      throw new Error("Assistant sessions cannot bind a workspace");
     const model = input.model ?? this.config.defaultModel;
     this.models.get(model);
     return this.database.createSession({
+      mode,
       title: input.title ?? "New session",
-      workspace,
+      ...(workspace ? { workspace } : {}),
       model,
       thinkingLevel: this.config.defaultThinkingLevel,
     });
+  }
+
+  private async executeTask(id: string): Promise<void> {
+    const release = await this.taskSemaphore.acquire();
+    const task = this.database.getBackgroundTask(id);
+    if (task.status !== "pending") {
+      release();
+      return;
+    }
+    const controller = new AbortController();
+    this.taskControllers.set(id, controller);
+    try {
+      const running = this.database.updateBackgroundTask(id, { status: "running" });
+      this.events.emit(running.sessionId, undefined, "task.updated", running);
+      const run = this.sendMessage(task.sessionId, { messageId: randomUUID(), text: task.prompt });
+      await new Promise<void>((resolve) => {
+        const off = this.subscribe((event) => {
+          if (event.runId !== run.id || event.type !== "run.updated") return;
+          const status = (event.payload as Run).status;
+          if (!["completed", "failed", "cancelled", "interrupted"].includes(status)) return;
+          off();
+          const snapshot = this.database.getSnapshot(task.sessionId);
+          const final = [...snapshot.transcript]
+            .reverse()
+            .find((item) => item.runId === run.id && item.role === "assistant");
+          const updated = this.database.updateBackgroundTask(
+            id,
+            status === "completed"
+              ? { status, ...(final?.content ? { result: final.content } : {}) }
+              : {
+                  status: status as BackgroundTask["status"],
+                  ...((event.payload as Run).error ? { error: (event.payload as Run).error } : {}),
+                },
+          );
+          this.events.emit(task.sessionId, undefined, "task.updated", updated);
+          resolve();
+        });
+        controller.signal.addEventListener(
+          "abort",
+          () => {
+            off();
+            resolve();
+          },
+          { once: true },
+        );
+      });
+    } catch (error) {
+      const updated = this.database.updateBackgroundTask(id, {
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.events.emit(task.sessionId, undefined, "task.updated", updated);
+    } finally {
+      this.taskControllers.delete(id);
+      release();
+    }
   }
 
   updateSession(
@@ -201,10 +348,23 @@ export class UmaRuntime {
   }
 
   sendMessage(sessionId: string, input: SendMessageRequest): Run {
+    if (!this.started || this.stopping) throw new Error("UmaRuntime is not accepting new runs");
     const session = this.database.getSession(sessionId);
     const attachmentIds = input.attachmentIds ?? [];
     for (const id of attachmentIds) this.database.validateAttachmentForSession(id, sessionId);
-    const { run, created } = this.database.createRun(sessionId, input.messageId);
+    const awaiting = this.database.findAwaitingRun(sessionId);
+    if (awaiting && (awaiting.clarificationCount ?? 0) >= 3) {
+      const failed = this.database.updateRun(awaiting.id, {
+        status: "failed",
+        error: "Clarification limit exceeded",
+      });
+      this.events.emit(sessionId, awaiting.id, "run.updated", failed);
+      throw new Error("Clarification limit exceeded; send a new message to start another run");
+    }
+    const continuation = awaiting && (awaiting.clarificationCount ?? 0) < 3 ? awaiting : undefined;
+    const { run, created } = continuation
+      ? { run: continuation, created: true }
+      : this.database.createRun(sessionId, input.messageId);
     if (!created) return run;
     this.database.insertMessage({
       id: input.messageId,
@@ -216,9 +376,31 @@ export class UmaRuntime {
       payload: { role: "user", content: input.text, timestamp: Date.now() },
       attachmentIds,
     });
+    if (continuation) {
+      this.database.updateRun(run.id, {
+        clarificationCount: (run.clarificationCount ?? 0) + 1,
+        status: "queued",
+      });
+      this.events.emit(sessionId, run.id, "run.resumed", {
+        run: this.database.getRun(run.id),
+        clarification: input.text,
+      });
+    }
     this.events.emit(sessionId, run.id, "message.completed", this.database.getMessage(input.messageId));
     const previous = this.queueTails.get(sessionId) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(() => this.executeRun(session, run.id, input));
+    const originalPrompt = continuation
+      ? this.database.getMessage(continuation.messageId).content
+      : undefined;
+    const next = previous
+      .catch(() => {})
+      .then(() =>
+        this.executeRun(
+          session,
+          run.id,
+          input,
+          continuation ? `${originalPrompt}\n\nClarification: ${input.text}` : undefined,
+        ),
+      );
     const tail = next.finally(() => {
       if (this.queueTails.get(sessionId) === tail) this.queueTails.delete(sessionId);
     });
@@ -234,6 +416,13 @@ export class UmaRuntime {
 
   resolveApproval(id: string, approved: boolean): Approval {
     const approval = this.database.resolveApproval(id, approved);
+    this.database.addAudit({
+      runId: approval.runId,
+      kind: "approval",
+      name: approval.toolName,
+      input: { toolCallId: approval.toolCallId },
+      status: approved ? "approved" : "denied",
+    });
     const pending = this.approvals.get(id);
     if (pending) {
       clearTimeout(pending.timer);
@@ -272,6 +461,7 @@ export class UmaRuntime {
     prompt: string,
     mode: SendMessageRequest["mode"],
     signal: AbortSignal,
+    runId: string,
   ): Promise<PreflightDecision> {
     const force =
       mode === "direct"
@@ -279,6 +469,7 @@ export class UmaRuntime {
         : mode === "plan"
           ? "You must choose plan."
           : "Choose the cheapest suitable route.";
+    const startedAt = Date.now();
     const response = await this.models.models.completeSimple(
       this.models.get(session.model),
       {
@@ -288,9 +479,26 @@ export class UmaRuntime {
       },
       { signal, temperature: 0 },
     );
+    this.database.addModelCall({
+      runId,
+      provider: session.model.provider,
+      model: session.model.id,
+      role: "default",
+      status: response.stopReason,
+      durationMs: Date.now() - startedAt,
+    });
     if (response.stopReason === "error" || response.stopReason === "aborted")
       throw new Error(response.errorMessage ?? "Preflight failed");
     const decision = decisionFrom(extractJson(contentText(response.content)));
+    this.database.addAudit({
+      runId,
+      kind: "model",
+      name: `${session.model.provider}/${session.model.id}:preflight`,
+      output: decision,
+      status: response.stopReason,
+      usage: response.usage,
+      durationMs: Date.now() - startedAt,
+    });
     if (decision.route === "clarify" && decision.questions.length === 0)
       throw new Error("Clarification route requires questions");
     if (decision.route === "plan" && decision.steps.length === 0) decision.steps = [decision.goal];
@@ -301,15 +509,35 @@ export class UmaRuntime {
     sessionAtQueueTime: Session,
     runId: string,
     input: SendMessageRequest,
+    promptOverride?: string,
   ): Promise<void> {
     const release = await this.semaphore.acquire();
+    if (this.stopping) {
+      this.database.updateRun(runId, { status: "cancelled", error: "Server is shutting down" });
+      this.events.emit(sessionAtQueueTime.id, runId, "run.updated", this.database.getRun(runId));
+      release();
+      return;
+    }
     const controller = new AbortController();
     this.controllers.set(sessionAtQueueTime.id, controller);
     try {
       const session = this.database.getSession(sessionAtQueueTime.id);
       this.database.updateRun(runId, { status: "preflight" });
+      this.database.addAudit({
+        runId,
+        kind: "run",
+        name: "status",
+        input: { status: "preflight" },
+        status: "started",
+      });
       this.events.emit(session.id, runId, "run.updated", this.database.getRun(runId));
-      const decision = await this.preflight(session, input.text, input.mode ?? "auto", controller.signal);
+      const decision = await this.preflight(
+        session,
+        promptOverride ?? input.text,
+        input.mode ?? "auto",
+        controller.signal,
+        runId,
+      );
       this.database.updateRun(runId, { route: decision.route, reasoningSummary: decision.reasoningSummary });
       if (decision.route === "clarify") {
         const content = decision.questions.map((question, index) => `${index + 1}. ${question}`).join("\n");
@@ -340,15 +568,24 @@ export class UmaRuntime {
         this.database.updateRun(runId, { status: "awaiting_input" });
         this.events.emit(session.id, runId, "message.completed", message);
         this.events.emit(session.id, runId, "run.updated", this.database.getRun(runId));
+        this.events.emit(session.id, runId, "run.awaiting_input", {
+          run: this.database.getRun(runId),
+          questions: decision.questions,
+        });
         return;
       }
       if (decision.route === "plan") {
         this.database.setPlan(runId, decision.steps);
         this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+        const first = this.database.listPlan(runId)[0];
+        if (first) {
+          this.database.updatePlanStep(first.id, "running");
+          this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+        }
       }
       this.database.updateRun(runId, { status: "running" });
       this.events.emit(session.id, runId, "run.updated", this.database.getRun(runId));
-      await this.runAgent(session, runId, input, decision, controller.signal);
+      await this.runAgent(session, runId, input, decision, controller.signal, promptOverride);
       if (controller.signal.aborted) throw new DOMException("Run cancelled", "AbortError");
       if (decision.route === "plan") {
         this.database.updateRun(runId, { status: "verifying" });
@@ -358,6 +595,14 @@ export class UmaRuntime {
         this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
       }
       this.database.updateRun(runId, { status: "completed" });
+      this.database.addAudit({
+        runId,
+        kind: "run",
+        name: "status",
+        input: { status: "completed" },
+        status: "completed",
+      });
+      await this.extractMemories(session, runId, controller.signal);
       this.events.emit(session.id, runId, "run.updated", this.database.getRun(runId));
     } catch (error) {
       const cancelled =
@@ -366,10 +611,67 @@ export class UmaRuntime {
         status: cancelled ? "cancelled" : "failed",
         error: error instanceof Error ? error.message : String(error),
       });
+      this.database.addAudit({
+        runId,
+        kind: "run",
+        name: "status",
+        input: { status: cancelled ? "cancelled" : "failed" },
+        status: cancelled ? "cancelled" : "failed",
+        ...(error instanceof Error ? { error: error.message } : {}),
+      });
+      for (const step of this.database.listPlan(runId)) {
+        if (step.status === "running" || step.status === "pending")
+          this.database.updatePlanStep(
+            step.id,
+            "failed",
+            error instanceof Error ? error.message : String(error),
+          );
+      }
       this.events.emit(sessionAtQueueTime.id, runId, "run.updated", this.database.getRun(runId));
     } finally {
       this.controllers.delete(sessionAtQueueTime.id);
       release();
+    }
+  }
+
+  private async extractMemories(session: Session, runId: string, signal: AbortSignal): Promise<void> {
+    try {
+      const transcript = this.database
+        .getSnapshot(session.id)
+        .transcript.filter((item) => item.runId === runId && item.role === "user")
+        .map((item) => item.content)
+        .join("\n");
+      if (!transcript) return;
+      const response = await this.models.models.completeSimple(
+        this.models.forRole("reasoning"),
+        {
+          systemPrompt:
+            "Extract durable user facts only. Return JSON array of objects with content, confidence (0..1), and scope (global|session). Return [] when none. Never extract secrets or hidden reasoning.",
+          messages: [{ role: "user", content: transcript, timestamp: Date.now() }],
+        },
+        { signal, temperature: 0 },
+      );
+      if (response.stopReason === "error" || response.stopReason === "aborted") return;
+      const values = extractJson(contentText(response.content));
+      if (!Array.isArray(values)) return;
+      for (const value of values) {
+        if (!value || typeof value !== "object") continue;
+        const item = value as Record<string, unknown>;
+        const content = typeof item.content === "string" ? item.content.trim() : "";
+        const confidence = typeof item.confidence === "number" ? item.confidence : 0;
+        const scope = item.scope === "global" ? "global" : "session";
+        if (!content || isSecretLike(content) || confidence < 0 || confidence > 1) continue;
+        this.database.addMemoryFact({
+          ...(scope === "session" ? { sessionId: session.id } : {}),
+          scope,
+          content,
+          confidence,
+          sourceRunId: runId,
+          status: confidence >= 0.95 ? "active" : "candidate",
+        });
+      }
+    } catch {
+      // Memory extraction is advisory and never changes run success.
     }
   }
 
@@ -379,6 +681,7 @@ export class UmaRuntime {
     input: SendMessageRequest,
     decision: PreflightDecision,
     signal: AbortSignal,
+    promptOverride?: string,
   ): Promise<void> {
     const userMessage = this.database.getMessage(input.messageId);
     const historyState = await this.compactContext(
@@ -403,7 +706,7 @@ export class UmaRuntime {
     const attachmentText = input.attachmentIds?.length
       ? `\n\nAttachments: ${input.attachmentIds.join(", ")}. Use attachment_read when needed.`
       : "";
-    const prompt = `${input.text}${planText}${attachmentText}`;
+    const prompt = `${promptOverride ?? input.text}${planText}${attachmentText}`;
     const tools = [
       ...createBuiltinTools({
         session,
@@ -412,7 +715,7 @@ export class UmaRuntime {
         workspacePolicy: this.workspacePolicy,
         toolTimeoutMs: this.config.runtime.toolTimeoutMs,
       }),
-      ...this.mcp.tools(),
+      ...(session.mode === "workspace" ? this.mcp.tools() : []),
     ];
     let turns = 0;
     const agent = new Agent({
@@ -427,7 +730,9 @@ export class UmaRuntime {
       toolExecution: "parallel",
       shouldStopAfterTurn: () => ++turns >= 40,
       beforeToolCall: async ({ toolCall, args }, toolSignal) => {
-        if (toolCall.name !== "shell" && !toolCall.name.startsWith("mcp_")) return undefined;
+        const permission = this.permissions.decide(session.mode, toolCall.name);
+        if (!permission.allowed) return { block: true, reason: permission.reason };
+        if (!permission.requiresApproval) return undefined;
         const approved = await this.requestApproval(
           session.id,
           runId,
@@ -549,10 +854,36 @@ export class UmaRuntime {
           status,
           payload: event.message,
         });
+        const session = this.database.getSession(sessionId);
+        this.database.addModelCall({
+          runId,
+          provider: session.model.provider,
+          model: session.model.id,
+          role: "default",
+          status: event.message.stopReason,
+          usage: event.message.usage,
+          ...(event.message.errorMessage ? { error: event.message.errorMessage } : {}),
+        });
+        this.database.addAudit({
+          runId,
+          kind: "model",
+          name: `${session.model.provider}/${session.model.id}`,
+          output: { text: item.content },
+          status: event.message.stopReason,
+          usage: event.message.usage,
+          ...(event.message.errorMessage ? { error: event.message.errorMessage } : {}),
+        });
         this.events.emit(sessionId, runId, "message.completed", item);
         assistantItem = undefined;
       } else if (event.type === "tool_execution_start") {
         this.database.createToolCall({ id: event.toolCallId, runId, name: event.toolName, args: event.args });
+        this.database.addAudit({
+          runId,
+          kind: "tool",
+          name: event.toolName,
+          input: event.args,
+          status: "started",
+        });
         const item = this.database.insertMessage({
           sessionId,
           runId,
@@ -569,6 +900,13 @@ export class UmaRuntime {
         });
       } else if (event.type === "tool_execution_end") {
         this.database.completeToolCall(event.toolCallId, event.result, event.isError);
+        this.database.addAudit({
+          runId,
+          kind: "tool",
+          name: event.toolName,
+          output: event.result,
+          status: event.isError ? "error" : "completed",
+        });
         const messageId = toolMessages.get(event.toolCallId);
         if (messageId) {
           const content =
@@ -677,6 +1015,13 @@ export class UmaRuntime {
     signal: AbortSignal,
   ): Promise<boolean> {
     const approval = this.database.createApproval({ sessionId, runId, toolCallId, toolName, args });
+    this.database.addAudit({
+      runId,
+      kind: "approval",
+      name: toolName,
+      input: { toolCallId },
+      status: "pending",
+    });
     this.events.emit(sessionId, runId, "approval.requested", approval);
     return new Promise<boolean>((resolve) => {
       const finish = (approved: boolean) => {
@@ -689,6 +1034,13 @@ export class UmaRuntime {
         clearTimeout(pending.timer);
         this.approvals.delete(approval.id);
         const expired = this.database.expireApproval(approval.id);
+        this.database.addAudit({
+          runId,
+          kind: "approval",
+          name: toolName,
+          input: { toolCallId },
+          status: "expired",
+        });
         this.events.emit(sessionId, runId, "approval.resolved", expired);
         finish(false);
       };

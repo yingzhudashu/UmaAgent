@@ -131,7 +131,7 @@ export async function safeFetch(raw: string, signal?: AbortSignal): Promise<stri
         redirect: "manual",
         dispatcher,
         ...(signal ? { signal } : {}),
-        headers: { "user-agent": "UmaAgent/0.1" },
+        headers: { "user-agent": "UmaAgent/0.2" },
       });
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
@@ -157,6 +157,41 @@ export function createBuiltinTools(input: {
   toolTimeoutMs: number;
 }): AgentTool[] {
   const { session, database, knowledge, workspacePolicy, toolTimeoutMs } = input;
+  if (!session.workspace)
+    return [
+      defineTool({
+        name: "memory_write",
+        label: "Remember",
+        description: "Store an explicit durable fact in session or global memory.",
+        parameters: Type.Object({
+          content: Type.String(),
+          scope: Type.Optional(Type.Union([Type.Literal("session"), Type.Literal("global")])),
+        }),
+        executionMode: "sequential",
+        async execute(_id, params) {
+          const scope = params.scope ?? "session";
+          const id = database.addMemory(scope === "session" ? session.id : undefined, scope, params.content);
+          return result("Memory stored", { id, scope });
+        },
+      }),
+      defineTool({
+        name: "memory_search",
+        label: "Search memory",
+        description: "Search durable session and global memories.",
+        parameters: Type.Object({
+          query: Type.String(),
+          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+        }),
+        executionMode: "parallel",
+        async execute(_id, params) {
+          return result(
+            database.searchMemory(session.id, params.query, params.limit ?? 5).join("\n\n") ||
+              "No memories found",
+          );
+        },
+      }),
+    ];
+  const workspace = session.workspace;
   const readSchema = Type.Object({
     path: Type.String(),
     offset: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -186,7 +221,7 @@ export function createBuiltinTools(input: {
       parameters: readSchema,
       executionMode: "parallel",
       async execute(_id, params) {
-        const path = await workspacePolicy.resolvePath(session.workspace, params.path);
+        const path = await workspacePolicy.resolvePath(workspace, params.path);
         const lines = (await readFile(path, "utf8")).split(/\r?\n/);
         const start = (params.offset ?? 1) - 1;
         return result(lines.slice(start, start + (params.limit ?? 500)).join("\n"), {
@@ -202,10 +237,10 @@ export function createBuiltinTools(input: {
       parameters: writeSchema,
       executionMode: "sequential",
       async execute(_id, params) {
-        const path = await workspacePolicy.resolvePath(session.workspace, params.path, true);
+        const path = await workspacePolicy.resolvePath(workspace, params.path, true);
         await mkdir(dirname(path), { recursive: true });
         await writeFile(path, params.content, "utf8");
-        return result(`Wrote ${params.content.length} characters to ${relative(session.workspace, path)}`, {
+        return result(`Wrote ${params.content.length} characters to ${relative(workspace, path)}`, {
           path,
         });
       },
@@ -217,14 +252,14 @@ export function createBuiltinTools(input: {
       parameters: editSchema,
       executionMode: "sequential",
       async execute(_id, params) {
-        const path = await workspacePolicy.resolvePath(session.workspace, params.path);
+        const path = await workspacePolicy.resolvePath(workspace, params.path);
         const current = await readFile(path, "utf8");
         const first = current.indexOf(params.oldText);
         if (first < 0) throw new Error("oldText was not found");
         if (current.indexOf(params.oldText, first + params.oldText.length) >= 0)
           throw new Error("oldText is not unique");
         await writeFile(path, current.replace(params.oldText, params.newText), "utf8");
-        return result(`Edited ${relative(session.workspace, path)}`, { path });
+        return result(`Edited ${relative(workspace, path)}`, { path });
       },
     }),
     defineTool({
@@ -234,7 +269,7 @@ export function createBuiltinTools(input: {
       parameters: pathSchema,
       executionMode: "parallel",
       async execute(_id, params) {
-        const root = await workspacePolicy.resolvePath(session.workspace, params.path ?? ".");
+        const root = await workspacePolicy.resolvePath(workspace, params.path ?? ".");
         const output: string[] = [];
         await walk(root, root, output);
         return result(output.join("\n") || "No files", { root, truncated: output.length >= 2_000 });
@@ -247,7 +282,7 @@ export function createBuiltinTools(input: {
       parameters: searchSchema,
       executionMode: "parallel",
       async execute(_id, params) {
-        const root = await workspacePolicy.resolvePath(session.workspace, params.path ?? ".");
+        const root = await workspacePolicy.resolvePath(workspace, params.path ?? ".");
         const output: string[] = [];
         await walk(root, root, output, new RegExp(params.query, "i"));
         return result(output.join("\n") || "No matches", { root, truncated: output.length >= 2_000 });
@@ -260,7 +295,7 @@ export function createBuiltinTools(input: {
       parameters: shellSchema,
       executionMode: "sequential",
       async execute(_id, params, signal) {
-        const output = await runShell(params.command, session.workspace, toolTimeoutMs, signal);
+        const output = await runShell(params.command, workspace, toolTimeoutMs, signal);
         return result([output.stdout, output.stderr].filter(Boolean).join("\n"), output);
       },
     }),

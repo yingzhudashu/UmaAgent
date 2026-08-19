@@ -20,7 +20,7 @@ describe("server", () => {
         port: 3210,
         stateDir: state,
         workspaceRoots: [root],
-        webOrigins: [],
+        webOrigins: ["https://web.example"],
         maxUploadBytes: 1024,
       },
       auth: { tokenEnv: "UMA_TEST_TOKEN", webSessionHours: 1 },
@@ -42,21 +42,107 @@ describe("server", () => {
       skillsDirs: [],
       mcpServers: [],
       runtime: { maxParallelSessions: 1, approvalTimeoutMs: 1000, toolTimeoutMs: 1000 },
+      roles: {
+        default: { provider: "test", id: "model" },
+        reasoning: { provider: "test", id: "model" },
+        fast: { provider: "test", id: "model" },
+        vision: { provider: "test", id: "model" },
+      },
     };
     process.env.UMA_TEST_TOKEN = "secret";
     const runtime = new UmaRuntime(config);
     await runtime.start();
-    const app = await createServer(runtime);
+    const app = await createServer(runtime, { webRoot: false });
     cleanup.push(async () => {
       await app.close();
       await runtime.stop();
       await rm(root, { recursive: true, force: true });
       delete process.env.UMA_TEST_TOKEN;
     });
-    expect((await app.inject({ method: "GET", url: "/api/v1/sessions" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/v2/sessions" })).statusCode).toBe(401);
+    const preflight = await app.inject({
+      method: "OPTIONS",
+      url: "/api/v2/sessions",
+      headers: {
+        origin: "https://web.example",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "content-type",
+      },
+    });
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe("https://web.example");
+    expect(preflight.headers["access-control-allow-credentials"]).toBe("true");
+    const deniedPreflight = await app.inject({
+      method: "OPTIONS",
+      url: "/api/v2/sessions",
+      headers: {
+        origin: "https://attacker.example",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(deniedPreflight.statusCode).toBe(403);
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/v2/auth/login",
+      headers: { origin: "https://web.example" },
+      payload: { token: "secret" },
+    });
+    expect(login.statusCode).toBe(200);
+    expect(login.headers["set-cookie"]).toContain("SameSite=None");
+    expect(login.headers["set-cookie"]).toContain("Secure");
+    const webCookie = login.cookies[0];
+    expect(webCookie).toBeDefined();
+    const missingOrigin = await app.inject({
+      method: "POST",
+      url: "/api/v2/sessions",
+      headers: { cookie: `${webCookie?.name}=${webCookie?.value}` },
+      payload: {},
+    });
+    expect(missingOrigin.statusCode).toBe(403);
+    expect(missingOrigin.json().error.code).toBe("origin_required");
+    const cookieSession = await app.inject({
+      method: "POST",
+      url: "/api/v2/sessions",
+      headers: {
+        cookie: `${webCookie?.name}=${webCookie?.value}`,
+        origin: "https://web.example",
+      },
+      payload: {},
+    });
+    expect(cookieSession.statusCode).toBe(200);
+    const cookieSessionId = cookieSession.json<{ id: string }>().id;
+    const socket = await app.injectWS("/api/v2/events", {
+      headers: {
+        cookie: `${webCookie?.name}=${webCookie?.value}`,
+        origin: "https://web.example",
+      },
+    });
+    const socketEvent = new Promise<{ type: string }>((resolve) => {
+      socket.once("message", (data) => resolve(JSON.parse(String(data)) as { type: string }));
+    });
+    socket.send(JSON.stringify({ type: "subscribe", sessionIds: [cookieSessionId] }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    runtime.updateSession(cookieSessionId, { title: "Synced over WebSocket" });
+    expect((await socketEvent).type).toBe("session.snapshot");
+    socket.terminate();
+
+    await expect(
+      app.injectWS("/api/v2/events", { headers: { origin: "https://attacker.example" } }),
+    ).rejects.toThrow("Unexpected server response: 403");
+    const logout = await app.inject({
+      method: "POST",
+      url: "/api/v2/auth/logout",
+      headers: {
+        cookie: `${webCookie?.name}=${webCookie?.value}`,
+        origin: "https://web.example",
+      },
+    });
+    expect(logout.statusCode).toBe(204);
+    expect(logout.headers["set-cookie"]).toContain("SameSite=None");
+    expect(logout.headers["set-cookie"]).toContain("Secure");
     const created = await app.inject({
       method: "POST",
-      url: "/api/v1/sessions",
+      url: "/api/v2/sessions",
       headers: { authorization: "Bearer secret" },
       payload: { title: "API test" },
     });
@@ -64,27 +150,33 @@ describe("server", () => {
     const session = created.json<{ id: string }>();
     const snapshot = await app.inject({
       method: "GET",
-      url: `/api/v1/sessions/${session.id}`,
+      url: `/api/v2/sessions/${session.id}`,
       headers: { authorization: "Bearer secret" },
     });
     expect(snapshot.json<{ session: { title: string } }>().session.title).toBe("API test");
     const invalidPatch = await app.inject({
       method: "PATCH",
-      url: `/api/v1/sessions/${session.id}`,
+      url: `/api/v2/sessions/${session.id}`,
       headers: { authorization: "Bearer secret" },
       payload: { workspace: "elsewhere" },
     });
     expect(invalidPatch.statusCode).toBe(400);
     const crossOriginLogin = await app.inject({
       method: "POST",
-      url: "/api/v1/auth/login",
+      url: "/api/v2/auth/login",
       headers: { origin: "https://attacker.example" },
       payload: { token: "secret" },
     });
     expect(crossOriginLogin.statusCode).toBe(403);
+    const bearerFromWrongOrigin = await app.inject({
+      method: "GET",
+      url: "/api/v2/sessions",
+      headers: { authorization: "Bearer secret", origin: "https://attacker.example" },
+    });
+    expect(bearerFromWrongOrigin.statusCode).toBe(403);
     const unknown = await app.inject({
       method: "GET",
-      url: "/api/v1/unknown",
+      url: "/api/v2/unknown",
       headers: { authorization: "Bearer secret" },
     });
     expect(unknown.statusCode).toBe(404);

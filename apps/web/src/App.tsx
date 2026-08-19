@@ -22,7 +22,8 @@ import {
 import { marked } from "marked";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-const client = new UmaClient({ baseUrl: window.location.origin });
+const coreUrl = import.meta.env.VITE_UMA_CORE_URL?.trim() || window.location.origin;
+const client = new UmaClient({ baseUrl: coreUrl });
 client.connectEvents();
 
 function Markdown({ content }: { content: string }) {
@@ -172,7 +173,7 @@ export function App() {
   }, [transcriptLength]);
 
   const createSession = useMutation({
-    mutationFn: () => client.createSession(),
+    mutationFn: (mode: "workspace" | "assistant") => client.createSession({ mode }),
     onSuccess: (session) => {
       setSelected(session.id);
       void queryClient.invalidateQueries({ queryKey: ["sessions"] });
@@ -266,9 +267,13 @@ export function App() {
             <ChevronLeft />
           </button>
         </div>
-        <button type="button" className="new-session" onClick={() => createSession.mutate()}>
+        <button type="button" className="new-session" onClick={() => createSession.mutate("workspace")}>
           <MessageSquarePlus size={17} />
           新会话
+        </button>
+        <button type="button" className="new-session" onClick={() => createSession.mutate("assistant")}>
+          <MessageSquarePlus size={17} />
+          助手会话
         </button>
         <nav>
           {sessions.data?.map((session) => (
@@ -281,7 +286,10 @@ export function App() {
                 setSidebarOpen(false);
               }}
             >
-              <span>{session.title}</span>
+              <span>
+                {session.mode === "assistant" ? "助手 · " : ""}
+                {session.title}
+              </span>
               <small>{session.model.id}</small>
             </button>
           ))}

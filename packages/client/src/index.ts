@@ -2,9 +2,12 @@ import type {
   AgentEventEnvelope,
   Approval,
   Attachment,
+  AuditRecord,
+  BackgroundTask,
   CreateSessionRequest,
   Health,
   KnowledgeSource,
+  MemoryFact,
   ModelRef,
   SendMessageRequest,
   SendMessageResponse,
@@ -13,6 +16,7 @@ import type {
   SkillSummary,
   UpdateSessionRequest,
 } from "@uma-agent/protocol";
+import { PROTOCOL_VERSION } from "@uma-agent/protocol";
 
 export class UmaClientError extends Error {
   constructor(
@@ -55,7 +59,7 @@ export class UmaClient {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v1${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v2${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -145,6 +149,36 @@ export class UmaClient {
   indexKnowledge(name: string, path: string): Promise<KnowledgeSource> {
     return this.request("/knowledge", { method: "POST", body: JSON.stringify({ name, path }) });
   }
+  listTasks(): Promise<BackgroundTask[]> {
+    return this.request("/tasks");
+  }
+  createTask(prompt: string, parentSessionId?: string): Promise<BackgroundTask> {
+    return this.request("/tasks", {
+      method: "POST",
+      body: JSON.stringify({ prompt, ...(parentSessionId ? { parentSessionId } : {}) }),
+    });
+  }
+  getTask(id: string): Promise<BackgroundTask> {
+    return this.request(`/tasks/${encodeURIComponent(id)}`);
+  }
+  cancelTask(id: string): Promise<BackgroundTask> {
+    return this.request(`/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  }
+  listMemoryFacts(status?: MemoryFact["status"]): Promise<MemoryFact[]> {
+    return this.request(`/memory${status ? `?status=${status}` : ""}`);
+  }
+  reviewMemoryFact(id: string, status: MemoryFact["status"]): Promise<MemoryFact> {
+    return this.request(`/memory/${encodeURIComponent(id)}`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    });
+  }
+  deleteMemoryFact(id: string): Promise<void> {
+    return this.request(`/memory/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  listAudit(runId: string): Promise<AuditRecord[]> {
+    return this.request(`/audit/runs/${encodeURIComponent(runId)}`);
+  }
 
   async upload(file: Blob, name: string, sessionId?: string): Promise<Attachment> {
     const form = new FormData();
@@ -173,7 +207,7 @@ export class UmaClient {
 
   connectEvents(): void {
     if (this.socket || this.closed) return;
-    const url = new URL("/api/v1/events", this.baseUrl);
+    const url = new URL("/api/v2/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())
@@ -243,7 +277,7 @@ export class UmaClient {
         const snapshot = await this.getSession(sessionId);
         const current = this.recoveryTargets.get(sessionId) ?? observed;
         this.notify({
-          protocolVersion: 1,
+          protocolVersion: PROTOCOL_VERSION,
           sessionId,
           sequence: Math.max(1, current),
           timestamp: Date.now(),

@@ -21,7 +21,7 @@ describe("protocol schemas", () => {
   it("rejects events with the wrong protocol version", () => {
     expect(
       Value.Check(AgentEventEnvelopeSchema, {
-        protocolVersion: 2,
+        protocolVersion: 1,
         sessionId: "s",
         sequence: 1,
         timestamp: 1,

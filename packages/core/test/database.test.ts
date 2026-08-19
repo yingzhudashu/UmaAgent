@@ -17,6 +17,7 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
+      mode: "workspace",
       title: "test",
       workspace: root,
       model: { provider: "test", id: "model" },
@@ -28,6 +29,7 @@ describe("UmaDatabase", () => {
     expect(second.created).toBe(false);
     expect(second.run.id).toBe(first.run.id);
     const other = db.createSession({
+      mode: "workspace",
       title: "other",
       workspace: root,
       model: { provider: "test", id: "model" },
@@ -56,6 +58,7 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
+      mode: "workspace",
       title: "restart",
       workspace: root,
       model: { provider: "test", id: "model" },

@@ -1,7 +1,11 @@
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ModelRef } from "@uma-agent/protocol";
 
-export type ModelApi = "openai-responses" | "openai-completions";
+export type ModelApi =
+  | "openai-responses"
+  | "openai-completions"
+  | "anthropic-messages"
+  | "google-generative-ai";
 
 export interface UmaModelConfig {
   provider: string;
@@ -40,6 +44,7 @@ export interface UmaConfig {
   skillsDirs: string[];
   mcpServers: McpServerConfig[];
   runtime: { maxParallelSessions: number; approvalTimeoutMs: number; toolTimeoutMs: number };
+  roles: { default: ModelRef; reasoning: ModelRef; fast: ModelRef; vision: ModelRef };
 }
 
 export interface PreflightDecision {
