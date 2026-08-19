@@ -1,0 +1,17 @@
+{
+  "name": "@uma-agent/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "uma": "dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "0.84.2",
+    "@uma-agent/client": "0.1.0",
+    "@uma-agent/protocol": "0.1.0"
+  }
+}

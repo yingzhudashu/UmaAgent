@@ -1,0 +1,30 @@
+{
+  "name": "uma-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspace=@uma-agent/protocol && npm run build --workspace=@uma-agent/client && npm run build --workspace=@uma-agent/core && npm run build --workspace=@uma-agent/server && npm run build --workspace=@uma-agent/cli && npm run build --workspace=@uma-agent/web",
+    "check": "biome check . && tsc -b",
+    "dev": "npm run dev --workspace=@uma-agent/server",
+    "dev:faux": "npm run build && node scripts/faux-server.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "npm run start --workspace=@uma-agent/server",
+    "start:configured": "node --env-file=.env apps/server/dist/main.js",
+    "cli:configured": "node --env-file=.env apps/cli/dist/main.js"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.5",
+    "@types/node": "24.12.4",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

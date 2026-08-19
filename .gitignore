@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+dist-types/
+.uma/
+*.db
+*.db-shm
+*.db-wal
+uma.config.json
+.env
+apps/web/public/
+!apps/web/public/.gitkeep

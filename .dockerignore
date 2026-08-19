@@ -1,0 +1,7 @@
+.git
+.uma
+node_modules
+**/dist
+coverage
+uma.config.json
+workspace

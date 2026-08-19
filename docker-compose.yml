@@ -1,0 +1,15 @@
+services:
+  uma:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3210:3210"
+    environment:
+      UMA_AUTH_TOKEN: ${UMA_AUTH_TOKEN:?set UMA_AUTH_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+    volumes:
+      - uma-state:/data/state
+      - ./workspace:/data/workspace
+
+volumes:
+  uma-state:
