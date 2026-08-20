@@ -23,6 +23,7 @@ import type {
   CreateSessionRequest,
   ModelRef,
   Run,
+  RunAction,
   SendMessageRequest,
   Session,
   SessionSnapshot,
@@ -189,6 +190,56 @@ export class UmaRuntime {
   }
   listTasks(): BackgroundTask[] {
     return this.database.listBackgroundTasks();
+  }
+  listSessionEvents(sessionId: string, afterSequence: number, limit?: number) {
+    return this.database.listEvents(sessionId, afterSequence, limit);
+  }
+  getRun(runId: string): Run {
+    return this.database.getRun(runId);
+  }
+  listRunActions(runId: string): RunAction[] {
+    this.database.getRun(runId);
+    return this.database.listRunActions(runId);
+  }
+  resumeRun(runId: string): Run {
+    const run = this.database.getRun(runId);
+    if (run.status !== "interrupted") throw new Error("Only interrupted runs can be resumed");
+    if (run.resume?.state === "needs_confirmation") throw new Error("Run has actions requiring confirmation");
+    const message = this.database.getMessage(run.messageId);
+    const session = this.database.getSession(run.sessionId);
+    const resumed = this.database.updateRun(runId, { status: "queued" });
+    this.events.emit(session.id, runId, "run.resumed", resumed);
+    const previous = this.queueTails.get(session.id) ?? Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(() =>
+        this.executeRun(session, runId, { messageId: message.id, text: message.content }, undefined, true),
+      );
+    const tail = next.finally(() => {
+      if (this.queueTails.get(session.id) === tail) this.queueTails.delete(session.id);
+    });
+    this.queueTails.set(session.id, tail);
+    return resumed;
+  }
+  confirmRunAction(runId: string, actionId: string, approved: boolean): RunAction {
+    const run = this.database.getRun(runId);
+    const action = this.database.getRunAction(actionId);
+    if (action.runId !== runId) throw new Error("Action does not belong to run");
+    const updated = this.database.updateRunAction(actionId, {
+      status: approved ? "confirmed" : "rejected",
+      ...(approved ? {} : { error: "Rejected by user" }),
+    });
+    if (!approved) {
+      const failed = this.database.updateRun(runId, { status: "failed", error: "Pending action rejected" });
+      this.events.emit(run.sessionId, runId, "run.updated", failed);
+    } else if (
+      this.database
+        .listRunActions(runId)
+        .every((item) => !["uncertain", "prepared", "running"].includes(item.status))
+    ) {
+      this.events.emit(run.sessionId, runId, "run.updated", this.database.getRun(runId));
+    }
+    return updated;
   }
   getTask(id: string): BackgroundTask {
     return this.database.getBackgroundTask(id);
@@ -375,6 +426,7 @@ export class UmaRuntime {
       content: input.text,
       payload: { role: "user", content: input.text, timestamp: Date.now() },
       attachmentIds,
+      ...(input.source ? { source: input.source } : {}),
     });
     if (continuation) {
       this.database.updateRun(run.id, {
@@ -510,6 +562,7 @@ export class UmaRuntime {
     runId: string,
     input: SendMessageRequest,
     promptOverride?: string,
+    resumeFromCheckpoint = false,
   ): Promise<void> {
     const release = await this.semaphore.acquire();
     if (this.stopping) {
@@ -531,14 +584,32 @@ export class UmaRuntime {
         status: "started",
       });
       this.events.emit(session.id, runId, "run.updated", this.database.getRun(runId));
-      const decision = await this.preflight(
-        session,
-        promptOverride ?? input.text,
-        input.mode ?? "auto",
-        controller.signal,
-        runId,
-      );
+      const currentRun = this.database.getRun(runId);
+      const decision =
+        resumeFromCheckpoint && currentRun.route && currentRun.route !== "clarify"
+          ? {
+              route: currentRun.route,
+              goal: input.text,
+              reasoningSummary: currentRun.reasoningSummary ?? "Resuming from checkpoint",
+              successCriteria: [],
+              questions: [],
+              steps: currentRun.plan.map((step) => step.title),
+            }
+          : await this.preflight(
+              session,
+              promptOverride ?? input.text,
+              input.mode ?? "auto",
+              controller.signal,
+              runId,
+            );
       this.database.updateRun(runId, { route: decision.route, reasoningSummary: decision.reasoningSummary });
+      this.database.createCheckpoint({
+        runId,
+        phase: decision.route === "plan" ? "plan" : "preflight",
+        turnCount: 0,
+        lastMessageSequence: this.database.getMessage(input.messageId).sequence,
+        safeToResume: true,
+      });
       if (decision.route === "clarify") {
         const content = decision.questions.map((question, index) => `${index + 1}. ${question}`).join("\n");
         const message = this.database.insertMessage({
@@ -574,7 +645,7 @@ export class UmaRuntime {
         });
         return;
       }
-      if (decision.route === "plan") {
+      if (decision.route === "plan" && currentRun.plan.length === 0) {
         this.database.setPlan(runId, decision.steps);
         this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
         const first = this.database.listPlan(runId)[0];
@@ -728,7 +799,7 @@ export class UmaRuntime {
       },
       streamFn: this.models.models.streamSimple.bind(this.models.models),
       toolExecution: "parallel",
-      shouldStopAfterTurn: () => ++turns >= 40,
+      shouldStopAfterTurn: () => ++turns >= 48,
       beforeToolCall: async ({ toolCall, args }, toolSignal) => {
         const permission = this.permissions.decide(session.mode, toolCall.name);
         if (!permission.allowed) return { block: true, reason: permission.reason };
@@ -811,6 +882,7 @@ export class UmaRuntime {
     let pendingAssistant: AssistantMessage | undefined;
     let flushTimer: NodeJS.Timeout | undefined;
     const toolMessages = new Map<string, string>();
+    const toolActions = new Map<string, string>();
     const flushAssistant = () => {
       if (!assistantItem || !pendingAssistant) return;
       assistantItem = this.database.updateMessage(assistantItem.id, {
@@ -877,6 +949,15 @@ export class UmaRuntime {
         assistantItem = undefined;
       } else if (event.type === "tool_execution_start") {
         this.database.createToolCall({ id: event.toolCallId, runId, name: event.toolName, args: event.args });
+        const action = this.database.createRunAction({
+          runId,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          toolClass: this.permissions.classify(event.toolName),
+          idempotencyKey: `${runId}:${event.toolCallId}`,
+          input: event.args,
+        });
+        toolActions.set(event.toolCallId, action.id);
         this.database.addAudit({
           runId,
           kind: "tool",
@@ -900,6 +981,12 @@ export class UmaRuntime {
         });
       } else if (event.type === "tool_execution_end") {
         this.database.completeToolCall(event.toolCallId, event.result, event.isError);
+        const actionId = toolActions.get(event.toolCallId);
+        if (actionId)
+          this.database.updateRunAction(actionId, {
+            status: event.isError ? "failed" : "completed",
+            result: event.result,
+          });
         this.database.addAudit({
           runId,
           kind: "tool",

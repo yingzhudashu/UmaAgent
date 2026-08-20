@@ -10,18 +10,22 @@ import type {
   BackgroundTask,
   KnowledgeSource,
   MemoryFact,
+  MessageSource,
   ModelRef,
   PlanStep,
   Run,
+  RunAction,
   RunStatus,
   Session,
+  SessionEventPage,
   SessionMode,
   SessionSnapshot,
   TranscriptItem,
 } from "@uma-agent/protocol";
+import { type AgentEventEnvelope, type AgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 type Row = Record<string, unknown>;
 
 function rows(statement: StatementSync, ...params: SQLInputValue[]): Row[] {
@@ -103,6 +107,24 @@ function toPlanStep(value: Row): PlanStep {
   };
 }
 
+function toRunAction(value: Row): RunAction {
+  return {
+    id: text(value.id),
+    runId: text(value.run_id),
+    ...(value.checkpoint_id ? { checkpointId: text(value.checkpoint_id) } : {}),
+    toolCallId: text(value.tool_call_id),
+    toolName: text(value.tool_name),
+    toolClass: text(value.tool_class),
+    idempotencyKey: text(value.idempotency_key),
+    ...(value.input_json ? { input: redactAudit(parseJson(value.input_json, null)) } : {}),
+    ...(value.result_json ? { result: redactAudit(parseJson(value.result_json, null)) } : {}),
+    status: text(value.status) as RunAction["status"],
+    ...(value.started_at ? { startedAt: integer(value.started_at) } : {}),
+    ...(value.completed_at ? { completedAt: integer(value.completed_at) } : {}),
+    ...(value.error ? { error: text(value.error) } : {}),
+  };
+}
+
 export class UmaDatabase {
   readonly db: DatabaseSync;
 
@@ -128,6 +150,7 @@ export class UmaDatabase {
     this.db
       .prepare("UPDATE messages SET status = 'cancelled', updated_at = ? WHERE status = 'streaming'")
       .run(now);
+    this.markUncertainActions();
     this.markActiveBackgroundTasksInterrupted();
   }
 
@@ -232,13 +255,14 @@ export class UmaDatabase {
     name?: string;
     payload?: AgentMessage;
     attachmentIds?: string[];
+    source?: MessageSource;
   }): TranscriptItem {
     const id = input.id ?? randomUUID();
     const now = Date.now();
     const sequence = this.allocateMessageSequence(input.sessionId);
     this.db
       .prepare(
-        "INSERT INTO messages(id,session_id,run_id,sequence,role,status,name,content,payload_json,attachment_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO messages(id,session_id,run_id,sequence,role,status,name,content,payload_json,source_json,attachment_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
@@ -250,6 +274,7 @@ export class UmaDatabase {
         input.name ?? null,
         input.content,
         input.payload ? JSON.stringify(input.payload) : null,
+        input.source ? JSON.stringify(input.source) : null,
         JSON.stringify(input.attachmentIds ?? []),
         now,
         now,
@@ -283,6 +308,9 @@ export class UmaDatabase {
     const value = row(this.db.prepare("SELECT * FROM messages WHERE id=?"), id);
     if (!value) throw new Error(`Message not found: ${id}`);
     const attachmentIds = parseJson<string[]>(value.attachment_ids_json, []);
+    const source = value.source_json
+      ? parseJson<MessageSource | undefined>(value.source_json, undefined)
+      : undefined;
     return {
       id: text(value.id),
       sequence: integer(value.sequence),
@@ -294,6 +322,7 @@ export class UmaDatabase {
       attachments: attachmentIds
         .map((attachmentId) => this.getAttachment(attachmentId))
         .filter((item): item is Attachment => item !== undefined),
+      ...(source ? { source } : {}),
       createdAt: integer(value.created_at),
       updatedAt: integer(value.updated_at),
     };
@@ -415,6 +444,7 @@ export class UmaDatabase {
   getRun(id: string): Run {
     const value = row(this.db.prepare("SELECT * FROM runs WHERE id=?"), id);
     if (!value) throw new Error(`Run not found: ${id}`);
+    const resume = this.getRunResume(id, text(value.status) as RunStatus);
     return {
       id: text(value.id),
       sessionId: text(value.session_id),
@@ -423,11 +453,159 @@ export class UmaDatabase {
       ...(value.route ? { route: text(value.route) as Exclude<Run["route"], undefined> } : {}),
       ...(value.reasoning_summary ? { reasoningSummary: text(value.reasoning_summary) } : {}),
       clarificationCount: integer(value.clarification_count),
+      ...(resume ? { resume } : {}),
       plan: this.listPlan(id),
       ...(value.error ? { error: text(value.error) } : {}),
       createdAt: integer(value.created_at),
       updatedAt: integer(value.updated_at),
     };
+  }
+
+  private getRunResume(runId: string, status: RunStatus): Run["resume"] {
+    if (status !== "interrupted") return undefined;
+    const checkpoint = row(
+      this.db.prepare("SELECT * FROM run_checkpoints WHERE run_id=? ORDER BY checkpoint_no DESC LIMIT 1"),
+      runId,
+    );
+    const pending = rows(
+      this.db.prepare(
+        "SELECT id FROM run_actions WHERE run_id=? AND status IN ('uncertain','prepared','running') AND tool_class NOT IN ('read','attachment_read')",
+      ),
+      runId,
+    ).map((value) => text(value.id));
+    const phase = checkpoint ? text(checkpoint.phase) : undefined;
+    const base = {
+      state: pending.length ? "needs_confirmation" : checkpoint ? "available" : "exhausted",
+      ...(checkpoint ? { checkpointId: text(checkpoint.id) } : {}),
+      pendingActionIds: pending,
+    };
+    return (
+      phase ? { ...base, lastSafePhase: phase as NonNullable<Run["resume"]>["lastSafePhase"] } : base
+    ) as NonNullable<Run["resume"]>;
+  }
+
+  createCheckpoint(input: {
+    runId: string;
+    phase: NonNullable<Run["resume"]>["lastSafePhase"];
+    planStepId?: string;
+    turnCount: number;
+    lastMessageSequence: number;
+    contextSummarySequence?: number;
+    safeToResume: boolean;
+  }): { id: string; checkpointNo: number } {
+    const current = row(
+      this.db.prepare(
+        "SELECT COALESCE(MAX(checkpoint_no),0) AS checkpoint_no FROM run_checkpoints WHERE run_id=?",
+      ),
+      input.runId,
+    );
+    const checkpointNo = integer(current?.checkpoint_no) + 1;
+    const id = randomUUID();
+    const phase = input.phase;
+    if (!phase) throw new Error("Checkpoint phase is required");
+    this.db
+      .prepare(
+        "INSERT INTO run_checkpoints(id,run_id,checkpoint_no,phase,plan_step_id,turn_count,last_message_sequence,context_summary_sequence,safe_to_resume,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        input.runId,
+        checkpointNo,
+        phase,
+        input.planStepId ?? null,
+        input.turnCount,
+        input.lastMessageSequence,
+        input.contextSummarySequence ?? null,
+        input.safeToResume ? 1 : 0,
+        Date.now(),
+      );
+    return { id, checkpointNo };
+  }
+
+  getLatestCheckpoint(runId: string): { id: string; phase: string; turnCount: number } | undefined {
+    const value = row(
+      this.db.prepare(
+        "SELECT id,phase,turn_count FROM run_checkpoints WHERE run_id=? ORDER BY checkpoint_no DESC LIMIT 1",
+      ),
+      runId,
+    );
+    return value
+      ? { id: text(value.id), phase: text(value.phase), turnCount: integer(value.turn_count) }
+      : undefined;
+  }
+
+  createRunAction(input: {
+    runId: string;
+    checkpointId?: string;
+    toolCallId: string;
+    toolName: string;
+    toolClass: string;
+    idempotencyKey: string;
+    input?: unknown;
+  }): RunAction {
+    const id = randomUUID();
+    this.db
+      .prepare(
+        "INSERT INTO run_actions(id,run_id,checkpoint_id,tool_call_id,tool_name,tool_class,idempotency_key,input_json,status,started_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        input.runId,
+        input.checkpointId ?? null,
+        input.toolCallId,
+        input.toolName,
+        input.toolClass,
+        input.idempotencyKey,
+        input.input === undefined ? null : JSON.stringify(redactAudit(input.input)),
+        "running",
+        Date.now(),
+      );
+    return this.getRunAction(id);
+  }
+
+  getRunAction(id: string): RunAction {
+    const value = row(this.db.prepare("SELECT * FROM run_actions WHERE id=?"), id);
+    if (!value) throw new Error(`Run action not found: ${id}`);
+    return toRunAction(value);
+  }
+
+  listRunActions(runId: string): RunAction[] {
+    return rows(
+      this.db.prepare("SELECT * FROM run_actions WHERE run_id=? ORDER BY COALESCE(started_at,0), id"),
+      runId,
+    ).map(toRunAction);
+  }
+
+  updateRunAction(
+    id: string,
+    patch: { status?: RunAction["status"]; result?: unknown; error?: string },
+  ): RunAction {
+    const current = this.getRunAction(id);
+    this.db
+      .prepare(
+        "UPDATE run_actions SET status=?,result_json=?,error=?,completed_at=CASE WHEN ? IN ('completed','failed','rejected') THEN ? ELSE completed_at END WHERE id=?",
+      )
+      .run(
+        patch.status ?? current.status,
+        patch.result === undefined
+          ? current.result === undefined
+            ? null
+            : JSON.stringify(redactAudit(current.result))
+          : JSON.stringify(redactAudit(patch.result)),
+        patch.error ?? current.error ?? null,
+        patch.status ?? current.status,
+        Date.now(),
+        id,
+      );
+    return this.getRunAction(id);
+  }
+
+  markUncertainActions(): void {
+    this.db
+      .prepare(
+        "UPDATE run_actions SET status='uncertain',error='Server restarted before action completion' WHERE status IN ('running','prepared')",
+      )
+      .run();
   }
 
   listRuns(sessionId: string): Run[] {
@@ -437,14 +615,89 @@ export class UmaDatabase {
   }
 
   getSnapshot(sessionId: string): SessionSnapshot {
-    const revision = integer(
-      row(this.db.prepare("SELECT revision FROM sessions WHERE id=?"), sessionId)?.revision,
+    const sessionState = row(
+      this.db.prepare("SELECT revision,next_event_sequence FROM sessions WHERE id=?"),
+      sessionId,
     );
+    const revision = integer(sessionState?.revision);
     return {
       session: this.getSession(sessionId),
       transcript: this.listMessages(sessionId),
       runs: this.listRuns(sessionId),
       revision,
+      snapshotSequence: Math.max(0, integer(sessionState?.next_event_sequence) - 1),
+    };
+  }
+
+  appendEvent(
+    sessionId: string,
+    runId: string | undefined,
+    type: AgentEventType,
+    payload: unknown,
+  ): AgentEventEnvelope {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const sequence = this.allocateEventSequence(sessionId);
+      const event: AgentEventEnvelope = {
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId,
+        ...(runId ? { runId } : {}),
+        sequence,
+        timestamp: Date.now(),
+        type,
+        payload: redactAudit(payload),
+      };
+      this.db
+        .prepare(
+          "INSERT INTO session_events(id,session_id,run_id,sequence,protocol_version,type,payload_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
+        )
+        .run(
+          randomUUID(),
+          sessionId,
+          runId ?? null,
+          sequence,
+          PROTOCOL_VERSION,
+          type,
+          JSON.stringify(event.payload),
+          event.timestamp,
+        );
+      this.db.exec("COMMIT");
+      return event;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  listEvents(sessionId: string, afterSequence: number, limit = 500): SessionEventPage {
+    this.getSession(sessionId);
+    const bounded = Math.max(1, Math.min(1000, limit));
+    const values = rows(
+      this.db.prepare(
+        "SELECT * FROM session_events WHERE session_id=? AND sequence>? ORDER BY sequence LIMIT ?",
+      ),
+      sessionId,
+      afterSequence,
+      bounded,
+    );
+    const events = values.map(
+      (value): AgentEventEnvelope => ({
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: text(value.session_id),
+        ...(value.run_id ? { runId: text(value.run_id) } : {}),
+        sequence: integer(value.sequence),
+        timestamp: integer(value.created_at),
+        type: text(value.type) as AgentEventType,
+        payload: parseJson(value.payload_json, null),
+      }),
+    );
+    const snapshotSequence = this.getSnapshot(sessionId).snapshotSequence;
+    return {
+      sessionId,
+      fromSequence: events[0]?.sequence ?? afterSequence,
+      toSequence: events.at(-1)?.sequence ?? afterSequence,
+      events,
+      snapshotSequence,
     };
   }
 

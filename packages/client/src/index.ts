@@ -12,6 +12,7 @@ import type {
   SendMessageRequest,
   SendMessageResponse,
   Session,
+  SessionEventPage,
   SessionSnapshot,
   SkillSummary,
   UpdateSessionRequest,
@@ -37,6 +38,7 @@ export interface UmaClientOptions {
 }
 
 type Listener = (event: AgentEventEnvelope) => void;
+export type SessionSubscription = { id: string; lastSequence?: number };
 
 export class UmaClient {
   private readonly baseUrl: string;
@@ -59,7 +61,7 @@ export class UmaClient {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v2${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v3${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -103,6 +105,11 @@ export class UmaClient {
   getSession(id: string): Promise<SessionSnapshot> {
     return this.request(`/sessions/${encodeURIComponent(id)}`);
   }
+  getSessionEvents(sessionId: string, afterSequence: number, limit = 500): Promise<SessionEventPage> {
+    return this.request(
+      `/sessions/${encodeURIComponent(sessionId)}/events?after=${afterSequence}&limit=${limit}`,
+    );
+  }
   updateSession(id: string, patch: UpdateSessionRequest): Promise<Session> {
     return this.request(`/sessions/${encodeURIComponent(id)}`, {
       method: "PATCH",
@@ -115,11 +122,11 @@ export class UmaClient {
   sendMessage(
     sessionId: string,
     text: string,
-    input: Omit<SendMessageRequest, "messageId" | "text"> = {},
+    input: Partial<Omit<SendMessageRequest, "text">> = {},
   ): Promise<SendMessageResponse> {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ ...input, messageId: crypto.randomUUID(), text }),
+      body: JSON.stringify({ ...input, messageId: input.messageId ?? crypto.randomUUID(), text }),
     });
   }
   cancel(sessionId: string): Promise<void> {
@@ -179,6 +186,28 @@ export class UmaClient {
   listAudit(runId: string): Promise<AuditRecord[]> {
     return this.request(`/audit/runs/${encodeURIComponent(runId)}`);
   }
+  getRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
+    return this.request(`/runs/${encodeURIComponent(runId)}`);
+  }
+  listRunActions(runId: string): Promise<import("@uma-agent/protocol").RunAction[]> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/actions`);
+  }
+  resumeRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/resume`, { method: "POST" });
+  }
+  confirmRunAction(
+    runId: string,
+    actionId: string,
+    approved: boolean,
+  ): Promise<import("@uma-agent/protocol").RunAction> {
+    return this.request(
+      `/runs/${encodeURIComponent(runId)}/actions/${encodeURIComponent(actionId)}/confirm`,
+      {
+        method: "POST",
+        body: JSON.stringify({ approved }),
+      },
+    );
+  }
 
   async upload(file: Blob, name: string, sessionId?: string): Promise<Attachment> {
     const form = new FormData();
@@ -205,9 +234,18 @@ export class UmaClient {
     };
   }
 
+  subscribeSessions(sessions: SessionSubscription[], listener: Listener): () => void {
+    const unsubscribers = sessions.map((session) => this.subscribe(session.id, listener));
+    return () => {
+      unsubscribers.forEach((unsubscribe) => {
+        unsubscribe();
+      });
+    };
+  }
+
   connectEvents(): void {
     if (this.socket || this.closed) return;
-    const url = new URL("/api/v2/events", this.baseUrl);
+    const url = new URL("/api/v3/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())
@@ -218,13 +256,14 @@ export class UmaClient {
       if (this.options.token) socket.send(JSON.stringify({ type: "auth", token: this.options.token }));
       this.sendSubscriptions();
       for (const sessionId of this.subscriptions) {
-        this.lastSequences.delete(sessionId);
-        void this.recoverSnapshot(sessionId, 0);
+        if (this.lastSequences.get(sessionId) === undefined) void this.recoverSnapshot(sessionId, 0);
       }
     });
     socket.addEventListener("message", (message) => {
       try {
-        this.dispatch(JSON.parse(String(message.data)) as AgentEventEnvelope);
+        const parsed = JSON.parse(String(message.data)) as Record<string, unknown>;
+        if (parsed.type === "sync.started" || parsed.type === "sync.completed") return;
+        this.dispatch(parsed as unknown as AgentEventEnvelope);
       } catch {
         /* Ignore malformed remote frames. */
       }
@@ -252,11 +291,52 @@ export class UmaClient {
     }
     const previous = this.lastSequences.get(event.sessionId);
     if (previous !== undefined && event.sequence !== previous + 1) {
-      void this.recoverSnapshot(event.sessionId, Math.max(previous, event.sequence));
+      void this.recoverEvents(event.sessionId, previous, event.sequence);
       return;
     }
     this.lastSequences.set(event.sessionId, event.sequence);
     this.notify(event);
+  }
+
+  private async recoverEvents(sessionId: string, after: number, observed: number): Promise<void> {
+    if (this.recoveryTargets.has(sessionId)) return;
+    this.recoveryTargets.set(sessionId, observed);
+    try {
+      const page = await this.getSessionEvents(sessionId, after, 1000);
+      if (!Array.isArray(page.events)) throw new Error("Invalid event page");
+      let expected = after + 1;
+      for (const event of page.events) {
+        if (event.sequence !== expected) throw new Error("Event sequence gap");
+        this.lastSequences.set(sessionId, event.sequence);
+        this.notify(event);
+        expected++;
+      }
+      if ((this.lastSequences.get(sessionId) ?? after) < observed) {
+        const snapshot = await this.getSession(sessionId);
+        this.notify({
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId,
+          sequence: Math.max(1, snapshot.snapshotSequence),
+          timestamp: Date.now(),
+          type: "session.snapshot",
+          payload: snapshot,
+        });
+        this.lastSequences.set(sessionId, snapshot.snapshotSequence);
+      }
+    } catch {
+      const snapshot = await this.getSession(sessionId);
+      this.notify({
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId,
+        sequence: Math.max(1, snapshot.snapshotSequence),
+        timestamp: Date.now(),
+        type: "session.snapshot",
+        payload: snapshot,
+      });
+      this.lastSequences.set(sessionId, snapshot.snapshotSequence);
+    } finally {
+      this.recoveryTargets.delete(sessionId);
+    }
   }
 
   private notify(event: AgentEventEnvelope): void {
@@ -272,6 +352,7 @@ export class UmaClient {
     this.recoveryTargets.set(sessionId, sequence);
     try {
       let observed = sequence;
+      let latestSnapshotSequence = sequence;
       while (this.subscriptions.has(sessionId)) {
         const requestedThrough = this.recoveryTargets.get(sessionId) ?? observed;
         const snapshot = await this.getSession(sessionId);
@@ -279,15 +360,16 @@ export class UmaClient {
         this.notify({
           protocolVersion: PROTOCOL_VERSION,
           sessionId,
-          sequence: Math.max(1, current),
+          sequence: Math.max(1, snapshot.snapshotSequence),
           timestamp: Date.now(),
           type: "session.snapshot",
           payload: snapshot,
         });
+        latestSnapshotSequence = snapshot.snapshotSequence;
         observed = current;
         if (current === requestedThrough) break;
       }
-      this.lastSequences.set(sessionId, observed);
+      this.lastSequences.set(sessionId, Math.max(observed, latestSnapshotSequence));
     } catch {
       this.lastSequences.delete(sessionId);
     } finally {
@@ -297,7 +379,15 @@ export class UmaClient {
 
   private sendSubscriptions(): void {
     if (this.socket?.readyState === 1)
-      this.socket.send(JSON.stringify({ type: "subscribe", sessionIds: [...this.subscriptions] }));
+      this.socket.send(
+        JSON.stringify({
+          type: "subscribe",
+          sessions: [...this.subscriptions].map((id) => ({
+            id,
+            lastSequence: this.lastSequences.get(id) ?? 0,
+          })),
+        }),
+      );
   }
 
   private restartEvents(): void {

@@ -59,10 +59,10 @@ describe("server", () => {
       await rm(root, { recursive: true, force: true });
       delete process.env.UMA_TEST_TOKEN;
     });
-    expect((await app.inject({ method: "GET", url: "/api/v2/sessions" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/v3/sessions" })).statusCode).toBe(401);
     const preflight = await app.inject({
       method: "OPTIONS",
-      url: "/api/v2/sessions",
+      url: "/api/v3/sessions",
       headers: {
         origin: "https://web.example",
         "access-control-request-method": "POST",
@@ -74,7 +74,7 @@ describe("server", () => {
     expect(preflight.headers["access-control-allow-credentials"]).toBe("true");
     const deniedPreflight = await app.inject({
       method: "OPTIONS",
-      url: "/api/v2/sessions",
+      url: "/api/v3/sessions",
       headers: {
         origin: "https://attacker.example",
         "access-control-request-method": "POST",
@@ -83,7 +83,7 @@ describe("server", () => {
     expect(deniedPreflight.statusCode).toBe(403);
     const login = await app.inject({
       method: "POST",
-      url: "/api/v2/auth/login",
+      url: "/api/v3/auth/login",
       headers: { origin: "https://web.example" },
       payload: { token: "secret" },
     });
@@ -94,7 +94,7 @@ describe("server", () => {
     expect(webCookie).toBeDefined();
     const missingOrigin = await app.inject({
       method: "POST",
-      url: "/api/v2/sessions",
+      url: "/api/v3/sessions",
       headers: { cookie: `${webCookie?.name}=${webCookie?.value}` },
       payload: {},
     });
@@ -102,7 +102,7 @@ describe("server", () => {
     expect(missingOrigin.json().error.code).toBe("origin_required");
     const cookieSession = await app.inject({
       method: "POST",
-      url: "/api/v2/sessions",
+      url: "/api/v3/sessions",
       headers: {
         cookie: `${webCookie?.name}=${webCookie?.value}`,
         origin: "https://web.example",
@@ -111,27 +111,30 @@ describe("server", () => {
     });
     expect(cookieSession.statusCode).toBe(200);
     const cookieSessionId = cookieSession.json<{ id: string }>().id;
-    const socket = await app.injectWS("/api/v2/events", {
+    const socket = await app.injectWS("/api/v3/events", {
       headers: {
         cookie: `${webCookie?.name}=${webCookie?.value}`,
         origin: "https://web.example",
       },
     });
     const socketEvent = new Promise<{ type: string }>((resolve) => {
-      socket.once("message", (data) => resolve(JSON.parse(String(data)) as { type: string }));
+      socket.on("message", (data) => {
+        const event = JSON.parse(String(data)) as { type: string };
+        if (event.type === "session.snapshot") resolve(event);
+      });
     });
-    socket.send(JSON.stringify({ type: "subscribe", sessionIds: [cookieSessionId] }));
+    socket.send(JSON.stringify({ type: "subscribe", sessions: [{ id: cookieSessionId, lastSequence: 0 }] }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     runtime.updateSession(cookieSessionId, { title: "Synced over WebSocket" });
     expect((await socketEvent).type).toBe("session.snapshot");
     socket.terminate();
 
     await expect(
-      app.injectWS("/api/v2/events", { headers: { origin: "https://attacker.example" } }),
+      app.injectWS("/api/v3/events", { headers: { origin: "https://attacker.example" } }),
     ).rejects.toThrow("Unexpected server response: 403");
     const logout = await app.inject({
       method: "POST",
-      url: "/api/v2/auth/logout",
+      url: "/api/v3/auth/logout",
       headers: {
         cookie: `${webCookie?.name}=${webCookie?.value}`,
         origin: "https://web.example",
@@ -142,7 +145,7 @@ describe("server", () => {
     expect(logout.headers["set-cookie"]).toContain("Secure");
     const created = await app.inject({
       method: "POST",
-      url: "/api/v2/sessions",
+      url: "/api/v3/sessions",
       headers: { authorization: "Bearer secret" },
       payload: { title: "API test" },
     });
@@ -150,33 +153,33 @@ describe("server", () => {
     const session = created.json<{ id: string }>();
     const snapshot = await app.inject({
       method: "GET",
-      url: `/api/v2/sessions/${session.id}`,
+      url: `/api/v3/sessions/${session.id}`,
       headers: { authorization: "Bearer secret" },
     });
     expect(snapshot.json<{ session: { title: string } }>().session.title).toBe("API test");
     const invalidPatch = await app.inject({
       method: "PATCH",
-      url: `/api/v2/sessions/${session.id}`,
+      url: `/api/v3/sessions/${session.id}`,
       headers: { authorization: "Bearer secret" },
       payload: { workspace: "elsewhere" },
     });
     expect(invalidPatch.statusCode).toBe(400);
     const crossOriginLogin = await app.inject({
       method: "POST",
-      url: "/api/v2/auth/login",
+      url: "/api/v3/auth/login",
       headers: { origin: "https://attacker.example" },
       payload: { token: "secret" },
     });
     expect(crossOriginLogin.statusCode).toBe(403);
     const bearerFromWrongOrigin = await app.inject({
       method: "GET",
-      url: "/api/v2/sessions",
+      url: "/api/v3/sessions",
       headers: { authorization: "Bearer secret", origin: "https://attacker.example" },
     });
     expect(bearerFromWrongOrigin.statusCode).toBe(403);
     const unknown = await app.inject({
       method: "GET",
-      url: "/api/v2/unknown",
+      url: "/api/v3/unknown",
       headers: { authorization: "Bearer secret" },
     });
     expect(unknown.statusCode).toBe(404);

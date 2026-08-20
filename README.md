@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI 和 Web 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.3.0`，协议版本为 `2`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.4.0`，协议版本为 `3`。
 
 ## 当前能力
 
@@ -79,16 +79,34 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 ## API 摘要
 
-- `GET/POST /api/v2/sessions`
-- `GET/PATCH/DELETE /api/v2/sessions/:id`
-- `POST /api/v2/sessions/:id/messages`，返回 `202 { runId, status }`
-- `POST /api/v2/sessions/:id/cancel`
-- `POST /api/v2/approvals/:id`
-- `POST /api/v2/uploads`
-- `GET /api/v2/events` WebSocket
-- `/api/v2/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `GET/POST /api/v3/sessions`
+- `GET/PATCH/DELETE /api/v3/sessions/:id`
+- `GET /api/v3/sessions/:id/events?after=<sequence>` 增量事件
+- `POST /api/v3/sessions/:id/messages`，返回 `202 { runId, status }`
+- `POST /api/v3/sessions/:id/cancel`
+- `GET/POST /api/v3/runs/:id`、`actions`、`resume`
+- `POST /api/v3/approvals/:id`、`POST /api/v3/uploads`
+- `GET /api/v3/events` WebSocket
+- `/api/v3/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
 
-WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessionIds": [...] }`。快照始终是事实源，客户端重连后重新拉取快照。
+WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
+
+## 飞书 Adapter
+
+飞书接入是独立进程，不访问 Core SQLite。构建后使用以下环境变量启动：
+
+```powershell
+$env:FEISHU_APP_ID = "..."
+$env:FEISHU_APP_SECRET = "..."
+$env:FEISHU_VERIFICATION_TOKEN = "..."
+$env:FEISHU_ENCRYPT_KEY = "..."
+$env:UMA_SERVER_URL = "http://127.0.0.1:3210"
+$env:UMA_TOKEN = $env:UMA_AUTH_TOKEN
+npm run build --workspace=@uma-agent/feishu-adapter
+npm run start --workspace=@uma-agent/feishu-adapter
+```
+
+Adapter 对 Webhook 入站按外部消息 ID 去重，私聊全部进入 Core，群聊仅处理 @机器人或线程回复；Adapter 自己的 SQLite 只保存会话映射、卡片游标和回调状态。
 
 ## 部署
 

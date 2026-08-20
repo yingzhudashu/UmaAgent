@@ -258,6 +258,25 @@ async function auditCommand(): Promise<void> {
 }
 
 async function runCommand(): Promise<void> {
+  const action = positionals[0];
+  if (action === "resume" && positionals[1]) {
+    console.log(JSON.stringify(await client.resumeRun(positionals[1]), null, 2));
+    return;
+  }
+  if (action === "actions" && positionals[1]) {
+    console.log(JSON.stringify(await client.listRunActions(positionals[1]), null, 2));
+    return;
+  }
+  if ((action === "confirm" || action === "reject") && positionals[1] && positionals[2]) {
+    console.log(
+      JSON.stringify(
+        await client.confirmRunAction(positionals[1], positionals[2], action === "confirm"),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
   const prompt = positionals.join(" ").trim();
   if (!prompt) throw new Error("uma run --json <prompt>");
   const session = await chooseInitialSession();
@@ -342,7 +361,7 @@ async function main(): Promise<void> {
   else if (command === "audit") await auditCommand();
   else
     console.log(
-      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa session list|create|delete|rename\numa task start|list|show|cancel\numa memory list|review|accept|reject\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa doctor",
+      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|actions|confirm|reject ...\numa session list|create|delete|rename\numa task start|list|show|cancel\numa memory list|review|accept|reject\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa doctor",
     );
   client.close();
 }

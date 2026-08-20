@@ -62,6 +62,7 @@ CREATE TABLE messages (
   name TEXT,
   content TEXT NOT NULL,
   payload_json TEXT,
+  source_json TEXT,
   attachment_ids_json TEXT NOT NULL DEFAULT '[]',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -158,6 +159,51 @@ CREATE TABLE model_calls (
 );
 CREATE INDEX model_calls_run_created ON model_calls(run_id,created_at);
 
+CREATE TABLE session_events (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
+  sequence INTEGER NOT NULL,
+  protocol_version INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(session_id, sequence)
+);
+CREATE INDEX session_events_session_sequence ON session_events(session_id, sequence);
+
+CREATE TABLE run_checkpoints (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  checkpoint_no INTEGER NOT NULL,
+  phase TEXT NOT NULL,
+  plan_step_id TEXT REFERENCES plan_steps(id) ON DELETE SET NULL,
+  turn_count INTEGER NOT NULL,
+  last_message_sequence INTEGER NOT NULL,
+  context_summary_sequence INTEGER,
+  safe_to_resume INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(run_id, checkpoint_no)
+);
+CREATE INDEX run_checkpoints_run_created ON run_checkpoints(run_id, checkpoint_no DESC);
+
+CREATE TABLE run_actions (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  checkpoint_id TEXT REFERENCES run_checkpoints(id) ON DELETE SET NULL,
+  tool_call_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  tool_class TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  input_json TEXT,
+  result_json TEXT,
+  status TEXT NOT NULL,
+  started_at INTEGER,
+  completed_at INTEGER,
+  error TEXT
+);
+CREATE INDEX run_actions_run_status ON run_actions(run_id, status);
+
 CREATE TABLE context_summaries (
   session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
   through_sequence INTEGER NOT NULL,
@@ -187,4 +233,4 @@ CREATE TABLE web_sessions (
   created_at INTEGER NOT NULL
 );
 
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;

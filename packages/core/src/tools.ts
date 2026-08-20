@@ -131,7 +131,7 @@ export async function safeFetch(raw: string, signal?: AbortSignal): Promise<stri
         redirect: "manual",
         dispatcher,
         ...(signal ? { signal } : {}),
-        headers: { "user-agent": "UmaAgent/0.2" },
+        headers: { "user-agent": "UmaAgent/0.4" },
       });
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");

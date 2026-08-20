@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 3 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -47,6 +47,14 @@ export const AttachmentSchema = Strict({
 });
 export type Attachment = Static<typeof AttachmentSchema>;
 
+export const MessageSourceSchema = Strict({
+  adapter: Id,
+  conversationId: Id,
+  externalMessageId: Id,
+  senderId: Type.Optional(Id),
+});
+export type MessageSource = Static<typeof MessageSourceSchema>;
+
 export const TranscriptItemSchema = Strict({
   id: Id,
   sequence: Type.Integer({ minimum: 1 }),
@@ -61,6 +69,7 @@ export const TranscriptItemSchema = Strict({
   name: Type.Optional(Type.String()),
   runId: Type.Optional(Id),
   attachments: Type.Array(AttachmentSchema),
+  source: Type.Optional(MessageSourceSchema),
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });
@@ -87,6 +96,28 @@ export const RunSchema = Strict({
   route: Type.Optional(Type.Union([Type.Literal("direct"), Type.Literal("clarify"), Type.Literal("plan")])),
   reasoningSummary: Type.Optional(Type.String()),
   clarificationCount: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })),
+  resume: Type.Optional(
+    Strict({
+      state: Type.Union([
+        Type.Literal("none"),
+        Type.Literal("available"),
+        Type.Literal("needs_confirmation"),
+        Type.Literal("exhausted"),
+      ]),
+      checkpointId: Type.Optional(Id),
+      pendingActionIds: Type.Array(Id),
+      lastSafePhase: Type.Optional(
+        Type.Union([
+          Type.Literal("preflight"),
+          Type.Literal("plan"),
+          Type.Literal("step"),
+          Type.Literal("model"),
+          Type.Literal("tool"),
+          Type.Literal("verify"),
+        ]),
+      ),
+    }),
+  ),
   plan: Type.Array(PlanStepSchema),
   error: Type.Optional(Type.String()),
   createdAt: Timestamp,
@@ -111,6 +142,7 @@ export const SessionSnapshotSchema = Strict({
   transcript: Type.Array(TranscriptItemSchema),
   runs: Type.Array(RunSchema),
   revision: Type.Integer({ minimum: 0 }),
+  snapshotSequence: Type.Integer({ minimum: 0 }),
 });
 export type SessionSnapshot = Static<typeof SessionSnapshotSchema>;
 
@@ -151,6 +183,8 @@ export const KnowledgeSourceSchema = Strict({
 export type KnowledgeSource = Static<typeof KnowledgeSourceSchema>;
 
 export const EventTypeSchema = Type.Union([
+  Type.Literal("sync.started"),
+  Type.Literal("sync.completed"),
   Type.Literal("session.snapshot"),
   Type.Literal("run.updated"),
   Type.Literal("message.started"),
@@ -205,6 +239,7 @@ export const SendMessageRequestSchema = Strict({
   text: Type.String({ minLength: 1, maxLength: 1_000_000 }),
   attachmentIds: Type.Optional(Type.Array(Id, { maxItems: 20 })),
   mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("direct"), Type.Literal("plan")])),
+  source: Type.Optional(MessageSourceSchema),
 });
 export type SendMessageRequest = Static<typeof SendMessageRequestSchema>;
 
@@ -273,3 +308,39 @@ export const AuditRecordSchema = Strict({
   createdAt: Timestamp,
 });
 export type AuditRecord = Static<typeof AuditRecordSchema>;
+
+export const SessionEventPageSchema = Strict({
+  sessionId: Id,
+  fromSequence: Type.Integer({ minimum: 0 }),
+  toSequence: Type.Integer({ minimum: 0 }),
+  events: Type.Array(AgentEventEnvelopeSchema),
+  snapshotSequence: Type.Integer({ minimum: 0 }),
+});
+export type SessionEventPage = Static<typeof SessionEventPageSchema>;
+
+export const RunActionStatusSchema = Type.Union([
+  Type.Literal("prepared"),
+  Type.Literal("running"),
+  Type.Literal("completed"),
+  Type.Literal("failed"),
+  Type.Literal("uncertain"),
+  Type.Literal("confirmed"),
+  Type.Literal("rejected"),
+]);
+
+export const RunActionSchema = Strict({
+  id: Id,
+  runId: Id,
+  checkpointId: Type.Optional(Id),
+  toolCallId: Id,
+  toolName: Id,
+  toolClass: Type.String({ minLength: 1 }),
+  idempotencyKey: Id,
+  input: Type.Optional(Type.Unknown()),
+  result: Type.Optional(Type.Unknown()),
+  status: RunActionStatusSchema,
+  startedAt: Type.Optional(Timestamp),
+  completedAt: Type.Optional(Timestamp),
+  error: Type.Optional(Type.String()),
+});
+export type RunAction = Static<typeof RunActionSchema>;

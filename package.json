@@ -1,6 +1,6 @@
 {
   "name": "uma-agent",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -11,7 +11,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "npm run build --workspace=@uma-agent/protocol && npm run build --workspace=@uma-agent/client && npm run build --workspace=@uma-agent/core && npm run build --workspace=@uma-agent/server && npm run build --workspace=@uma-agent/cli && npm run build --workspace=@uma-agent/web",
+    "build": "npm run build --workspace=@uma-agent/protocol && npm run build --workspace=@uma-agent/client && npm run build --workspace=@uma-agent/core && npm run build --workspace=@uma-agent/server && npm run build --workspace=@uma-agent/cli && npm run build --workspace=@uma-agent/web && npm run build --workspace=@uma-agent/feishu-adapter",
     "check": "biome check . && tsc -b",
     "dev": "npm run dev --workspace=@uma-agent/server",
     "dev:faux": "npm run build && node scripts/faux-server.mjs",

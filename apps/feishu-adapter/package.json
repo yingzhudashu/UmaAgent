@@ -1,0 +1,21 @@
+{
+  "name": "@uma-agent/feishu-adapter",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').copyFileSync('src/schema.sql','dist/schema.sql')\"",
+    "start": "node dist/main.js",
+    "dev": "node --watch --import tsx src/main.ts"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.62.1",
+    "@uma-agent/client": "0.4.0",
+    "@uma-agent/protocol": "0.4.0",
+    "fastify": "5.12.1"
+  },
+  "devDependencies": {
+    "tsx": "4.22.1"
+  }
+}
