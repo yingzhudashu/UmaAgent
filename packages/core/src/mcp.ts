@@ -24,7 +24,7 @@ export class McpManager {
   async connect(configs: McpServerConfig[], toolTimeoutMs: number): Promise<void> {
     await this.close();
     for (const config of configs) {
-      const client = new Client({ name: "uma-agent", version: "0.5.0" });
+      const client = new Client({ name: "uma-agent", version: "0.6.0" });
       try {
         const transport =
           config.transport === "stdio"

@@ -13,7 +13,9 @@ import {
 import {
   type AssistantMessage,
   contentText,
+  type ImageContent,
   type Message,
+  type Model,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import type {
@@ -32,6 +34,8 @@ import type {
   SkillSummary,
   TranscriptItem,
 } from "@uma-agent/protocol";
+import Type from "typebox";
+import Value from "typebox/value";
 import { UmaDatabase } from "./database.js";
 import { EventHub, type EventListener } from "./events.js";
 import { KnowledgeService } from "./knowledge.js";
@@ -91,27 +95,49 @@ function extractJson(text: string): unknown {
   return JSON.parse((fenced ?? text).trim());
 }
 
+const TaskClassificationSchema = Type.Object(
+  { taskClass: Type.Union([Type.Literal("simple"), Type.Literal("standard"), Type.Literal("complex")]) },
+  { additionalProperties: false },
+);
+const PreflightDecisionSchema = Type.Object(
+  {
+    taskClass: Type.Union([Type.Literal("simple"), Type.Literal("standard"), Type.Literal("complex")]),
+    route: Type.Union([Type.Literal("direct"), Type.Literal("clarify"), Type.Literal("plan")]),
+    goal: Type.String({ minLength: 1 }),
+    reasoningSummary: Type.String(),
+    successCriteria: Type.Array(Type.String({ minLength: 1 })),
+    questions: Type.Array(Type.String({ minLength: 1 })),
+    steps: Type.Array(Type.String({ minLength: 1 })),
+  },
+  { additionalProperties: false },
+);
+const VerificationSchema = Type.Object(
+  { accepted: Type.Boolean(), feedback: Type.String() },
+  { additionalProperties: false },
+);
+const MemoryExtractionSchema = Type.Array(
+  Type.Object(
+    {
+      content: Type.String({ minLength: 1 }),
+      confidence: Type.Number({ minimum: 0, maximum: 1 }),
+      scope: Type.Union([Type.Literal("global"), Type.Literal("session")]),
+    },
+    { additionalProperties: false },
+  ),
+);
+
 function decisionFrom(value: unknown): PreflightDecision {
-  if (!value || typeof value !== "object") throw new Error("Preflight response is not an object");
-  const data = value as Record<string, unknown>;
-  if (data.route !== "direct" && data.route !== "clarify" && data.route !== "plan")
-    throw new Error("Preflight route is invalid");
-  const strings = (input: unknown) =>
-    Array.isArray(input) ? input.filter((item): item is string => typeof item === "string") : [];
-  const goal = typeof data.goal === "string" ? data.goal : "";
-  if (!goal) throw new Error("Preflight goal is missing");
-  return {
-    route: data.route,
-    goal,
-    reasoningSummary: typeof data.reasoningSummary === "string" ? data.reasoningSummary : "",
-    successCriteria: strings(data.successCriteria),
-    questions: strings(data.questions),
-    steps: strings(data.steps),
-  };
+  if (!Value.Check(PreflightDecisionSchema, value)) throw new Error("Preflight response is invalid");
+  return value;
 }
 
 function isSecretLike(value: string): boolean {
   return /(api[_-]?key|bearer\s+|password|secret|token\s*[:=]|-----BEGIN)/i.test(value);
+}
+
+function isTransientProviderError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(429|rate.?limit|5\d\d|network|timeout|timed out|econn|fetch failed|socket hang up)/i.test(message);
 }
 
 export class UmaRuntime {
@@ -142,7 +168,11 @@ export class UmaRuntime {
       this.stateLock.release();
       throw error;
     }
-    this.knowledge = new KnowledgeService(this.database);
+    this.knowledge = new KnowledgeService(
+      this.database,
+      config.server.workspaceRoots,
+      config.server.stateDir,
+    );
     this.models = new ModelRegistry(config);
     this.skills = new SkillRegistry(config.skillsDirs);
     this.workspacePolicy = new WorkspacePolicy(config.server.workspaceRoots);
@@ -270,7 +300,7 @@ export class UmaRuntime {
       });
     }
     if (decision === "acknowledge") {
-      return this.events.transaction(() => {
+      const acknowledged = this.events.transaction(() => {
         const transition = this.database.transitionRunAction(actionId, ["uncertain"], {
           status: "acknowledged",
         });
@@ -279,6 +309,8 @@ export class UmaRuntime {
         this.events.emit(run.sessionId, runId, "run.action_decided", { action: updated, decision });
         return updated;
       });
+      if (acknowledged.status === "acknowledged") await this.reconcileAcknowledgedAction(run, acknowledged);
+      return acknowledged;
     }
     return this.executePreparedAction(run, action);
   }
@@ -343,10 +375,29 @@ export class UmaRuntime {
   listMemoryFacts(status?: "active" | "candidate" | "rejected") {
     return this.database.listMemoryFacts(status);
   }
+  createMemoryFact(sessionId: string, scope: "global" | "session", content: string) {
+    this.database.getSession(sessionId);
+    const normalized = content.trim();
+    if (!normalized) throw new Error("Memory content is required");
+    if (isSecretLike(normalized)) throw new Error("Memory content appears to contain a secret");
+    return this.events.transaction(() => {
+      const fact = this.database.addMemoryFact({
+        sessionId,
+        scope,
+        content: normalized,
+        confidence: 1,
+        status: "active",
+      });
+      this.events.emit(sessionId, undefined, "memory.updated", fact);
+      return fact;
+    });
+  }
   reviewMemoryFact(id: string, status: "active" | "candidate" | "rejected") {
     return this.events.transaction(() => {
       const fact = this.database.updateMemoryFact(id, status);
-      if (fact.sourceRunId) {
+      if (fact.sessionId) {
+        this.events.emit(fact.sessionId, fact.sourceRunId, "memory.updated", fact);
+      } else if (fact.sourceRunId) {
         const run = this.database.getRun(fact.sourceRunId);
         this.events.emit(run.sessionId, run.id, "memory.updated", fact);
       }
@@ -354,7 +405,18 @@ export class UmaRuntime {
     });
   }
   deleteMemoryFact(id: string): void {
-    this.database.deleteMemoryFact(id);
+    const fact = this.database.getMemoryFact(id);
+    if (!fact.sessionId) {
+      this.database.deleteMemoryFact(id);
+      return;
+    }
+    this.events.transaction(() => {
+      this.database.deleteMemoryFact(id);
+      this.events.emit(fact.sessionId as string, fact.sourceRunId, "memory.updated", {
+        ...fact,
+        deleted: true,
+      });
+    });
   }
   audit(runId: string) {
     return this.database.listAudit(runId);
@@ -490,7 +552,15 @@ export class UmaRuntime {
     }
     const attachmentIds = input.attachmentIds ?? [];
     for (const id of attachmentIds) this.database.validateAttachmentForSession(id, sessionId);
+    const hasImages = attachmentIds.some((id) =>
+      this.database.getAttachment(id)?.mimeType.startsWith("image/"),
+    );
+    const runModel = this.models.snapshot(hasImages ? this.config.roles.vision : session.model);
+    if (hasImages && !runModel.capabilities.vision)
+      throw new Error("Configured vision model does not support image input");
     const awaiting = this.database.findAwaitingRun(sessionId);
+    if (awaiting && hasImages && !awaiting.model.capabilities.vision)
+      throw new Error("The awaiting run model does not support image input; start a new vision run");
     if (awaiting && (awaiting.clarificationCount ?? 0) >= 3) {
       this.events.transaction(() => {
         const failed = this.database.updateRun(awaiting.id, {
@@ -505,7 +575,7 @@ export class UmaRuntime {
     const { run, created } = this.events.transaction(() => {
       const result = continuation
         ? { run: continuation, created: true }
-        : this.database.createRun(sessionId, input.messageId);
+        : this.database.createRun(sessionId, input.messageId, runModel, session.thinkingLevel);
       if (!result.created) return result;
       this.database.insertMessage({
         id: input.messageId,
@@ -564,7 +634,30 @@ export class UmaRuntime {
     controller.abort();
   }
 
+  cancelRun(runId: string): Run {
+    const run = this.database.getRun(runId);
+    if (["completed", "failed", "cancelled"].includes(run.status)) return run;
+    if (run.status === "queued") {
+      return this.events.transaction(() => {
+        const cancelled = this.database.updateRun(runId, {
+          status: "cancelled",
+          error: "Cancelled before execution",
+        });
+        this.events.emit(run.sessionId, runId, "run.updated", cancelled);
+        return cancelled;
+      });
+    }
+    const controller = this.controllers.get(run.sessionId);
+    if (controller) {
+      controller.abort();
+      return this.database.getRun(runId);
+    }
+    throw new Error("Run is not cancellable");
+  }
+
   resolveApproval(id: string, approved: boolean): Approval {
+    const current = this.database.getApproval(id);
+    if (current.status !== "pending") return current;
     const approval = this.events.transaction(() => {
       const value = this.database.resolveApproval(id, approved);
       this.database.addAudit({
@@ -609,6 +702,56 @@ export class UmaRuntime {
     });
   }
 
+  private async completeControl(
+    runId: string,
+    role: "fast" | "reasoning",
+    systemPrompt: string,
+    prompt: string,
+    signal: AbortSignal,
+    allowTransientRetries = true,
+  ): Promise<AssistantMessage> {
+    const model = this.models.forRole(role);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const startedAt = Date.now();
+      const callId = this.database.startModelCall({
+        runId,
+        provider: model.provider,
+        model: model.id,
+        role,
+      });
+      try {
+        const response = await this.models.models.completeSimple(
+          model,
+          { systemPrompt, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
+          { signal, temperature: 0 },
+        );
+        const retryable =
+          allowTransientRetries &&
+          response.stopReason === "error" &&
+          /(429|rate.?limit|5\d\d|network|timeout|econn|fetch failed)/i.test(response.errorMessage ?? "");
+        this.database.finishModelCall(callId, {
+          status: response.stopReason,
+          durationMs: Date.now() - startedAt,
+          usage: response.usage,
+          ...(response.errorMessage ? { error: response.errorMessage } : {}),
+        });
+        if (!retryable || attempt === 2) return response;
+        lastError = new Error(response.errorMessage ?? "Provider request failed");
+      } catch (error) {
+        this.database.finishModelCall(callId, {
+          status: signal.aborted ? "aborted" : "failed",
+          durationMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        lastError = error;
+        if (signal.aborted || attempt === 2 || !allowTransientRetries || !isTransientProviderError(error))
+          throw error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("Provider request failed");
+  }
+
   private async preflight(
     session: Session,
     prompt: string,
@@ -616,41 +759,91 @@ export class UmaRuntime {
     signal: AbortSignal,
     runId: string,
   ): Promise<PreflightDecision> {
-    const force =
-      mode === "direct"
-        ? "You must choose direct."
-        : mode === "plan"
-          ? "You must choose plan."
-          : "Choose the cheapest suitable route.";
-    const startedAt = Date.now();
-    const response = await this.models.models.completeSimple(
-      this.models.get(session.model),
-      {
-        systemPrompt:
-          "You route an agent request. Return JSON only with route (direct|clarify|plan), goal, reasoningSummary (one short sentence), successCriteria (string[]), questions (string[]), and steps (string[]). Clarify only when missing information blocks safe execution. Plan for multi-step work. Never include private chain-of-thought.",
-        messages: [{ role: "user", content: `${force}\n\n${prompt}`, timestamp: Date.now() }],
-      },
-      { signal, temperature: 0 },
-    );
-    this.database.addModelCall({
-      runId,
-      provider: session.model.provider,
-      model: session.model.id,
-      role: "default",
-      status: response.stopReason,
-      durationMs: Date.now() - startedAt,
-    });
+    let taskClass: PreflightDecision["taskClass"];
+    if (mode === "direct") taskClass = "simple";
+    else if (mode === "plan") taskClass = "complex";
+    else {
+      const classify = async (repair?: string) =>
+        this.completeControl(
+          runId,
+          "fast",
+          'Classify the request. Return JSON only: {"taskClass":"simple|standard|complex"}. Simple is a direct answer or one obvious action; standard may need clarification; complex needs multiple ordered steps. Do not include reasoning.',
+          repair ?? prompt,
+          signal,
+        );
+      let response = await classify();
+      if (response.stopReason === "error" || response.stopReason === "aborted")
+        throw new Error(response.errorMessage ?? "Task classification failed");
+      try {
+        const value = extractJson(contentText(response.content));
+        if (!Value.Check(TaskClassificationSchema, value)) throw new Error("Invalid taskClass");
+        taskClass = value.taskClass;
+      } catch {
+        response = await classify(
+          `The previous response was invalid. Return exactly one valid JSON object for this request:\n${prompt}`,
+        );
+        if (response.stopReason === "error" || response.stopReason === "aborted")
+          throw new Error(response.errorMessage ?? "Task classification repair failed");
+        let value: unknown;
+        try {
+          value = extractJson(contentText(response.content));
+        } catch {
+          throw new Error("Provider contract error: invalid task classification");
+        }
+        if (!Value.Check(TaskClassificationSchema, value))
+          throw new Error("Provider contract error: invalid task classification");
+        taskClass = value.taskClass;
+      }
+    }
+    if (taskClass === "simple") {
+      return {
+        taskClass,
+        route: "direct",
+        goal: prompt,
+        reasoningSummary: "Direct execution is sufficient",
+        successCriteria: ["Satisfy the user request accurately"],
+        questions: [],
+        steps: [],
+      };
+    }
+    const memory = this.database.searchMemory(session.id, prompt, 5);
+    const controlPrompt = `${prompt}${memory.length ? `\n\nKnown active user facts:\n${memory.join("\n")}` : ""}`;
+    const decide = async (repair?: string) =>
+      this.completeControl(
+        runId,
+        "reasoning",
+        "Specify an agent request. Return JSON only with taskClass (standard|complex), route (direct|clarify|plan), goal, reasoningSummary (one public sentence), successCriteria (string[]), questions (string[]), and steps (string[]). Clarify only if missing information blocks safe work. Complex work must plan unless clarification is required. Never include chain-of-thought.",
+        repair ?? controlPrompt,
+        signal,
+      );
+    let response = await decide();
     if (response.stopReason === "error" || response.stopReason === "aborted")
       throw new Error(response.errorMessage ?? "Preflight failed");
-    const decision = decisionFrom(extractJson(contentText(response.content)));
+    let decision: PreflightDecision;
+    try {
+      decision = decisionFrom(extractJson(contentText(response.content)));
+    } catch {
+      response = await decide(
+        `The previous response was invalid. Return exactly one valid JSON object for this request:\n${controlPrompt}`,
+      );
+      if (response.stopReason === "error" || response.stopReason === "aborted")
+        throw new Error(response.errorMessage ?? "Preflight repair failed");
+      try {
+        decision = decisionFrom(extractJson(contentText(response.content)));
+      } catch {
+        throw new Error("Provider contract error: invalid preflight response");
+      }
+    }
+    decision.taskClass = taskClass;
+    if (taskClass === "complex" && decision.route === "direct")
+      throw new Error("Provider contract error: complex tasks require a plan or clarification");
     this.database.addAudit({
       runId,
       kind: "model",
-      name: `${session.model.provider}/${session.model.id}:preflight`,
+      name: `${this.models.forRole("reasoning").provider}/${this.models.forRole("reasoning").id}:preflight`,
       output: decision,
       status: response.stopReason,
       usage: response.usage,
-      durationMs: Date.now() - startedAt,
     });
     if (decision.route === "clarify" && decision.questions.length === 0)
       throw new Error("Clarification route requires questions");
@@ -666,6 +859,10 @@ export class UmaRuntime {
     resumeFromCheckpoint = false,
   ): Promise<void> {
     const release = await this.semaphore.acquire();
+    if (this.database.getRun(runId).status === "cancelled") {
+      release();
+      return;
+    }
     if (this.stopping) {
       this.transitionRun(sessionAtQueueTime.id, runId, {
         status: "cancelled",
@@ -677,9 +874,19 @@ export class UmaRuntime {
     const controller = new AbortController();
     this.controllers.set(sessionAtQueueTime.id, controller);
     try {
-      const session = this.database.getSession(sessionAtQueueTime.id);
+      const storedSession = this.database.getSession(sessionAtQueueTime.id);
+      const frozenRun = this.database.getRun(runId);
+      const session: Session = {
+        ...storedSession,
+        model: frozenRun.model.ref,
+        thinkingLevel: frozenRun.thinkingLevel,
+      };
       this.events.transaction(() => {
-        const preflightRun = this.database.updateRun(runId, { status: "preflight", error: null });
+        const preflightRun = this.database.updateRun(runId, {
+          status: "preflight",
+          phase: "preflight",
+          error: null,
+        });
         this.database.addAudit({
           runId,
           kind: "run",
@@ -694,9 +901,10 @@ export class UmaRuntime {
         resumeFromCheckpoint && currentRun.route && currentRun.route !== "clarify"
           ? {
               route: currentRun.route,
-              goal: input.text,
+              taskClass: currentRun.taskClass ?? "standard",
+              goal: currentRun.goal ?? input.text,
               reasoningSummary: currentRun.reasoningSummary ?? "Resuming from checkpoint",
-              successCriteria: [],
+              successCriteria: currentRun.successCriteria,
               questions: [],
               steps: currentRun.plan.map((step) => step.title),
             }
@@ -710,6 +918,9 @@ export class UmaRuntime {
       this.events.transaction(() => {
         const routed = this.database.updateRun(runId, {
           route: decision.route,
+          taskClass: decision.taskClass,
+          goal: decision.goal,
+          successCriteria: decision.successCriteria,
           reasoningSummary: decision.reasoningSummary,
         });
         this.database.createCheckpoint({
@@ -749,7 +960,11 @@ export class UmaRuntime {
               timestamp: Date.now(),
             } as AssistantMessage,
           });
-          const awaiting = this.database.updateRun(runId, { status: "awaiting_input", error: null });
+          const awaiting = this.database.updateRun(runId, {
+            status: "awaiting_input",
+            phase: "clarify",
+            error: null,
+          });
           this.events.emit(session.id, runId, "message.completed", message);
           this.events.emit(session.id, runId, "run.updated", awaiting);
           this.events.emit(session.id, runId, "run.awaiting_input", {
@@ -773,8 +988,8 @@ export class UmaRuntime {
           this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
         });
       }
-      this.transitionRun(session.id, runId, { status: "running", error: null });
-      const budget = { turns: this.database.getLatestCheckpoint(runId)?.turnCount ?? 0 };
+      this.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
+      const budget = { turns: this.database.getRun(runId).turnCount };
       if (decision.route === "plan") {
         for (const step of this.database.listPlan(runId)) {
           if (step.status === "completed") continue;
@@ -820,7 +1035,7 @@ export class UmaRuntime {
       }
       if (controller.signal.aborted) throw new DOMException("Run cancelled", "AbortError");
       if (decision.route === "plan") {
-        this.transitionRun(session.id, runId, { status: "verifying" });
+        this.transitionRun(session.id, runId, { status: "verifying", phase: "verify" });
         await this.verifyAndCorrect(session, runId, decision, controller.signal);
         this.events.transaction(() => {
           this.database.createCheckpoint({
@@ -863,7 +1078,7 @@ export class UmaRuntime {
           ...(error instanceof Error ? { error: error.message } : {}),
         });
         for (const step of this.database.listPlan(runId)) {
-          if (step.status === "running" || step.status === "pending")
+          if (step.status === "running")
             this.database.updatePlanStep(
               step.id,
               "failed",
@@ -880,35 +1095,76 @@ export class UmaRuntime {
   }
 
   private async extractMemories(session: Session, runId: string, signal: AbortSignal): Promise<void> {
+    const model = this.models.forRole("reasoning");
+    const transcript = this.database
+      .getSnapshot(session.id)
+      .transcript.filter((item) => item.runId === runId && item.role === "user")
+      .map((item) => item.content)
+      .join("\n");
+    if (!transcript) return;
+    const invoke = async (systemPrompt: string, prompt: string) => {
+      const startedAt = Date.now();
+      const callId = this.database.startModelCall({
+        runId,
+        provider: model.provider,
+        model: model.id,
+        role: "reasoning:memory",
+      });
+      try {
+        const response = await this.models.models.completeSimple(
+          model,
+          {
+            systemPrompt,
+            messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+          },
+          { signal, temperature: 0 },
+        );
+        this.database.finishModelCall(callId, {
+          status: response.stopReason,
+          durationMs: Date.now() - startedAt,
+          usage: response.usage,
+          ...(response.errorMessage ? { error: response.errorMessage } : {}),
+        });
+        return response;
+      } catch (error) {
+        this.database.finishModelCall(callId, {
+          status: signal.aborted ? "aborted" : "failed",
+          durationMs: Date.now() - startedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    };
     try {
-      const transcript = this.database
-        .getSnapshot(session.id)
-        .transcript.filter((item) => item.runId === runId && item.role === "user")
-        .map((item) => item.content)
-        .join("\n");
-      if (!transcript) return;
-      const response = await this.models.models.completeSimple(
-        this.models.forRole("reasoning"),
-        {
-          systemPrompt:
-            "Extract durable user facts only. Return JSON array of objects with content, confidence (0..1), and scope (global|session). Return [] when none. Never extract secrets or hidden reasoning.",
-          messages: [{ role: "user", content: transcript, timestamp: Date.now() }],
-        },
-        { signal, temperature: 0 },
-      );
+      const systemPrompt =
+        "Extract durable user facts only. Return JSON array of objects with content, confidence (0..1), and scope (global|session). Return [] when none. Never extract secrets or hidden reasoning.";
+      let response = await invoke(systemPrompt, transcript);
       if (response.stopReason === "error" || response.stopReason === "aborted") return;
-      const values = extractJson(contentText(response.content));
-      if (!Array.isArray(values)) return;
+      let values: unknown;
+      try {
+        values = extractJson(contentText(response.content));
+        if (!Value.Check(MemoryExtractionSchema, values)) throw new Error("Invalid memory extraction");
+      } catch {
+        response = await invoke(
+          "Return exactly one valid JSON array of memory facts, or []. Do not include Markdown or commentary.",
+          transcript,
+        );
+        if (response.stopReason === "error" || response.stopReason === "aborted") return;
+        try {
+          values = extractJson(contentText(response.content));
+        } catch {
+          throw new Error("Provider contract error: invalid memory extraction response");
+        }
+        if (!Value.Check(MemoryExtractionSchema, values))
+          throw new Error("Provider contract error: invalid memory extraction response");
+      }
       for (const value of values) {
-        if (!value || typeof value !== "object") continue;
-        const item = value as Record<string, unknown>;
-        const content = typeof item.content === "string" ? item.content.trim() : "";
-        const confidence = typeof item.confidence === "number" ? item.confidence : 0;
-        const scope = item.scope === "global" ? "global" : "session";
-        if (!content || isSecretLike(content) || confidence < 0 || confidence > 1) continue;
+        const content = value.content.trim();
+        const { confidence, scope } = value;
+        if (!content || isSecretLike(content)) continue;
         this.events.transaction(() => {
           const fact = this.database.addMemoryFact({
-            ...(scope === "session" ? { sessionId: session.id } : {}),
+            sessionId: session.id,
             scope,
             content,
             confidence,
@@ -918,8 +1174,9 @@ export class UmaRuntime {
           this.events.emit(session.id, runId, "memory.updated", fact);
         });
       }
-    } catch {
-      // Memory extraction is advisory and never changes run success.
+    } catch (error) {
+      if (error instanceof Error && /provider contract/i.test(error.message)) throw error;
+      // Provider availability must not discard an otherwise completed user task.
     }
   }
 
@@ -929,8 +1186,10 @@ export class UmaRuntime {
         session,
         database: this.database,
         knowledge: this.knowledge,
+        skills: this.skills,
         workspacePolicy: this.workspacePolicy,
         toolTimeoutMs: this.config.runtime.toolTimeoutMs,
+        memoryWrite: (scope, content) => this.createMemoryFact(session.id, scope, content),
       }),
       ...(session.mode === "workspace" ? this.mcp.tools() : []),
     ];
@@ -942,13 +1201,54 @@ export class UmaRuntime {
     return this.executeRecoveredAction(run, action, false);
   }
 
+  private async reconcileAcknowledgedAction(run: Run, action: RunAction): Promise<void> {
+    const stored = this.database.getSession(run.sessionId);
+    const session: Session = {
+      ...stored,
+      model: run.model.ref,
+      thinkingLevel: run.thinkingLevel,
+    };
+    const prompt = [
+      `A side-effect action may already have executed before interruption: ${action.toolName}.`,
+      `Recorded input: ${JSON.stringify(action.input ?? {})}`,
+      "Use only read-only tools to inspect the current state. Do not repeat or compensate for the action. Summarize what can be observed so a later explicit resume can continue safely.",
+    ].join("\n");
+    await this.runAgent(
+      session,
+      run.id,
+      { messageId: run.messageId, text: prompt, mode: "direct" },
+      {
+        taskClass: "simple",
+        route: "direct",
+        goal: "Reconcile an uncertain side effect using read-only inspection",
+        reasoningSummary: "Read-only reconciliation after an acknowledged uncertain action",
+        successCriteria: ["Do not repeat the uncertain action", "Report only observed state"],
+        questions: [],
+        steps: [],
+      },
+      new AbortController().signal,
+      prompt,
+      { turns: run.turnCount },
+      true,
+    );
+    this.events.transaction(() => {
+      this.database.createCheckpoint({
+        runId: run.id,
+        phase: "tool",
+        turnCount: this.database.getRun(run.id).turnCount,
+        lastMessageSequence: this.database.latestMessageSequence(run.sessionId),
+        contextSummarySequence: this.database.getContextSummary(run.sessionId)?.throughSequence,
+        safeToResume: true,
+      });
+      this.events.emit(run.sessionId, run.id, "run.updated", this.database.getRun(run.id));
+    });
+  }
+
   private async replaySafeActions(run: Run): Promise<void> {
     const safe = this.database
       .listRunActions(run.id)
       .filter(
-        (action) =>
-          ["prepared", "uncertain"].includes(action.status) &&
-          ["read", "attachment_read"].includes(action.toolClass),
+        (action) => action.status === "prepared" && ["read", "attachment_read"].includes(action.toolClass),
       );
     for (const action of safe) await this.executeRecoveredAction(run, action, true);
   }
@@ -958,11 +1258,10 @@ export class UmaRuntime {
     const tool = this.toolsForSession(session).find((candidate) => candidate.name === action.toolName);
     if (!tool) throw new Error(`Tool is unavailable: ${action.toolName}`);
     const running = this.events.transaction(() => {
-      const transition = this.database.transitionRunAction(
-        action.id,
-        automatic ? ["prepared", "uncertain"] : ["prepared"],
-        { status: "running", error: null },
-      );
+      const transition = this.database.transitionRunAction(action.id, ["prepared"], {
+        status: "running",
+        error: null,
+      });
       if (!transition.changed) return transition.action;
       if (!automatic) {
         this.events.emit(run.sessionId, run.id, "run.action_decided", {
@@ -980,7 +1279,7 @@ export class UmaRuntime {
     if (running.status !== "running") return running;
     const controller = new AbortController();
     try {
-      const toolInput = this.database.getToolCallInput(action.toolCallId);
+      const toolInput = action.input;
       const result = await tool.execute(action.toolCallId, toolInput as never, controller.signal);
       return this.events.transaction(() => {
         this.database.completeToolCall(action.toolCallId, result, false);
@@ -1087,12 +1386,16 @@ export class UmaRuntime {
     signal: AbortSignal,
     promptOverride?: string,
     budget: { turns: number } = { turns: 0 },
+    readOnly = false,
   ): Promise<void> {
     const userMessage = this.database.getMessage(input.messageId);
+    const frozenModel = this.models.fromSnapshot(this.database.getRun(runId).model);
     const historyState = await this.compactContext(
       session,
       this.database.listAgentMessages(session.id, userMessage.sequence),
       signal,
+      false,
+      frozenModel,
     );
     const memory = this.database.searchMemory(session.id, input.text, 5);
     const knowledge = this.knowledge.search(input.text, 3);
@@ -1112,13 +1415,25 @@ export class UmaRuntime {
       ? `\n\nAttachments: ${input.attachmentIds.join(", ")}. Use attachment_read when needed.`
       : "";
     const prompt = `${promptOverride ?? input.text}${planText}${attachmentText}`;
-    const tools = this.toolsForSession(session);
+    const images: ImageContent[] = [];
+    for (const attachmentId of input.attachmentIds ?? []) {
+      const attachment = this.database.getAttachment(attachmentId);
+      if (!attachment?.mimeType.startsWith("image/")) continue;
+      const data = await import("node:fs/promises").then((fs) =>
+        fs.readFile(this.database.getAttachmentPath(attachmentId, session.id), "base64"),
+      );
+      images.push({ type: "image", data, mimeType: attachment.mimeType });
+    }
+    const tools = this.toolsForSession(session).filter(
+      (tool) => !readOnly || ["read", "attachment_read"].includes(this.permissions.classify(tool.name)),
+    );
     let stepTurns = 0;
+    let turnLimitReached = false;
     const turnLimit = decision.route === "plan" ? 48 : 400;
     const agent = new Agent({
       initialState: {
         systemPrompt: `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought.${this.skills.systemPrompt()}${historyState.summary ? `\n\n<conversation_summary>\n${historyState.summary.content}\n</conversation_summary>` : ""}${context ? `\n\n${context}` : ""}`,
-        model: this.models.get(session.model),
+        model: frozenModel,
         thinkingLevel: session.thinkingLevel,
         tools,
         messages: historyState.messages,
@@ -1128,21 +1443,28 @@ export class UmaRuntime {
       shouldStopAfterTurn: () => {
         stepTurns++;
         budget.turns++;
-        return stepTurns >= turnLimit || budget.turns >= 400;
+        this.database.updateRun(runId, { turnCount: budget.turns });
+        const reached = stepTurns >= turnLimit || budget.turns >= 400;
+        if (reached) turnLimitReached = true;
+        return reached;
       },
       beforeToolCall: async ({ toolCall, args }, toolSignal) => {
         const permission = this.permissions.decide(session.mode, toolCall.name);
         if (!permission.allowed) return { block: true, reason: permission.reason };
         const action =
           this.database.getRunActionByToolCall(runId, toolCall.id) ??
-          this.database.createRunAction({
-            runId,
-            checkpointId: this.database.getLatestCheckpoint(runId)?.id,
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            toolClass: this.permissions.classify(toolCall.name),
-            idempotencyKey: `${runId}:${toolCall.id}`,
-            input: args,
+          this.events.transaction(() => {
+            const prepared = this.database.createRunAction({
+              runId,
+              checkpointId: this.database.getLatestCheckpoint(runId)?.id,
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              toolClass: this.permissions.classify(toolCall.name),
+              idempotencyKey: `${runId}:${toolCall.id}`,
+              input: args,
+            });
+            this.events.emit(session.id, runId, "run.action_prepared", prepared);
+            return prepared;
           });
         if (permission.requiresApproval) {
           const approved = await this.requestApproval(
@@ -1153,9 +1475,28 @@ export class UmaRuntime {
             args,
             toolSignal ?? signal,
           );
-          if (!approved) return { block: true, reason: "Tool execution was not approved" };
+          if (!approved) {
+            this.events.transaction(() => {
+              const rejected = this.database.transitionRunAction(action.id, ["prepared"], {
+                status: "rejected",
+                error: "Tool execution was not approved",
+              });
+              if (rejected.changed)
+                this.events.emit(session.id, runId, "run.action_decided", {
+                  action: rejected.action,
+                  decision: "reject",
+                });
+            });
+            return { block: true, reason: "Tool execution was not approved" };
+          }
         }
-        this.database.updateRunAction(action.id, { status: "running" });
+        this.events.transaction(() => {
+          const running = this.database.transitionRunAction(action.id, ["prepared"], {
+            status: "running",
+            error: null,
+          });
+          if (running.changed) this.events.emit(session.id, runId, "run.action_prepared", running.action);
+        });
         return undefined;
       },
     });
@@ -1163,8 +1504,12 @@ export class UmaRuntime {
     const abort = () => agent.abort();
     signal.addEventListener("abort", abort, { once: true });
     try {
-      await agent.prompt(prompt);
+      await agent.prompt(prompt, images);
       if (agent.state.errorMessage) throw new Error(agent.state.errorMessage);
+      if (turnLimitReached)
+        throw new Error(
+          budget.turns >= 400 ? "Run turn limit exceeded (400)" : "Plan step turn limit exceeded (48)",
+        );
     } finally {
       signal.removeEventListener("abort", abort);
     }
@@ -1175,13 +1520,14 @@ export class UmaRuntime {
     entries: StoredAgentMessage[],
     signal: AbortSignal,
     force = false,
+    modelOverride?: Model<UmaConfig["models"][number]["api"]>,
   ): Promise<{ messages: AgentMessage[]; summary?: ContextSummary }> {
     let summary = this.database.getContextSummary(session.id);
     let pending = entries.filter((entry) => entry.sequence > (summary?.throughSequence ?? 0));
     const summaryMessage: AgentMessage[] = summary
       ? [{ role: "user", content: `Conversation summary:\n${summary.content}`, timestamp: summary.updatedAt }]
       : [];
-    const model = this.models.get(session.model);
+    const model = modelOverride ?? this.models.get(session.model);
     const contextTokens = estimateContextTokens([
       ...summaryMessage,
       ...pending.map((entry) => entry.message),
@@ -1233,6 +1579,7 @@ export class UmaRuntime {
     let flushTimer: NodeJS.Timeout | undefined;
     const toolMessages = new Map<string, string>();
     const toolActions = new Map<string, string>();
+    let activeModelCall: { id: string; startedAt: number } | undefined;
     const flushAssistant = () => {
       if (!assistantItem || !pendingAssistant) return;
       const message = pendingAssistant;
@@ -1247,7 +1594,18 @@ export class UmaRuntime {
       flushTimer = undefined;
     };
     agent.subscribe((event: AgentEvent) => {
-      if (event.type === "message_start" && event.message.role === "assistant") {
+      if (event.type === "turn_start") {
+        const run = this.database.getRun(runId);
+        activeModelCall = {
+          id: this.database.startModelCall({
+            runId,
+            provider: run.model.ref.provider,
+            model: run.model.ref.id,
+            role: "default",
+          }),
+          startedAt: Date.now(),
+        };
+      } else if (event.type === "message_start" && event.message.role === "assistant") {
         assistantItem = this.events.transaction(() => {
           const item = this.database.insertMessage({
             sessionId,
@@ -1278,26 +1636,24 @@ export class UmaRuntime {
             : message.stopReason === "aborted"
               ? "cancelled"
               : "complete";
-        const session = this.database.getSession(sessionId);
+        const run = this.database.getRun(runId);
         this.events.transaction(() => {
           const item = this.database.updateMessage(assistantItem?.id as string, {
             content: textFromMessage(message),
             status,
             payload: message,
           });
-          this.database.addModelCall({
-            runId,
-            provider: session.model.provider,
-            model: session.model.id,
-            role: "default",
-            status: message.stopReason,
-            usage: message.usage,
-            ...(message.errorMessage ? { error: message.errorMessage } : {}),
-          });
+          if (activeModelCall)
+            this.database.finishModelCall(activeModelCall.id, {
+              status: message.stopReason,
+              durationMs: Date.now() - activeModelCall.startedAt,
+              usage: message.usage,
+              ...(message.errorMessage ? { error: message.errorMessage } : {}),
+            });
           this.database.addAudit({
             runId,
             kind: "model",
-            name: `${session.model.provider}/${session.model.id}`,
+            name: `${run.model.ref.provider}/${run.model.ref.id}`,
             output: { text: item.content },
             status: message.stopReason,
             usage: message.usage,
@@ -1313,6 +1669,7 @@ export class UmaRuntime {
           });
           this.events.emit(sessionId, runId, "message.completed", item);
         });
+        activeModelCall = undefined;
         assistantItem = undefined;
       } else if (event.type === "tool_execution_start") {
         const created = this.events.transaction(() => {
@@ -1376,7 +1733,7 @@ export class UmaRuntime {
             this.database.completeToolCall(event.toolCallId, event.result, event.isError);
             const actionId = toolActions.get(event.toolCallId);
             if (actionId)
-              this.database.updateRunAction(actionId, {
+              this.database.transitionRunAction(actionId, ["running"], {
                 status: event.isError ? "failed" : "completed",
                 result: event.result,
               });
@@ -1409,6 +1766,22 @@ export class UmaRuntime {
       } else if (event.type === "message_end" && event.message.role === "toolResult") {
         const messageId = toolMessages.get(event.message.toolCallId);
         if (messageId) this.database.updateMessage(messageId, { payload: event.message });
+      } else if (event.type === "agent_end" && activeModelCall) {
+        if (flushTimer) clearTimeout(flushTimer);
+        flushTimer = undefined;
+        pendingAssistant = undefined;
+        this.database.finishModelCall(activeModelCall.id, {
+          status: "failed",
+          durationMs: Date.now() - activeModelCall.startedAt,
+          error: "Agent ended before the model response completed",
+        });
+        if (assistantItem)
+          this.database.updateMessage(assistantItem.id, {
+            status: "error",
+            content: assistantItem.content,
+          });
+        activeModelCall = undefined;
+        assistantItem = undefined;
       }
     });
   }
@@ -1419,44 +1792,59 @@ export class UmaRuntime {
     decision: PreflightDecision,
     signal: AbortSignal,
   ): Promise<void> {
-    const snapshot = this.database.getSnapshot(session.id);
-    const final = [...snapshot.transcript]
+    const final = [...this.database.listMessages(session.id)]
       .reverse()
       .find((item) => item.runId === runId && item.role === "assistant" && item.status === "complete");
     if (!final) throw new Error("Planned run produced no final response");
-    const response = await this.models.models.completeSimple(
-      this.models.get(session.model),
-      {
-        systemPrompt:
-          'Verify whether the result satisfies the goal and success criteria. Return JSON only: {"accepted":boolean,"feedback":string}. Do not include chain-of-thought.',
-        messages: [
-          {
-            role: "user",
-            content: JSON.stringify({
-              goal: decision.goal,
-              successCriteria: decision.successCriteria,
-              result: final.content,
-            }),
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      { signal, temperature: 0 },
+    const verificationInput = JSON.stringify({
+      goal: decision.goal,
+      successCriteria: decision.successCriteria,
+      result: final.content,
+    });
+    let response = await this.completeControl(
+      runId,
+      "reasoning",
+      'Verify whether the result satisfies the goal and success criteria. Return JSON only: {"accepted":boolean,"feedback":string}. Do not include chain-of-thought.',
+      verificationInput,
+      signal,
+      false,
     );
     if (response.stopReason === "error" || response.stopReason === "aborted")
       throw new Error(response.errorMessage ?? "Verification failed");
-    const verdict = extractJson(contentText(response.content)) as Record<string, unknown>;
+    let verdict: { accepted: boolean; feedback: string };
+    try {
+      const value = extractJson(contentText(response.content));
+      if (!Value.Check(VerificationSchema, value)) throw new Error("Invalid verification verdict");
+      verdict = value;
+    } catch {
+      response = await this.completeControl(
+        runId,
+        "reasoning",
+        'Return exactly one JSON object: {"accepted":boolean,"feedback":string}.',
+        verificationInput,
+        signal,
+        false,
+      );
+      if (response.stopReason === "error" || response.stopReason === "aborted")
+        throw new Error(response.errorMessage ?? "Verification repair failed");
+      let value: unknown;
+      try {
+        value = extractJson(contentText(response.content));
+      } catch {
+        throw new Error("Provider contract error: invalid verification response");
+      }
+      if (!Value.Check(VerificationSchema, value))
+        throw new Error("Provider contract error: invalid verification response");
+      verdict = value;
+    }
     if (verdict.accepted === true) return;
-    const feedback =
-      typeof verdict.feedback === "string"
-        ? verdict.feedback
-        : "Review the result and correct remaining issues.";
+    const feedback = verdict.feedback || "Review the result and correct remaining issues.";
     const internal: Message = {
       role: "user",
       content: `Verifier feedback: ${feedback}\nCorrect the result once, using tools if necessary.`,
       timestamp: Date.now(),
     };
-    this.database.insertMessage({
+    const correctionMessage = this.database.insertMessage({
       sessionId: session.id,
       runId,
       role: "tool",
@@ -1465,21 +1853,21 @@ export class UmaRuntime {
       content: feedback,
       payload: internal,
     });
-    const history = this.database.listAgentMessages(session.id).map((stored) => stored.message);
-    const agent = new Agent({
-      initialState: {
-        systemPrompt:
-          "Correct the preceding result according to verifier feedback. Do not expose private chain-of-thought.",
-        model: this.models.get(session.model),
-        thinkingLevel: session.thinkingLevel,
-        tools: [] as AgentTool[],
-        messages: history.slice(0, -1),
-      },
-      streamFn: this.models.models.streamSimple.bind(this.models.models),
+    this.transitionRun(session.id, runId, {
+      status: "running",
+      phase: "correct",
+      correctionCount: 1,
     });
-    this.bindAgentEvents(agent, session.id, runId);
-    await agent.prompt(internal);
-    if (agent.state.errorMessage) throw new Error(agent.state.errorMessage);
+    const current = this.database.getRun(runId);
+    await this.runAgent(
+      session,
+      runId,
+      { messageId: correctionMessage.id, text: String(internal.content) },
+      { ...decision, route: "direct" },
+      signal,
+      String(internal.content),
+      { turns: current.turnCount },
+    );
   }
 
   private requestApproval(

@@ -4,6 +4,8 @@ import * as lark from "@larksuiteoapi/node-sdk";
 import { retryWithBackoff } from "@uma-agent/channel-adapter";
 import { UmaClient } from "@uma-agent/client";
 import type { Approval, RunAction, RunActionDecision, SessionSnapshot } from "@uma-agent/protocol";
+import { type CoreGateway, LarkFeishuGateway } from "./gateways.js";
+import { acceptsInbound, isAllowedOpenId } from "./inbound-policy.js";
 import { AdapterStore } from "./store.js";
 
 const required = (name: string): string => {
@@ -23,22 +25,48 @@ const config = {
   host: process.env.FEISHU_HOST?.trim() || "127.0.0.1",
   port: Number(process.env.FEISHU_PORT ?? 3220),
   maxAttachmentBytes: Number(process.env.FEISHU_MAX_ATTACHMENT_BYTES ?? 25 * 1024 * 1024),
+  allowedOpenIds: new Set(
+    required("FEISHU_ALLOWED_OPEN_IDS")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  ),
 };
 if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535)
   throw new Error("FEISHU_PORT must be a valid TCP port");
 if (!Number.isSafeInteger(config.maxAttachmentBytes) || config.maxAttachmentBytes < 1)
   throw new Error("FEISHU_MAX_ATTACHMENT_BYTES must be a positive integer");
+if (config.allowedOpenIds.size === 0)
+  throw new Error("FEISHU_ALLOWED_OPEN_IDS must contain at least one Open ID");
 
 const store = new AdapterStore(config.stateDir);
-const uma = new UmaClient({ baseUrl: config.umaUrl, token: config.umaToken });
-const feishu = new lark.Client({
+const uma: CoreGateway = new UmaClient({ baseUrl: config.umaUrl, token: config.umaToken });
+const feishuSdk = new lark.Client({
   appId: config.appId,
   appSecret: config.appSecret,
   appType: lark.AppType.SelfBuild,
   domain: lark.Domain.Feishu,
 });
+const feishu = new LarkFeishuGateway(feishuSdk);
 const cards = new Map<string, { text: string; lastUpdate: number; messageId?: string }>();
+const pendingCards = new Map<string, Parameters<typeof sendCardNow>>();
+const cardTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const subscribed = new Set<string>();
+
+interface FeishuInbound {
+  tenant_key?: string;
+  sender?: { sender_id?: { open_id?: string; user_id?: string } };
+  message: {
+    message_id: string;
+    chat_id: string;
+    chat_type: string;
+    message_type: string;
+    content: string;
+    root_id?: string;
+    parent_id?: string;
+    mentions?: Array<{ id: { open_id?: string; user_id?: string }; key: string }>;
+  };
+}
 
 type CardControl =
   | { label: string; kind: "approval"; targetId: string; decision: "approve" | "reject" }
@@ -52,7 +80,7 @@ type CardControl =
     };
 
 function cardText(snapshot: SessionSnapshot, actions: RunAction[] = []): string {
-  const run = snapshot.runs.at(-1);
+  const run = snapshot.recentRuns.at(-1);
   const reply = snapshot.transcript.filter((item) => item.role === "assistant").at(-1)?.content ?? "";
   const status = run ? `\n\n状态: ${run.status}` : "";
   const plan = run?.plan.filter((step) => step.status === "running").at(0);
@@ -90,7 +118,7 @@ function inboundText(messageType: string, content: string): string {
   }
 }
 
-async function sendCard(
+async function sendCardNow(
   chatId: string,
   conversationId: string,
   runId: string,
@@ -108,8 +136,6 @@ async function sendCard(
       cards.set(key, previous);
     }
   }
-  if (!final && controls.length === 0 && previous && Date.now() - previous.lastUpdate < 1_000)
-    return previous.messageId;
   if (controls.length === 0 && previous?.text === text) return previous.messageId;
   const elements: unknown[] = [{ tag: "div", text: { tag: "lark_md", content: text } }];
   const callbacks = controls.map((control) => ({
@@ -133,20 +159,9 @@ async function sendCard(
   let messageId = previous?.messageId;
   try {
     if (!messageId) {
-      const result = await retryWithBackoff(() =>
-        feishu.im.message.create({
-          params: { receive_id_type: "chat_id" },
-          data: { receive_id: chatId, content, msg_type: "interactive" },
-        }),
-      );
-      messageId = String((result as { data?: { message_id?: string } }).data?.message_id ?? "");
+      messageId = await retryWithBackoff(() => feishu.createCard(chatId, content));
     } else {
-      await retryWithBackoff(() =>
-        (feishu.im.message as unknown as { patch: (input: unknown) => Promise<unknown> }).patch({
-          path: { message_id: messageId },
-          data: { content },
-        }),
-      );
+      await retryWithBackoff(() => feishu.updateCard(messageId as string, content));
     }
     store.upsertCard(conversationId, runId, sequence, final ? "completed" : "running", messageId);
   } catch (error) {
@@ -171,6 +186,49 @@ async function sendCard(
   return messageId;
 }
 
+async function sendCard(
+  chatId: string,
+  conversationId: string,
+  runId: string,
+  text: string,
+  sequence: number,
+  final = false,
+  controls: CardControl[] = [],
+): Promise<string | undefined> {
+  const key = `${conversationId}:${runId}`;
+  const previous = cards.get(key);
+  const args: Parameters<typeof sendCardNow> = [
+    chatId,
+    conversationId,
+    runId,
+    text,
+    sequence,
+    final,
+    controls,
+  ];
+  if (!final && controls.length === 0 && previous && Date.now() - previous.lastUpdate < 1_000) {
+    pendingCards.set(key, args);
+    if (!cardTimers.has(key)) {
+      const remaining = Math.max(1, 1_000 - (Date.now() - previous.lastUpdate));
+      cardTimers.set(
+        key,
+        setTimeout(() => {
+          cardTimers.delete(key);
+          const pending = pendingCards.get(key);
+          pendingCards.delete(key);
+          if (pending) void sendCardNow(...pending).catch(() => {});
+        }, remaining),
+      );
+    }
+    return previous.messageId;
+  }
+  const timer = cardTimers.get(key);
+  if (timer) clearTimeout(timer);
+  cardTimers.delete(key);
+  pendingCards.delete(key);
+  return sendCardNow(...args);
+}
+
 async function renderSession(
   sessionId: string,
   chatId: string,
@@ -178,7 +236,7 @@ async function renderSession(
   approval?: Approval,
 ): Promise<void> {
   const snapshot = await uma.getSession(sessionId);
-  const run = snapshot.runs.at(-1);
+  const run = snapshot.recentRuns.at(-1);
   if (!run) return;
   const actions = run.status === "interrupted" ? await uma.listRunActions(run.id) : [];
   const pending = actions.find((action) => ["prepared", "uncertain"].includes(action.status));
@@ -250,12 +308,7 @@ async function downloadAttachment(
   const parsed = JSON.parse(content) as { image_key?: string; file_key?: string; file_name?: string };
   const key = messageType === "image" ? parsed.image_key : parsed.file_key;
   if (!key) throw new Error(`Feishu ${messageType} message has no resource key`);
-  const resource = await retryWithBackoff(() =>
-    feishu.im.messageResource.get({
-      params: { type: messageType },
-      path: { message_id: messageId, file_key: key },
-    }),
-  );
+  const resource = await retryWithBackoff(() => feishu.downloadResource(messageId, key, messageType));
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const value of resource.getReadableStream()) {
@@ -274,24 +327,8 @@ async function downloadAttachment(
   return attachment.id;
 }
 
-async function processMessage(data: {
-  tenant_key?: string;
-  sender?: { sender_id?: { open_id?: string; user_id?: string } };
-  message: {
-    message_id: string;
-    chat_id: string;
-    chat_type: string;
-    message_type: string;
-    content: string;
-    root_id?: string;
-    mentions?: Array<{ id: { open_id?: string; user_id?: string }; key: string }>;
-  };
-}): Promise<void> {
+async function processStoredMessage(data: FeishuInbound, umaMessageId: string): Promise<void> {
   const message = data.message;
-  if (!["text", "post", "image", "file"].includes(message.message_type)) return;
-  const isGroup = message.chat_type === "group";
-  const mentioned = Boolean(message.mentions?.length);
-  if (isGroup && !mentioned && !message.root_id) return;
   const key = {
     tenant: data.tenant_key ?? "",
     chatType: message.chat_type,
@@ -303,9 +340,8 @@ async function processMessage(data: {
     const session = await uma.createSession({ mode: "assistant", title: `Feishu ${message.chat_id}` });
     conversation = store.createConversation(key, session.id);
   }
-  const senderId = data.sender?.sender_id?.open_id ?? data.sender?.sender_id?.user_id;
-  const claimed = store.claimInbound(message.message_id, conversation.id, senderId, message.message_type);
-  if (!claimed.fresh) return;
+  store.attachInboundConversation(message.message_id, conversation.id);
+  const senderId = data.sender?.sender_id?.open_id;
   let text = inboundText(message.message_type, message.content);
   text = text.replace(/<at[^>]*>.*?<\/at>/gi, "").trim();
   try {
@@ -324,7 +360,7 @@ async function processMessage(data: {
     if (!text && attachmentIds.length)
       text = `请处理这个飞书${message.message_type === "image" ? "图片" : "文件"}附件。`;
     await uma.sendMessage(conversation.sessionId, text, {
-      messageId: claimed.messageId,
+      messageId: umaMessageId,
       ...(attachmentIds.length ? { attachmentIds } : {}),
       source: {
         adapter: "feishu",
@@ -333,20 +369,55 @@ async function processMessage(data: {
         ...(senderId ? { senderId } : {}),
       },
     });
-    store.markInbound(claimed.messageId, "processed");
+    store.markInbound(umaMessageId, "processed");
   } catch (error) {
-    store.markInbound(claimed.messageId, "failed", error instanceof Error ? error.message : String(error));
+    store.markInbound(umaMessageId, "failed", error instanceof Error ? error.message : String(error));
   }
+}
+
+let inboundQueue = Promise.resolve();
+
+function scheduleInbound(input: { externalId: string; messageId: string; payload: FeishuInbound }): void {
+  inboundQueue = inboundQueue
+    .then(async () => {
+      if (!store.startInbound(input.externalId)) return;
+      try {
+        await processStoredMessage(input.payload, input.messageId);
+      } catch (error) {
+        store.markInbound(input.messageId, "failed", error instanceof Error ? error.message : String(error));
+      }
+    })
+    .catch(() => {});
+}
+
+async function enqueueMessage(data: FeishuInbound): Promise<void> {
+  const message = data.message;
+  if (!acceptsInbound(data, config.allowedOpenIds, (id) => store.isOutboundMessage(id))) return;
+  const senderId = data.sender?.sender_id?.open_id;
+  const claimed = store.claimInbound({
+    externalId: message.message_id,
+    senderId: senderId as string,
+    rawType: message.message_type,
+    payload: data,
+  });
+  if (claimed.fresh)
+    scheduleInbound({
+      externalId: message.message_id,
+      messageId: claimed.messageId,
+      payload: data,
+    });
 }
 
 const eventDispatcher = new lark.EventDispatcher({
   verificationToken: config.verificationToken,
   encryptKey: config.encryptKey,
-}).register({ "im.message.receive_v1": processMessage });
+}).register({ "im.message.receive_v1": enqueueMessage });
 
 const cardDispatcher = new lark.CardActionHandler(
   { verificationToken: config.verificationToken, encryptKey: config.encryptKey },
-  async (event: { action?: { value?: Record<string, string> } }) => {
+  async (event: { operator?: { open_id?: string }; action?: { value?: Record<string, string> } }) => {
+    if (!isAllowedOpenId(event.operator?.open_id, config.allowedOpenIds))
+      return { toast: { type: "error", content: "无权执行此操作" } };
     const value = event.action?.value ?? {};
     const token = value.token;
     if (!token) return { toast: { type: "error", content: "操作已失效" } };
@@ -387,6 +458,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 });
 
 uma.connectEvents();
+for (const pending of store.listPendingInbound<FeishuInbound>()) scheduleInbound(pending);
 for (const conversation of store.listConversations())
   subscribeSession(
     conversation.sessionId,
@@ -396,11 +468,13 @@ for (const conversation of store.listConversations())
   );
 server.listen(config.port, config.host);
 process.once("SIGINT", () => {
+  for (const timer of cardTimers.values()) clearTimeout(timer);
   store.close();
   uma.close();
   server.close();
 });
 process.once("SIGTERM", () => {
+  for (const timer of cardTimers.values()) clearTimeout(timer);
   store.close();
   uma.close();
   server.close();

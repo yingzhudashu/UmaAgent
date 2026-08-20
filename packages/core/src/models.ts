@@ -3,7 +3,7 @@ import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messag
 import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
-import type { ModelRef } from "@uma-agent/protocol";
+import type { ModelRef, ModelSnapshot } from "@uma-agent/protocol";
 import type { UmaConfig, UmaModelConfig } from "./types.js";
 
 function toModel(config: UmaModelConfig): Model<UmaModelConfig["api"]> {
@@ -66,5 +66,39 @@ export class ModelRegistry {
 
   list(): ModelRef[] {
     return this.models.getModels().map((model) => ({ provider: model.provider, id: model.id }));
+  }
+
+  snapshot(ref: ModelRef): ModelSnapshot {
+    const model = this.get(ref);
+    const configured = this.config.models.find(
+      (entry) => entry.provider === ref.provider && entry.id === ref.id,
+    );
+    if (!configured) throw new Error(`Unknown model ${ref.provider}/${ref.id}`);
+    return {
+      ref,
+      name: model.name,
+      api: model.api,
+      contextWindow: model.contextWindow,
+      maxOutputTokens: model.maxTokens,
+      capabilities: {
+        tools: configured.tools,
+        vision: configured.vision,
+        reasoning: configured.reasoning,
+        structuredOutput: configured.structuredOutput,
+      },
+    };
+  }
+
+  fromSnapshot(snapshot: ModelSnapshot): Model<UmaModelConfig["api"]> {
+    const current = this.get(snapshot.ref);
+    return {
+      ...current,
+      name: snapshot.name,
+      api: snapshot.api as UmaModelConfig["api"],
+      contextWindow: snapshot.contextWindow,
+      maxTokens: snapshot.maxOutputTokens,
+      reasoning: snapshot.capabilities.reasoning,
+      input: snapshot.capabilities.vision ? ["text", "image"] : ["text"],
+    };
   }
 }

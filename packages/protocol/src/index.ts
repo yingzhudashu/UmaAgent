@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 4 as const;
+export const PROTOCOL_VERSION = 5 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -8,6 +8,23 @@ const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T
 
 export const ModelRefSchema = Strict({ provider: Id, id: Id });
 export type ModelRef = Static<typeof ModelRefSchema>;
+
+export const ModelCapabilitiesSchema = Strict({
+  tools: Type.Boolean(),
+  vision: Type.Boolean(),
+  reasoning: Type.Boolean(),
+  structuredOutput: Type.Boolean(),
+});
+
+export const ModelSnapshotSchema = Strict({
+  ref: ModelRefSchema,
+  name: Type.String({ minLength: 1 }),
+  api: Type.String({ minLength: 1 }),
+  contextWindow: Type.Integer({ minimum: 1 }),
+  maxOutputTokens: Type.Integer({ minimum: 1 }),
+  capabilities: ModelCapabilitiesSchema,
+});
+export type ModelSnapshot = Static<typeof ModelSnapshotSchema>;
 
 export const SessionModeSchema = Type.Union([Type.Literal("workspace"), Type.Literal("assistant")]);
 export type SessionMode = Static<typeof SessionModeSchema>;
@@ -88,11 +105,34 @@ export const RunStatusSchema = Type.Union([
 ]);
 export type RunStatus = Static<typeof RunStatusSchema>;
 
+export const RunPhaseSchema = Type.Union([
+  Type.Literal("queued"),
+  Type.Literal("preflight"),
+  Type.Literal("clarify"),
+  Type.Literal("execute"),
+  Type.Literal("verify"),
+  Type.Literal("correct"),
+]);
+
+export const TaskClassSchema = Type.Union([
+  Type.Literal("simple"),
+  Type.Literal("standard"),
+  Type.Literal("complex"),
+]);
+
 export const RunSchema = Strict({
   id: Id,
   sessionId: Id,
   messageId: Id,
   status: RunStatusSchema,
+  phase: RunPhaseSchema,
+  taskClass: Type.Optional(TaskClassSchema),
+  goal: Type.Optional(Type.String()),
+  successCriteria: Type.Array(Type.String()),
+  model: ModelSnapshotSchema,
+  thinkingLevel: ThinkingLevelSchema,
+  turnCount: Type.Integer({ minimum: 0, maximum: 400 }),
+  correctionCount: Type.Union([Type.Literal(0), Type.Literal(1)]),
   route: Type.Optional(Type.Union([Type.Literal("direct"), Type.Literal("clarify"), Type.Literal("plan")])),
   reasoningSummary: Type.Optional(Type.String()),
   clarificationCount: Type.Optional(Type.Integer({ minimum: 0, maximum: 3 })),
@@ -137,15 +177,6 @@ export const SessionSchema = Strict({
 });
 export type Session = Static<typeof SessionSchema>;
 
-export const SessionSnapshotSchema = Strict({
-  session: SessionSchema,
-  transcript: Type.Array(TranscriptItemSchema),
-  runs: Type.Array(RunSchema),
-  revision: Type.Integer({ minimum: 0 }),
-  snapshotSequence: Type.Integer({ minimum: 0 }),
-});
-export type SessionSnapshot = Static<typeof SessionSnapshotSchema>;
-
 export const ApprovalSchema = Strict({
   id: Id,
   sessionId: Id,
@@ -164,10 +195,22 @@ export const ApprovalSchema = Strict({
 });
 export type Approval = Static<typeof ApprovalSchema>;
 
+export const SessionSnapshotSchema = Strict({
+  session: SessionSchema,
+  transcript: Type.Array(TranscriptItemSchema),
+  recentRuns: Type.Array(RunSchema),
+  pendingApprovals: Type.Array(ApprovalSchema),
+  snapshotSequence: Type.Integer({ minimum: 0 }),
+  history: Strict({
+    oldestMessageSequence: Type.Integer({ minimum: 0 }),
+    hasMoreBefore: Type.Boolean(),
+  }),
+});
+export type SessionSnapshot = Static<typeof SessionSnapshotSchema>;
+
 export const SkillSummarySchema = Strict({
   name: Id,
   description: Type.String(),
-  path: Type.String(),
   enabled: Type.Boolean(),
   diagnostics: Type.Array(Type.String()),
 });
@@ -198,6 +241,7 @@ export const EventTypeSchema = Type.Union([
   Type.Literal("server.status"),
   Type.Literal("run.awaiting_input"),
   Type.Literal("run.resumed"),
+  Type.Literal("run.action_prepared"),
   Type.Literal("run.action_decided"),
   Type.Literal("task.updated"),
   Type.Literal("memory.updated"),
@@ -215,8 +259,27 @@ export const AgentEventEnvelopeSchema = Strict({
 });
 export type AgentEventEnvelope = Static<typeof AgentEventEnvelopeSchema>;
 
+export const ErrorCodeSchema = Type.Union([
+  Type.Literal("auth_required"),
+  Type.Literal("forbidden"),
+  Type.Literal("not_found"),
+  Type.Literal("conflict"),
+  Type.Literal("validation_failed"),
+  Type.Literal("provider_error"),
+  Type.Literal("provider_contract_error"),
+  Type.Literal("rate_limited"),
+  Type.Literal("resume_required"),
+  Type.Literal("cancelled"),
+  Type.Literal("internal_error"),
+]);
+
 export const ErrorResponseSchema = Strict({
-  error: Strict({ code: Id, message: Type.String(), details: Type.Optional(Type.Unknown()) }),
+  error: Strict({
+    code: ErrorCodeSchema,
+    message: Type.String(),
+    retryable: Type.Boolean(),
+    requestId: Id,
+  }),
 });
 export type ErrorResponse = Static<typeof ErrorResponseSchema>;
 
@@ -280,6 +343,7 @@ export type BackgroundTask = Static<typeof BackgroundTaskSchema>;
 
 export const MemoryFactSchema = Strict({
   id: Id,
+  sessionId: Type.Optional(Id),
   scope: Type.Union([Type.Literal("global"), Type.Literal("session")]),
   content: Type.String({ minLength: 1 }),
   confidence: Type.Number({ minimum: 0, maximum: 1 }),
@@ -314,6 +378,8 @@ export const SessionEventPageSchema = Strict({
   sessionId: Id,
   fromSequence: Type.Integer({ minimum: 0 }),
   toSequence: Type.Integer({ minimum: 0 }),
+  nextSequence: Type.Integer({ minimum: 0 }),
+  hasMore: Type.Boolean(),
   events: Type.Array(AgentEventEnvelopeSchema),
   snapshotSequence: Type.Integer({ minimum: 0 }),
 });

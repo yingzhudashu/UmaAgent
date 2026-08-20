@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.5.0`，协议版本为 `4`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.6.0`，协议版本为 `5`，SQLite schema 为 `6`。
 
 ## 当前能力
 
@@ -81,17 +81,19 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 ## API 摘要
 
-- `GET/POST /api/v4/sessions`
-- `GET /api/v4/sessions/:id/snapshot`
-- `GET /api/v4/sessions/:id/events?after=<sequence>` 增量事件
-- `GET /api/v4/sessions/:id/history?before=<sequence>` 历史分页
-- `POST /api/v4/sessions/:id/messages|cancel|compact`
-- `GET /api/v4/runs/:id/checkpoints|actions`
-- `POST /api/v4/runs/:id/resume`
-- `POST /api/v4/runs/:id/actions/:actionId/decide`
-- `POST /api/v4/approvals/:id`、`POST /api/v4/uploads`
-- `GET /api/v4/events` WebSocket
-- `/api/v4/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `GET/POST /api/v5/sessions`
+- `GET /api/v5/sessions/:id/snapshot`
+- `GET /api/v5/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v5/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v5/sessions/:id/messages|cancel|compact`
+- `GET /api/v5/attachments/:id/content`
+- `GET /api/v5/runs/:id/checkpoints|actions`
+- `POST /api/v5/runs/:id/resume|cancel`
+- `POST /api/v5/runs/:id/actions/:actionId/decide`
+- `POST /api/v5/approvals/:id`、`POST /api/v5/uploads`
+- `GET /api/v5/health/live|ready`
+- `GET /api/v5/events` WebSocket
+- `/api/v5/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
@@ -104,6 +106,7 @@ $env:FEISHU_APP_ID = "..."
 $env:FEISHU_APP_SECRET = "..."
 $env:FEISHU_VERIFICATION_TOKEN = "..."
 $env:FEISHU_ENCRYPT_KEY = "..."
+$env:FEISHU_ALLOWED_OPEN_IDS = "ou_owner_open_id"
 $env:UMA_SERVER_URL = "http://127.0.0.1:3210"
 $env:UMA_TOKEN = $env:UMA_AUTH_TOKEN
 $env:FEISHU_HOST = "127.0.0.1"
@@ -111,7 +114,7 @@ npm run build --workspace=@uma-agent/feishu-adapter
 npm run start --workspace=@uma-agent/feishu-adapter
 ```
 
-Adapter 对 Webhook 入站按外部消息 ID 去重，私聊全部进入 Core，群聊仅处理 @机器人或线程回复；文本、图片和文件会转换为标准消息与 Attachment。运行卡片支持审批、恢复及副作用 Action 决策，按钮只携带短期 opaque token，重复点击保持幂等。Adapter 自己的 SQLite 只保存会话映射、卡片游标和回调状态。
+Adapter 只接受 `FEISHU_ALLOWED_OPEN_IDS` 白名单中的所有者。Webhook 在签名校验后先持久化去重记录并立即 ACK，后台 Worker 再处理；重启会恢复 pending 入站。私聊全部进入 Core，群聊仅处理白名单用户 @机器人或回复 Adapter 已发送消息的内容；文本、图片和文件会转换为标准消息与 Attachment。运行卡片支持审批、恢复及副作用 Action 决策，更新采用一秒尾随节流且终态立即定稿。按钮只携带短期 opaque token，重复点击保持幂等。Adapter 自己的 SQLite 只保存会话映射、入站队列、卡片游标和回调状态。
 通用渠道类型、指数退避和节流工具由 `@uma-agent/channel-adapter` 提供；Core 不依赖任何渠道 SDK。
 
 ## 部署
@@ -129,6 +132,10 @@ docker compose --profile feishu up --build
 ```
 
 Compose 默认只发布到 `127.0.0.1`，镜像包含健康检查并使用 `/data/state`、`/data/workspace` 独立卷。公网部署应通过 Caddy/Nginx 终止 TLS，并在配置中列出允许的 `webOrigins`。Core Server 使用状态目录锁和单进程 SQLite，不能横向启动多个副本共享同一状态卷。
+
+### 停机备份与恢复
+
+先停止 Core，确认进程已经退出，再备份状态目录中的 `state.db`、存在时的 `state.db-wal`、`uploads/`，以及正在使用的配置模板。不要备份 `.env`、API Key、Bearer Token 或渠道 Secret。恢复时使用同一 UmaAgent 版本，把这些文件放回新的状态目录并保持原有相对结构；schema 版本不匹配时必须显式重置，不能用旧数据库启动或自动升级。飞书 Adapter 的 `feishu.db` 应在停止 Adapter 后单独备份，它不属于 Core 状态卷。
 
 非回环地址（例如 `0.0.0.0`）必须配置至少一个 `server.webOrigins`。服务令牌和每个模型的 API Key 都必须通过声明的环境变量提供，否则 Server 拒绝启动。
 
@@ -151,4 +158,8 @@ apps/server ─> packages/core ─> Pi AI/Agent
 npm run check
 npm test
 npm run build
+npx playwright install chromium
+npm run test:web:e2e
 ```
+
+单元与集成测试覆盖 Runtime、SQLite、Protocol、Client、Server、CLI JSON 流、Web 离线缓存和飞书持久队列；Playwright 使用两个独立浏览器上下文验证同一 Session 的实时同步与离线只读。Docker 构建也属于 CI 门禁；本机没有 Docker 时可先完成其余门禁，再在 CI 或具备 Docker Engine 的环境验证两个镜像。

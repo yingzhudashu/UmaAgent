@@ -30,12 +30,21 @@ const config = {
       baseUrl: "http://127.0.0.1:9/v1",
       apiKeyEnv: "UMA_FAUX_KEY",
       reasoning: false,
+      tools: true,
+      vision: false,
+      structuredOutput: true,
       contextWindow: 100_000,
       maxTokens: 4_096,
     },
   ],
   defaultModel: { provider: "faux", id: "faux-1" },
   defaultThinkingLevel: "off",
+  roles: {
+    default: { provider: "faux", id: "faux-1" },
+    reasoning: { provider: "faux", id: "faux-1" },
+    fast: { provider: "faux", id: "faux-1" },
+    vision: { provider: "faux", id: "faux-1" },
+  },
   skillsDirs: [resolve(".uma-faux/skills")],
   mcpServers: [],
   runtime: { maxParallelSessions: 4, approvalTimeoutMs: 120_000, toolTimeoutMs: 60_000 },
@@ -48,9 +57,12 @@ const faux = fauxProvider({
   tokensPerSecond: 80,
 });
 const response = (context) => {
-  if (context.systemPrompt.includes("You route an agent request")) {
+  if (context.systemPrompt.includes("Classify the request"))
+    return fauxAssistantMessage(JSON.stringify({ taskClass: "simple" }));
+  if (context.systemPrompt.includes("Specify an agent request")) {
     return fauxAssistantMessage(
       JSON.stringify({
+        taskClass: "standard",
         route: "direct",
         goal: "Respond to the user",
         reasoningSummary: "Direct response is sufficient.",
@@ -62,6 +74,7 @@ const response = (context) => {
   }
   if (context.systemPrompt.includes("Verify whether the result"))
     return fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" }));
+  if (context.systemPrompt.includes("Extract durable user facts")) return fauxAssistantMessage("[]");
   const latest = [...context.messages].reverse().find((message) => message.role === "user");
   const content =
     typeof latest?.content === "string"

@@ -15,6 +15,9 @@ export interface UmaModelConfig {
   baseUrl: string;
   apiKeyEnv: string;
   reasoning: boolean;
+  tools: boolean;
+  vision: boolean;
+  structuredOutput: boolean;
   contextWindow: number;
   maxTokens: number;
 }
@@ -48,6 +51,7 @@ export interface UmaConfig {
 }
 
 export interface PreflightDecision {
+  taskClass: "simple" | "standard" | "complex";
   route: "direct" | "clarify" | "plan";
   goal: string;
   reasoningSummary: string;

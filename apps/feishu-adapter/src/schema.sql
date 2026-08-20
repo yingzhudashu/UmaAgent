@@ -12,15 +12,17 @@ CREATE TABLE conversation_maps (
 );
 CREATE TABLE inbound_messages (
   external_message_id TEXT PRIMARY KEY,
-  conversation_map_id TEXT NOT NULL REFERENCES conversation_maps(id) ON DELETE CASCADE,
+  conversation_map_id TEXT REFERENCES conversation_maps(id) ON DELETE CASCADE,
   sender_id TEXT,
   raw_type TEXT NOT NULL,
   uma_message_id TEXT NOT NULL UNIQUE,
+  payload_json TEXT NOT NULL,
   status TEXT NOT NULL,
   received_at INTEGER NOT NULL,
   processed_at INTEGER,
   error TEXT
 );
+CREATE INDEX inbound_messages_status_idx ON inbound_messages(status, received_at);
 CREATE TABLE outbound_cards (
   id TEXT PRIMARY KEY,
   conversation_map_id TEXT NOT NULL REFERENCES conversation_maps(id) ON DELETE CASCADE,

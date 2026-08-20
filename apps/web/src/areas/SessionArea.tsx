@@ -1,0 +1,74 @@
+import type { Health, Session, SessionMode } from "@uma-agent/protocol";
+import { Bot, ChevronLeft, MessageSquarePlus } from "lucide-react";
+
+export function SessionArea({
+  sessions,
+  selected,
+  open,
+  disabled,
+  health,
+  installable,
+  create,
+  select,
+  close,
+  install,
+}: {
+  sessions: Session[];
+  selected: string | undefined;
+  open: boolean;
+  disabled: boolean;
+  health: Health | undefined;
+  installable: boolean;
+  create: (mode: SessionMode) => void;
+  select: (id: string) => void;
+  close: () => void;
+  install: () => void;
+}) {
+  const online = health?.status === "ok";
+  return (
+    <aside className={`sidebar ${open ? "open" : ""}`}>
+      <div className="brand">
+        <div className="brand-mark">
+          <Bot size={20} />
+        </div>
+        <span>UmaAgent</span>
+        <button type="button" className="icon mobile-only" onClick={close} title="关闭导航">
+          <ChevronLeft />
+        </button>
+      </div>
+      <button type="button" className="new-session" disabled={disabled} onClick={() => create("workspace")}>
+        <MessageSquarePlus size={17} />
+        新会话
+      </button>
+      <button type="button" className="new-session" disabled={disabled} onClick={() => create("assistant")}>
+        <MessageSquarePlus size={17} />
+        助手会话
+      </button>
+      <nav>
+        {sessions.map((session) => (
+          <button
+            type="button"
+            key={session.id}
+            className={selected === session.id ? "active" : ""}
+            onClick={() => select(session.id)}
+          >
+            <span>
+              {session.mode === "assistant" ? "助手 · " : ""}
+              {session.title}
+            </span>
+            <small>{session.model.id}</small>
+          </button>
+        ))}
+      </nav>
+      <div className="sidebar-footer">
+        <span className={`health-dot ${online ? "online" : "offline"}`} />
+        Core {online ? "online" : "offline"}
+        {installable && (
+          <button type="button" onClick={install}>
+            安装应用
+          </button>
+        )}
+      </div>
+    </aside>
+  );
+}

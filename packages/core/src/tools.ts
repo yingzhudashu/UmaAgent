@@ -2,13 +2,14 @@ import { spawn } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
-import { basename, dirname, join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Session } from "@uma-agent/protocol";
 import Type, { type TSchema } from "typebox";
 import { Agent as HttpAgent, fetch as undiciFetch } from "undici";
 import type { UmaDatabase } from "./database.js";
 import type { KnowledgeService } from "./knowledge.js";
+import type { SkillRegistry } from "./skills.js";
 import type { WorkspacePolicy } from "./workspace.js";
 
 type ToolDetails = Record<string, unknown>;
@@ -19,6 +20,26 @@ const result = (text: string, details: Record<string, unknown> = {}) => ({
   content: [{ type: "text" as const, text }],
   details,
 });
+
+async function readTextFile(path: string): Promise<string> {
+  const bytes = await readFile(path);
+  const limited = bytes.subarray(0, 400_000);
+  let encoding = "utf-8";
+  let offset = 0;
+  if (limited[0] === 0xef && limited[1] === 0xbb && limited[2] === 0xbf) offset = 3;
+  else if (limited[0] === 0xff && limited[1] === 0xfe) {
+    encoding = "utf-16le";
+    offset = 2;
+  } else if (limited[0] === 0xfe && limited[1] === 0xff) {
+    encoding = "utf-16be";
+    offset = 2;
+  }
+  try {
+    return new TextDecoder(encoding, { fatal: true }).decode(limited.subarray(offset)).slice(0, 100_000);
+  } catch {
+    throw new Error(`Attachment text encoding is not supported: ${encoding}`);
+  }
+}
 
 async function walk(directory: string, root: string, output: string[], query?: RegExp): Promise<void> {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -131,7 +152,7 @@ export async function safeFetch(raw: string, signal?: AbortSignal): Promise<stri
         redirect: "manual",
         dispatcher,
         ...(signal ? { signal } : {}),
-        headers: { "user-agent": "UmaAgent/0.5" },
+        headers: { "user-agent": "UmaAgent/0.6" },
       });
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
@@ -153,10 +174,12 @@ export function createBuiltinTools(input: {
   session: Session;
   database: UmaDatabase;
   knowledge: KnowledgeService;
+  skills: SkillRegistry;
   workspacePolicy: WorkspacePolicy;
   toolTimeoutMs: number;
+  memoryWrite: (scope: "global" | "session", content: string) => ReturnType<UmaDatabase["addMemoryFact"]>;
 }): AgentTool[] {
-  const { session, database, knowledge, workspacePolicy, toolTimeoutMs } = input;
+  const { session, database, knowledge, skills, workspacePolicy, toolTimeoutMs, memoryWrite } = input;
   if (!session.workspace)
     return [
       defineTool({
@@ -170,8 +193,8 @@ export function createBuiltinTools(input: {
         executionMode: "sequential",
         async execute(_id, params) {
           const scope = params.scope ?? "session";
-          const id = database.addMemory(scope === "session" ? session.id : undefined, scope, params.content);
-          return result("Memory stored", { id, scope });
+          const fact = memoryWrite(scope, params.content);
+          return result("Memory stored", { id: fact.id, scope });
         },
       }),
       defineTool({
@@ -188,6 +211,61 @@ export function createBuiltinTools(input: {
             database.searchMemory(session.id, params.query, params.limit ?? 5).join("\n\n") ||
               "No memories found",
           );
+        },
+      }),
+      defineTool({
+        name: "knowledge_search",
+        label: "Search knowledge",
+        description: "Search indexed knowledge sources.",
+        parameters: Type.Object({
+          query: Type.String(),
+          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+        }),
+        executionMode: "parallel",
+        async execute(_id, params) {
+          const found = knowledge.search(params.query, params.limit ?? 5);
+          return result(
+            found.map((item) => `### ${item.filePath}\n${item.content}`).join("\n\n") || "No knowledge found",
+          );
+        },
+      }),
+      defineTool({
+        name: "skill_read",
+        label: "Read skill",
+        description: "Load one enabled skill by name.",
+        parameters: Type.Object({ name: Type.String() }),
+        executionMode: "parallel",
+        async execute(_id, params) {
+          return result(skills.read(params.name), { name: params.name });
+        },
+      }),
+      defineTool({
+        name: "attachment_read",
+        label: "Read attachment",
+        description: "Read a text attachment uploaded to this session.",
+        parameters: Type.Object({ attachmentId: Type.String() }),
+        executionMode: "parallel",
+        async execute(_id, params) {
+          database.validateAttachmentForSession(params.attachmentId, session.id);
+          const attachment = database.getAttachment(params.attachmentId);
+          if (!attachment) throw new Error(`Attachment not found: ${params.attachmentId}`);
+          if (
+            !attachment.mimeType.startsWith("text/") &&
+            !/(^|\/)(json|yaml|xml|javascript|typescript)$/.test(attachment.mimeType)
+          )
+            throw new Error(`Attachment is not readable text: ${attachment.mimeType}`);
+          const path = database.getAttachmentPath(params.attachmentId, session.id);
+          return result(await readTextFile(path), { name: attachment.name });
+        },
+      }),
+      defineTool({
+        name: "http_get",
+        label: "Fetch URL",
+        description: "Fetch public HTTP(S) text. Private network destinations are blocked.",
+        parameters: Type.Object({ url: Type.String() }),
+        executionMode: "sequential",
+        async execute(_id, params, signal) {
+          return result(await safeFetch(params.url, signal), { url: params.url });
         },
       }),
     ];
@@ -312,13 +390,13 @@ export function createBuiltinTools(input: {
     defineTool({
       name: "memory_write",
       label: "Remember",
-      description: "Store an explicit durable fact in session or global memory.",
+      description: "Store an explicit durable fact in session or global memory. Requires approval.",
       parameters: memoryWriteSchema,
       executionMode: "sequential",
       async execute(_id, params) {
         const scope = params.scope ?? "session";
-        const id = database.addMemory(scope === "session" ? session.id : undefined, scope, params.content);
-        return result("Memory stored", { id, scope });
+        const fact = memoryWrite(scope, params.content);
+        return result("Memory stored", { id: fact.id, scope });
       },
     }),
     defineTool({
@@ -348,17 +426,32 @@ export function createBuiltinTools(input: {
       },
     }),
     defineTool({
+      name: "skill_read",
+      label: "Read skill",
+      description: "Load one enabled skill by name.",
+      parameters: Type.Object({ name: Type.String() }),
+      executionMode: "parallel",
+      async execute(_id, params) {
+        return result(skills.read(params.name), { name: params.name });
+      },
+    }),
+    defineTool({
       name: "attachment_read",
       label: "Read attachment",
       description: "Read a text attachment uploaded to the server.",
       parameters: attachmentSchema,
       executionMode: "parallel",
       async execute(_id, params) {
-        const path = database.getAttachmentPath(params.attachmentId);
-        return result((await readFile(path, "utf8")).slice(0, 100_000), {
-          name: basename(path),
-          path: dirname(path),
-        });
+        database.validateAttachmentForSession(params.attachmentId, session.id);
+        const attachment = database.getAttachment(params.attachmentId);
+        if (!attachment) throw new Error(`Attachment not found: ${params.attachmentId}`);
+        if (
+          !attachment.mimeType.startsWith("text/") &&
+          !/(^|\/)(json|yaml|xml|javascript|typescript)$/.test(attachment.mimeType)
+        )
+          throw new Error(`Attachment is not readable text: ${attachment.mimeType}`);
+        const path = database.getAttachmentPath(params.attachmentId, session.id);
+        return result(await readTextFile(path), { name: attachment.name });
       },
     }),
   ];

@@ -5,6 +5,7 @@ import type { SkillSummary } from "@uma-agent/protocol";
 import YAML from "yaml";
 
 export interface LoadedSkill extends SkillSummary {
+  path: string;
   content: string;
 }
 
@@ -72,13 +73,19 @@ export class SkillRegistry {
 
   list(): SkillSummary[] {
     return [...this.skills.values()]
-      .map(({ content: _content, ...summary }) => summary)
+      .map(({ content: _content, path: _path, ...summary }) => summary)
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  read(name: string): string {
+    const skill = this.skills.get(name);
+    if (!skill || !skill.enabled) throw new Error(`Skill is unavailable: ${name}`);
+    return skill.content;
   }
 
   systemPrompt(): string {
     const enabled = [...this.skills.values()].filter((skill) => skill.enabled);
     if (!enabled.length) return "";
-    return `\n\n<available_skills>\n${enabled.map((skill) => `<skill><name>${skill.name}</name><description>${skill.description}</description><location>${skill.path}</location></skill>`).join("\n")}\n</available_skills>\nLoad a matching SKILL.md with the read tool before following it.`;
+    return `\n\n<available_skills>\n${enabled.map((skill) => `<skill><name>${skill.name}</name><description>${skill.description}</description></skill>`).join("\n")}\n</available_skills>\nUse skill_read to load a matching skill before following it.`;
   }
 }

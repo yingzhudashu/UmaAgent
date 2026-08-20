@@ -25,6 +25,8 @@ export class UmaClientError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly retryable = false,
+    readonly requestId?: string,
   ) {
     super(message);
     this.name = "UmaClientError";
@@ -62,7 +64,7 @@ export class UmaClient {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v4${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v5${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -71,12 +73,14 @@ export class UmaClient {
       const body = (await response
         .json()
         .catch(() => ({ error: { code: "http_error", message: response.statusText } }))) as {
-        error?: { code?: string; message?: string };
+        error?: { code?: string; message?: string; retryable?: boolean; requestId?: string };
       };
       throw new UmaClientError(
         response.status,
         body.error?.code ?? "http_error",
         body.error?.message ?? response.statusText,
+        body.error?.retryable ?? false,
+        body.error?.requestId,
       );
     }
     if (response.status === 204) return undefined as T;
@@ -84,7 +88,7 @@ export class UmaClient {
   }
 
   health(): Promise<Health> {
-    return this.request("/health");
+    return this.request("/health/ready");
   }
   async login(token: string): Promise<{ ok: boolean }> {
     const result = await this.request<{ ok: boolean }>("/auth/login", {
@@ -162,6 +166,12 @@ export class UmaClient {
   indexKnowledge(name: string, path: string): Promise<KnowledgeSource> {
     return this.request("/knowledge", { method: "POST", body: JSON.stringify({ name, path }) });
   }
+  indexKnowledgeAttachment(name: string, attachmentId: string): Promise<KnowledgeSource> {
+    return this.request("/knowledge", {
+      method: "POST",
+      body: JSON.stringify({ name, attachmentId }),
+    });
+  }
   listTasks(): Promise<BackgroundTask[]> {
     return this.request("/tasks");
   }
@@ -180,6 +190,16 @@ export class UmaClient {
   listMemoryFacts(status?: MemoryFact["status"]): Promise<MemoryFact[]> {
     return this.request(`/memory${status ? `?status=${status}` : ""}`);
   }
+  createMemoryFact(
+    sessionId: string,
+    content: string,
+    scope: MemoryFact["scope"] = "session",
+  ): Promise<MemoryFact> {
+    return this.request("/memory", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, content, scope }),
+    });
+  }
   reviewMemoryFact(id: string, status: MemoryFact["status"]): Promise<MemoryFact> {
     return this.request(`/memory/${encodeURIComponent(id)}`, {
       method: "POST",
@@ -195,6 +215,28 @@ export class UmaClient {
   getRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
     return this.request(`/runs/${encodeURIComponent(runId)}`);
   }
+  async waitForRun(
+    runId: string,
+    options: { signal?: AbortSignal; pollMs?: number } = {},
+  ): Promise<import("@uma-agent/protocol").Run> {
+    const terminal = new Set(["completed", "failed", "cancelled", "interrupted", "awaiting_input"]);
+    while (true) {
+      if (options.signal?.aborted) throw new DOMException("Run wait cancelled", "AbortError");
+      const run = await this.getRun(runId);
+      if (terminal.has(run.status)) return run;
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => {
+          clearTimeout(timer);
+          reject(new DOMException("Run wait cancelled", "AbortError"));
+        };
+        const timer = setTimeout(() => {
+          options.signal?.removeEventListener("abort", abort);
+          resolve();
+        }, options.pollMs ?? 1_000);
+        options.signal?.addEventListener("abort", abort, { once: true });
+      });
+    }
+  }
   listRunActions(runId: string): Promise<import("@uma-agent/protocol").RunAction[]> {
     return this.request(`/runs/${encodeURIComponent(runId)}/actions`);
   }
@@ -203,6 +245,9 @@ export class UmaClient {
   }
   resumeRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
     return this.request(`/runs/${encodeURIComponent(runId)}/resume`, { method: "POST" });
+  }
+  cancelRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
   }
   decideRunAction(
     runId: string,
@@ -223,6 +268,28 @@ export class UmaClient {
     form.append("file", file, name);
     if (sessionId) form.append("sessionId", sessionId);
     return this.request("/uploads", { method: "POST", body: form });
+  }
+
+  async attachmentContent(id: string): Promise<Blob> {
+    const headers = new Headers();
+    if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
+    const response = await this.fetchFn(
+      `${this.baseUrl}/api/v5/attachments/${encodeURIComponent(id)}/content`,
+      { headers, credentials: "include" },
+    );
+    if (!response.ok) {
+      const body = (await response.json().catch(() => undefined)) as
+        | { error?: { code?: string; message?: string; retryable?: boolean; requestId?: string } }
+        | undefined;
+      throw new UmaClientError(
+        response.status,
+        body?.error?.code ?? "http_error",
+        body?.error?.message ?? response.statusText,
+        body?.error?.retryable ?? false,
+        body?.error?.requestId,
+      );
+    }
+    return response.blob();
   }
 
   subscribe(sessionId: string, listener: Listener): () => void {
@@ -258,7 +325,7 @@ export class UmaClient {
 
   connectEvents(): void {
     if (this.socket || this.closed) return;
-    const url = new URL("/api/v4/events", this.baseUrl);
+    const url = new URL("/api/v5/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())
@@ -303,6 +370,7 @@ export class UmaClient {
       return;
     }
     const previous = this.lastSequences.get(event.sessionId);
+    if (previous !== undefined && event.sequence <= previous) return;
     if (previous !== undefined && event.sequence !== previous + 1) {
       void this.recoverEvents(event.sessionId, previous, event.sequence);
       return;
@@ -315,16 +383,25 @@ export class UmaClient {
     if (this.recoveryTargets.has(sessionId)) return;
     this.recoveryTargets.set(sessionId, observed);
     try {
-      const page = await this.getSessionEvents(sessionId, after, 1000);
-      if (!Array.isArray(page.events)) throw new Error("Invalid event page");
+      let cursor = after;
       let expected = after + 1;
-      for (const event of page.events) {
-        if (event.sequence !== expected) throw new Error("Event sequence gap");
-        this.lastSequences.set(sessionId, event.sequence);
-        this.notify(event);
-        expected++;
+      while (true) {
+        const page = await this.getSessionEvents(sessionId, cursor, 1000);
+        if (!Array.isArray(page.events)) throw new Error("Invalid event page");
+        for (const event of page.events) {
+          if (event.sequence !== expected) throw new Error("Event sequence gap");
+          this.lastSequences.set(sessionId, event.sequence);
+          this.notify(event);
+          expected++;
+        }
+        cursor = page.nextSequence;
+        const target = Math.max(observed, this.recoveryTargets.get(sessionId) ?? observed);
+        if (page.events.length === 0 && cursor < target) throw new Error("Event cursor did not advance");
+        if (page.hasMore || cursor < target) continue;
+        break;
       }
-      if ((this.lastSequences.get(sessionId) ?? after) < observed) {
+    } catch {
+      try {
         const snapshot = await this.getSession(sessionId);
         this.notify({
           protocolVersion: PROTOCOL_VERSION,
@@ -335,18 +412,9 @@ export class UmaClient {
           payload: snapshot,
         });
         this.lastSequences.set(sessionId, snapshot.snapshotSequence);
+      } catch {
+        this.lastSequences.delete(sessionId);
       }
-    } catch {
-      const snapshot = await this.getSession(sessionId);
-      this.notify({
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId,
-        sequence: Math.max(1, snapshot.snapshotSequence),
-        timestamp: Date.now(),
-        type: "session.snapshot",
-        payload: snapshot,
-      });
-      this.lastSequences.set(sessionId, snapshot.snapshotSequence);
     } finally {
       this.recoveryTargets.delete(sessionId);
     }

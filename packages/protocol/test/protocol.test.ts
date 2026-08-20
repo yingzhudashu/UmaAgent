@@ -22,7 +22,7 @@ describe("protocol schemas", () => {
   it("rejects events with the wrong protocol version", () => {
     expect(
       Value.Check(AgentEventEnvelopeSchema, {
-        protocolVersion: 3,
+        protocolVersion: 4,
         sessionId: "s",
         sequence: 1,
         timestamp: 1,
@@ -32,7 +32,7 @@ describe("protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts only the v4 Action decisions", () => {
+  it("accepts only the v5 Action decisions", () => {
     for (const decision of ["approve", "reject", "acknowledge"])
       expect(Value.Check(RunActionDecisionSchema, { decision })).toBe(true);
     expect(Value.Check(RunActionDecisionSchema, { decision: "confirm" })).toBe(false);

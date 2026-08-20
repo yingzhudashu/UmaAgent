@@ -9,6 +9,7 @@ import {
   PROTOCOL_VERSION,
   type Session,
   type SessionSnapshot,
+  type TranscriptItem,
 } from "@uma-agent/protocol";
 
 const args = process.argv.slice(2);
@@ -19,9 +20,10 @@ const server = valueAfter("--server") ?? process.env.UMA_SERVER_URL ?? "http://1
 const token = valueAfter("--token") ?? process.env.UMA_TOKEN;
 const client = new UmaClient({ baseUrl: server, ...(token ? { token } : {}) });
 
-function renderTranscript(snapshot: SessionSnapshot): string {
-  return snapshot.transcript
-    .slice(-14)
+function renderTranscript(items: TranscriptItem[], offset = 0): string {
+  const end = Math.max(0, items.length - offset);
+  return items
+    .slice(Math.max(0, end - 14), end)
     .map((item) => {
       const label = item.role === "user" ? "You" : item.role === "assistant" ? "Uma" : (item.name ?? "Tool");
       const suffix = item.status === "streaming" ? " [running]" : item.status === "error" ? " [error]" : "";
@@ -43,6 +45,8 @@ async function chat(): Promise<void> {
   let snapshot = await client.getSession(active.id);
   const approvals = new Map<string, Approval>();
   const attachmentIds: string[] = [];
+  let historical: TranscriptItem[] = [];
+  let scrollOffset = 0;
   const ui = new TuiMainScreen(new ProcessTerminal());
   const header = new Text("", 1, 0);
   const transcript = new Text("", 1, 1);
@@ -59,11 +63,14 @@ async function chat(): Promise<void> {
   ui.setFocus(input);
 
   const render = (notice?: string) => {
-    const run = snapshot.runs.at(-1);
+    const run = snapshot.recentRuns.at(-1);
     header.setText(
       `UmaAgent  ${active.title}\n${active.model.provider}/${active.model.id}  ${active.workspace}`,
     );
-    transcript.setText(renderTranscript(snapshot) || "No messages yet.");
+    const items = [
+      ...new Map([...historical, ...snapshot.transcript].map((item) => [item.id, item])).values(),
+    ].sort((a, b) => a.sequence - b.sequence);
+    transcript.setText(renderTranscript(items, scrollOffset) || "No messages yet.");
     const plan = run?.plan.length
       ? `  ${run.plan.map((step) => `${step.status === "completed" ? "[x]" : "[ ]"} ${step.title}`).join("  ")}`
       : "";
@@ -110,6 +117,8 @@ async function chat(): Promise<void> {
     unsubscribe();
     active = session;
     snapshot = await client.getSession(session.id);
+    historical = [];
+    scrollOffset = 0;
     unsubscribe = client.subscribe(session.id, eventHandler);
     approvals.clear();
     attachmentIds.splice(0);
@@ -131,7 +140,7 @@ async function chat(): Promise<void> {
     }
     if (value === "/help") {
       render(
-        "/new  /sessions  /use <id>  /rename <title>  /model <provider/id>  /attach <path>  /approve <id> yes|no  /cancel  /exit",
+        "/new  /sessions  /use <id>  /older  /newer  /rename <title>  /model <provider/id>  /attach <path>  /approve <id> yes|no  /actions  /decide <action> approve|reject|acknowledge  /resume  /cancel  /exit",
       );
       return;
     }
@@ -153,6 +162,24 @@ async function chat(): Promise<void> {
       refresh();
       return;
     }
+    if (value === "/older") {
+      const all = [...historical, ...snapshot.transcript].sort((a, b) => a.sequence - b.sequence);
+      if (scrollOffset + 14 >= all.length && snapshot.history.hasMoreBefore) {
+        const page = await client.getSessionHistory(active.id, all[0]?.sequence, 100);
+        historical = [...new Map([...page.items, ...historical].map((item) => [item.id, item])).values()];
+      }
+      scrollOffset = Math.min(
+        scrollOffset + 14,
+        Math.max(0, historical.length + snapshot.transcript.length - 1),
+      );
+      render();
+      return;
+    }
+    if (value === "/newer") {
+      scrollOffset = Math.max(0, scrollOffset - 14);
+      render();
+      return;
+    }
     if (value.startsWith("/model ")) {
       const [provider, ...id] = value.slice(7).trim().split("/");
       if (!provider || !id.length) throw new Error("Use /model <provider/id>");
@@ -169,7 +196,8 @@ async function chat(): Promise<void> {
       return;
     }
     if (value === "/cancel") {
-      await client.cancel(active.id);
+      const run = snapshot.recentRuns.at(-1);
+      if (run) await client.cancelRun(run.id);
       return;
     }
     if (value === "/compact") {
@@ -184,12 +212,36 @@ async function chat(): Promise<void> {
       approvals.delete(id);
       return;
     }
+    if (value === "/actions") {
+      const run = snapshot.recentRuns.at(-1);
+      if (!run) throw new Error("No run is available");
+      const actions = await client.listRunActions(run.id);
+      render(actions.map((action) => `${action.id} ${action.toolName} ${action.status}`).join("  "));
+      return;
+    }
+    if (value.startsWith("/decide ")) {
+      const [, actionId, decision] = value.split(/\s+/);
+      const run = snapshot.recentRuns.at(-1);
+      if (!run || !actionId || !new Set(["approve", "reject", "acknowledge"]).has(decision ?? ""))
+        throw new Error("Use /decide <action-id> approve|reject|acknowledge");
+      await client.decideRunAction(run.id, actionId, decision as "approve" | "reject" | "acknowledge");
+      refresh();
+      return;
+    }
+    if (value === "/resume") {
+      const run = snapshot.recentRuns.at(-1);
+      if (!run) throw new Error("No run is available");
+      await client.resumeRun(run.id);
+      refresh();
+      return;
+    }
     await client.sendMessage(
       active.id,
       value,
       attachmentIds.length ? { attachmentIds: [...attachmentIds] } : {},
     );
     attachmentIds.splice(0);
+    scrollOffset = 0;
     refresh();
   };
   input.onSubmit = (value) =>
@@ -296,23 +348,61 @@ async function runCommand(): Promise<void> {
   const prompt = positionals.join(" ").trim();
   if (!prompt) throw new Error("uma run --json <prompt>");
   const session = await chooseInitialSession();
+  const initial = await client.getSession(session.id);
+  console.log(JSON.stringify({ type: "snapshot", payload: initial }));
+  const buffered: AgentEventEnvelope[] = [];
+  const emitted = new Set<number>();
+  let acceptedRunId: string | undefined;
   client.connectEvents();
-  const done = new Promise<void>((resolve) => {
-    const unsubscribe = client.subscribe(session.id, (event) => {
-      console.log(JSON.stringify(event));
-      if (event.type !== "run.updated") return;
-      const status = (event.payload as { status?: string }).status;
-      if (!["completed", "failed", "cancelled", "interrupted", "awaiting_input"].includes(status ?? ""))
-        return;
-      unsubscribe();
-      resolve();
-    });
-  });
-  const run = await client.sendMessage(session.id, prompt);
-  console.log(
-    JSON.stringify({ type: "run.accepted", sessionId: session.id, runId: run.runId, status: run.status }),
+  const unsubscribe = client.subscribeSessions(
+    [{ id: session.id, lastSequence: initial.snapshotSequence }],
+    (event) => {
+      if (!acceptedRunId) buffered.push(event);
+      else if (event.runId === acceptedRunId && !emitted.has(event.sequence)) {
+        emitted.add(event.sequence);
+        console.log(JSON.stringify({ type: "durable.event", payload: event }));
+      }
+    },
   );
-  await done;
+  const accepted = await client.sendMessage(session.id, prompt);
+  acceptedRunId = accepted.runId;
+  console.log(
+    JSON.stringify({
+      type: "run.accepted",
+      sessionId: session.id,
+      runId: accepted.runId,
+      status: accepted.status,
+    }),
+  );
+  for (const event of buffered)
+    if (event.runId === acceptedRunId) {
+      emitted.add(event.sequence);
+      console.log(JSON.stringify({ type: "durable.event", payload: event }));
+    }
+  buffered.length = 0;
+  const terminal = await client.waitForRun(accepted.runId);
+  let catchupAfter = initial.snapshotSequence;
+  while (true) {
+    const page = await client.getSessionEvents(session.id, catchupAfter, 1000);
+    for (const event of page.events) {
+      if (event.runId === acceptedRunId && !emitted.has(event.sequence)) {
+        emitted.add(event.sequence);
+        console.log(JSON.stringify({ type: "durable.event", payload: event }));
+      }
+    }
+    catchupAfter = page.nextSequence;
+    if (!page.hasMore) break;
+  }
+  console.log(
+    JSON.stringify({
+      type: "run.terminal",
+      sessionId: session.id,
+      runId: terminal.id,
+      status: terminal.status,
+      payload: terminal,
+    }),
+  );
+  unsubscribe();
 }
 
 async function syncCommand(): Promise<void> {
@@ -320,8 +410,13 @@ async function syncCommand(): Promise<void> {
   if (!sessionId) throw new Error("uma sync <session-id>");
   const snapshot = await client.getSession(sessionId);
   console.log(JSON.stringify({ type: "snapshot", payload: snapshot }));
-  const page = await client.getSessionEvents(sessionId, snapshot.snapshotSequence);
-  for (const event of page.events) console.log(JSON.stringify({ type: "durable.event", payload: event }));
+  let after = snapshot.snapshotSequence;
+  while (true) {
+    const page = await client.getSessionEvents(sessionId, after, 1000);
+    for (const event of page.events) console.log(JSON.stringify({ type: "durable.event", payload: event }));
+    after = page.nextSequence;
+    if (!page.hasMore) break;
+  }
 }
 
 async function skillCommand(): Promise<void> {

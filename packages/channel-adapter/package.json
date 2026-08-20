@@ -1,6 +1,6 @@
 {
   "name": "@uma-agent/channel-adapter",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -10,6 +10,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@uma-agent/protocol": "0.5.0"
+    "@uma-agent/protocol": "0.6.0"
   }
 }

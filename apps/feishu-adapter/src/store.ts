@@ -6,6 +6,12 @@ import { DatabaseSync } from "node:sqlite";
 type Row = Record<string, unknown>;
 const text = (value: unknown) => String(value ?? "");
 
+export interface StoredInbound<T = unknown> {
+  externalId: string;
+  messageId: string;
+  payload: T;
+}
+
 export class AdapterStore {
   readonly db: DatabaseSync;
   constructor(readonly stateDir: string) {
@@ -17,11 +23,12 @@ export class AdapterStore {
     );
     if (version === 0) {
       this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
-      this.db.exec("PRAGMA user_version=2");
-    } else if (version !== 2) {
+      this.db.exec("PRAGMA user_version=3");
+    } else if (version !== 3) {
       this.db.close();
       throw new Error(`Unsupported Feishu adapter schema ${version}; reset state explicitly.`);
     }
+    this.db.prepare("UPDATE inbound_messages SET status='pending' WHERE status='processing'").run();
   }
   close(): void {
     this.db.close();
@@ -58,28 +65,72 @@ export class AdapterStore {
       (row) => ({ id: text(row.id), sessionId: text(row.uma_session_id), chatId: text(row.chat_id) }),
     );
   }
-  claimInbound(
-    externalId: string,
-    conversationId: string,
-    senderId: string | undefined,
-    rawType: string,
-  ): { messageId: string; fresh: boolean } {
+  claimInbound<T>(input: { externalId: string; senderId?: string; rawType: string; payload: T }): {
+    messageId: string;
+    fresh: boolean;
+  } {
     const existing = this.db
       .prepare("SELECT uma_message_id FROM inbound_messages WHERE external_message_id=?")
-      .get(externalId) as Row | undefined;
+      .get(input.externalId) as Row | undefined;
     if (existing) return { messageId: text(existing.uma_message_id), fresh: false };
     const messageId = randomUUID();
     this.db
       .prepare(
-        "INSERT INTO inbound_messages(external_message_id,conversation_map_id,sender_id,raw_type,uma_message_id,status,received_at) VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO inbound_messages(external_message_id,conversation_map_id,sender_id,raw_type,uma_message_id,payload_json,status,received_at) VALUES(?,?,?,?,?,?,?,?)",
       )
-      .run(externalId, conversationId, senderId ?? null, rawType, messageId, "received", Date.now());
+      .run(
+        input.externalId,
+        null,
+        input.senderId ?? null,
+        input.rawType,
+        messageId,
+        JSON.stringify(input.payload),
+        "pending",
+        Date.now(),
+      );
     return { messageId, fresh: true };
+  }
+
+  listPendingInbound<T>(): StoredInbound<T>[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT external_message_id,uma_message_id,payload_json FROM inbound_messages WHERE status='pending' ORDER BY received_at",
+        )
+        .all() as Row[]
+    ).map((row) => ({
+      externalId: text(row.external_message_id),
+      messageId: text(row.uma_message_id),
+      payload: JSON.parse(text(row.payload_json)) as T,
+    }));
+  }
+
+  startInbound(externalId: string): boolean {
+    return (
+      this.db
+        .prepare(
+          "UPDATE inbound_messages SET status='processing',error=NULL WHERE external_message_id=? AND status='pending'",
+        )
+        .run(externalId).changes === 1
+    );
+  }
+
+  attachInboundConversation(externalId: string, conversationId: string): void {
+    this.db
+      .prepare("UPDATE inbound_messages SET conversation_map_id=? WHERE external_message_id=?")
+      .run(conversationId, externalId);
   }
   markInbound(messageId: string, status: "processed" | "failed", error?: string): void {
     this.db
       .prepare("UPDATE inbound_messages SET status=?,processed_at=?,error=? WHERE uma_message_id=?")
       .run(status, Date.now(), error ?? null, messageId);
+  }
+
+  isOutboundMessage(messageId: string | undefined): boolean {
+    if (!messageId) return false;
+    return Boolean(
+      this.db.prepare("SELECT 1 FROM outbound_cards WHERE feishu_message_id=? LIMIT 1").get(messageId),
+    );
   }
   upsertCard(
     conversationId: string,

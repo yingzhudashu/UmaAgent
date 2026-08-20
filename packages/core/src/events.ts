@@ -20,12 +20,9 @@ export class EventHub {
     type: AgentEventType,
     payload: unknown,
   ): AgentEventEnvelope {
+    if (!this.pending) throw new Error("Durable events must be emitted inside an EventHub transaction");
     const event = this.database.appendEvent(sessionId, runId, type, payload);
-    if (this.pending) {
-      this.pending.push(event);
-      return event;
-    }
-    this.broadcast(event);
+    this.pending.push(event);
     return event;
   }
 

@@ -9,7 +9,6 @@ CREATE TABLE sessions (
   model_provider TEXT NOT NULL,
   model_id TEXT NOT NULL,
   thinking_level TEXT NOT NULL,
-  revision INTEGER NOT NULL DEFAULT 0,
   next_sequence INTEGER NOT NULL DEFAULT 1,
   next_event_sequence INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
@@ -21,6 +20,14 @@ CREATE TABLE runs (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   message_id TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  task_class TEXT,
+  goal TEXT,
+  success_criteria_json TEXT NOT NULL DEFAULT '[]',
+  model_snapshot_json TEXT NOT NULL,
+  thinking_level TEXT NOT NULL,
+  turn_count INTEGER NOT NULL DEFAULT 0,
+  correction_count INTEGER NOT NULL DEFAULT 0 CHECK (correction_count IN (0,1)),
   route TEXT,
   reasoning_summary TEXT,
   error TEXT,
@@ -35,12 +42,12 @@ CREATE TABLE plan_steps (
   run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
   position INTEGER NOT NULL,
   title TEXT NOT NULL,
-  status TEXT NOT NULL
-  ,started_at INTEGER
-  ,completed_at INTEGER
-  ,error TEXT
+  status TEXT NOT NULL,
+  started_at INTEGER,
+  completed_at INTEGER,
+  error TEXT,
+  UNIQUE(run_id, position)
 );
-CREATE UNIQUE INDEX plan_steps_position ON plan_steps(run_id, position);
 
 CREATE TABLE attachments (
   id TEXT PRIMARY KEY,
@@ -94,16 +101,6 @@ CREATE TABLE approvals (
 );
 CREATE INDEX approvals_pending ON approvals(status, created_at);
 
-CREATE TABLE memory_items (
-  id TEXT PRIMARY KEY,
-  session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
-  scope TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE VIRTUAL TABLE memory_fts USING fts5(id UNINDEXED, content, tokenize='trigram');
-
 CREATE TABLE memory_facts (
   id TEXT PRIMARY KEY,
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
@@ -116,6 +113,7 @@ CREATE TABLE memory_facts (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX memory_facts_scope_status ON memory_facts(scope,status,updated_at DESC);
+CREATE VIRTUAL TABLE memory_fts USING fts5(id UNINDEXED, content, tokenize='trigram');
 
 CREATE TABLE background_tasks (
   id TEXT PRIMARY KEY,
@@ -155,7 +153,8 @@ CREATE TABLE model_calls (
   duration_ms INTEGER,
   usage_json TEXT,
   error TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 CREATE INDEX model_calls_run_created ON model_calls(run_id,created_at);
 
@@ -233,4 +232,4 @@ CREATE TABLE web_sessions (
   created_at INTEGER NOT NULL
 );
 
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;

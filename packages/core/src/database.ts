@@ -12,6 +12,7 @@ import type {
   MemoryFact,
   MessageSource,
   ModelRef,
+  ModelSnapshot,
   PlanStep,
   Run,
   RunAction,
@@ -27,7 +28,7 @@ import type {
 import { type AgentEventEnvelope, type AgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 type Row = Record<string, unknown>;
 
 function rows(statement: StatementSync, ...params: SQLInputValue[]): Row[] {
@@ -53,6 +54,16 @@ function parseJson<T>(value: unknown, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function ftsQuery(value: string): string | undefined {
+  const terms =
+    value
+      .normalize("NFKC")
+      .match(/[\p{L}\p{N}_]{3,}/gu)
+      ?.slice(0, 12) ?? [];
+  if (terms.length === 0) return undefined;
+  return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" OR ");
 }
 
 function redactAudit(value: unknown): unknown {
@@ -178,6 +189,11 @@ export class UmaDatabase {
         .run(now);
       this.markUncertainActions();
       this.markActiveBackgroundTasksInterrupted();
+      this.db
+        .prepare(
+          "UPDATE model_calls SET status='abandoned',error='Server restarted during model request',updated_at=? WHERE status='started'",
+        )
+        .run(now);
       for (const value of interrupted) {
         const runId = text(value.id);
         this.appendEvent(text(value.session_id), runId, "run.updated", this.getRun(runId));
@@ -250,7 +266,7 @@ export class UmaDatabase {
     const now = Date.now();
     this.db
       .prepare(
-        "UPDATE sessions SET title=?, mode=?, model_provider=?, model_id=?, thinking_level=?, revision=revision+1, updated_at=? WHERE id=?",
+        "UPDATE sessions SET title=?, mode=?, model_provider=?, model_id=?, thinking_level=?, updated_at=? WHERE id=?",
       )
       .run(
         patch.title ?? current.title,
@@ -272,7 +288,7 @@ export class UmaDatabase {
   private allocateMessageSequence(sessionId: string): number {
     const value = row(
       this.db.prepare(
-        "UPDATE sessions SET next_sequence=next_sequence+1, revision=revision+1, updated_at=? WHERE id=? RETURNING next_sequence-1 AS sequence",
+        "UPDATE sessions SET next_sequence=next_sequence+1, updated_at=? WHERE id=? RETURNING next_sequence-1 AS sequence",
       ),
       Date.now(),
       sessionId,
@@ -452,7 +468,12 @@ export class UmaDatabase {
     return this.getContextSummary(sessionId) as ContextSummary;
   }
 
-  createRun(sessionId: string, messageId: string): { run: Run; created: boolean } {
+  createRun(
+    sessionId: string,
+    messageId: string,
+    model: ModelSnapshot,
+    thinkingLevel: Run["thinkingLevel"],
+  ): { run: Run; created: boolean } {
     const existing = row(this.db.prepare("SELECT id,session_id FROM runs WHERE message_id=?"), messageId);
     if (existing) {
       if (text(existing.session_id) !== sessionId)
@@ -462,8 +483,10 @@ export class UmaDatabase {
     const id = randomUUID();
     const now = Date.now();
     this.db
-      .prepare("INSERT INTO runs(id,session_id,message_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?)")
-      .run(id, sessionId, messageId, "queued", now, now);
+      .prepare(
+        "INSERT INTO runs(id,session_id,message_id,status,phase,model_snapshot_json,thinking_level,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+      )
+      .run(id, sessionId, messageId, "queued", "queued", JSON.stringify(model), thinkingLevel, now, now);
     return { run: this.getRun(id), created: true };
   }
 
@@ -471,6 +494,12 @@ export class UmaDatabase {
     id: string,
     patch: {
       status?: RunStatus;
+      phase?: Run["phase"];
+      taskClass?: Run["taskClass"];
+      goal?: string;
+      successCriteria?: string[];
+      turnCount?: number;
+      correctionCount?: 0 | 1;
       route?: Run["route"];
       reasoningSummary?: string;
       error?: string | null;
@@ -480,10 +509,16 @@ export class UmaDatabase {
     const current = this.getRun(id);
     this.db
       .prepare(
-        "UPDATE runs SET status=?, route=?, reasoning_summary=?, error=?, clarification_count=?, updated_at=? WHERE id=?",
+        "UPDATE runs SET status=?,phase=?,task_class=?,goal=?,success_criteria_json=?,turn_count=?,correction_count=?,route=?,reasoning_summary=?,error=?,clarification_count=?,updated_at=? WHERE id=?",
       )
       .run(
         patch.status ?? current.status,
+        patch.phase ?? current.phase,
+        patch.taskClass ?? current.taskClass ?? null,
+        patch.goal ?? current.goal ?? null,
+        JSON.stringify(patch.successCriteria ?? current.successCriteria),
+        patch.turnCount ?? current.turnCount,
+        patch.correctionCount ?? current.correctionCount,
         patch.route ?? current.route ?? null,
         patch.reasoningSummary ?? current.reasoningSummary ?? null,
         patch.error === undefined ? (current.error ?? null) : patch.error,
@@ -529,6 +564,14 @@ export class UmaDatabase {
       sessionId: text(value.session_id),
       messageId: text(value.message_id),
       status: text(value.status) as RunStatus,
+      phase: text(value.phase) as Run["phase"],
+      ...(value.task_class ? { taskClass: text(value.task_class) as NonNullable<Run["taskClass"]> } : {}),
+      ...(value.goal ? { goal: text(value.goal) } : {}),
+      successCriteria: parseJson<string[]>(value.success_criteria_json, []),
+      model: parseJson<ModelSnapshot>(value.model_snapshot_json, {} as ModelSnapshot),
+      thinkingLevel: text(value.thinking_level) as Run["thinkingLevel"],
+      turnCount: integer(value.turn_count),
+      correctionCount: integer(value.correction_count) === 1 ? 1 : 0,
       ...(value.route ? { route: text(value.route) as Exclude<Run["route"], undefined> } : {}),
       ...(value.reasoning_summary ? { reasoningSummary: text(value.reasoning_summary) } : {}),
       clarificationCount: integer(value.clarification_count),
@@ -747,6 +790,11 @@ export class UmaDatabase {
   markUncertainActions(): void {
     this.db
       .prepare(
+        "UPDATE run_actions SET status='prepared',started_at=NULL,error='Safe read action will be replayed after restart' WHERE status='running' AND tool_class IN ('read','attachment_read')",
+      )
+      .run();
+    this.db
+      .prepare(
         "UPDATE run_actions SET status='uncertain',error='Server restarted before action completion' WHERE status='running'",
       )
       .run();
@@ -758,18 +806,53 @@ export class UmaDatabase {
     );
   }
 
-  getSnapshot(sessionId: string): SessionSnapshot {
-    const sessionState = row(
-      this.db.prepare("SELECT revision,next_event_sequence FROM sessions WHERE id=?"),
+  listRecentRuns(sessionId: string, limit = 20): Run[] {
+    const active = rows(
+      this.db.prepare(
+        "SELECT id,created_at FROM runs WHERE session_id=? AND status NOT IN ('completed','failed','cancelled') ORDER BY created_at",
+      ),
       sessionId,
     );
-    const revision = integer(sessionState?.revision);
+    const recent = rows(
+      this.db.prepare("SELECT id,created_at FROM runs WHERE session_id=? ORDER BY created_at DESC LIMIT ?"),
+      sessionId,
+      limit,
+    );
+    const unique = new Map(
+      [...active, ...recent].map((value) => [text(value.id), integer(value.created_at)]),
+    );
+    return [...unique.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => this.getRun(id));
+  }
+
+  listPendingApprovals(sessionId: string): Approval[] {
+    return rows(
+      this.db.prepare("SELECT id FROM approvals WHERE session_id=? AND status='pending' ORDER BY created_at"),
+      sessionId,
+    ).map((value) => this.getApproval(text(value.id)));
+  }
+
+  getSnapshot(sessionId: string): SessionSnapshot {
+    const sessionState = row(
+      this.db.prepare("SELECT next_event_sequence FROM sessions WHERE id=?"),
+      sessionId,
+    );
+    this.getSession(sessionId);
+    const tail = rows(
+      this.db.prepare("SELECT id,sequence FROM messages WHERE session_id=? ORDER BY sequence DESC LIMIT 101"),
+      sessionId,
+    );
+    const hasMoreBefore = tail.length > 100;
+    const visible = tail.slice(0, 100).reverse();
     return {
       session: this.getSession(sessionId),
-      transcript: this.listMessages(sessionId),
-      runs: this.listRuns(sessionId),
-      revision,
+      transcript: visible.map((value) => this.getMessage(text(value.id))),
+      recentRuns: this.listRecentRuns(sessionId),
+      pendingApprovals: this.listPendingApprovals(sessionId),
       snapshotSequence: Math.max(0, integer(sessionState?.next_event_sequence) - 1),
+      history: {
+        oldestMessageSequence: visible.length ? integer(visible[0]?.sequence) : 0,
+        hasMoreBefore,
+      },
     };
   }
 
@@ -817,9 +900,11 @@ export class UmaDatabase {
       ),
       sessionId,
       afterSequence,
-      bounded,
+      bounded + 1,
     );
-    const events = values.map(
+    const hasMore = values.length > bounded;
+    const pageValues = values.slice(0, bounded);
+    const events = pageValues.map(
       (value): AgentEventEnvelope => ({
         protocolVersion: PROTOCOL_VERSION,
         sessionId: text(value.session_id),
@@ -835,6 +920,8 @@ export class UmaDatabase {
       sessionId,
       fromSequence: events[0]?.sequence ?? afterSequence,
       toSequence: events.at(-1)?.sequence ?? afterSequence,
+      nextSequence: events.at(-1)?.sequence ?? afterSequence,
+      hasMore,
       events,
       snapshotSequence,
     };
@@ -901,7 +988,7 @@ export class UmaDatabase {
     const result = this.db
       .prepare("UPDATE approvals SET status=?, resolved_at=? WHERE id=? AND status='pending'")
       .run(approved ? "approved" : "denied", Date.now(), id);
-    if (result.changes === 0) throw new Error("Approval is not pending");
+    if (result.changes === 0) return this.getApproval(id);
     return this.getApproval(id);
   }
 
@@ -934,37 +1021,29 @@ export class UmaDatabase {
     return value ? toAttachment(value) : undefined;
   }
 
-  getAttachmentPath(id: string): string {
-    const value = row(this.db.prepare("SELECT storage_path FROM attachments WHERE id=?"), id);
+  getAttachmentPath(id: string, sessionId?: string): string {
+    const value = row(this.db.prepare("SELECT session_id,storage_path FROM attachments WHERE id=?"), id);
     if (!value) throw new Error(`Attachment not found: ${id}`);
+    if (sessionId && (!value.session_id || text(value.session_id) !== sessionId))
+      throw new Error(`Attachment belongs to another session: ${id}`);
     return text(value.storage_path);
   }
 
   validateAttachmentForSession(id: string, sessionId: string): void {
     const value = row(this.db.prepare("SELECT session_id FROM attachments WHERE id=?"), id);
     if (!value) throw new Error(`Attachment not found: ${id}`);
-    if (value.session_id && text(value.session_id) !== sessionId)
+    if (!value.session_id || text(value.session_id) !== sessionId)
       throw new Error(`Attachment belongs to another session: ${id}`);
   }
 
-  addMemory(sessionId: string | undefined, scope: "session" | "global", content: string): string {
-    const id = randomUUID();
-    const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO memory_items(id,session_id,scope,content,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-      )
-      .run(id, sessionId ?? null, scope, content, now, now);
-    this.db.prepare("INSERT INTO memory_fts(id,content) VALUES(?,?)").run(id, content);
-    return id;
-  }
-
   searchMemory(sessionId: string, query: string, limit = 5): string[] {
+    const match = ftsQuery(query);
+    if (!match) return [];
     return rows(
       this.db.prepare(
-        "SELECT m.content FROM memory_fts f JOIN memory_items m ON m.id=f.id WHERE memory_fts MATCH ? AND (m.scope='global' OR m.session_id=?) ORDER BY bm25(memory_fts) LIMIT ?",
+        "SELECT m.content FROM memory_fts f JOIN memory_facts m ON m.id=f.id WHERE memory_fts MATCH ? AND m.status='active' AND (m.scope='global' OR m.session_id=?) ORDER BY bm25(memory_fts) LIMIT ?",
       ),
-      query,
+      match,
       sessionId,
       limit,
     ).map((value) => text(value.content));
@@ -1025,11 +1104,13 @@ export class UmaDatabase {
   }
 
   searchKnowledge(query: string, limit = 5): Array<{ filePath: string; content: string }> {
+    const match = ftsQuery(query);
+    if (!match) return [];
     return rows(
       this.db.prepare(
         "SELECT file_path,content FROM knowledge_fts WHERE knowledge_fts MATCH ? ORDER BY bm25(knowledge_fts) LIMIT ?",
       ),
-      query,
+      match,
       limit,
     ).map((value) => ({ filePath: text(value.file_path), content: text(value.content) }));
   }
@@ -1144,6 +1225,7 @@ export class UmaDatabase {
         now,
         now,
       );
+    this.db.prepare("INSERT INTO memory_fts(id,content) VALUES(?,?)").run(id, input.content);
     return this.getMemoryFact(id);
   }
 
@@ -1152,6 +1234,7 @@ export class UmaDatabase {
     if (!value) throw new Error(`Memory fact not found: ${id}`);
     return {
       id: text(value.id),
+      ...(value.session_id ? { sessionId: text(value.session_id) } : {}),
       scope: text(value.scope) as MemoryFact["scope"],
       content: text(value.content),
       confidence: Number(value.confidence),
@@ -1178,8 +1261,11 @@ export class UmaDatabase {
   }
 
   deleteMemoryFact(id: string): void {
-    const result = this.db.prepare("DELETE FROM memory_facts WHERE id=?").run(id);
-    if (result.changes === 0) throw new Error(`Memory fact not found: ${id}`);
+    this.withTransaction(() => {
+      const result = this.db.prepare("DELETE FROM memory_facts WHERE id=?").run(id);
+      if (result.changes === 0) throw new Error(`Memory fact not found: ${id}`);
+      this.db.prepare("DELETE FROM memory_fts WHERE id=?").run(id);
+    });
   }
 
   addAudit(input: {
@@ -1214,6 +1300,41 @@ export class UmaDatabase {
     return this.getAudit(id);
   }
 
+  startModelCall(input: { runId: string; provider: string; model: string; role: string }): string {
+    const id = randomUUID();
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO model_calls(id,run_id,provider,model,role,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+      )
+      .run(id, input.runId, input.provider, input.model, input.role, "started", now, now);
+    return id;
+  }
+
+  finishModelCall(
+    id: string,
+    input: {
+      status: string;
+      durationMs?: number;
+      usage?: unknown;
+      error?: string;
+    },
+  ): void {
+    const result = this.db
+      .prepare(
+        "UPDATE model_calls SET status=?,duration_ms=?,usage_json=?,error=?,updated_at=? WHERE id=? AND status='started'",
+      )
+      .run(
+        input.status,
+        input.durationMs ?? null,
+        input.usage === undefined ? null : JSON.stringify(redactAudit(input.usage)),
+        input.error ?? null,
+        Date.now(),
+        id,
+      );
+    if (result.changes === 0) throw new Error(`Model call is not active: ${id}`);
+  }
+
   addModelCall(input: {
     runId: string;
     provider: string;
@@ -1224,22 +1345,8 @@ export class UmaDatabase {
     usage?: unknown;
     error?: string;
   }): void {
-    this.db
-      .prepare(
-        "INSERT INTO model_calls(id,run_id,provider,model,role,status,duration_ms,usage_json,error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        randomUUID(),
-        input.runId,
-        input.provider,
-        input.model,
-        input.role,
-        input.status,
-        input.durationMs ?? null,
-        input.usage === undefined ? null : JSON.stringify(redactAudit(input.usage)),
-        input.error ?? null,
-        Date.now(),
-      );
+    const id = this.startModelCall(input);
+    this.finishModelCall(id, input);
   }
 
   listAudit(runId: string): AuditRecord[] {

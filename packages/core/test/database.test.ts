@@ -1,10 +1,19 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { UmaDatabase } from "../src/database.js";
 import { safeFetch } from "../src/tools.js";
 import { WorkspacePolicy } from "../src/workspace.js";
+
+const modelSnapshot = {
+  ref: { provider: "test", id: "model" },
+  name: "Test Model",
+  api: "openai-responses",
+  contextWindow: 100_000,
+  maxOutputTokens: 4_096,
+  capabilities: { tools: true, vision: false, reasoning: false, structuredOutput: true },
+};
 
 const temporary: string[] = [];
 afterEach(async () =>
@@ -23,8 +32,8 @@ describe("UmaDatabase", () => {
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
-    const first = db.createRun(session.id, "message-1");
-    const second = db.createRun(session.id, "message-1");
+    const first = db.createRun(session.id, "message-1", modelSnapshot, "off");
+    const second = db.createRun(session.id, "message-1", modelSnapshot, "off");
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(second.run.id).toBe(first.run.id);
@@ -35,8 +44,14 @@ describe("UmaDatabase", () => {
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
-    expect(() => db.createRun(other.id, "message-1")).toThrow("another session");
-    db.addMemory(session.id, "session", "用户偏好使用 TypeScript 编写工具");
+    expect(() => db.createRun(other.id, "message-1", modelSnapshot, "off")).toThrow("another session");
+    db.addMemoryFact({
+      sessionId: session.id,
+      scope: "session",
+      content: "用户偏好使用 TypeScript 编写工具",
+      confidence: 1,
+      status: "active",
+    });
     expect(db.searchMemory(session.id, "TypeScript 编写")).toContain("用户偏好使用 TypeScript 编写工具");
     db.close();
     const reopened = new UmaDatabase(root);
@@ -64,7 +79,7 @@ describe("UmaDatabase", () => {
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
-    const run = db.createRun(session.id, "active-message").run;
+    const run = db.createRun(session.id, "active-message", modelSnapshot, "off").run;
     db.updateRun(run.id, { status: "running" });
     db.createCheckpoint({
       runId: run.id,
@@ -82,6 +97,21 @@ describe("UmaDatabase", () => {
       input: { command: "echo hi" },
     });
     db.updateRunAction(runningAction.id, { status: "running" });
+    const runningRead = db.createRunAction({
+      runId: run.id,
+      toolCallId: "read-1",
+      toolName: "read",
+      toolClass: "read",
+      idempotencyKey: "action-read",
+      input: { path: "README.md" },
+    });
+    db.updateRunAction(runningRead.id, { status: "running" });
+    const modelCallId = db.startModelCall({
+      runId: run.id,
+      provider: "test",
+      model: "model",
+      role: "default",
+    });
     const preparedAction = db.createRunAction({
       runId: run.id,
       toolCallId: "shell-2",
@@ -94,10 +124,183 @@ describe("UmaDatabase", () => {
     const reopened = new UmaDatabase(root);
     expect(reopened.getRun(run.id).status).toBe("interrupted");
     expect(reopened.getRunAction(runningAction.id).status).toBe("uncertain");
+    expect(reopened.getRunAction(runningRead.id).status).toBe("prepared");
     expect(reopened.getRunAction(preparedAction.id).status).toBe("prepared");
     expect(reopened.getRun(run.id).resume?.state).toBe("needs_confirmation");
     expect(reopened.listEvents(session.id, 0).events.at(-1)?.type).toBe("run.updated");
+    expect(
+      (
+        reopened.db.prepare("SELECT status FROM model_calls WHERE id=?").get(modelCallId) as {
+          status: string;
+        }
+      ).status,
+    ).toBe("abandoned");
     reopened.close();
+  });
+
+  it("bounds snapshots while retaining every non-terminal run", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-snapshot-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const session = db.createSession({
+      mode: "workspace",
+      title: "bounded",
+      workspace: root,
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    for (let index = 0; index < 105; index++)
+      db.insertMessage({ sessionId: session.id, role: "user", status: "complete", content: String(index) });
+    for (let index = 0; index < 25; index++) {
+      const run = db.createRun(session.id, `completed-${index}`, modelSnapshot, "off").run;
+      db.updateRun(run.id, { status: "completed" });
+    }
+    const activeIds = Array.from(
+      { length: 3 },
+      (_, index) => db.createRun(session.id, `active-${index}`, modelSnapshot, "off").run.id,
+    );
+    const snapshot = db.getSnapshot(session.id);
+    expect(snapshot.transcript).toHaveLength(100);
+    expect(snapshot.history).toEqual({ oldestMessageSequence: 6, hasMoreBefore: true });
+    expect(snapshot.recentRuns.length).toBeLessThanOrEqual(23);
+    expect(activeIds.every((id) => snapshot.recentRuns.some((run) => run.id === id))).toBe(true);
+    db.close();
+  });
+
+  it("paginates durable events beyond one thousand entries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-events-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const session = db.createSession({
+      mode: "assistant",
+      title: "events",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    for (let index = 0; index < 1_005; index++)
+      db.appendEvent(session.id, undefined, "session.snapshot", { index });
+    const first = db.listEvents(session.id, 0, 1_000);
+    const second = db.listEvents(session.id, first.nextSequence, 1_000);
+    expect(first.events).toHaveLength(1_000);
+    expect(first.hasMore).toBe(true);
+    expect(second.events).toHaveLength(5);
+    expect(second.hasMore).toBe(false);
+    expect(second.toSequence).toBe(1_005);
+    db.close();
+  });
+
+  it("retrieves only active global and current-session memory facts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-memory-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const session = db.createSession({
+      mode: "assistant",
+      title: "memory",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const other = db.createSession({
+      mode: "assistant",
+      title: "other",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    db.addMemoryFact({
+      scope: "global",
+      content: "global zebrafish preference",
+      confidence: 1,
+      status: "active",
+    });
+    db.addMemoryFact({
+      sessionId: session.id,
+      scope: "session",
+      content: "session zebrafish preference",
+      confidence: 1,
+      status: "active",
+    });
+    db.addMemoryFact({
+      sessionId: other.id,
+      scope: "session",
+      content: "other zebrafish preference",
+      confidence: 1,
+      status: "active",
+    });
+    db.addMemoryFact({
+      sessionId: session.id,
+      scope: "session",
+      content: "candidate zebrafish preference",
+      confidence: 0.7,
+      status: "candidate",
+    });
+    const results = db.searchMemory(session.id, "zebrafish preference", 10);
+    expect(results).toContain("global zebrafish preference");
+    expect(results).toContain("session zebrafish preference");
+    expect(results).not.toContain("other zebrafish preference");
+    expect(results).not.toContain("candidate zebrafish preference");
+    db.close();
+  });
+
+  it("rejects attachments that are not owned by the current session", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-attachment-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const first = db.createSession({
+      mode: "assistant",
+      title: "first",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const second = db.createSession({
+      mode: "assistant",
+      title: "second",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const attachment = db.addAttachment({
+      sessionId: first.id,
+      name: "private.txt",
+      mimeType: "text/plain",
+      size: 1,
+      storagePath: join(root, "private.txt"),
+    });
+    expect(() => db.validateAttachmentForSession(attachment.id, first.id)).not.toThrow();
+    expect(() => db.validateAttachmentForSession(attachment.id, second.id)).toThrow(
+      "belongs to another session",
+    );
+    const unbound = db.addAttachment({
+      name: "unbound.txt",
+      mimeType: "text/plain",
+      size: 1,
+      storagePath: join(root, "unbound.txt"),
+    });
+    expect(() => db.validateAttachmentForSession(unbound.id, first.id)).toThrow("belongs to another session");
+    db.close();
+  });
+
+  it("redacts credentials from durable audit input and output", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-audit-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const session = db.createSession({
+      mode: "assistant",
+      title: "audit",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const run = db.createRun(session.id, "audit-message", modelSnapshot, "off").run;
+    const audit = db.addAudit({
+      runId: run.id,
+      kind: "tool",
+      name: "external",
+      input: { authorization: "Bearer private-token", nested: { apiKey: "model-secret" } },
+      output: { cookie: "session-secret", result: "ok" },
+      status: "completed",
+    });
+    expect(JSON.stringify(audit)).not.toContain("private-token");
+    expect(JSON.stringify(audit)).not.toContain("model-secret");
+    expect(JSON.stringify(audit)).not.toContain("session-secret");
+    expect(audit.output).toMatchObject({ cookie: "[REDACTED]", result: "ok" });
+    db.close();
   });
 
   it("rolls back state and durable events together", async () => {
@@ -154,7 +357,7 @@ describe("UmaDatabase", () => {
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
-    const run = db.createRun(session.id, "action-message").run;
+    const run = db.createRun(session.id, "action-message", modelSnapshot, "off").run;
     db.createToolCall({ id: "tool-1", runId: run.id, name: "read", args: { path: "README.md" } });
     const action = db.createRunAction({
       runId: run.id,
@@ -168,6 +371,15 @@ describe("UmaDatabase", () => {
     expect(db.transitionRunAction(action.id, ["prepared"], { status: "rejected" }).changed).toBe(false);
     expect(db.getRunAction(action.id).status).toBe("running");
     expect(db.getToolCallInput("tool-1")).toEqual({ path: "README.md" });
+    const approval = db.createApproval({
+      sessionId: session.id,
+      runId: run.id,
+      toolCallId: "tool-1",
+      toolName: "read",
+      args: { path: "README.md" },
+    });
+    expect(db.resolveApproval(approval.id, true).status).toBe("approved");
+    expect(db.resolveApproval(approval.id, false).status).toBe("approved");
     db.close();
   });
 });
@@ -193,5 +405,17 @@ describe("WorkspacePolicy", () => {
       join(workspace, "nested", "file.txt"),
     );
     await expect(policy.resolvePath(workspace, "../outside.txt", true)).rejects.toThrow("escapes");
+  });
+
+  it("blocks paths that escape through a symbolic-link directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-workspace-link-"));
+    const outside = await mkdtemp(join(tmpdir(), "uma-workspace-outside-"));
+    temporary.push(root, outside);
+    await writeFile(join(outside, "secret.txt"), "secret", "utf8");
+    await symlink(outside, join(root, "escape"), process.platform === "win32" ? "junction" : "dir");
+    const policy = new WorkspacePolicy([root]);
+    await policy.initialize();
+    await expect(policy.resolvePath(root, "escape/secret.txt")).rejects.toThrow("outside");
+    await expect(policy.resolvePath(root, "escape/new.txt", true)).rejects.toThrow("outside");
   });
 });

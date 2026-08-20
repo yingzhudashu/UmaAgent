@@ -95,6 +95,9 @@ function parseModel(
     baseUrl: httpUrl(provider.baseUrl ?? "https://api.openai.com/v1", `providers.${id}.baseUrl`),
     apiKeyEnv: stringValue(provider.apiKeyEnv, `providers.${id}.apiKeyEnv`),
     reasoning: capabilities.reasoning === true,
+    tools: capabilities.tools !== false,
+    vision: capabilities.vision === true,
+    structuredOutput: capabilities.structuredOutput === true,
     contextWindow: numberValue(item.contextWindow, `models.${id}.contextWindow`),
     maxTokens: numberValue(item.maxOutputTokens, `models.${id}.maxOutputTokens`),
   };

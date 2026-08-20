@@ -1,27 +1,34 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UmaClient, UmaClientError } from "@uma-agent/client";
-import type { Approval, Run, RunAction, RunCheckpoint, SessionSnapshot } from "@uma-agent/protocol";
+import type { Approval, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
 import DOMPurify from "dompurify";
 import {
   Bot,
-  Check,
-  ChevronLeft,
   CircleStop,
   FilePlus2,
   LogIn,
   Menu,
-  MessageSquarePlus,
   PanelRight,
   Pencil,
   RefreshCw,
   RotateCcw,
   Send,
   Trash2,
-  X,
 } from "lucide-react";
 import { marked } from "marked";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { cachedSnapshot, cacheSnapshot } from "./cache.js";
+import { ResourceArea } from "./areas/ResourceArea.js";
+import { ApprovalBar, RunPanel } from "./areas/RunArea.js";
+import { SessionArea } from "./areas/SessionArea.js";
+import { SettingsArea } from "./areas/SettingsArea.js";
+import {
+  cacheCursor,
+  cachedCursor,
+  cachedHistory,
+  cachedSnapshot,
+  cacheHistory,
+  cacheSnapshot,
+} from "./cache.js";
 
 const coreUrl = import.meta.env.VITE_UMA_CORE_URL?.trim() || window.location.origin;
 const client = new UmaClient({ baseUrl: coreUrl });
@@ -75,129 +82,6 @@ function Login({ onDone }: { onDone: () => void }) {
   );
 }
 
-function RunPanel({
-  run,
-  checkpoints,
-  actions,
-  retry,
-  resume,
-  decide,
-  disabled,
-}: {
-  run: Run | undefined;
-  checkpoints: RunCheckpoint[];
-  actions: RunAction[];
-  retry: () => void;
-  resume: () => void;
-  decide: (action: RunAction, decision: "approve" | "reject" | "acknowledge") => void;
-  disabled: boolean;
-}) {
-  if (!run) return <div className="empty-panel">暂无运行信息</div>;
-  return (
-    <div className="run-panel">
-      <div className="panel-label">当前运行</div>
-      <div className={`status status-${run.status}`}>{run.status.replace("_", " ")}</div>
-      {run.reasoningSummary && (
-        <>
-          <div className="panel-label">判断</div>
-          <p>{run.reasoningSummary}</p>
-        </>
-      )}
-      {run.plan.length > 0 && (
-        <>
-          <div className="panel-label">计划</div>
-          <ol className="plan">
-            {run.plan.map((step) => (
-              <li key={step.id} data-status={step.status}>
-                {step.status === "completed" ? <Check size={14} /> : <span className="step-dot" />}
-                {step.title}
-              </li>
-            ))}
-          </ol>
-        </>
-      )}
-      {run.error && <div className="error">{run.error}</div>}
-      {checkpoints.at(-1) && (
-        <p className="muted">
-          检查点 #{checkpoints.at(-1)?.checkpointNo} · {checkpoints.at(-1)?.phase}
-        </p>
-      )}
-      {actions
-        .filter((action) => ["prepared", "uncertain"].includes(action.status))
-        .map((action) => (
-          <div className="action-card" key={action.id}>
-            <strong>{action.toolName}</strong>
-            <small className="action-status">{action.status}</small>
-            <div className="approval-actions">
-              <button type="button" disabled={disabled} onClick={() => decide(action, "reject")}>
-                拒绝
-              </button>
-              {action.status === "prepared" ? (
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={disabled}
-                  onClick={() => decide(action, "approve")}
-                >
-                  执行一次
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={disabled}
-                  onClick={() => decide(action, "acknowledge")}
-                >
-                  确认可能已执行
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
-      {run.status === "interrupted" && run.resume?.state === "available" && (
-        <button type="button" className="run-action" disabled={disabled} onClick={resume}>
-          继续运行
-        </button>
-      )}
-      {["failed", "cancelled"].includes(run.status) && (
-        <button type="button" className="run-action" disabled={disabled} onClick={retry}>
-          <RotateCcw size={15} />
-          重试
-        </button>
-      )}
-    </div>
-  );
-}
-
-function ApprovalBar({
-  approval,
-  resolve,
-  disabled,
-}: {
-  approval: Approval;
-  resolve: (approved: boolean) => void;
-  disabled: boolean;
-}) {
-  return (
-    <div className="approval">
-      <div>
-        <strong>{approval.toolName}</strong>
-        <code>{JSON.stringify(approval.input)}</code>
-      </div>
-      <div className="approval-actions">
-        <button type="button" disabled={disabled} onClick={() => resolve(false)}>
-          <X size={16} />
-          拒绝
-        </button>
-        <button type="button" className="primary" disabled={disabled} onClick={() => resolve(true)}>
-          <Check size={16} />
-          允许
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export function App() {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<string>();
@@ -205,11 +89,15 @@ export function App() {
   const [loginRequired, setLoginRequired] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
-  const [detailsTab, setDetailsTab] = useState<"run" | "tasks" | "memory" | "system" | "audit">("run");
+  const [detailsTab, setDetailsTab] = useState<
+    "run" | "tasks" | "memory" | "resources" | "settings" | "audit"
+  >("run");
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent>();
+  const [historical, setHistorical] = useState<TranscriptItem[]>([]);
+  const [historyHasMore, setHistoryHasMore] = useState<boolean>();
   const endRef = useRef<HTMLDivElement>(null);
 
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => client.listSessions() });
@@ -266,13 +154,20 @@ export function App() {
     if (!selected) return;
     let unsubscribe: (() => void) | undefined;
     let cancelled = false;
-    void cachedSnapshot(selected)
+    void Promise.all([cachedCursor(selected), cachedHistory(selected)])
       .catch(() => undefined)
       .then((cached) => {
         if (cancelled) return;
+        setHistorical(cached?.[1] ?? []);
+        setHistoryHasMore(undefined);
         unsubscribe = client.subscribeSessions(
-          [{ id: selected, lastSequence: cached?.snapshotSequence ?? 0 }],
+          [{ id: selected, lastSequence: cached?.[0] ?? 0 }],
           (event) => {
+            const durableSequence =
+              event.type === "session.snapshot"
+                ? (event.payload as SessionSnapshot).snapshotSequence
+                : event.sequence;
+            void cacheCursor(selected, durableSequence);
             if (event.type === "approval.requested")
               setApprovals((items) => [
                 ...items.filter((item) => item.id !== (event.payload as Approval).id),
@@ -293,7 +188,13 @@ export function App() {
       unsubscribe?.();
     };
   }, [selected, queryClient]);
-  const transcriptLength = snapshot.data?.transcript.length;
+  const transcript = useMemo(() => {
+    const items = [...historical, ...(snapshot.data?.transcript ?? [])];
+    return [...new Map(items.map((item) => [item.id, item])).values()].sort(
+      (a, b) => a.sequence - b.sequence,
+    );
+  }, [historical, snapshot.data?.transcript]);
+  const transcriptLength = transcript.length;
   // biome-ignore lint/correctness/useExhaustiveDependencies: New transcript items must trigger scrolling.
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -331,11 +232,11 @@ export function App() {
     },
   });
   const currentRun =
-    [...(snapshot.data?.runs ?? [])]
+    [...(snapshot.data?.recentRuns ?? [])]
       .reverse()
       .find(
         (run) => !["completed", "failed", "cancelled", "interrupted", "awaiting_input"].includes(run.status),
-      ) ?? snapshot.data?.runs.at(-1);
+      ) ?? snapshot.data?.recentRuns.at(-1);
   const busy = currentRun && ["queued", "preflight", "running", "verifying"].includes(currentRun.status);
   const checkpoints = useQuery({
     queryKey: ["checkpoints", currentRun?.id],
@@ -377,7 +278,7 @@ export function App() {
     if (selected && window.confirm("删除此会话及其全部记录？")) deleteSession.mutate(selected);
   };
   const retryLast = () => {
-    const lastUser = [...(snapshot.data?.transcript ?? [])].reverse().find((item) => item.role === "user");
+    const lastUser = [...transcript].reverse().find((item) => item.role === "user");
     if (!lastUser || !selected) return;
     const ids = lastUser.attachments.map((attachment) => attachment.id);
     void client
@@ -396,73 +297,23 @@ export function App() {
     );
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
-        <div className="brand">
-          <div className="brand-mark">
-            <Bot size={20} />
-          </div>
-          <span>UmaAgent</span>
-          <button
-            type="button"
-            className="icon mobile-only"
-            onClick={() => setSidebarOpen(false)}
-            title="关闭导航"
-          >
-            <ChevronLeft />
-          </button>
-        </div>
-        <button
-          type="button"
-          className="new-session"
-          disabled={offline}
-          onClick={() => createSession.mutate("workspace")}
-        >
-          <MessageSquarePlus size={17} />
-          新会话
-        </button>
-        <button
-          type="button"
-          className="new-session"
-          disabled={offline}
-          onClick={() => createSession.mutate("assistant")}
-        >
-          <MessageSquarePlus size={17} />
-          助手会话
-        </button>
-        <nav>
-          {sessions.data?.map((session) => (
-            <button
-              type="button"
-              key={session.id}
-              className={selected === session.id ? "active" : ""}
-              onClick={() => {
-                setSelected(session.id);
-                setSidebarOpen(false);
-              }}
-            >
-              <span>
-                {session.mode === "assistant" ? "助手 · " : ""}
-                {session.title}
-              </span>
-              <small>{session.model.id}</small>
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-footer">
-          <span className={`health-dot ${health.data?.status === "ok" ? "online" : "offline"}`} />
-          Core {health.data?.status === "ok" ? "online" : "offline"}
-          {installPrompt && (
-            <button
-              type="button"
-              onClick={() => {
-                void installPrompt.prompt().then(() => setInstallPrompt(undefined));
-              }}
-            >
-              安装应用
-            </button>
-          )}
-        </div>
-      </aside>
+      <SessionArea
+        sessions={sessions.data ?? []}
+        selected={selected}
+        open={sidebarOpen}
+        disabled={offline}
+        health={health.data}
+        installable={Boolean(installPrompt)}
+        create={(mode) => createSession.mutate(mode)}
+        select={(id) => {
+          setSelected(id);
+          setSidebarOpen(false);
+        }}
+        close={() => setSidebarOpen(false)}
+        install={() => {
+          void installPrompt?.prompt().then(() => setInstallPrompt(undefined));
+        }}
+      />
       <main className="workspace">
         <header>
           <button
@@ -537,7 +388,28 @@ export function App() {
           </div>
         </header>
         <section className="transcript">
-          {!snapshot.data?.transcript.length && (
+          {(historyHasMore ?? snapshot.data?.history.hasMoreBefore) && (
+            <button
+              type="button"
+              className="run-action"
+              onClick={() => {
+                if (!selected) return;
+                const before = transcript[0]?.sequence ?? snapshot.data?.history.oldestMessageSequence;
+                void client.getSessionHistory(selected, before, 100).then((page) => {
+                  const next = [...page.items, ...historical];
+                  const unique = [...new Map(next.map((item) => [item.id, item])).values()].sort(
+                    (a, b) => a.sequence - b.sequence,
+                  );
+                  setHistorical(unique);
+                  setHistoryHasMore(page.hasMore);
+                  void cacheHistory(selected, unique);
+                });
+              }}
+            >
+              加载更早记录
+            </button>
+          )}
+          {!transcript.length && (
             <div className="empty">
               <div className="brand-mark large">
                 <Bot size={30} />
@@ -546,7 +418,7 @@ export function App() {
               <p>消息、工具和计划都会在服务器上持久化。</p>
             </div>
           )}
-          {snapshot.data?.transcript.map((item) => (
+          {transcript.map((item) => (
             <article key={item.id} className={`message ${item.role}`}>
               <div className="message-meta">
                 <span>
@@ -564,6 +436,22 @@ export function App() {
               ) : (
                 <p>{item.content}</p>
               )}
+              {item.attachments.map((attachment) => (
+                <button
+                  type="button"
+                  className="run-action"
+                  key={attachment.id}
+                  onClick={() =>
+                    void client.attachmentContent(attachment.id).then((blob) => {
+                      const url = URL.createObjectURL(blob);
+                      window.open(url, "_blank", "noopener,noreferrer");
+                      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                    })
+                  }
+                >
+                  {attachment.name}
+                </button>
+              ))}
             </article>
           ))}
           <div ref={endRef} />
@@ -644,7 +532,7 @@ export function App() {
       {panelOpen && (
         <aside className="details">
           <div className="detail-tabs">
-            {(["run", "tasks", "memory", "system", "audit"] as const).map((tab) => (
+            {(["run", "tasks", "memory", "resources", "settings", "audit"] as const).map((tab) => (
               <button
                 type="button"
                 className={`detail-tab ${detailsTab === tab ? "active" : ""}`}
@@ -736,51 +624,31 @@ export function App() {
               ))}
             </div>
           )}
-          {detailsTab === "system" && (
-            <div className="operation-list">
-              <div>
-                <strong>Skills</strong>
-                <p>{skills.data?.map((item) => item.name).join(", ") || "-"}</p>
-                <button
-                  type="button"
-                  disabled={offline}
-                  onClick={() => void client.refreshSkills().then(() => skills.refetch())}
-                >
-                  刷新
-                </button>
-              </div>
-              <div>
-                <strong>MCP</strong>
-                <p>
-                  {mcp.data
-                    ?.map((item) => `${item.name}:${item.connected ? "online" : "offline"}`)
-                    .join(", ") || "-"}
-                </p>
-              </div>
-              <div>
-                <strong>Knowledge</strong>
-                <p>
-                  {knowledge.data?.map((item) => `${item.name} (${item.documentCount})`).join(", ") || "-"}
-                </p>
-                <button
-                  type="button"
-                  disabled={offline}
-                  onClick={() => {
-                    const path = window.prompt("服务器上的知识目录路径")?.trim();
-                    if (!path) return;
-                    const name = window
-                      .prompt("知识库名称", path.split(/[\\/]/).at(-1) || "Knowledge")
-                      ?.trim();
-                    if (name)
-                      void client.indexKnowledge(name, path).then(() => {
-                        void knowledge.refetch();
-                      });
-                  }}
-                >
-                  添加目录
-                </button>
-              </div>
-            </div>
+          {detailsTab === "resources" && (
+            <ResourceArea
+              skills={skills.data ?? []}
+              mcp={mcp.data ?? []}
+              knowledge={knowledge.data ?? []}
+              disabled={offline}
+              refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
+              addKnowledgePath={(name, path) =>
+                void client.indexKnowledge(name, path).then(() => knowledge.refetch())
+              }
+              uploadKnowledge={(file) =>
+                void client
+                  .upload(file, file.name, selected)
+                  .then((attachment) => client.indexKnowledgeAttachment(file.name, attachment.id))
+                  .then(() => knowledge.refetch())
+              }
+            />
+          )}
+          {detailsTab === "settings" && (
+            <SettingsArea
+              session={snapshot.data?.session}
+              health={health.data}
+              installAvailable={Boolean(installPrompt)}
+              install={() => void installPrompt?.prompt()}
+            />
           )}
           {detailsTab === "audit" && (
             <div className="operation-list">

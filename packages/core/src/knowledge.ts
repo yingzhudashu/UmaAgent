@@ -1,5 +1,5 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
-import { extname, join, relative } from "node:path";
+import { extname, join, relative, resolve } from "node:path";
 import type { KnowledgeSource } from "@uma-agent/protocol";
 import type { UmaDatabase } from "./database.js";
 
@@ -39,7 +39,15 @@ function chunks(content: string, size = 2_000, overlap = 200): string[] {
 }
 
 export class KnowledgeService {
-  constructor(private readonly database: UmaDatabase) {}
+  private readonly allowedRoots: string[];
+
+  constructor(
+    private readonly database: UmaDatabase,
+    roots: string[],
+    stateDir: string,
+  ) {
+    this.allowedRoots = [...roots, join(stateDir, "uploads")].map((root) => resolve(root));
+  }
 
   list(): KnowledgeSource[] {
     return this.database.listKnowledgeSources();
@@ -51,6 +59,11 @@ export class KnowledgeService {
 
   async index(name: string, sourcePath: string): Promise<KnowledgeSource> {
     const canonical = await realpath(sourcePath);
+    const allowed = this.allowedRoots.some((root) => {
+      const value = relative(root, canonical);
+      return value === "" || (!value.startsWith("..") && !value.includes(":") && !value.startsWith("/"));
+    });
+    if (!allowed) throw new Error("Knowledge source is outside configured workspace roots and uploads");
     const info = await stat(canonical);
     const files: string[] = [];
     if (info.isFile()) files.push(canonical);

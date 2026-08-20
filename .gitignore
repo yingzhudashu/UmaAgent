@@ -2,9 +2,12 @@ node_modules/
 .node_modules.previous/
 dist/
 coverage/
+playwright-report/
+test-results/
 *.tsbuildinfo
 dist-types/
 .uma/
+/.uma-faux-e2e/
 *.db
 *.db-shm
 *.db-wal

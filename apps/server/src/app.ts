@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
@@ -8,6 +9,8 @@ import websocket from "@fastify/websocket";
 import type { UmaRuntime } from "@uma-agent/core";
 import {
   CreateSessionRequestSchema,
+  PROTOCOL_VERSION,
+  type Run,
   RunActionDecisionSchema,
   SendMessageRequestSchema,
   UpdateSessionRequestSchema,
@@ -45,6 +48,10 @@ function secureOrigin(origin: string | undefined): boolean {
   }
 }
 
+function errorBody(requestId: string, code: string, message: string, retryable = false) {
+  return { error: { code, message, retryable, requestId } };
+}
+
 export async function createServer(
   runtime: UmaRuntime,
   options: { webRoot?: string | false } = {},
@@ -56,6 +63,23 @@ export async function createServer(
     },
     bodyLimit: runtime.config.server.maxUploadBytes + 1024,
   });
+  const stopRuntimeLogging = runtime.subscribe((event) => {
+    if (event.type !== "run.updated") return;
+    const run = event.payload as Run;
+    app.log.info(
+      {
+        sessionId: event.sessionId,
+        runId: run.id,
+        provider: run.model.ref.provider,
+        model: run.model.ref.id,
+        status: run.status,
+        phase: run.phase,
+        durationMs: Math.max(0, run.updatedAt - run.createdAt),
+      },
+      "run state changed",
+    );
+  });
+  app.addHook("onClose", async () => stopRuntimeLogging());
   const auth = new AuthService(runtime, process.env[runtime.config.auth.tokenEnv]);
   await app.register(cookie);
   await app.register(cors, {
@@ -76,36 +100,60 @@ export async function createServer(
   app.addHook("onRequest", async (request, reply) => {
     const origin = request.headers.origin;
     if (origin && !allowedOrigin(origin, runtime.config.server.webOrigins))
-      return reply.code(403).send({ error: { code: "origin_denied", message: "Origin is not allowed" } });
+      return reply.code(403).send(errorBody(request.id, "forbidden", "Origin is not allowed"));
     const mutating = !new Set(["GET", "HEAD", "OPTIONS"]).has(request.method);
     if (mutating && !origin && auth.webSessionAuthenticated(request) && !auth.bearerAuthenticated(request))
-      return reply
-        .code(403)
-        .send({ error: { code: "origin_required", message: "Origin is required for Web sessions" } });
+      return reply.code(403).send(errorBody(request.id, "forbidden", "Origin is required for Web sessions"));
     if (request.method === "OPTIONS") return reply.code(204).send();
     if (
-      !request.url.startsWith("/api/v4/") ||
-      request.url === "/api/v4/health" ||
-      request.url === "/api/v4/auth/login" ||
-      request.url === "/api/v4/events"
+      !request.url.startsWith("/api/v5/") ||
+      request.url === "/api/v5/health/live" ||
+      request.url === "/api/v5/health/ready" ||
+      request.url === "/api/v5/auth/login" ||
+      request.url === "/api/v5/events"
     )
       return;
     if (!auth.requestAuthenticated(request))
-      return reply.code(401).send({ error: { code: "unauthorized", message: "Authentication required" } });
+      return reply.code(401).send(errorBody(request.id, "auth_required", "Authentication required"));
   });
 
-  app.get("/api/v4/health", async () => ({
-    status: runtime.health().started ? "ok" : "degraded",
-    version: "0.5.0",
-    protocolVersion: 4,
+  const health = (ready: boolean) => ({
+    status: ready ? ("ok" as const) : ("degraded" as const),
+    version: "0.6.0",
+    protocolVersion: PROTOCOL_VERSION,
     activeRuns: runtime.health().activeRuns,
-  }));
-  app.post<{ Body: { token?: string } }>("/api/v4/auth/login", async (request, reply) => {
+  });
+  app.get("/api/v5/health/live", async () => health(true));
+  app.get("/api/v5/health/ready", async (_request, reply) => {
+    let databaseReady = true;
+    try {
+      runtime.database.db.prepare("SELECT 1").get();
+    } catch {
+      databaseReady = false;
+    }
+    const workspacesReady = (
+      await Promise.all(
+        runtime.config.server.workspaceRoots.map((root) =>
+          access(root).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      )
+    ).every(Boolean);
+    const modelsReady = runtime.listModels().length > 0;
+    const mcpReady = runtime.mcp.status().every((server) => server.connected);
+    const value = health(
+      runtime.health().started && databaseReady && workspacesReady && modelsReady && mcpReady,
+    );
+    return reply.code(value.status === "ok" ? 200 : 503).send(value);
+  });
+  app.post<{ Body: { token?: string } }>("/api/v5/auth/login", async (request, reply) => {
     if (!auth.loginAllowed(request.ip))
-      return reply.code(429).send({ error: { code: "rate_limited", message: "Too many login attempts" } });
+      return reply.code(429).send(errorBody(request.id, "rate_limited", "Too many login attempts", true));
     if (!auth.tokenMatches(request.body?.token)) {
       auth.recordFailure(request.ip);
-      return reply.code(401).send({ error: { code: "invalid_token", message: "Invalid token" } });
+      return reply.code(401).send(errorBody(request.id, "auth_required", "Invalid token"));
     }
     const origin = request.headers.origin;
     auth.createWebSession(reply, {
@@ -114,7 +162,7 @@ export async function createServer(
     });
     return { ok: true };
   });
-  app.post("/api/v4/auth/logout", async (request, reply) => {
+  app.post("/api/v5/auth/logout", async (request, reply) => {
     const origin = request.headers.origin;
     auth.logout(request, reply, {
       crossOrigin: crossOrigin(origin, request.headers.host),
@@ -123,17 +171,17 @@ export async function createServer(
     return reply.code(204).send();
   });
 
-  app.get("/api/v4/sessions", async () => runtime.listSessions());
-  app.post("/api/v4/sessions", async (request) => {
+  app.get("/api/v5/sessions", async () => runtime.listSessions());
+  app.post("/api/v5/sessions", async (request) => {
     const body = request.body ?? {};
     if (!Value.Check(CreateSessionRequestSchema, body)) throw new Error("Invalid create-session request");
     return runtime.createSession(body);
   });
-  app.get<{ Params: { id: string } }>("/api/v4/sessions/:id/snapshot", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v5/sessions/:id/snapshot", async (request) =>
     runtime.getSnapshot(request.params.id),
   );
   app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: string } }>(
-    "/api/v4/sessions/:id/events",
+    "/api/v5/sessions/:id/events",
     async (request) =>
       runtime.listSessionEvents(
         request.params.id,
@@ -142,7 +190,7 @@ export async function createServer(
       ),
   );
   app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string } }>(
-    "/api/v4/sessions/:id/history",
+    "/api/v5/sessions/:id/history",
     async (request) =>
       runtime.listSessionHistory(
         request.params.id,
@@ -150,65 +198,83 @@ export async function createServer(
         Math.max(1, Math.min(500, Number(request.query.limit ?? 100))),
       ),
   );
-  app.post<{ Params: { id: string } }>("/api/v4/sessions/:id/compact", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v5/sessions/:id/compact", async (request) =>
     runtime.compactSession(request.params.id),
   );
-  app.patch<{ Params: { id: string } }>("/api/v4/sessions/:id", async (request) => {
+  app.patch<{ Params: { id: string } }>("/api/v5/sessions/:id", async (request) => {
     if (!Value.Check(UpdateSessionRequestSchema, request.body))
       throw new Error("Invalid update-session request");
     return runtime.updateSession(request.params.id, request.body);
   });
-  app.delete<{ Params: { id: string } }>("/api/v4/sessions/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v5/sessions/:id", async (request, reply) => {
     runtime.deleteSession(request.params.id);
     return reply.code(204).send();
   });
-  app.post<{ Params: { id: string } }>("/api/v4/sessions/:id/messages", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/v5/sessions/:id/messages", async (request, reply) => {
     if (!Value.Check(SendMessageRequestSchema, request.body)) throw new Error("Invalid message request");
     const run = runtime.sendMessage(request.params.id, request.body);
     return reply.code(202).send({ runId: run.id, status: run.status });
   });
-  app.post<{ Params: { id: string } }>("/api/v4/sessions/:id/cancel", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/v5/sessions/:id/cancel", async (request, reply) => {
     runtime.cancel(request.params.id);
     return reply.code(204).send();
   });
   app.post<{ Params: { id: string }; Body: { approved?: boolean } }>(
-    "/api/v4/approvals/:id",
+    "/api/v5/approvals/:id",
     async (request) => runtime.resolveApproval(request.params.id, request.body?.approved === true),
   );
-  app.get("/api/v4/models", async () => runtime.listModels());
-  app.get("/api/v4/skills", async () => runtime.listSkills());
-  app.post("/api/v4/skills/refresh", async () => runtime.refreshSkills());
-  app.get("/api/v4/mcp", async () => runtime.mcp.status());
-  app.get("/api/v4/knowledge", async () => runtime.knowledge.list());
-  app.post<{ Body: { name?: string; path?: string } }>("/api/v4/knowledge", async (request) => {
-    if (!request.body?.name || !request.body.path) throw new Error("name and path are required");
-    const path = await runtime.workspacePolicy.resolvePath(
-      runtime.config.server.workspaceRoots[0] as string,
-      request.body.path,
-    );
-    return runtime.knowledge.index(request.body.name, path);
-  });
-  app.get("/api/v4/tasks", async () => runtime.listTasks());
-  app.post<{ Body: { prompt?: string; parentSessionId?: string } }>("/api/v4/tasks", async (request) => {
+  app.get("/api/v5/models", async () => runtime.listModels());
+  app.get("/api/v5/skills", async () => runtime.listSkills());
+  app.post("/api/v5/skills/refresh", async () => runtime.refreshSkills());
+  app.get("/api/v5/mcp", async () => runtime.mcp.status());
+  app.get("/api/v5/knowledge", async () => runtime.knowledge.list());
+  app.post<{ Body: { name?: string; path?: string; attachmentId?: string } }>(
+    "/api/v5/knowledge",
+    async (request) => {
+      if (!request.body?.name || (!request.body.path && !request.body.attachmentId))
+        throw new Error("name and either path or attachmentId are required");
+      const path = request.body.attachmentId
+        ? runtime.database.getAttachmentPath(request.body.attachmentId)
+        : await runtime.workspacePolicy.resolvePath(
+            runtime.config.server.workspaceRoots[0] as string,
+            request.body.path as string,
+          );
+      return runtime.knowledge.index(request.body.name, path);
+    },
+  );
+  app.get("/api/v5/tasks", async () => runtime.listTasks());
+  app.post<{ Body: { prompt?: string; parentSessionId?: string } }>("/api/v5/tasks", async (request) => {
     if (!request.body?.prompt || typeof request.body.prompt !== "string")
       throw new Error("prompt is required");
     return runtime.createTask(request.body.prompt, request.body.parentSessionId);
   });
-  app.get<{ Params: { id: string } }>("/api/v4/tasks/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v5/tasks/:id", async (request) =>
     runtime.getTask(request.params.id),
   );
-  app.get<{ Params: { id: string } }>("/api/v4/tasks/:id/snapshot", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v5/tasks/:id/snapshot", async (request) =>
     runtime.getSnapshot(runtime.getTask(request.params.id).sessionId),
   );
-  app.post<{ Params: { id: string } }>("/api/v4/tasks/:id/cancel", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v5/tasks/:id/cancel", async (request) =>
     runtime.cancelTask(request.params.id),
   );
   app.get<{ Querystring: { status?: "active" | "candidate" | "rejected" } }>(
-    "/api/v4/memory",
+    "/api/v5/memory",
     async (request) => runtime.listMemoryFacts(request.query.status),
   );
+  app.post<{ Body: { sessionId?: string; scope?: "global" | "session"; content?: string } }>(
+    "/api/v5/memory",
+    async (request) => {
+      if (!request.body?.sessionId || !request.body.content)
+        throw new Error("sessionId and content are required");
+      return runtime.createMemoryFact(
+        request.body.sessionId,
+        request.body.scope ?? "session",
+        request.body.content,
+      );
+    },
+  );
   app.post<{ Params: { id: string }; Body: { status?: "active" | "candidate" | "rejected" } }>(
-    "/api/v4/memory/:id",
+    "/api/v5/memory/:id",
     async (request) => {
       const status = request.body?.status;
       if (!status || !["active", "candidate", "rejected"].includes(status))
@@ -216,38 +282,36 @@ export async function createServer(
       return runtime.reviewMemoryFact(request.params.id, status);
     },
   );
-  app.delete<{ Params: { id: string } }>("/api/v4/memory/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v5/memory/:id", async (request, reply) => {
     runtime.deleteMemoryFact(request.params.id);
     return reply.code(204).send();
   });
-  app.get<{ Params: { runId: string } }>("/api/v4/audit/runs/:runId", async (request) =>
+  app.get<{ Params: { runId: string } }>("/api/v5/audit/runs/:runId", async (request) =>
     runtime.audit(request.params.runId),
   );
-  app.get<{ Params: { id: string } }>("/api/v4/runs/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v5/runs/:id", async (request) =>
     runtime.getRun(request.params.id),
   );
-  app.get<{ Params: { id: string } }>("/api/v4/runs/:id/checkpoints", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v5/runs/:id/checkpoints", async (request) =>
     runtime.listRunCheckpoints(request.params.id),
   );
-  app.get<{ Params: { id: string } }>("/api/v4/runs/:id/actions", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v5/runs/:id/actions", async (request) =>
     runtime.listRunActions(request.params.id),
   );
-  app.post<{ Params: { id: string } }>("/api/v4/runs/:id/resume", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v5/runs/:id/resume", async (request) =>
     runtime.resumeRun(request.params.id),
   );
   app.post<{ Params: { id: string; actionId: string }; Body: { decision?: string } }>(
-    "/api/v4/runs/:id/actions/:actionId/decide",
+    "/api/v5/runs/:id/actions/:actionId/decide",
     async (request) => {
       if (!Value.Check(RunActionDecisionSchema, request.body)) throw new Error("Invalid action decision");
       return runtime.decideRunAction(request.params.id, request.params.actionId, request.body.decision);
     },
   );
-  app.post<{ Params: { id: string } }>("/api/v4/runs/:id/cancel", async (request, reply) => {
-    const run = runtime.getRun(request.params.id);
-    runtime.cancel(run.sessionId);
-    return reply.code(204).send();
+  app.post<{ Params: { id: string } }>("/api/v5/runs/:id/cancel", async (request) => {
+    return runtime.cancelRun(request.params.id);
   });
-  app.post("/api/v4/uploads", async (request) => {
+  app.post("/api/v5/uploads", async (request) => {
     const parts = request.parts();
     let sessionId: string | undefined;
     let upload: { name: string; mimeType: string; data: Buffer } | undefined;
@@ -259,8 +323,17 @@ export async function createServer(
     if (!upload) throw new Error("file is required");
     return runtime.addAttachment({ ...(sessionId ? { sessionId } : {}), ...upload });
   });
+  app.get<{ Params: { id: string } }>("/api/v5/attachments/:id/content", async (request, reply) => {
+    const attachment = runtime.database.getAttachment(request.params.id);
+    if (!attachment) throw new Error(`Attachment not found: ${request.params.id}`);
+    const data = await readFile(runtime.database.getAttachmentPath(request.params.id));
+    return reply
+      .type(attachment.mimeType)
+      .header("content-disposition", `inline; filename*=UTF-8''${encodeURIComponent(attachment.name)}`)
+      .send(data);
+  });
 
-  app.get("/api/v4/events", { websocket: true }, (socket, request) => {
+  app.get("/api/v5/events", { websocket: true }, (socket, request) => {
     const origin = request.headers.origin;
     if (origin && !allowedOrigin(origin, runtime.config.server.webOrigins)) {
       socket.close(1008, "Origin is not allowed");
@@ -295,8 +368,14 @@ export async function createServer(
           if (!id) continue;
           sessions.add(id);
           socket.send(JSON.stringify({ type: "sync.started", sessionId: id }));
-          const page = runtime.listSessionEvents(id, Math.max(0, subscription.lastSequence ?? 0), 1000);
-          for (const event of page.events) socket.send(JSON.stringify(event));
+          let after = Math.max(0, subscription.lastSequence ?? 0);
+          let page = runtime.listSessionEvents(id, after, 1000);
+          while (true) {
+            for (const event of page.events) socket.send(JSON.stringify(event));
+            after = page.nextSequence;
+            if (!page.hasMore) break;
+            page = runtime.listSessionEvents(id, after, 1000);
+          }
           socket.send(
             JSON.stringify({ type: "sync.completed", sessionId: id, sequence: page.snapshotSequence }),
           );
@@ -309,11 +388,11 @@ export async function createServer(
     });
   });
 
-  app.all("/api/v4/*", async (_request, reply) =>
-    reply.code(404).send({ error: { code: "not_found", message: "API route not found" } }),
+  app.all("/api/v5/*", async (request, reply) =>
+    reply.code(404).send(errorBody(request.id, "not_found", "API route not found")),
   );
 
-  app.setErrorHandler((cause, _request, reply) => {
+  app.setErrorHandler((cause, request, reply) => {
     const error = cause instanceof Error ? cause : new Error(String(cause));
     let message = error.message.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]");
     const secrets = [
@@ -323,12 +402,41 @@ export async function createServer(
     for (const secret of secrets) message = message.split(secret).join("[REDACTED]");
     app.log.error({ err: { name: error.name, message } }, "request failed");
     const notFound = /not found/i.test(error.message);
-    reply.code(notFound ? 404 : 400).send({
-      error: {
-        code: notFound ? "not_found" : "invalid_request",
-        message,
-      },
-    });
+    const conflict =
+      /(already|not pending|not cancellable|active run|only interrupted|requiring confirmation)/i.test(
+        error.message,
+      );
+    const providerContract = /provider contract/i.test(error.message);
+    const provider =
+      !providerContract && /(provider|preflight|classification|verification|model)/i.test(error.message);
+    const cancelled = /cancel/i.test(error.message);
+    const validation =
+      /(invalid|required|must |unsupported|outside|escapes|exceeds|unavailable|does not support|belongs to another session)/i.test(
+        error.message,
+      );
+    const code = notFound
+      ? "not_found"
+      : conflict
+        ? "conflict"
+        : providerContract
+          ? "provider_contract_error"
+          : cancelled
+            ? "cancelled"
+            : provider
+              ? "provider_error"
+              : validation
+                ? "validation_failed"
+                : "internal_error";
+    const status = notFound
+      ? 404
+      : conflict || cancelled
+        ? 409
+        : providerContract || provider
+          ? 502
+          : validation
+            ? 400
+            : 500;
+    reply.code(status).send(errorBody(request.id, code, message, provider || code === "internal_error"));
   });
 
   const webRoot =

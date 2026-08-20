@@ -38,6 +38,23 @@ async function runtimeWith(responses: FauxResponseStep[]): Promise<UmaRuntime> {
         baseUrl: "http://127.0.0.1:9/v1",
         apiKeyEnv: "UMA_FAUX_KEY",
         reasoning: false,
+        tools: true,
+        vision: false,
+        structuredOutput: true,
+        contextWindow: 100_000,
+        maxTokens: 4_096,
+      },
+      {
+        provider: "faux",
+        id: "model-2",
+        name: "Faux 2",
+        api: "openai-responses",
+        baseUrl: "http://127.0.0.1:9/v1",
+        apiKeyEnv: "UMA_FAUX_KEY",
+        reasoning: false,
+        tools: true,
+        vision: false,
+        structuredOutput: true,
         contextWindow: 100_000,
         maxTokens: 4_096,
       },
@@ -57,7 +74,10 @@ async function runtimeWith(responses: FauxResponseStep[]): Promise<UmaRuntime> {
   const runtime = new UmaRuntime(config);
   const faux = fauxProvider({
     provider: "faux",
-    models: [{ id: "model", contextWindow: 100_000, maxTokens: 4_096 }],
+    models: [
+      { id: "model", contextWindow: 100_000, maxTokens: 4_096 },
+      { id: "model-2", contextWindow: 100_000, maxTokens: 4_096 },
+    ],
     tokensPerSecond: 100_000,
   });
   faux.setResponses(responses);
@@ -70,11 +90,25 @@ async function runtimeWith(responses: FauxResponseStep[]): Promise<UmaRuntime> {
   return runtime;
 }
 
-function waitForTerminal(runtime: UmaRuntime, sessionId: string): Promise<Run> {
+function waitForTerminal(runtime: UmaRuntime, sessionId: string, timeoutMs = 5_000): Promise<Run> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("run timed out")), timeoutMs);
+    const unsubscribe = runtime.subscribe((event) => {
+      if (event.sessionId !== sessionId || event.type !== "run.updated") return;
+      const run = event.payload as Run;
+      if (!["completed", "failed", "cancelled", "awaiting_input"].includes(run.status)) return;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(run);
+    });
+  });
+}
+
+function waitForRunTerminal(runtime: UmaRuntime, runId: string): Promise<Run> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("run timed out")), 5_000);
     const unsubscribe = runtime.subscribe((event) => {
-      if (event.sessionId !== sessionId || event.type !== "run.updated") return;
+      if (event.runId !== runId || event.type !== "run.updated") return;
       const run = event.payload as Run;
       if (!["completed", "failed", "cancelled", "awaiting_input"].includes(run.status)) return;
       clearTimeout(timer);
@@ -87,6 +121,7 @@ function waitForTerminal(runtime: UmaRuntime, sessionId: string): Promise<Run> {
 const decision = (route: "direct" | "clarify" | "plan") =>
   fauxAssistantMessage(
     JSON.stringify({
+      taskClass: route === "plan" ? "complex" : route === "clarify" ? "standard" : "simple",
       route,
       goal: "finish the task",
       reasoningSummary: `${route} route`,
@@ -95,6 +130,9 @@ const decision = (route: "direct" | "clarify" | "plan") =>
       steps: route === "plan" ? ["Do work", "Verify work"] : [],
     }),
   );
+
+const classification = (taskClass: "simple" | "standard" | "complex") =>
+  fauxAssistantMessage(JSON.stringify({ taskClass }));
 
 async function runOnce(runtime: UmaRuntime): Promise<{ run: Run; snapshot: SessionSnapshot }> {
   const session = await runtime.createSession({ title: "Runtime test" });
@@ -105,14 +143,14 @@ async function runOnce(runtime: UmaRuntime): Promise<{ run: Run; snapshot: Sessi
 
 describe("UmaRuntime preflight", () => {
   it("runs direct tasks through the Pi agent loop", async () => {
-    const runtime = await runtimeWith([decision("direct"), fauxAssistantMessage("finished")]);
+    const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("finished")]);
     const { run, snapshot } = await runOnce(runtime);
-    expect(run.status).toBe("completed");
+    expect(run.status, run.error).toBe("completed");
     expect(snapshot.transcript.at(-1)?.content).toBe("finished");
   });
 
   it("persists clarification questions without entering the agent loop", async () => {
-    const runtime = await runtimeWith([decision("clarify")]);
+    const runtime = await runtimeWith([classification("standard"), decision("clarify")]);
     const { run, snapshot } = await runOnce(runtime);
     expect(run.status).toBe("awaiting_input");
     expect(snapshot.transcript.at(-1)?.content).toContain("Which target?");
@@ -120,8 +158,9 @@ describe("UmaRuntime preflight", () => {
 
   it("deduplicates a retried clarification continuation onto the original Run", async () => {
     const runtime = await runtimeWith([
+      classification("standard"),
       decision("clarify"),
-      decision("direct"),
+      classification("simple"),
       fauxAssistantMessage("continued"),
     ]);
     const session = await runtime.createSession({ title: "Clarification retry" });
@@ -137,6 +176,7 @@ describe("UmaRuntime preflight", () => {
 
   it("verifies planned work and completes persisted plan steps", async () => {
     const runtime = await runtimeWith([
+      classification("complex"),
       decision("plan"),
       fauxAssistantMessage("first step complete"),
       fauxAssistantMessage("planned result"),
@@ -149,7 +189,7 @@ describe("UmaRuntime preflight", () => {
 
   it("waits for shell approval and resumes the same run", async () => {
     const runtime = await runtimeWith([
-      decision("direct"),
+      classification("simple"),
       fauxAssistantMessage([fauxToolCall("shell", { command: "echo ok" })]),
       fauxAssistantMessage("approved result"),
     ]);
@@ -169,9 +209,28 @@ describe("UmaRuntime preflight", () => {
     expect(runtime.getSnapshot(session.id).transcript.at(-1)?.content).toBe("approved result");
   });
 
+  it("marks the Action rejected when a tool approval is denied", async () => {
+    const runtime = await runtimeWith([
+      classification("simple"),
+      fauxAssistantMessage([fauxToolCall("shell", { command: "echo denied" })]),
+      fauxAssistantMessage("denial handled"),
+    ]);
+    const session = await runtime.createSession();
+    const terminal = waitForTerminal(runtime, session.id);
+    runtime.subscribe((event) => {
+      if (event.sessionId === session.id && event.type === "approval.requested")
+        runtime.resolveApproval((event.payload as { id: string }).id, false);
+    });
+    const run = runtime.sendMessage(session.id, { messageId: "deny-action", text: "run shell" });
+    expect((await terminal).status).toBe("completed");
+    expect(runtime.database.listRunActions(run.id)).toEqual([
+      expect.objectContaining({ toolName: "shell", status: "rejected" }),
+    ]);
+  });
+
   it("denies pending approvals and cancels the run during shutdown", async () => {
     const runtime = await runtimeWith([
-      decision("direct"),
+      classification("simple"),
       fauxAssistantMessage([fauxToolCall("shell", { command: "echo ok" })]),
     ]);
     const session = await runtime.createSession();
@@ -196,7 +255,12 @@ describe("UmaRuntime preflight", () => {
     const session = await runtime.createSession();
     await writeFile(join(session.workspace as string, "resume.txt"), "safe replay", "utf8");
     const messageId = crypto.randomUUID();
-    const run = runtime.database.createRun(session.id, messageId).run;
+    const run = runtime.database.createRun(
+      session.id,
+      messageId,
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+    ).run;
     runtime.database.insertMessage({
       id: messageId,
       sessionId: session.id,
@@ -234,5 +298,136 @@ describe("UmaRuntime preflight", () => {
     expect(runtime.getSnapshot(session.id).transcript.some((item) => item.content === "safe replay")).toBe(
       true,
     );
+  });
+
+  it("freezes the execution model when the Run is accepted", async () => {
+    const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("frozen")]);
+    const session = await runtime.createSession({ model: { provider: "faux", id: "model" } });
+    const terminal = waitForTerminal(runtime, session.id);
+    const accepted = runtime.sendMessage(session.id, { messageId: "frozen-model", text: "do it" });
+    runtime.updateSession(session.id, { model: { provider: "faux", id: "model-2" } });
+    expect(accepted.model.ref.id).toBe("model");
+    expect((await terminal).model.ref.id).toBe("model");
+    expect(runtime.database.getSession(session.id).model.id).toBe("model-2");
+  });
+
+  it("repairs invalid structured output once and then fails the provider contract", async () => {
+    const runtime = await runtimeWith([
+      fauxAssistantMessage("not json"),
+      fauxAssistantMessage("still invalid"),
+    ]);
+    const { run } = await runOnce(runtime);
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain("Provider contract error");
+  });
+
+  it("fails a plan step that reaches forty-eight Agent turns", async () => {
+    const toolTurns = Array.from({ length: 48 }, () =>
+      fauxAssistantMessage([fauxToolCall("list", { path: "." })]),
+    );
+    const runtime = await runtimeWith([classification("complex"), decision("plan"), ...toolTurns]);
+    const { run } = await runOnce(runtime);
+    expect(run.status).toBe("failed");
+    expect(run.turnCount).toBe(48);
+    expect(run.error).toContain("Plan step turn limit exceeded (48)");
+  });
+
+  it("fails a direct Run at the global four-hundred-turn limit", async () => {
+    const toolTurns = Array.from({ length: 400 }, () =>
+      fauxAssistantMessage([fauxToolCall("list", { path: "." })]),
+    );
+    const runtime = await runtimeWith(toolTurns);
+    const session = await runtime.createSession();
+    const terminal = waitForTerminal(runtime, session.id, 15_000);
+    runtime.sendMessage(session.id, {
+      messageId: "global-turn-limit",
+      text: "keep listing",
+      mode: "direct",
+    });
+    const run = await terminal;
+    expect(run.status).toBe("failed");
+    expect(run.turnCount).toBe(400);
+    expect(run.error).toContain("Run turn limit exceeded (400)");
+  }, 20_000);
+
+  it("corrects a rejected verification once without creating a new Run", async () => {
+    const runtime = await runtimeWith([
+      classification("complex"),
+      decision("plan"),
+      fauxAssistantMessage("first step"),
+      fauxAssistantMessage("initial result"),
+      fauxAssistantMessage(JSON.stringify({ accepted: false, feedback: "fix it" })),
+      fauxAssistantMessage("corrected result"),
+    ]);
+    const { run, snapshot } = await runOnce(runtime);
+    expect(run.status, run.error).toBe("completed");
+    expect(run.correctionCount).toBe(1);
+    expect(snapshot.recentRuns.filter((item) => item.id === run.id)).toHaveLength(1);
+    expect(snapshot.transcript.at(-1)?.content).toBe("corrected result");
+  });
+
+  it("cancels a queued Run by id without cancelling the active Run", async () => {
+    const runtime = await runtimeWith([
+      classification("simple"),
+      fauxAssistantMessage([fauxToolCall("shell", { command: "echo active" })]),
+      fauxAssistantMessage("active finished"),
+    ]);
+    const session = await runtime.createSession();
+    const approvalId = new Promise<string>((resolve) => {
+      const unsubscribe = runtime.subscribe((event) => {
+        if (event.sessionId !== session.id || event.type !== "approval.requested") return;
+        unsubscribe();
+        resolve((event.payload as { id: string }).id);
+      });
+    });
+    const active = runtime.sendMessage(session.id, { messageId: "active", text: "run shell" });
+    const activeTerminal = waitForRunTerminal(runtime, active.id);
+    const approval = await approvalId;
+    const queued = runtime.sendMessage(session.id, { messageId: "queued", text: "later" });
+    expect(runtime.cancelRun(queued.id).status).toBe("cancelled");
+    runtime.resolveApproval(approval, true);
+    expect(await activeTerminal).toMatchObject({ id: active.id, status: "completed" });
+    expect(runtime.database.getRun(queued.id).status).toBe("cancelled");
+  });
+
+  it("acknowledges an uncertain side effect with read-only reconciliation", async () => {
+    const runtime = await runtimeWith([fauxAssistantMessage("reconciliation complete")]);
+    const session = await runtime.createSession();
+    const messageId = "uncertain-message";
+    const run = runtime.database.createRun(
+      session.id,
+      messageId,
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+    ).run;
+    runtime.database.insertMessage({
+      id: messageId,
+      sessionId: session.id,
+      runId: run.id,
+      role: "user",
+      status: "complete",
+      content: "perform side effect",
+    });
+    runtime.database.updateRun(run.id, { status: "interrupted", route: "direct" });
+    runtime.database.createCheckpoint({
+      runId: run.id,
+      phase: "tool",
+      turnCount: 1,
+      lastMessageSequence: 1,
+      safeToResume: true,
+    });
+    const action = runtime.database.createRunAction({
+      runId: run.id,
+      toolCallId: "shell-uncertain",
+      toolName: "shell",
+      toolClass: "shell",
+      idempotencyKey: "shell-uncertain-once",
+      input: { command: "external-effect" },
+    });
+    runtime.database.updateRunAction(action.id, { status: "uncertain" });
+    const decided = await runtime.decideRunAction(run.id, action.id, "acknowledge");
+    expect(decided.status).toBe("acknowledged");
+    expect(runtime.database.getRun(run.id).resume?.state).toBe("available");
+    expect(runtime.getSnapshot(session.id).transcript.at(-1)?.content).toBe("reconciliation complete");
   });
 });

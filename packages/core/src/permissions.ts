@@ -8,7 +8,7 @@ export interface PermissionDecision {
   reason: string;
 }
 
-const readTools = new Set(["read", "list", "search", "memory_search", "knowledge_search"]);
+const readTools = new Set(["read", "list", "search", "memory_search", "knowledge_search", "skill_read"]);
 const writeTools = new Set(["write", "edit"]);
 
 export class PermissionPolicy {
@@ -26,15 +26,27 @@ export class PermissionPolicy {
     const kind = this.classify(toolName);
     if (
       mode === "assistant" &&
-      !["memory_write", "memory_search", "knowledge_search", "attachment_read"].includes(toolName)
+      ![
+        "memory_write",
+        "memory_search",
+        "knowledge_search",
+        "skill_read",
+        "attachment_read",
+        "http_get",
+      ].includes(toolName)
     ) {
       return { allowed: false, requiresApproval: false, reason: "Tool is unavailable in assistant sessions" };
     }
-    if (kind === "shell" || kind === "mcp") {
+    if (kind === "shell" || kind === "mcp" || kind === "memory_write") {
       return {
         allowed: true,
         requiresApproval: true,
-        reason: kind === "shell" ? "Shell execution always requires approval" : "MCP tools require approval",
+        reason:
+          kind === "shell"
+            ? "Shell execution always requires approval"
+            : kind === "memory_write"
+              ? "Explicit memory writes require approval"
+              : "MCP tools require approval",
       };
     }
     return { allowed: true, requiresApproval: false, reason: "Allowed by session policy" };
