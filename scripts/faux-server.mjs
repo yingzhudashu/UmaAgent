@@ -5,6 +5,10 @@ import { createServer } from "../apps/server/dist/app.js";
 
 const port = Number(process.env.UMA_FAUX_PORT ?? 3210);
 const token = process.env.UMA_FAUX_TOKEN ?? "uma-dev-token";
+const webOrigins = (process.env.UMA_FAUX_WEB_ORIGINS ?? `http://127.0.0.1:${port},http://127.0.0.1:3211`)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 process.env.UMA_FAUX_TOKEN = token;
 
 const config = {
@@ -13,7 +17,7 @@ const config = {
     port,
     stateDir: resolve(process.env.UMA_FAUX_STATE ?? ".uma-faux"),
     workspaceRoots: [resolve(".")],
-    webOrigins: [],
+    webOrigins,
     maxUploadBytes: 20 * 1024 * 1024,
   },
   auth: { tokenEnv: "UMA_FAUX_TOKEN", webSessionHours: 24 },

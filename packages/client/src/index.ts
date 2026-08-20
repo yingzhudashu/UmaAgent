@@ -13,6 +13,7 @@ import type {
   SendMessageResponse,
   Session,
   SessionEventPage,
+  SessionHistoryPage,
   SessionSnapshot,
   SkillSummary,
   UpdateSessionRequest,
@@ -61,7 +62,7 @@ export class UmaClient {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v3${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v4${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -103,7 +104,12 @@ export class UmaClient {
     return this.request("/sessions", { method: "POST", body: JSON.stringify(input) });
   }
   getSession(id: string): Promise<SessionSnapshot> {
-    return this.request(`/sessions/${encodeURIComponent(id)}`);
+    return this.request(`/sessions/${encodeURIComponent(id)}/snapshot`);
+  }
+  getSessionHistory(sessionId: string, beforeSequence?: number, limit = 100): Promise<SessionHistoryPage> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (beforeSequence !== undefined) query.set("before", String(beforeSequence));
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/history?${query}`);
   }
   getSessionEvents(sessionId: string, afterSequence: number, limit = 500): Promise<SessionEventPage> {
     return this.request(
@@ -192,21 +198,24 @@ export class UmaClient {
   listRunActions(runId: string): Promise<import("@uma-agent/protocol").RunAction[]> {
     return this.request(`/runs/${encodeURIComponent(runId)}/actions`);
   }
+  listRunCheckpoints(runId: string): Promise<import("@uma-agent/protocol").RunCheckpoint[]> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/checkpoints`);
+  }
   resumeRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
     return this.request(`/runs/${encodeURIComponent(runId)}/resume`, { method: "POST" });
   }
-  confirmRunAction(
+  decideRunAction(
     runId: string,
     actionId: string,
-    approved: boolean,
+    decision: import("@uma-agent/protocol").RunActionDecision["decision"],
   ): Promise<import("@uma-agent/protocol").RunAction> {
-    return this.request(
-      `/runs/${encodeURIComponent(runId)}/actions/${encodeURIComponent(actionId)}/confirm`,
-      {
-        method: "POST",
-        body: JSON.stringify({ approved }),
-      },
-    );
+    return this.request(`/runs/${encodeURIComponent(runId)}/actions/${encodeURIComponent(actionId)}/decide`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    });
+  }
+  compactSession(sessionId: string): Promise<{ throughSequence: number; content: string }> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/compact`, { method: "POST" });
   }
 
   async upload(file: Blob, name: string, sessionId?: string): Promise<Attachment> {
@@ -235,7 +244,11 @@ export class UmaClient {
   }
 
   subscribeSessions(sessions: SessionSubscription[], listener: Listener): () => void {
-    const unsubscribers = sessions.map((session) => this.subscribe(session.id, listener));
+    const unsubscribers = sessions.map((session) => {
+      if (session.lastSequence !== undefined && !this.lastSequences.has(session.id))
+        this.lastSequences.set(session.id, session.lastSequence);
+      return this.subscribe(session.id, listener);
+    });
     return () => {
       unsubscribers.forEach((unsubscribe) => {
         unsubscribe();
@@ -245,7 +258,7 @@ export class UmaClient {
 
   connectEvents(): void {
     if (this.socket || this.closed) return;
-    const url = new URL("/api/v3/events", this.baseUrl);
+    const url = new URL("/api/v4/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())

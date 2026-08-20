@@ -67,7 +67,7 @@ describe("UmaClient", () => {
     socket.open();
     await tick();
     socket.message({
-      protocolVersion: 3,
+      protocolVersion: 4,
       sessionId: "session-1",
       sequence: 1,
       timestamp: 2,
@@ -75,7 +75,7 @@ describe("UmaClient", () => {
       payload: {},
     });
     socket.message({
-      protocolVersion: 3,
+      protocolVersion: 4,
       sessionId: "session-1",
       sequence: 3,
       timestamp: 3,
@@ -103,6 +103,46 @@ describe("UmaClient", () => {
     await client.login("secret");
     expect(sockets).toHaveLength(2);
     expect(sockets[0]?.readyState).toBe(3);
+    client.close();
+  });
+
+  it("sends the v4 Action decision contract", async () => {
+    const fetchMock = vi.fn(() =>
+      response({
+        id: "action-1",
+        runId: "run-1",
+        toolCallId: "tool-1",
+        toolName: "shell",
+        toolClass: "shell",
+        idempotencyKey: "once",
+        status: "acknowledged",
+      }),
+    );
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: fetchMock as typeof fetch,
+    });
+    await client.decideRunAction("run-1", "action-1", "acknowledge");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3210/api/v4/runs/run-1/actions/action-1/decide",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ decision: "acknowledge" }) }),
+    );
+  });
+
+  it("subscribes from a durable cursor supplied by a persisted client projection", () => {
+    const socket = new FakeSocket();
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: (() => response(snapshot)) as typeof fetch,
+      webSocketFactory: () => socket as unknown as WebSocket,
+    });
+    client.subscribeSessions([{ id: "session-1", lastSequence: 42 }], () => {});
+    client.connectEvents();
+    socket.open();
+    expect(socket.sent.map((value) => JSON.parse(value))).toContainEqual({
+      type: "subscribe",
+      sessions: [{ id: "session-1", lastSequence: 42 }],
+    });
     client.close();
   });
 });

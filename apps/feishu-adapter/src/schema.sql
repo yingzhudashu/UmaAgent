@@ -31,9 +31,12 @@ CREATE TABLE outbound_cards (
   error TEXT,
   updated_at INTEGER NOT NULL
 );
-CREATE TABLE approval_callbacks (
+CREATE TABLE action_callbacks (
   id TEXT PRIMARY KEY,
-  approval_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  run_id TEXT,
+  decision TEXT,
   feishu_message_id TEXT NOT NULL,
   callback_token_hash TEXT NOT NULL,
   expires_at INTEGER NOT NULL,

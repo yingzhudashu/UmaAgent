@@ -10,5 +10,3 @@ dist-types/
 *.db-wal
 /uma.config.json
 .env
-apps/web/public/
-!apps/web/public/.gitkeep

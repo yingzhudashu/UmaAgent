@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -118,9 +118,27 @@ describe("UmaRuntime preflight", () => {
     expect(snapshot.transcript.at(-1)?.content).toContain("Which target?");
   });
 
+  it("deduplicates a retried clarification continuation onto the original Run", async () => {
+    const runtime = await runtimeWith([
+      decision("clarify"),
+      decision("direct"),
+      fauxAssistantMessage("continued"),
+    ]);
+    const session = await runtime.createSession({ title: "Clarification retry" });
+    const firstTerminal = waitForTerminal(runtime, session.id);
+    const original = runtime.sendMessage(session.id, { messageId: "question", text: "do it" });
+    await firstTerminal;
+    const continued = runtime.sendMessage(session.id, { messageId: "answer", text: "target A" });
+    const retried = runtime.sendMessage(session.id, { messageId: "answer", text: "target A" });
+    expect(continued.id).toBe(original.id);
+    expect(retried.id).toBe(original.id);
+    expect(runtime.getSnapshot(session.id).transcript.filter((item) => item.id === "answer")).toHaveLength(1);
+  });
+
   it("verifies planned work and completes persisted plan steps", async () => {
     const runtime = await runtimeWith([
       decision("plan"),
+      fauxAssistantMessage("first step complete"),
       fauxAssistantMessage("planned result"),
       fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" })),
     ]);
@@ -171,5 +189,50 @@ describe("UmaRuntime preflight", () => {
     await runtime.stop();
     expect((await terminal).status).toBe("cancelled");
     expect(approvalStatus).toBe("denied");
+  });
+
+  it("replays a prepared read Action before resuming an interrupted Run", async () => {
+    const runtime = await runtimeWith([fauxAssistantMessage("resumed")]);
+    const session = await runtime.createSession();
+    await writeFile(join(session.workspace as string, "resume.txt"), "safe replay", "utf8");
+    const messageId = crypto.randomUUID();
+    const run = runtime.database.createRun(session.id, messageId).run;
+    runtime.database.insertMessage({
+      id: messageId,
+      sessionId: session.id,
+      runId: run.id,
+      role: "user",
+      status: "complete",
+      content: "continue",
+      payload: { role: "user", content: "continue", timestamp: Date.now() },
+    });
+    runtime.database.updateRun(run.id, { status: "interrupted", route: "direct" });
+    runtime.database.createToolCall({
+      id: "read-recovery",
+      runId: run.id,
+      name: "read",
+      args: { path: "resume.txt" },
+    });
+    const action = runtime.database.createRunAction({
+      runId: run.id,
+      toolCallId: "read-recovery",
+      toolName: "read",
+      toolClass: "read",
+      idempotencyKey: "read-recovery-once",
+      input: { path: "resume.txt" },
+    });
+    const replayed = new Promise<void>((resolve) => {
+      const unsubscribe = runtime.subscribe((event) => {
+        if (event.runId !== run.id || event.type !== "tool.completed") return;
+        unsubscribe();
+        resolve();
+      });
+    });
+    runtime.resumeRun(run.id);
+    await replayed;
+    expect(runtime.database.getRunAction(action.id).status).toBe("completed");
+    expect(runtime.getSnapshot(session.id).transcript.some((item) => item.content === "safe replay")).toBe(
+      true,
+    );
   });
 });

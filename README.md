@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.4.0`，协议版本为 `3`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.5.0`，协议版本为 `4`。
 
 ## 当前能力
 
@@ -10,6 +10,8 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 - 服务器工作区边界、符号链接逃逸检查、HTTP SSRF 基础防护、shell/MCP 审批
 - `SKILL.md` 发现以及 MCP stdio/Streamable HTTP 工具
 - 共享 `@uma-agent/client`、行式 CLI、响应式 Web 工作台
+- Snapshot + 永久事件游标同步、运行检查点和显式副作用恢复决策
+- Web IndexedDB 离线只读缓存、PWA shell 和独立 Channel Adapter 契约
 - Bearer Token、HttpOnly Web Cookie、Origin 校验、登录限流和日志脱敏
 
 ## 本地启动
@@ -62,7 +64,7 @@ npm run build:web
 npm run dev:faux
 ```
 
-默认地址为 `http://127.0.0.1:3210`，默认开发令牌为 `uma-dev-token`。可通过 `UMA_FAUX_PORT`、`UMA_FAUX_TOKEN` 和 `UMA_FAUX_STATE` 覆盖；该入口只用于本地开发与测试。
+默认地址为 `http://127.0.0.1:3210`，默认开发令牌为 `uma-dev-token`，并允许同源 Web 与 `http://127.0.0.1:3211` Vite 开发端。可通过 `UMA_FAUX_PORT`、`UMA_FAUX_TOKEN`、`UMA_FAUX_STATE` 和逗号分隔的 `UMA_FAUX_WEB_ORIGINS` 覆盖；该入口只用于本地开发与测试。
 
 ## 配置
 
@@ -79,15 +81,17 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 ## API 摘要
 
-- `GET/POST /api/v3/sessions`
-- `GET/PATCH/DELETE /api/v3/sessions/:id`
-- `GET /api/v3/sessions/:id/events?after=<sequence>` 增量事件
-- `POST /api/v3/sessions/:id/messages`，返回 `202 { runId, status }`
-- `POST /api/v3/sessions/:id/cancel`
-- `GET/POST /api/v3/runs/:id`、`actions`、`resume`
-- `POST /api/v3/approvals/:id`、`POST /api/v3/uploads`
-- `GET /api/v3/events` WebSocket
-- `/api/v3/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `GET/POST /api/v4/sessions`
+- `GET /api/v4/sessions/:id/snapshot`
+- `GET /api/v4/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v4/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v4/sessions/:id/messages|cancel|compact`
+- `GET /api/v4/runs/:id/checkpoints|actions`
+- `POST /api/v4/runs/:id/resume`
+- `POST /api/v4/runs/:id/actions/:actionId/decide`
+- `POST /api/v4/approvals/:id`、`POST /api/v4/uploads`
+- `GET /api/v4/events` WebSocket
+- `/api/v4/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
@@ -102,11 +106,13 @@ $env:FEISHU_VERIFICATION_TOKEN = "..."
 $env:FEISHU_ENCRYPT_KEY = "..."
 $env:UMA_SERVER_URL = "http://127.0.0.1:3210"
 $env:UMA_TOKEN = $env:UMA_AUTH_TOKEN
+$env:FEISHU_HOST = "127.0.0.1"
 npm run build --workspace=@uma-agent/feishu-adapter
 npm run start --workspace=@uma-agent/feishu-adapter
 ```
 
-Adapter 对 Webhook 入站按外部消息 ID 去重，私聊全部进入 Core，群聊仅处理 @机器人或线程回复；Adapter 自己的 SQLite 只保存会话映射、卡片游标和回调状态。
+Adapter 对 Webhook 入站按外部消息 ID 去重，私聊全部进入 Core，群聊仅处理 @机器人或线程回复；文本、图片和文件会转换为标准消息与 Attachment。运行卡片支持审批、恢复及副作用 Action 决策，按钮只携带短期 opaque token，重复点击保持幂等。Adapter 自己的 SQLite 只保存会话映射、卡片游标和回调状态。
+通用渠道类型、指数退避和节流工具由 `@uma-agent/channel-adapter` 提供；Core 不依赖任何渠道 SDK。
 
 ## 部署
 
@@ -114,6 +120,12 @@ Adapter 对 Webhook 入站按外部消息 ID 去重，私聊全部进入 Core，
 export UMA_AUTH_TOKEN="$(openssl rand -hex 32)"
 export OPENAI_API_KEY="..."
 docker compose up --build
+```
+
+飞书服务使用独立 profile 启动：
+
+```bash
+docker compose --profile feishu up --build
 ```
 
 Compose 默认只发布到 `127.0.0.1`，镜像包含健康检查并使用 `/data/state`、`/data/workspace` 独立卷。公网部署应通过 Caddy/Nginx 终止 TLS，并在配置中列出允许的 `webOrigins`。Core Server 使用状态目录锁和单进程 SQLite，不能横向启动多个副本共享同一状态卷。

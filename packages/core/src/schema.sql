@@ -233,4 +233,4 @@ CREATE TABLE web_sessions (
   created_at INTEGER NOT NULL
 );
 
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;

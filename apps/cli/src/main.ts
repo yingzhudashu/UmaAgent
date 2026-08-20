@@ -172,6 +172,11 @@ async function chat(): Promise<void> {
       await client.cancel(active.id);
       return;
     }
+    if (value === "/compact") {
+      const summary = await client.compactSession(active.id);
+      render(`Compacted through message ${summary.throughSequence}`);
+      return;
+    }
     if (value.startsWith("/approve ")) {
       const [, id, answer] = value.split(/\s+/);
       if (!id || !approvals.has(id)) throw new Error("Approval is not pending");
@@ -267,10 +272,21 @@ async function runCommand(): Promise<void> {
     console.log(JSON.stringify(await client.listRunActions(positionals[1]), null, 2));
     return;
   }
-  if ((action === "confirm" || action === "reject") && positionals[1] && positionals[2]) {
+  if (action === "checkpoints" && positionals[1]) {
+    console.log(JSON.stringify(await client.listRunCheckpoints(positionals[1]), null, 2));
+    return;
+  }
+  if (action === "decide" && positionals[1] && positionals[2] && positionals[3]) {
+    const decision = positionals[3];
+    if (!new Set(["approve", "reject", "acknowledge"]).has(decision))
+      throw new Error("Decision must be approve, reject, or acknowledge");
     console.log(
       JSON.stringify(
-        await client.confirmRunAction(positionals[1], positionals[2], action === "confirm"),
+        await client.decideRunAction(
+          positionals[1],
+          positionals[2],
+          decision as "approve" | "reject" | "acknowledge",
+        ),
         null,
         2,
       ),
@@ -297,6 +313,15 @@ async function runCommand(): Promise<void> {
     JSON.stringify({ type: "run.accepted", sessionId: session.id, runId: run.runId, status: run.status }),
   );
   await done;
+}
+
+async function syncCommand(): Promise<void> {
+  const sessionId = positionals[0];
+  if (!sessionId) throw new Error("uma sync <session-id>");
+  const snapshot = await client.getSession(sessionId);
+  console.log(JSON.stringify({ type: "snapshot", payload: snapshot }));
+  const page = await client.getSessionEvents(sessionId, snapshot.snapshotSequence);
+  for (const event of page.events) console.log(JSON.stringify({ type: "durable.event", payload: event }));
 }
 
 async function skillCommand(): Promise<void> {
@@ -359,9 +384,11 @@ async function main(): Promise<void> {
   else if (command === "task") await taskCommand();
   else if (command === "memory") await memoryCommand();
   else if (command === "audit") await auditCommand();
+  else if (command === "sync") await syncCommand();
+  else if (command === "channel") await doctorCommand();
   else
     console.log(
-      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|actions|confirm|reject ...\numa session list|create|delete|rename\numa task start|list|show|cancel\numa memory list|review|accept|reject\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa doctor",
+      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel\numa memory list|review|accept|reject\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa doctor",
     );
   client.close();
 }

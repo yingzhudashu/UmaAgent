@@ -20,6 +20,11 @@ textarea {
 button {
   cursor: pointer;
 }
+button:disabled,
+select:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
 .app-shell {
   height: 100vh;
   display: grid;
@@ -374,6 +379,45 @@ header h1 {
   padding: 20px 16px;
   overflow-y: auto;
 }
+.detail-tabs {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  margin: -6px -4px 18px;
+  padding: 4px;
+}
+.detail-tab {
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #69706e;
+  padding: 6px 8px;
+  font-size: 11px;
+  text-transform: capitalize;
+}
+.detail-tab.active {
+  color: #176b52;
+  background: #e7eeeb;
+}
+.operation-list {
+  display: grid;
+  gap: 9px;
+}
+.operation-list > div {
+  border: 1px solid #e1e4e3;
+  border-radius: 7px;
+  background: #fff;
+  padding: 10px;
+  overflow-wrap: anywhere;
+}
+.operation-list p {
+  margin: 5px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.operation-meta {
+  color: #747a78;
+}
 .panel-label {
   text-transform: uppercase;
   font-size: 10px;
@@ -385,6 +429,21 @@ header h1 {
   font-size: 13px;
   line-height: 1.5;
   margin: 0 0 21px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.action-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+.action-status {
+  color: var(--muted);
 }
 .status {
   display: inline-flex;
@@ -558,6 +617,13 @@ header h1 {
   .details {
     background: #1e211f;
     border-color: #343735;
+  }
+  .operation-list > div {
+    background: #242725;
+    border-color: #3d413f;
+  }
+  .detail-tab.active {
+    background: #2b332f;
   }
   .new-session,
   .login {

@@ -5,6 +5,7 @@ export type EventListener = (event: AgentEventEnvelope) => void;
 
 export class EventHub {
   private listeners = new Set<EventListener>();
+  private pending: AgentEventEnvelope[] | undefined;
 
   constructor(private readonly database: UmaDatabase) {}
 
@@ -20,6 +21,30 @@ export class EventHub {
     payload: unknown,
   ): AgentEventEnvelope {
     const event = this.database.appendEvent(sessionId, runId, type, payload);
+    if (this.pending) {
+      this.pending.push(event);
+      return event;
+    }
+    this.broadcast(event);
+    return event;
+  }
+
+  transaction<T>(operation: () => T): T {
+    if (this.pending) return operation();
+    const events: AgentEventEnvelope[] = [];
+    this.pending = events;
+    try {
+      const result = this.database.withTransaction(operation);
+      this.pending = undefined;
+      for (const event of events) this.broadcast(event);
+      return result;
+    } catch (error) {
+      this.pending = undefined;
+      throw error;
+    }
+  }
+
+  private broadcast(event: AgentEventEnvelope): void {
     for (const listener of this.listeners) {
       try {
         listener(event);
@@ -27,6 +52,5 @@ export class EventHub {
         /* Event consumers cannot break runtime state. */
       }
     }
-    return event;
   }
 }

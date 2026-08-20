@@ -8,6 +8,7 @@ import websocket from "@fastify/websocket";
 import type { UmaRuntime } from "@uma-agent/core";
 import {
   CreateSessionRequestSchema,
+  RunActionDecisionSchema,
   SendMessageRequestSchema,
   UpdateSessionRequestSchema,
 } from "@uma-agent/protocol";
@@ -83,23 +84,23 @@ export async function createServer(
         .send({ error: { code: "origin_required", message: "Origin is required for Web sessions" } });
     if (request.method === "OPTIONS") return reply.code(204).send();
     if (
-      !request.url.startsWith("/api/v3/") ||
-      request.url === "/api/v3/health" ||
-      request.url === "/api/v3/auth/login" ||
-      request.url === "/api/v3/events"
+      !request.url.startsWith("/api/v4/") ||
+      request.url === "/api/v4/health" ||
+      request.url === "/api/v4/auth/login" ||
+      request.url === "/api/v4/events"
     )
       return;
     if (!auth.requestAuthenticated(request))
       return reply.code(401).send({ error: { code: "unauthorized", message: "Authentication required" } });
   });
 
-  app.get("/api/v3/health", async () => ({
+  app.get("/api/v4/health", async () => ({
     status: runtime.health().started ? "ok" : "degraded",
-    version: "0.4.0",
-    protocolVersion: 3,
+    version: "0.5.0",
+    protocolVersion: 4,
     activeRuns: runtime.health().activeRuns,
   }));
-  app.post<{ Body: { token?: string } }>("/api/v3/auth/login", async (request, reply) => {
+  app.post<{ Body: { token?: string } }>("/api/v4/auth/login", async (request, reply) => {
     if (!auth.loginAllowed(request.ip))
       return reply.code(429).send({ error: { code: "rate_limited", message: "Too many login attempts" } });
     if (!auth.tokenMatches(request.body?.token)) {
@@ -113,7 +114,7 @@ export async function createServer(
     });
     return { ok: true };
   });
-  app.post("/api/v3/auth/logout", async (request, reply) => {
+  app.post("/api/v4/auth/logout", async (request, reply) => {
     const origin = request.headers.origin;
     auth.logout(request, reply, {
       crossOrigin: crossOrigin(origin, request.headers.host),
@@ -122,17 +123,17 @@ export async function createServer(
     return reply.code(204).send();
   });
 
-  app.get("/api/v3/sessions", async () => runtime.listSessions());
-  app.post("/api/v3/sessions", async (request) => {
+  app.get("/api/v4/sessions", async () => runtime.listSessions());
+  app.post("/api/v4/sessions", async (request) => {
     const body = request.body ?? {};
     if (!Value.Check(CreateSessionRequestSchema, body)) throw new Error("Invalid create-session request");
     return runtime.createSession(body);
   });
-  app.get<{ Params: { id: string } }>("/api/v3/sessions/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v4/sessions/:id/snapshot", async (request) =>
     runtime.getSnapshot(request.params.id),
   );
   app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: string } }>(
-    "/api/v3/sessions/:id/events",
+    "/api/v4/sessions/:id/events",
     async (request) =>
       runtime.listSessionEvents(
         request.params.id,
@@ -140,34 +141,46 @@ export async function createServer(
         Math.max(1, Math.min(1000, Number(request.query.limit ?? 500))),
       ),
   );
-  app.patch<{ Params: { id: string } }>("/api/v3/sessions/:id", async (request) => {
+  app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string } }>(
+    "/api/v4/sessions/:id/history",
+    async (request) =>
+      runtime.listSessionHistory(
+        request.params.id,
+        request.query.before === undefined ? undefined : Math.max(1, Number(request.query.before)),
+        Math.max(1, Math.min(500, Number(request.query.limit ?? 100))),
+      ),
+  );
+  app.post<{ Params: { id: string } }>("/api/v4/sessions/:id/compact", async (request) =>
+    runtime.compactSession(request.params.id),
+  );
+  app.patch<{ Params: { id: string } }>("/api/v4/sessions/:id", async (request) => {
     if (!Value.Check(UpdateSessionRequestSchema, request.body))
       throw new Error("Invalid update-session request");
     return runtime.updateSession(request.params.id, request.body);
   });
-  app.delete<{ Params: { id: string } }>("/api/v3/sessions/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v4/sessions/:id", async (request, reply) => {
     runtime.deleteSession(request.params.id);
     return reply.code(204).send();
   });
-  app.post<{ Params: { id: string } }>("/api/v3/sessions/:id/messages", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/v4/sessions/:id/messages", async (request, reply) => {
     if (!Value.Check(SendMessageRequestSchema, request.body)) throw new Error("Invalid message request");
     const run = runtime.sendMessage(request.params.id, request.body);
     return reply.code(202).send({ runId: run.id, status: run.status });
   });
-  app.post<{ Params: { id: string } }>("/api/v3/sessions/:id/cancel", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/v4/sessions/:id/cancel", async (request, reply) => {
     runtime.cancel(request.params.id);
     return reply.code(204).send();
   });
   app.post<{ Params: { id: string }; Body: { approved?: boolean } }>(
-    "/api/v3/approvals/:id",
+    "/api/v4/approvals/:id",
     async (request) => runtime.resolveApproval(request.params.id, request.body?.approved === true),
   );
-  app.get("/api/v3/models", async () => runtime.listModels());
-  app.get("/api/v3/skills", async () => runtime.listSkills());
-  app.post("/api/v3/skills/refresh", async () => runtime.refreshSkills());
-  app.get("/api/v3/mcp", async () => runtime.mcp.status());
-  app.get("/api/v3/knowledge", async () => runtime.knowledge.list());
-  app.post<{ Body: { name?: string; path?: string } }>("/api/v3/knowledge", async (request) => {
+  app.get("/api/v4/models", async () => runtime.listModels());
+  app.get("/api/v4/skills", async () => runtime.listSkills());
+  app.post("/api/v4/skills/refresh", async () => runtime.refreshSkills());
+  app.get("/api/v4/mcp", async () => runtime.mcp.status());
+  app.get("/api/v4/knowledge", async () => runtime.knowledge.list());
+  app.post<{ Body: { name?: string; path?: string } }>("/api/v4/knowledge", async (request) => {
     if (!request.body?.name || !request.body.path) throw new Error("name and path are required");
     const path = await runtime.workspacePolicy.resolvePath(
       runtime.config.server.workspaceRoots[0] as string,
@@ -175,27 +188,27 @@ export async function createServer(
     );
     return runtime.knowledge.index(request.body.name, path);
   });
-  app.get("/api/v3/tasks", async () => runtime.listTasks());
-  app.post<{ Body: { prompt?: string; parentSessionId?: string } }>("/api/v3/tasks", async (request) => {
+  app.get("/api/v4/tasks", async () => runtime.listTasks());
+  app.post<{ Body: { prompt?: string; parentSessionId?: string } }>("/api/v4/tasks", async (request) => {
     if (!request.body?.prompt || typeof request.body.prompt !== "string")
       throw new Error("prompt is required");
     return runtime.createTask(request.body.prompt, request.body.parentSessionId);
   });
-  app.get<{ Params: { id: string } }>("/api/v3/tasks/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v4/tasks/:id", async (request) =>
     runtime.getTask(request.params.id),
   );
-  app.get<{ Params: { id: string } }>("/api/v3/tasks/:id/snapshot", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v4/tasks/:id/snapshot", async (request) =>
     runtime.getSnapshot(runtime.getTask(request.params.id).sessionId),
   );
-  app.post<{ Params: { id: string } }>("/api/v3/tasks/:id/cancel", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v4/tasks/:id/cancel", async (request) =>
     runtime.cancelTask(request.params.id),
   );
   app.get<{ Querystring: { status?: "active" | "candidate" | "rejected" } }>(
-    "/api/v3/memory",
+    "/api/v4/memory",
     async (request) => runtime.listMemoryFacts(request.query.status),
   );
   app.post<{ Params: { id: string }; Body: { status?: "active" | "candidate" | "rejected" } }>(
-    "/api/v3/memory/:id",
+    "/api/v4/memory/:id",
     async (request) => {
       const status = request.body?.status;
       if (!status || !["active", "candidate", "rejected"].includes(status))
@@ -203,33 +216,38 @@ export async function createServer(
       return runtime.reviewMemoryFact(request.params.id, status);
     },
   );
-  app.delete<{ Params: { id: string } }>("/api/v3/memory/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v4/memory/:id", async (request, reply) => {
     runtime.deleteMemoryFact(request.params.id);
     return reply.code(204).send();
   });
-  app.get<{ Params: { runId: string } }>("/api/v3/audit/runs/:runId", async (request) =>
+  app.get<{ Params: { runId: string } }>("/api/v4/audit/runs/:runId", async (request) =>
     runtime.audit(request.params.runId),
   );
-  app.get<{ Params: { id: string } }>("/api/v3/runs/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v4/runs/:id", async (request) =>
     runtime.getRun(request.params.id),
   );
-  app.get<{ Params: { id: string } }>("/api/v3/runs/:id/actions", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v4/runs/:id/checkpoints", async (request) =>
+    runtime.listRunCheckpoints(request.params.id),
+  );
+  app.get<{ Params: { id: string } }>("/api/v4/runs/:id/actions", async (request) =>
     runtime.listRunActions(request.params.id),
   );
-  app.post<{ Params: { id: string } }>("/api/v3/runs/:id/resume", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v4/runs/:id/resume", async (request) =>
     runtime.resumeRun(request.params.id),
   );
-  app.post<{ Params: { id: string; actionId: string }; Body: { approved?: boolean } }>(
-    "/api/v3/runs/:id/actions/:actionId/confirm",
-    async (request) =>
-      runtime.confirmRunAction(request.params.id, request.params.actionId, request.body?.approved === true),
+  app.post<{ Params: { id: string; actionId: string }; Body: { decision?: string } }>(
+    "/api/v4/runs/:id/actions/:actionId/decide",
+    async (request) => {
+      if (!Value.Check(RunActionDecisionSchema, request.body)) throw new Error("Invalid action decision");
+      return runtime.decideRunAction(request.params.id, request.params.actionId, request.body.decision);
+    },
   );
-  app.post<{ Params: { id: string } }>("/api/v3/runs/:id/cancel", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/v4/runs/:id/cancel", async (request, reply) => {
     const run = runtime.getRun(request.params.id);
     runtime.cancel(run.sessionId);
     return reply.code(204).send();
   });
-  app.post("/api/v3/uploads", async (request) => {
+  app.post("/api/v4/uploads", async (request) => {
     const parts = request.parts();
     let sessionId: string | undefined;
     let upload: { name: string; mimeType: string; data: Buffer } | undefined;
@@ -242,7 +260,7 @@ export async function createServer(
     return runtime.addAttachment({ ...(sessionId ? { sessionId } : {}), ...upload });
   });
 
-  app.get("/api/v3/events", { websocket: true }, (socket, request) => {
+  app.get("/api/v4/events", { websocket: true }, (socket, request) => {
     const origin = request.headers.origin;
     if (origin && !allowedOrigin(origin, runtime.config.server.webOrigins)) {
       socket.close(1008, "Origin is not allowed");
@@ -291,7 +309,7 @@ export async function createServer(
     });
   });
 
-  app.all("/api/v3/*", async (_request, reply) =>
+  app.all("/api/v4/*", async (_request, reply) =>
     reply.code(404).send({ error: { code: "not_found", message: "API route not found" } }),
   );
 

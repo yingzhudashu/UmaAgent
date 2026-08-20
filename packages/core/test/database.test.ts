@@ -66,10 +66,109 @@ describe("UmaDatabase", () => {
     });
     const run = db.createRun(session.id, "active-message").run;
     db.updateRun(run.id, { status: "running" });
+    db.createCheckpoint({
+      runId: run.id,
+      phase: "tool",
+      turnCount: 1,
+      lastMessageSequence: 0,
+      safeToResume: true,
+    });
+    const runningAction = db.createRunAction({
+      runId: run.id,
+      toolCallId: "shell-1",
+      toolName: "shell",
+      toolClass: "shell",
+      idempotencyKey: "action-1",
+      input: { command: "echo hi" },
+    });
+    db.updateRunAction(runningAction.id, { status: "running" });
+    const preparedAction = db.createRunAction({
+      runId: run.id,
+      toolCallId: "shell-2",
+      toolName: "shell",
+      toolClass: "shell",
+      idempotencyKey: "action-2",
+      input: { command: "echo later" },
+    });
     db.close();
     const reopened = new UmaDatabase(root);
     expect(reopened.getRun(run.id).status).toBe("interrupted");
+    expect(reopened.getRunAction(runningAction.id).status).toBe("uncertain");
+    expect(reopened.getRunAction(preparedAction.id).status).toBe("prepared");
+    expect(reopened.getRun(run.id).resume?.state).toBe("needs_confirmation");
+    expect(reopened.listEvents(session.id, 0).events.at(-1)?.type).toBe("run.updated");
     reopened.close();
+  });
+
+  it("rolls back state and durable events together", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-atomic-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const session = db.createSession({
+      mode: "workspace",
+      title: "before",
+      workspace: root,
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    expect(() =>
+      db.withTransaction(() => {
+        db.updateSession(session.id, { title: "after" });
+        db.appendEvent(session.id, undefined, "session.snapshot", { title: "after" });
+        throw new Error("rollback");
+      }),
+    ).toThrow("rollback");
+    expect(db.getSession(session.id).title).toBe("before");
+    expect(db.listEvents(session.id, 0).events).toHaveLength(0);
+    db.close();
+  });
+
+  it("paginates transcript history before a stable message sequence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-history-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const session = db.createSession({
+      mode: "workspace",
+      title: "history",
+      workspace: root,
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    for (let index = 0; index < 3; index++)
+      db.insertMessage({ sessionId: session.id, role: "user", status: "complete", content: String(index) });
+    const latest = db.listHistory(session.id, undefined, 2);
+    expect(latest.items.map((item) => item.sequence)).toEqual([2, 3]);
+    expect(latest.hasMore).toBe(true);
+    expect(db.listHistory(session.id, latest.oldestSequence, 2).items[0]?.sequence).toBe(1);
+    db.close();
+  });
+
+  it("claims an Action transition only once", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-action-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const session = db.createSession({
+      mode: "workspace",
+      title: "action",
+      workspace: root,
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const run = db.createRun(session.id, "action-message").run;
+    db.createToolCall({ id: "tool-1", runId: run.id, name: "read", args: { path: "README.md" } });
+    const action = db.createRunAction({
+      runId: run.id,
+      toolCallId: "tool-1",
+      toolName: "read",
+      toolClass: "read",
+      idempotencyKey: "action-once",
+      input: { path: "README.md" },
+    });
+    expect(db.transitionRunAction(action.id, ["prepared"], { status: "running" }).changed).toBe(true);
+    expect(db.transitionRunAction(action.id, ["prepared"], { status: "rejected" }).changed).toBe(false);
+    expect(db.getRunAction(action.id).status).toBe("running");
+    expect(db.getToolCallInput("tool-1")).toEqual({ path: "README.md" });
+    db.close();
   });
 });
 

@@ -15,9 +15,11 @@ import type {
   PlanStep,
   Run,
   RunAction,
+  RunCheckpoint,
   RunStatus,
   Session,
   SessionEventPage,
+  SessionHistoryPage,
   SessionMode,
   SessionSnapshot,
   TranscriptItem,
@@ -25,7 +27,7 @@ import type {
 import { type AgentEventEnvelope, type AgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 type Row = Record<string, unknown>;
 
 function rows(statement: StatementSync, ...params: SQLInputValue[]): Row[] {
@@ -125,8 +127,26 @@ function toRunAction(value: Row): RunAction {
   };
 }
 
+function toRunCheckpoint(value: Row): RunCheckpoint {
+  return {
+    id: text(value.id),
+    runId: text(value.run_id),
+    checkpointNo: integer(value.checkpoint_no),
+    phase: text(value.phase) as RunCheckpoint["phase"],
+    ...(value.plan_step_id ? { planStepId: text(value.plan_step_id) } : {}),
+    turnCount: integer(value.turn_count),
+    lastMessageSequence: integer(value.last_message_sequence),
+    ...(value.context_summary_sequence
+      ? { contextSummarySequence: integer(value.context_summary_sequence) }
+      : {}),
+    safeToResume: integer(value.safe_to_resume) === 1,
+    createdAt: integer(value.created_at),
+  };
+}
+
 export class UmaDatabase {
   readonly db: DatabaseSync;
+  private transactionDepth = 0;
 
   constructor(stateDir: string) {
     mkdirSync(stateDir, { recursive: true });
@@ -141,21 +161,48 @@ export class UmaDatabase {
         `Unsupported database schema ${version}; expected ${SCHEMA_VERSION}. Reset state explicitly.`,
       );
     }
-    const now = Date.now();
-    this.db
-      .prepare(
-        "UPDATE runs SET status = 'interrupted', error = 'Server restarted during execution', updated_at = ? WHERE status IN ('queued','preflight','running','verifying')",
-      )
-      .run(now);
-    this.db
-      .prepare("UPDATE messages SET status = 'cancelled', updated_at = ? WHERE status = 'streaming'")
-      .run(now);
-    this.markUncertainActions();
-    this.markActiveBackgroundTasksInterrupted();
+    const interrupted = rows(
+      this.db.prepare(
+        "SELECT id,session_id FROM runs WHERE status IN ('queued','preflight','running','verifying')",
+      ),
+    );
+    this.withTransaction(() => {
+      const now = Date.now();
+      this.db
+        .prepare(
+          "UPDATE runs SET status = 'interrupted', error = 'Server restarted during execution', updated_at = ? WHERE status IN ('queued','preflight','running','verifying')",
+        )
+        .run(now);
+      this.db
+        .prepare("UPDATE messages SET status = 'cancelled', updated_at = ? WHERE status = 'streaming'")
+        .run(now);
+      this.markUncertainActions();
+      this.markActiveBackgroundTasksInterrupted();
+      for (const value of interrupted) {
+        const runId = text(value.id);
+        this.appendEvent(text(value.session_id), runId, "run.updated", this.getRun(runId));
+      }
+    });
   }
 
   close(): void {
     this.db.close();
+  }
+
+  withTransaction<T>(operation: () => T): T {
+    if (this.transactionDepth > 0) return operation();
+    this.db.exec("BEGIN IMMEDIATE");
+    this.transactionDepth++;
+    try {
+      const result = operation();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    } finally {
+      this.transactionDepth--;
+    }
   }
 
   listSessions(): Session[] {
@@ -328,11 +375,43 @@ export class UmaDatabase {
     };
   }
 
+  findMessageOwner(id: string): { sessionId: string; runId?: string } | undefined {
+    const value = row(this.db.prepare("SELECT session_id,run_id FROM messages WHERE id=?"), id);
+    if (!value) return undefined;
+    return {
+      sessionId: text(value.session_id),
+      ...(value.run_id ? { runId: text(value.run_id) } : {}),
+    };
+  }
+
   listMessages(sessionId: string): TranscriptItem[] {
     return rows(
       this.db.prepare("SELECT id FROM messages WHERE session_id=? ORDER BY sequence"),
       sessionId,
     ).map((value) => this.getMessage(text(value.id)));
+  }
+
+  listHistory(sessionId: string, beforeSequence?: number, limit = 100): SessionHistoryPage {
+    this.getSession(sessionId);
+    const bounded = Math.max(1, Math.min(500, limit));
+    const values = rows(
+      beforeSequence === undefined
+        ? this.db.prepare(
+            "SELECT id,sequence FROM messages WHERE session_id=? ORDER BY sequence DESC LIMIT ?",
+          )
+        : this.db.prepare(
+            "SELECT id,sequence FROM messages WHERE session_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?",
+          ),
+      ...(beforeSequence === undefined ? [sessionId, bounded + 1] : [sessionId, beforeSequence, bounded + 1]),
+    );
+    const hasMore = values.length > bounded;
+    const page = values.slice(0, bounded).reverse();
+    return {
+      sessionId,
+      items: page.map((value) => this.getMessage(text(value.id))),
+      oldestSequence: page.length ? integer(page[0]?.sequence) : 0,
+      hasMore,
+    };
   }
 
   listAgentMessages(sessionId: string, beforeSequence?: number): StoredAgentMessage[] {
@@ -394,7 +473,7 @@ export class UmaDatabase {
       status?: RunStatus;
       route?: Run["route"];
       reasoningSummary?: string;
-      error?: string;
+      error?: string | null;
       clarificationCount?: number;
     },
   ): Run {
@@ -407,7 +486,7 @@ export class UmaDatabase {
         patch.status ?? current.status,
         patch.route ?? current.route ?? null,
         patch.reasoningSummary ?? current.reasoningSummary ?? null,
-        patch.error ?? current.error ?? null,
+        patch.error === undefined ? (current.error ?? null) : patch.error,
         patch.clarificationCount ?? current.clarificationCount ?? 0,
         Date.now(),
         id,
@@ -487,10 +566,10 @@ export class UmaDatabase {
   createCheckpoint(input: {
     runId: string;
     phase: NonNullable<Run["resume"]>["lastSafePhase"];
-    planStepId?: string;
+    planStepId?: string | undefined;
     turnCount: number;
     lastMessageSequence: number;
-    contextSummarySequence?: number;
+    contextSummarySequence?: number | undefined;
     safeToResume: boolean;
   }): { id: string; checkpointNo: number } {
     const current = row(
@@ -534,9 +613,26 @@ export class UmaDatabase {
       : undefined;
   }
 
+  listRunCheckpoints(runId: string): RunCheckpoint[] {
+    this.getRun(runId);
+    return rows(
+      this.db.prepare("SELECT * FROM run_checkpoints WHERE run_id=? ORDER BY checkpoint_no"),
+      runId,
+    ).map(toRunCheckpoint);
+  }
+
+  latestMessageSequence(sessionId: string): number {
+    return integer(
+      row(
+        this.db.prepare("SELECT COALESCE(MAX(sequence),0) AS sequence FROM messages WHERE session_id=?"),
+        sessionId,
+      )?.sequence,
+    );
+  }
+
   createRunAction(input: {
     runId: string;
-    checkpointId?: string;
+    checkpointId?: string | undefined;
     toolCallId: string;
     toolName: string;
     toolClass: string;
@@ -557,8 +653,8 @@ export class UmaDatabase {
         input.toolClass,
         input.idempotencyKey,
         input.input === undefined ? null : JSON.stringify(redactAudit(input.input)),
-        "running",
-        Date.now(),
+        "prepared",
+        null,
       );
     return this.getRunAction(id);
   }
@@ -567,6 +663,15 @@ export class UmaDatabase {
     const value = row(this.db.prepare("SELECT * FROM run_actions WHERE id=?"), id);
     if (!value) throw new Error(`Run action not found: ${id}`);
     return toRunAction(value);
+  }
+
+  getRunActionByToolCall(runId: string, toolCallId: string): RunAction | undefined {
+    const value = row(
+      this.db.prepare("SELECT * FROM run_actions WHERE run_id=? AND tool_call_id=?"),
+      runId,
+      toolCallId,
+    );
+    return value ? toRunAction(value) : undefined;
   }
 
   listRunActions(runId: string): RunAction[] {
@@ -578,12 +683,12 @@ export class UmaDatabase {
 
   updateRunAction(
     id: string,
-    patch: { status?: RunAction["status"]; result?: unknown; error?: string },
+    patch: { status?: RunAction["status"]; result?: unknown; error?: string | null },
   ): RunAction {
     const current = this.getRunAction(id);
     this.db
       .prepare(
-        "UPDATE run_actions SET status=?,result_json=?,error=?,completed_at=CASE WHEN ? IN ('completed','failed','rejected') THEN ? ELSE completed_at END WHERE id=?",
+        "UPDATE run_actions SET status=?,result_json=?,error=?,started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END,completed_at=CASE WHEN ? IN ('completed','failed','rejected','acknowledged') THEN ? ELSE completed_at END WHERE id=?",
       )
       .run(
         patch.status ?? current.status,
@@ -592,7 +697,9 @@ export class UmaDatabase {
             ? null
             : JSON.stringify(redactAudit(current.result))
           : JSON.stringify(redactAudit(patch.result)),
-        patch.error ?? current.error ?? null,
+        patch.error === undefined ? (current.error ?? null) : patch.error,
+        patch.status ?? current.status,
+        Date.now(),
         patch.status ?? current.status,
         Date.now(),
         id,
@@ -600,10 +707,47 @@ export class UmaDatabase {
     return this.getRunAction(id);
   }
 
+  transitionRunAction(
+    id: string,
+    expected: RunAction["status"][],
+    patch: { status: RunAction["status"]; result?: unknown; error?: string | null },
+  ): { action: RunAction; changed: boolean } {
+    if (expected.length === 0) throw new Error("Expected Action status is required");
+    const current = this.getRunAction(id);
+    const placeholders = expected.map(() => "?").join(",");
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        `UPDATE run_actions SET status=?,result_json=?,error=?,started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END,completed_at=CASE WHEN ? IN ('completed','failed','rejected','acknowledged') THEN ? ELSE completed_at END WHERE id=? AND status IN (${placeholders})`,
+      )
+      .run(
+        patch.status,
+        patch.result === undefined
+          ? current.result === undefined
+            ? null
+            : JSON.stringify(redactAudit(current.result))
+          : JSON.stringify(redactAudit(patch.result)),
+        patch.error === undefined ? (current.error ?? null) : patch.error,
+        patch.status,
+        now,
+        patch.status,
+        now,
+        id,
+        ...expected,
+      );
+    return { action: this.getRunAction(id), changed: result.changes === 1 };
+  }
+
+  getToolCallInput(id: string): unknown {
+    const value = row(this.db.prepare("SELECT input_json FROM tool_calls WHERE id=?"), id);
+    if (!value) throw new Error(`Tool call not found: ${id}`);
+    return parseJson(value.input_json, null);
+  }
+
   markUncertainActions(): void {
     this.db
       .prepare(
-        "UPDATE run_actions SET status='uncertain',error='Server restarted before action completion' WHERE status IN ('running','prepared')",
+        "UPDATE run_actions SET status='uncertain',error='Server restarted before action completion' WHERE status='running'",
       )
       .run();
   }
@@ -635,8 +779,7 @@ export class UmaDatabase {
     type: AgentEventType,
     payload: unknown,
   ): AgentEventEnvelope {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return this.withTransaction(() => {
       const sequence = this.allocateEventSequence(sessionId);
       const event: AgentEventEnvelope = {
         protocolVersion: PROTOCOL_VERSION,
@@ -661,12 +804,8 @@ export class UmaDatabase {
           JSON.stringify(event.payload),
           event.timestamp,
         );
-      this.db.exec("COMMIT");
       return event;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 
   listEvents(sessionId: string, afterSequence: number, limit = 500): SessionEventPage {

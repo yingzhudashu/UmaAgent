@@ -24,6 +24,8 @@ import type {
   ModelRef,
   Run,
   RunAction,
+  RunActionDecision,
+  RunCheckpoint,
   SendMessageRequest,
   Session,
   SessionSnapshot,
@@ -194,6 +196,9 @@ export class UmaRuntime {
   listSessionEvents(sessionId: string, afterSequence: number, limit?: number) {
     return this.database.listEvents(sessionId, afterSequence, limit);
   }
+  listSessionHistory(sessionId: string, beforeSequence?: number, limit?: number) {
+    return this.database.listHistory(sessionId, beforeSequence, limit);
+  }
   getRun(runId: string): Run {
     return this.database.getRun(runId);
   }
@@ -201,45 +206,93 @@ export class UmaRuntime {
     this.database.getRun(runId);
     return this.database.listRunActions(runId);
   }
+  listRunCheckpoints(runId: string): RunCheckpoint[] {
+    return this.database.listRunCheckpoints(runId);
+  }
   resumeRun(runId: string): Run {
     const run = this.database.getRun(runId);
     if (run.status !== "interrupted") throw new Error("Only interrupted runs can be resumed");
     if (run.resume?.state === "needs_confirmation") throw new Error("Run has actions requiring confirmation");
     const message = this.database.getMessage(run.messageId);
     const session = this.database.getSession(run.sessionId);
-    const resumed = this.database.updateRun(runId, { status: "queued" });
-    this.events.emit(session.id, runId, "run.resumed", resumed);
+    const resumed = this.events.transaction(() => {
+      const value = this.database.updateRun(runId, { status: "queued", error: null });
+      this.events.emit(session.id, runId, "run.resumed", value);
+      return value;
+    });
     const previous = this.queueTails.get(session.id) ?? Promise.resolve();
     const next = previous
       .catch(() => {})
-      .then(() =>
-        this.executeRun(session, runId, { messageId: message.id, text: message.content }, undefined, true),
-      );
+      .then(async () => {
+        await this.replaySafeActions(run);
+        await this.executeRun(
+          session,
+          runId,
+          { messageId: message.id, text: message.content },
+          undefined,
+          true,
+        );
+      });
     const tail = next.finally(() => {
       if (this.queueTails.get(session.id) === tail) this.queueTails.delete(session.id);
     });
     this.queueTails.set(session.id, tail);
     return resumed;
   }
-  confirmRunAction(runId: string, actionId: string, approved: boolean): RunAction {
+  async decideRunAction(
+    runId: string,
+    actionId: string,
+    decision: RunActionDecision["decision"],
+  ): Promise<RunAction> {
     const run = this.database.getRun(runId);
     const action = this.database.getRunAction(actionId);
     if (action.runId !== runId) throw new Error("Action does not belong to run");
-    const updated = this.database.updateRunAction(actionId, {
-      status: approved ? "confirmed" : "rejected",
-      ...(approved ? {} : { error: "Rejected by user" }),
-    });
-    if (!approved) {
-      const failed = this.database.updateRun(runId, { status: "failed", error: "Pending action rejected" });
-      this.events.emit(run.sessionId, runId, "run.updated", failed);
-    } else if (
-      this.database
-        .listRunActions(runId)
-        .every((item) => !["uncertain", "prepared", "running"].includes(item.status))
-    ) {
-      this.events.emit(run.sessionId, runId, "run.updated", this.database.getRun(runId));
+    if (!["prepared", "uncertain"].includes(action.status)) return action;
+    if (decision === "acknowledge" && action.status !== "uncertain")
+      throw new Error("Only uncertain actions can be acknowledged");
+    if (decision === "approve" && action.status !== "prepared")
+      throw new Error("Only prepared actions can be approved");
+    if (decision === "reject") {
+      return this.events.transaction(() => {
+        const transition = this.database.transitionRunAction(actionId, ["prepared", "uncertain"], {
+          status: "rejected",
+          error: "Rejected by user",
+        });
+        if (!transition.changed) return transition.action;
+        const updated = transition.action;
+        const failed = this.database.updateRun(runId, {
+          status: "failed",
+          error: "Pending action rejected",
+        });
+        this.events.emit(run.sessionId, runId, "run.action_decided", { action: updated, decision });
+        this.events.emit(run.sessionId, runId, "run.updated", failed);
+        return updated;
+      });
     }
-    return updated;
+    if (decision === "acknowledge") {
+      return this.events.transaction(() => {
+        const transition = this.database.transitionRunAction(actionId, ["uncertain"], {
+          status: "acknowledged",
+        });
+        if (!transition.changed) return transition.action;
+        const updated = transition.action;
+        this.events.emit(run.sessionId, runId, "run.action_decided", { action: updated, decision });
+        return updated;
+      });
+    }
+    return this.executePreparedAction(run, action);
+  }
+
+  async compactSession(sessionId: string): Promise<{ throughSequence: number; content: string }> {
+    const session = this.database.getSession(sessionId);
+    const result = await this.compactContext(
+      session,
+      this.database.listAgentMessages(sessionId),
+      new AbortController().signal,
+      true,
+    );
+    if (!result.summary) throw new Error("Session has insufficient history to compact");
+    return { throughSequence: result.summary.throughSequence, content: result.summary.content };
   }
   getTask(id: string): BackgroundTask {
     return this.database.getBackgroundTask(id);
@@ -252,13 +305,16 @@ export class UmaRuntime {
       ...(parent?.workspace ? { workspace: parent.workspace } : {}),
       ...(parent?.model ? { model: parent.model } : {}),
     });
-    const task = this.database.createBackgroundTask({
-      id: randomUUID(),
-      sessionId: session.id,
-      prompt,
-      ...(parentSessionId ? { parentSessionId } : {}),
+    const task = this.events.transaction(() => {
+      const value = this.database.createBackgroundTask({
+        id: randomUUID(),
+        sessionId: session.id,
+        prompt,
+        ...(parentSessionId ? { parentSessionId } : {}),
+      });
+      this.events.emit(session.id, undefined, "task.updated", value);
+      return value;
     });
-    this.events.emit(session.id, undefined, "task.updated", task);
     void this.executeTask(task.id);
     return task;
   }
@@ -273,12 +329,14 @@ export class UmaRuntime {
       }
     }
     if (["pending", "running"].includes(task.status)) {
-      const updated = this.database.updateBackgroundTask(id, {
-        status: "cancelled",
-        error: "Cancelled by user",
+      return this.events.transaction(() => {
+        const updated = this.database.updateBackgroundTask(id, {
+          status: "cancelled",
+          error: "Cancelled by user",
+        });
+        this.events.emit(task.sessionId, undefined, "task.updated", updated);
+        return updated;
       });
-      this.events.emit(task.sessionId, undefined, "task.updated", updated);
-      return updated;
     }
     return task;
   }
@@ -286,12 +344,14 @@ export class UmaRuntime {
     return this.database.listMemoryFacts(status);
   }
   reviewMemoryFact(id: string, status: "active" | "candidate" | "rejected") {
-    const fact = this.database.updateMemoryFact(id, status);
-    if (fact.sourceRunId) {
-      const run = this.database.getRun(fact.sourceRunId);
-      this.events.emit(run.sessionId, run.id, "memory.updated", fact);
-    }
-    return fact;
+    return this.events.transaction(() => {
+      const fact = this.database.updateMemoryFact(id, status);
+      if (fact.sourceRunId) {
+        const run = this.database.getRun(fact.sourceRunId);
+        this.events.emit(run.sessionId, run.id, "memory.updated", fact);
+      }
+      return fact;
+    });
   }
   deleteMemoryFact(id: string): void {
     this.database.deleteMemoryFact(id);
@@ -304,6 +364,18 @@ export class UmaRuntime {
   }
   refreshSkills(): Promise<SkillSummary[]> {
     return this.skills.refresh();
+  }
+
+  private transitionRun(
+    sessionId: string,
+    runId: string,
+    patch: Parameters<UmaDatabase["updateRun"]>[1],
+  ): Run {
+    return this.events.transaction(() => {
+      const run = this.database.updateRun(runId, patch);
+      this.events.emit(sessionId, runId, "run.updated", run);
+      return run;
+    });
   }
 
   async createSession(input: CreateSessionRequest = {}): Promise<Session> {
@@ -337,8 +409,11 @@ export class UmaRuntime {
     const controller = new AbortController();
     this.taskControllers.set(id, controller);
     try {
-      const running = this.database.updateBackgroundTask(id, { status: "running" });
-      this.events.emit(running.sessionId, undefined, "task.updated", running);
+      this.events.transaction(() => {
+        const value = this.database.updateBackgroundTask(id, { status: "running" });
+        this.events.emit(value.sessionId, undefined, "task.updated", value);
+        return value;
+      });
       const run = this.sendMessage(task.sessionId, { messageId: randomUUID(), text: task.prompt });
       await new Promise<void>((resolve) => {
         const off = this.subscribe((event) => {
@@ -350,16 +425,18 @@ export class UmaRuntime {
           const final = [...snapshot.transcript]
             .reverse()
             .find((item) => item.runId === run.id && item.role === "assistant");
-          const updated = this.database.updateBackgroundTask(
-            id,
-            status === "completed"
-              ? { status, ...(final?.content ? { result: final.content } : {}) }
-              : {
-                  status: status as BackgroundTask["status"],
-                  ...((event.payload as Run).error ? { error: (event.payload as Run).error } : {}),
-                },
-          );
-          this.events.emit(task.sessionId, undefined, "task.updated", updated);
+          this.events.transaction(() => {
+            const updated = this.database.updateBackgroundTask(
+              id,
+              status === "completed"
+                ? { status, ...(final?.content ? { result: final.content } : {}) }
+                : {
+                    status: status as BackgroundTask["status"],
+                    ...((event.payload as Run).error ? { error: (event.payload as Run).error } : {}),
+                  },
+            );
+            this.events.emit(task.sessionId, undefined, "task.updated", updated);
+          });
           resolve();
         });
         controller.signal.addEventListener(
@@ -372,11 +449,13 @@ export class UmaRuntime {
         );
       });
     } catch (error) {
-      const updated = this.database.updateBackgroundTask(id, {
-        status: "failed",
-        error: error instanceof Error ? error.message : String(error),
+      this.events.transaction(() => {
+        const updated = this.database.updateBackgroundTask(id, {
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.events.emit(task.sessionId, undefined, "task.updated", updated);
       });
-      this.events.emit(task.sessionId, undefined, "task.updated", updated);
     } finally {
       this.taskControllers.delete(id);
       release();
@@ -388,9 +467,11 @@ export class UmaRuntime {
     patch: { title?: string; model?: ModelRef; thinkingLevel?: ThinkingLevel },
   ): Session {
     if (patch.model) this.models.get(patch.model);
-    const session = this.database.updateSession(id, patch);
-    this.events.emit(id, undefined, "session.snapshot", this.database.getSnapshot(id));
-    return session;
+    return this.events.transaction(() => {
+      const session = this.database.updateSession(id, patch);
+      this.events.emit(id, undefined, "session.snapshot", this.database.getSnapshot(id));
+      return session;
+    });
   }
 
   deleteSession(id: string): void {
@@ -401,44 +482,61 @@ export class UmaRuntime {
   sendMessage(sessionId: string, input: SendMessageRequest): Run {
     if (!this.started || this.stopping) throw new Error("UmaRuntime is not accepting new runs");
     const session = this.database.getSession(sessionId);
+    const existing = this.database.findMessageOwner(input.messageId);
+    if (existing) {
+      if (existing.sessionId !== sessionId) throw new Error("messageId is already used by another session");
+      if (!existing.runId) throw new Error("messageId is already used by a non-run message");
+      return this.database.getRun(existing.runId);
+    }
     const attachmentIds = input.attachmentIds ?? [];
     for (const id of attachmentIds) this.database.validateAttachmentForSession(id, sessionId);
     const awaiting = this.database.findAwaitingRun(sessionId);
     if (awaiting && (awaiting.clarificationCount ?? 0) >= 3) {
-      const failed = this.database.updateRun(awaiting.id, {
-        status: "failed",
-        error: "Clarification limit exceeded",
+      this.events.transaction(() => {
+        const failed = this.database.updateRun(awaiting.id, {
+          status: "failed",
+          error: "Clarification limit exceeded",
+        });
+        this.events.emit(sessionId, awaiting.id, "run.updated", failed);
       });
-      this.events.emit(sessionId, awaiting.id, "run.updated", failed);
       throw new Error("Clarification limit exceeded; send a new message to start another run");
     }
     const continuation = awaiting && (awaiting.clarificationCount ?? 0) < 3 ? awaiting : undefined;
-    const { run, created } = continuation
-      ? { run: continuation, created: true }
-      : this.database.createRun(sessionId, input.messageId);
-    if (!created) return run;
-    this.database.insertMessage({
-      id: input.messageId,
-      sessionId,
-      runId: run.id,
-      role: "user",
-      status: "complete",
-      content: input.text,
-      payload: { role: "user", content: input.text, timestamp: Date.now() },
-      attachmentIds,
-      ...(input.source ? { source: input.source } : {}),
+    const { run, created } = this.events.transaction(() => {
+      const result = continuation
+        ? { run: continuation, created: true }
+        : this.database.createRun(sessionId, input.messageId);
+      if (!result.created) return result;
+      this.database.insertMessage({
+        id: input.messageId,
+        sessionId,
+        runId: result.run.id,
+        role: "user",
+        status: "complete",
+        content: input.text,
+        payload: { role: "user", content: input.text, timestamp: Date.now() },
+        attachmentIds,
+        ...(input.source ? { source: input.source } : {}),
+      });
+      if (continuation) {
+        this.database.updateRun(result.run.id, {
+          clarificationCount: (result.run.clarificationCount ?? 0) + 1,
+          status: "queued",
+        });
+        this.events.emit(sessionId, result.run.id, "run.resumed", {
+          run: this.database.getRun(result.run.id),
+          clarification: input.text,
+        });
+      }
+      this.events.emit(
+        sessionId,
+        result.run.id,
+        "message.completed",
+        this.database.getMessage(input.messageId),
+      );
+      return result;
     });
-    if (continuation) {
-      this.database.updateRun(run.id, {
-        clarificationCount: (run.clarificationCount ?? 0) + 1,
-        status: "queued",
-      });
-      this.events.emit(sessionId, run.id, "run.resumed", {
-        run: this.database.getRun(run.id),
-        clarification: input.text,
-      });
-    }
-    this.events.emit(sessionId, run.id, "message.completed", this.database.getMessage(input.messageId));
+    if (!created) return run;
     const previous = this.queueTails.get(sessionId) ?? Promise.resolve();
     const originalPrompt = continuation
       ? this.database.getMessage(continuation.messageId).content
@@ -467,13 +565,17 @@ export class UmaRuntime {
   }
 
   resolveApproval(id: string, approved: boolean): Approval {
-    const approval = this.database.resolveApproval(id, approved);
-    this.database.addAudit({
-      runId: approval.runId,
-      kind: "approval",
-      name: approval.toolName,
-      input: { toolCallId: approval.toolCallId },
-      status: approved ? "approved" : "denied",
+    const approval = this.events.transaction(() => {
+      const value = this.database.resolveApproval(id, approved);
+      this.database.addAudit({
+        runId: value.runId,
+        kind: "approval",
+        name: value.toolName,
+        input: { toolCallId: value.toolCallId },
+        status: approved ? "approved" : "denied",
+      });
+      this.events.emit(value.sessionId, value.runId, "approval.resolved", value);
+      return value;
     });
     const pending = this.approvals.get(id);
     if (pending) {
@@ -481,7 +583,6 @@ export class UmaRuntime {
       this.approvals.delete(id);
       pending.resolve(approved);
     }
-    this.events.emit(approval.sessionId, approval.runId, "approval.resolved", approval);
     return approval;
   }
 
@@ -566,8 +667,10 @@ export class UmaRuntime {
   ): Promise<void> {
     const release = await this.semaphore.acquire();
     if (this.stopping) {
-      this.database.updateRun(runId, { status: "cancelled", error: "Server is shutting down" });
-      this.events.emit(sessionAtQueueTime.id, runId, "run.updated", this.database.getRun(runId));
+      this.transitionRun(sessionAtQueueTime.id, runId, {
+        status: "cancelled",
+        error: "Server is shutting down",
+      });
       release();
       return;
     }
@@ -575,15 +678,17 @@ export class UmaRuntime {
     this.controllers.set(sessionAtQueueTime.id, controller);
     try {
       const session = this.database.getSession(sessionAtQueueTime.id);
-      this.database.updateRun(runId, { status: "preflight" });
-      this.database.addAudit({
-        runId,
-        kind: "run",
-        name: "status",
-        input: { status: "preflight" },
-        status: "started",
+      this.events.transaction(() => {
+        const preflightRun = this.database.updateRun(runId, { status: "preflight", error: null });
+        this.database.addAudit({
+          runId,
+          kind: "run",
+          name: "status",
+          input: { status: "preflight" },
+          status: "started",
+        });
+        this.events.emit(session.id, runId, "run.updated", preflightRun);
       });
-      this.events.emit(session.id, runId, "run.updated", this.database.getRun(runId));
       const currentRun = this.database.getRun(runId);
       const decision =
         resumeFromCheckpoint && currentRun.route && currentRun.route !== "clarify"
@@ -602,103 +707,172 @@ export class UmaRuntime {
               controller.signal,
               runId,
             );
-      this.database.updateRun(runId, { route: decision.route, reasoningSummary: decision.reasoningSummary });
-      this.database.createCheckpoint({
-        runId,
-        phase: decision.route === "plan" ? "plan" : "preflight",
-        turnCount: 0,
-        lastMessageSequence: this.database.getMessage(input.messageId).sequence,
-        safeToResume: true,
+      this.events.transaction(() => {
+        const routed = this.database.updateRun(runId, {
+          route: decision.route,
+          reasoningSummary: decision.reasoningSummary,
+        });
+        this.database.createCheckpoint({
+          runId,
+          phase: "preflight",
+          turnCount: 0,
+          lastMessageSequence: this.database.getMessage(input.messageId).sequence,
+          contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
+          safeToResume: true,
+        });
+        this.events.emit(session.id, runId, "run.updated", routed);
       });
       if (decision.route === "clarify") {
         const content = decision.questions.map((question, index) => `${index + 1}. ${question}`).join("\n");
-        const message = this.database.insertMessage({
-          sessionId: session.id,
-          runId,
-          role: "assistant",
-          status: "complete",
-          content,
-          payload: {
+        this.events.transaction(() => {
+          const message = this.database.insertMessage({
+            sessionId: session.id,
+            runId,
             role: "assistant",
-            content: [{ type: "text", text: content }],
-            api: session.model.provider,
-            provider: session.model.provider,
-            model: session.model.id,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop",
-            timestamp: Date.now(),
-          } as AssistantMessage,
-        });
-        this.database.updateRun(runId, { status: "awaiting_input" });
-        this.events.emit(session.id, runId, "message.completed", message);
-        this.events.emit(session.id, runId, "run.updated", this.database.getRun(runId));
-        this.events.emit(session.id, runId, "run.awaiting_input", {
-          run: this.database.getRun(runId),
-          questions: decision.questions,
+            status: "complete",
+            content,
+            payload: {
+              role: "assistant",
+              content: [{ type: "text", text: content }],
+              api: session.model.provider,
+              provider: session.model.provider,
+              model: session.model.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "stop",
+              timestamp: Date.now(),
+            } as AssistantMessage,
+          });
+          const awaiting = this.database.updateRun(runId, { status: "awaiting_input", error: null });
+          this.events.emit(session.id, runId, "message.completed", message);
+          this.events.emit(session.id, runId, "run.updated", awaiting);
+          this.events.emit(session.id, runId, "run.awaiting_input", {
+            run: awaiting,
+            questions: decision.questions,
+          });
         });
         return;
       }
       if (decision.route === "plan" && currentRun.plan.length === 0) {
-        this.database.setPlan(runId, decision.steps);
-        this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
-        const first = this.database.listPlan(runId)[0];
-        if (first) {
-          this.database.updatePlanStep(first.id, "running");
+        this.events.transaction(() => {
+          this.database.setPlan(runId, decision.steps);
+          this.database.createCheckpoint({
+            runId,
+            phase: "plan",
+            turnCount: 0,
+            lastMessageSequence: this.database.latestMessageSequence(session.id),
+            contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
+            safeToResume: true,
+          });
           this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
-        }
+        });
       }
-      this.database.updateRun(runId, { status: "running" });
-      this.events.emit(session.id, runId, "run.updated", this.database.getRun(runId));
-      await this.runAgent(session, runId, input, decision, controller.signal, promptOverride);
+      this.transitionRun(session.id, runId, { status: "running", error: null });
+      const budget = { turns: this.database.getLatestCheckpoint(runId)?.turnCount ?? 0 };
+      if (decision.route === "plan") {
+        for (const step of this.database.listPlan(runId)) {
+          if (step.status === "completed") continue;
+          this.events.transaction(() => {
+            this.database.updatePlanStep(step.id, "running");
+            this.database.createCheckpoint({
+              runId,
+              phase: "step",
+              planStepId: step.id,
+              turnCount: budget.turns,
+              lastMessageSequence: this.database.latestMessageSequence(session.id),
+              contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
+              safeToResume: true,
+            });
+            this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+          });
+          await this.runAgent(
+            session,
+            runId,
+            input,
+            decision,
+            controller.signal,
+            `Execute only plan step ${step.position + 1}: ${step.title}. Preserve completed work and finish this step with a concise progress result.`,
+            budget,
+          );
+          this.events.transaction(() => {
+            this.database.updatePlanStep(step.id, "completed");
+            this.database.createCheckpoint({
+              runId,
+              phase: "step",
+              planStepId: step.id,
+              turnCount: budget.turns,
+              lastMessageSequence: this.database.latestMessageSequence(session.id),
+              contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
+              safeToResume: true,
+            });
+            this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+          });
+          if (budget.turns >= 400) throw new Error("Run turn limit exceeded (400)");
+        }
+      } else {
+        await this.runAgent(session, runId, input, decision, controller.signal, promptOverride, budget);
+      }
       if (controller.signal.aborted) throw new DOMException("Run cancelled", "AbortError");
       if (decision.route === "plan") {
-        this.database.updateRun(runId, { status: "verifying" });
-        this.events.emit(session.id, runId, "run.updated", this.database.getRun(runId));
+        this.transitionRun(session.id, runId, { status: "verifying" });
         await this.verifyAndCorrect(session, runId, decision, controller.signal);
-        for (const step of this.database.listPlan(runId)) this.database.updatePlanStep(step.id, "completed");
-        this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+        this.events.transaction(() => {
+          this.database.createCheckpoint({
+            runId,
+            phase: "verify",
+            turnCount: budget.turns,
+            lastMessageSequence: this.database.latestMessageSequence(session.id),
+            contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
+            safeToResume: true,
+          });
+          this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+        });
       }
-      this.database.updateRun(runId, { status: "completed" });
-      this.database.addAudit({
-        runId,
-        kind: "run",
-        name: "status",
-        input: { status: "completed" },
-        status: "completed",
-      });
       await this.extractMemories(session, runId, controller.signal);
-      this.events.emit(session.id, runId, "run.updated", this.database.getRun(runId));
+      this.events.transaction(() => {
+        const completed = this.database.updateRun(runId, { status: "completed", error: null });
+        this.database.addAudit({
+          runId,
+          kind: "run",
+          name: "status",
+          input: { status: "completed" },
+          status: "completed",
+        });
+        this.events.emit(session.id, runId, "run.updated", completed);
+      });
     } catch (error) {
       const cancelled =
         controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError");
-      this.database.updateRun(runId, {
-        status: cancelled ? "cancelled" : "failed",
-        error: error instanceof Error ? error.message : String(error),
+      this.events.transaction(() => {
+        const failed = this.database.updateRun(runId, {
+          status: cancelled ? "cancelled" : "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.database.addAudit({
+          runId,
+          kind: "run",
+          name: "status",
+          input: { status: cancelled ? "cancelled" : "failed" },
+          status: cancelled ? "cancelled" : "failed",
+          ...(error instanceof Error ? { error: error.message } : {}),
+        });
+        for (const step of this.database.listPlan(runId)) {
+          if (step.status === "running" || step.status === "pending")
+            this.database.updatePlanStep(
+              step.id,
+              "failed",
+              error instanceof Error ? error.message : String(error),
+            );
+        }
+        this.events.emit(sessionAtQueueTime.id, runId, "run.updated", failed);
+        if (failed.plan.length) this.events.emit(sessionAtQueueTime.id, runId, "plan.updated", failed.plan);
       });
-      this.database.addAudit({
-        runId,
-        kind: "run",
-        name: "status",
-        input: { status: cancelled ? "cancelled" : "failed" },
-        status: cancelled ? "cancelled" : "failed",
-        ...(error instanceof Error ? { error: error.message } : {}),
-      });
-      for (const step of this.database.listPlan(runId)) {
-        if (step.status === "running" || step.status === "pending")
-          this.database.updatePlanStep(
-            step.id,
-            "failed",
-            error instanceof Error ? error.message : String(error),
-          );
-      }
-      this.events.emit(sessionAtQueueTime.id, runId, "run.updated", this.database.getRun(runId));
     } finally {
       this.controllers.delete(sessionAtQueueTime.id);
       release();
@@ -732,17 +906,176 @@ export class UmaRuntime {
         const confidence = typeof item.confidence === "number" ? item.confidence : 0;
         const scope = item.scope === "global" ? "global" : "session";
         if (!content || isSecretLike(content) || confidence < 0 || confidence > 1) continue;
-        this.database.addMemoryFact({
-          ...(scope === "session" ? { sessionId: session.id } : {}),
-          scope,
-          content,
-          confidence,
-          sourceRunId: runId,
-          status: confidence >= 0.95 ? "active" : "candidate",
+        this.events.transaction(() => {
+          const fact = this.database.addMemoryFact({
+            ...(scope === "session" ? { sessionId: session.id } : {}),
+            scope,
+            content,
+            confidence,
+            sourceRunId: runId,
+            status: confidence >= 0.95 ? "active" : "candidate",
+          });
+          this.events.emit(session.id, runId, "memory.updated", fact);
         });
       }
     } catch {
       // Memory extraction is advisory and never changes run success.
+    }
+  }
+
+  private toolsForSession(session: Session): AgentTool[] {
+    return [
+      ...createBuiltinTools({
+        session,
+        database: this.database,
+        knowledge: this.knowledge,
+        workspacePolicy: this.workspacePolicy,
+        toolTimeoutMs: this.config.runtime.toolTimeoutMs,
+      }),
+      ...(session.mode === "workspace" ? this.mcp.tools() : []),
+    ];
+  }
+
+  private async executePreparedAction(run: Run, action: RunAction): Promise<RunAction> {
+    if (run.status !== "interrupted")
+      throw new Error("Prepared actions can only be decided on interrupted runs");
+    return this.executeRecoveredAction(run, action, false);
+  }
+
+  private async replaySafeActions(run: Run): Promise<void> {
+    const safe = this.database
+      .listRunActions(run.id)
+      .filter(
+        (action) =>
+          ["prepared", "uncertain"].includes(action.status) &&
+          ["read", "attachment_read"].includes(action.toolClass),
+      );
+    for (const action of safe) await this.executeRecoveredAction(run, action, true);
+  }
+
+  private async executeRecoveredAction(run: Run, action: RunAction, automatic: boolean): Promise<RunAction> {
+    const session = this.database.getSession(run.sessionId);
+    const tool = this.toolsForSession(session).find((candidate) => candidate.name === action.toolName);
+    if (!tool) throw new Error(`Tool is unavailable: ${action.toolName}`);
+    const running = this.events.transaction(() => {
+      const transition = this.database.transitionRunAction(
+        action.id,
+        automatic ? ["prepared", "uncertain"] : ["prepared"],
+        { status: "running", error: null },
+      );
+      if (!transition.changed) return transition.action;
+      if (!automatic) {
+        this.events.emit(run.sessionId, run.id, "run.action_decided", {
+          action: transition.action,
+          decision: "approve",
+        });
+      }
+      this.events.emit(run.sessionId, run.id, "tool.started", {
+        toolCallId: action.toolCallId,
+        action: transition.action,
+        recovered: true,
+      });
+      return transition.action;
+    });
+    if (running.status !== "running") return running;
+    const controller = new AbortController();
+    try {
+      const toolInput = this.database.getToolCallInput(action.toolCallId);
+      const result = await tool.execute(action.toolCallId, toolInput as never, controller.signal);
+      return this.events.transaction(() => {
+        this.database.completeToolCall(action.toolCallId, result, false);
+        const completed = this.database.transitionRunAction(action.id, ["running"], {
+          status: "completed",
+          result,
+          error: null,
+        }).action;
+        const toolMessage: ToolResultMessage = {
+          role: "toolResult",
+          toolCallId: action.toolCallId,
+          toolName: action.toolName,
+          content:
+            result && typeof result === "object" && "content" in result
+              ? (result as ToolResultMessage).content
+              : [{ type: "text", text: JSON.stringify(result) }],
+          isError: false,
+          timestamp: Date.now(),
+        };
+        const item = this.database.insertMessage({
+          sessionId: run.sessionId,
+          runId: run.id,
+          role: "tool",
+          status: "complete",
+          name: action.toolName,
+          content: textFromMessage(toolMessage),
+          payload: toolMessage,
+        });
+        this.database.addAudit({
+          runId: run.id,
+          kind: "tool",
+          name: action.toolName,
+          output: result,
+          status: "completed",
+        });
+        this.database.createCheckpoint({
+          runId: run.id,
+          phase: "tool",
+          turnCount: this.database.getLatestCheckpoint(run.id)?.turnCount ?? 0,
+          lastMessageSequence: this.database.latestMessageSequence(run.sessionId),
+          contextSummarySequence: this.database.getContextSummary(run.sessionId)?.throughSequence,
+          safeToResume: true,
+        });
+        this.events.emit(run.sessionId, run.id, "tool.completed", {
+          toolCallId: action.toolCallId,
+          action: completed,
+          item,
+          recovered: true,
+        });
+        return completed;
+      });
+    } catch (error) {
+      return this.events.transaction(() => {
+        this.database.completeToolCall(
+          action.toolCallId,
+          { error: error instanceof Error ? error.message : String(error) },
+          true,
+        );
+        const failed = this.database.transitionRunAction(action.id, ["running"], {
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        }).action;
+        const toolMessage: ToolResultMessage = {
+          role: "toolResult",
+          toolCallId: action.toolCallId,
+          toolName: action.toolName,
+          content: [{ type: "text", text: failed.error ?? "Recovered tool execution failed" }],
+          isError: true,
+          timestamp: Date.now(),
+        };
+        const item = this.database.insertMessage({
+          sessionId: run.sessionId,
+          runId: run.id,
+          role: "tool",
+          status: "error",
+          name: action.toolName,
+          content: textFromMessage(toolMessage),
+          payload: toolMessage,
+        });
+        this.database.addAudit({
+          runId: run.id,
+          kind: "tool",
+          name: action.toolName,
+          status: "error",
+          ...(failed.error ? { error: failed.error } : {}),
+        });
+        this.events.emit(run.sessionId, run.id, "tool.completed", {
+          toolCallId: action.toolCallId,
+          action: failed,
+          item,
+          isError: true,
+          recovered: true,
+        });
+        return failed;
+      });
     }
   }
 
@@ -753,6 +1086,7 @@ export class UmaRuntime {
     decision: PreflightDecision,
     signal: AbortSignal,
     promptOverride?: string,
+    budget: { turns: number } = { turns: 0 },
   ): Promise<void> {
     const userMessage = this.database.getMessage(input.messageId);
     const historyState = await this.compactContext(
@@ -778,17 +1112,9 @@ export class UmaRuntime {
       ? `\n\nAttachments: ${input.attachmentIds.join(", ")}. Use attachment_read when needed.`
       : "";
     const prompt = `${promptOverride ?? input.text}${planText}${attachmentText}`;
-    const tools = [
-      ...createBuiltinTools({
-        session,
-        database: this.database,
-        knowledge: this.knowledge,
-        workspacePolicy: this.workspacePolicy,
-        toolTimeoutMs: this.config.runtime.toolTimeoutMs,
-      }),
-      ...(session.mode === "workspace" ? this.mcp.tools() : []),
-    ];
-    let turns = 0;
+    const tools = this.toolsForSession(session);
+    let stepTurns = 0;
+    const turnLimit = decision.route === "plan" ? 48 : 400;
     const agent = new Agent({
       initialState: {
         systemPrompt: `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought.${this.skills.systemPrompt()}${historyState.summary ? `\n\n<conversation_summary>\n${historyState.summary.content}\n</conversation_summary>` : ""}${context ? `\n\n${context}` : ""}`,
@@ -799,23 +1125,41 @@ export class UmaRuntime {
       },
       streamFn: this.models.models.streamSimple.bind(this.models.models),
       toolExecution: "parallel",
-      shouldStopAfterTurn: () => ++turns >= 48,
+      shouldStopAfterTurn: () => {
+        stepTurns++;
+        budget.turns++;
+        return stepTurns >= turnLimit || budget.turns >= 400;
+      },
       beforeToolCall: async ({ toolCall, args }, toolSignal) => {
         const permission = this.permissions.decide(session.mode, toolCall.name);
         if (!permission.allowed) return { block: true, reason: permission.reason };
-        if (!permission.requiresApproval) return undefined;
-        const approved = await this.requestApproval(
-          session.id,
-          runId,
-          toolCall.id,
-          toolCall.name,
-          args,
-          toolSignal ?? signal,
-        );
-        return approved ? undefined : { block: true, reason: "Tool execution was not approved" };
+        const action =
+          this.database.getRunActionByToolCall(runId, toolCall.id) ??
+          this.database.createRunAction({
+            runId,
+            checkpointId: this.database.getLatestCheckpoint(runId)?.id,
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            toolClass: this.permissions.classify(toolCall.name),
+            idempotencyKey: `${runId}:${toolCall.id}`,
+            input: args,
+          });
+        if (permission.requiresApproval) {
+          const approved = await this.requestApproval(
+            session.id,
+            runId,
+            toolCall.id,
+            toolCall.name,
+            args,
+            toolSignal ?? signal,
+          );
+          if (!approved) return { block: true, reason: "Tool execution was not approved" };
+        }
+        this.database.updateRunAction(action.id, { status: "running" });
+        return undefined;
       },
     });
-    this.bindAgentEvents(agent, session.id, runId);
+    this.bindAgentEvents(agent, session.id, runId, () => budget.turns);
     const abort = () => agent.abort();
     signal.addEventListener("abort", abort, { once: true });
     try {
@@ -830,6 +1174,7 @@ export class UmaRuntime {
     session: Session,
     entries: StoredAgentMessage[],
     signal: AbortSignal,
+    force = false,
   ): Promise<{ messages: AgentMessage[]; summary?: ContextSummary }> {
     let summary = this.database.getContextSummary(session.id);
     let pending = entries.filter((entry) => entry.sequence > (summary?.throughSequence ?? 0));
@@ -841,7 +1186,7 @@ export class UmaRuntime {
       ...summaryMessage,
       ...pending.map((entry) => entry.message),
     ]).tokens;
-    if (contextTokens < model.contextWindow * 0.65 || pending.length < 6) {
+    if ((!force && contextTokens < model.contextWindow * 0.65) || pending.length < 6) {
       return { messages: pending.map((entry) => entry.message), ...(summary ? { summary } : {}) };
     }
 
@@ -877,7 +1222,12 @@ export class UmaRuntime {
     return { messages: pending.map((entry) => entry.message), ...(summary ? { summary } : {}) };
   }
 
-  private bindAgentEvents(agent: Agent, sessionId: string, runId: string): void {
+  private bindAgentEvents(
+    agent: Agent,
+    sessionId: string,
+    runId: string,
+    turnCount: () => number = () => 0,
+  ): void {
     let assistantItem: TranscriptItem | undefined;
     let pendingAssistant: AssistantMessage | undefined;
     let flushTimer: NodeJS.Timeout | undefined;
@@ -885,23 +1235,30 @@ export class UmaRuntime {
     const toolActions = new Map<string, string>();
     const flushAssistant = () => {
       if (!assistantItem || !pendingAssistant) return;
-      assistantItem = this.database.updateMessage(assistantItem.id, {
-        content: textFromMessage(pendingAssistant),
-        payload: pendingAssistant,
+      const message = pendingAssistant;
+      this.events.transaction(() => {
+        assistantItem = this.database.updateMessage(assistantItem?.id as string, {
+          content: textFromMessage(message),
+          payload: message,
+        });
+        this.events.emit(sessionId, runId, "message.delta", assistantItem);
       });
       pendingAssistant = undefined;
       flushTimer = undefined;
     };
     agent.subscribe((event: AgentEvent) => {
       if (event.type === "message_start" && event.message.role === "assistant") {
-        assistantItem = this.database.insertMessage({
-          sessionId,
-          runId,
-          role: "assistant",
-          status: "streaming",
-          content: textFromMessage(event.message),
+        assistantItem = this.events.transaction(() => {
+          const item = this.database.insertMessage({
+            sessionId,
+            runId,
+            role: "assistant",
+            status: "streaming",
+            content: textFromMessage(event.message),
+          });
+          this.events.emit(sessionId, runId, "message.started", item);
+          return item;
         });
-        this.events.emit(sessionId, runId, "message.started", assistantItem);
       } else if (event.type === "message_update" && event.message.role === "assistant" && assistantItem) {
         pendingAssistant = event.message;
         assistantItem = {
@@ -909,91 +1266,99 @@ export class UmaRuntime {
           content: textFromMessage(event.message),
           updatedAt: Date.now(),
         };
-        this.events.emit(sessionId, runId, "message.delta", assistantItem);
         flushTimer ??= setTimeout(flushAssistant, 250);
       } else if (event.type === "message_end" && event.message.role === "assistant" && assistantItem) {
+        const message = event.message;
         if (flushTimer) clearTimeout(flushTimer);
         flushTimer = undefined;
         pendingAssistant = undefined;
         const status =
-          event.message.stopReason === "error"
+          message.stopReason === "error"
             ? "error"
-            : event.message.stopReason === "aborted"
+            : message.stopReason === "aborted"
               ? "cancelled"
               : "complete";
-        const item = this.database.updateMessage(assistantItem.id, {
-          content: textFromMessage(event.message),
-          status,
-          payload: event.message,
-        });
         const session = this.database.getSession(sessionId);
-        this.database.addModelCall({
-          runId,
-          provider: session.model.provider,
-          model: session.model.id,
-          role: "default",
-          status: event.message.stopReason,
-          usage: event.message.usage,
-          ...(event.message.errorMessage ? { error: event.message.errorMessage } : {}),
+        this.events.transaction(() => {
+          const item = this.database.updateMessage(assistantItem?.id as string, {
+            content: textFromMessage(message),
+            status,
+            payload: message,
+          });
+          this.database.addModelCall({
+            runId,
+            provider: session.model.provider,
+            model: session.model.id,
+            role: "default",
+            status: message.stopReason,
+            usage: message.usage,
+            ...(message.errorMessage ? { error: message.errorMessage } : {}),
+          });
+          this.database.addAudit({
+            runId,
+            kind: "model",
+            name: `${session.model.provider}/${session.model.id}`,
+            output: { text: item.content },
+            status: message.stopReason,
+            usage: message.usage,
+            ...(message.errorMessage ? { error: message.errorMessage } : {}),
+          });
+          this.database.createCheckpoint({
+            runId,
+            phase: "model",
+            turnCount: turnCount(),
+            lastMessageSequence: item.sequence,
+            contextSummarySequence: this.database.getContextSummary(sessionId)?.throughSequence,
+            safeToResume: true,
+          });
+          this.events.emit(sessionId, runId, "message.completed", item);
         });
-        this.database.addAudit({
-          runId,
-          kind: "model",
-          name: `${session.model.provider}/${session.model.id}`,
-          output: { text: item.content },
-          status: event.message.stopReason,
-          usage: event.message.usage,
-          ...(event.message.errorMessage ? { error: event.message.errorMessage } : {}),
-        });
-        this.events.emit(sessionId, runId, "message.completed", item);
         assistantItem = undefined;
       } else if (event.type === "tool_execution_start") {
-        this.database.createToolCall({ id: event.toolCallId, runId, name: event.toolName, args: event.args });
-        const action = this.database.createRunAction({
-          runId,
-          toolCallId: event.toolCallId,
-          toolName: event.toolName,
-          toolClass: this.permissions.classify(event.toolName),
-          idempotencyKey: `${runId}:${event.toolCallId}`,
-          input: event.args,
-        });
-        toolActions.set(event.toolCallId, action.id);
-        this.database.addAudit({
-          runId,
-          kind: "tool",
-          name: event.toolName,
-          input: event.args,
-          status: "started",
-        });
-        const item = this.database.insertMessage({
-          sessionId,
-          runId,
-          role: "tool",
-          status: "streaming",
-          name: event.toolName,
-          content: JSON.stringify(event.args, null, 2),
-        });
-        toolMessages.set(event.toolCallId, item.id);
-        this.events.emit(sessionId, runId, "tool.started", {
-          item,
-          toolCallId: event.toolCallId,
-          input: event.args,
-        });
-      } else if (event.type === "tool_execution_end") {
-        this.database.completeToolCall(event.toolCallId, event.result, event.isError);
-        const actionId = toolActions.get(event.toolCallId);
-        if (actionId)
-          this.database.updateRunAction(actionId, {
-            status: event.isError ? "failed" : "completed",
-            result: event.result,
+        const created = this.events.transaction(() => {
+          this.database.createToolCall({
+            id: event.toolCallId,
+            runId,
+            name: event.toolName,
+            args: event.args,
           });
-        this.database.addAudit({
-          runId,
-          kind: "tool",
-          name: event.toolName,
-          output: event.result,
-          status: event.isError ? "error" : "completed",
+          const action =
+            this.database.getRunActionByToolCall(runId, event.toolCallId) ??
+            this.database.createRunAction({
+              runId,
+              checkpointId: this.database.getLatestCheckpoint(runId)?.id,
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              toolClass: this.permissions.classify(event.toolName),
+              idempotencyKey: `${runId}:${event.toolCallId}`,
+              input: event.args,
+            });
+          this.database.addAudit({
+            runId,
+            kind: "tool",
+            name: event.toolName,
+            input: event.args,
+            status: "started",
+          });
+          const item = this.database.insertMessage({
+            sessionId,
+            runId,
+            role: "tool",
+            status: "streaming",
+            name: event.toolName,
+            content: JSON.stringify(event.args, null, 2),
+          });
+          this.events.emit(sessionId, runId, "tool.started", {
+            item,
+            action,
+            toolCallId: event.toolCallId,
+            input: event.args,
+          });
+          return { actionId: action.id, messageId: item.id };
         });
+        toolActions.set(event.toolCallId, created.actionId);
+        toolMessages.set(event.toolCallId, created.messageId);
+      } else if (event.type === "tool_execution_end") {
         const messageId = toolMessages.get(event.toolCallId);
         if (messageId) {
           const content =
@@ -1007,14 +1372,38 @@ export class UmaRuntime {
                   timestamp: Date.now(),
                 })
               : JSON.stringify(event.result);
-          const item = this.database.updateMessage(messageId, {
-            content,
-            status: event.isError ? "error" : "complete",
-          });
-          this.events.emit(sessionId, runId, "tool.completed", {
-            item,
-            toolCallId: event.toolCallId,
-            isError: event.isError,
+          this.events.transaction(() => {
+            this.database.completeToolCall(event.toolCallId, event.result, event.isError);
+            const actionId = toolActions.get(event.toolCallId);
+            if (actionId)
+              this.database.updateRunAction(actionId, {
+                status: event.isError ? "failed" : "completed",
+                result: event.result,
+              });
+            this.database.addAudit({
+              runId,
+              kind: "tool",
+              name: event.toolName,
+              output: event.result,
+              status: event.isError ? "error" : "completed",
+            });
+            const item = this.database.updateMessage(messageId, {
+              content,
+              status: event.isError ? "error" : "complete",
+            });
+            this.database.createCheckpoint({
+              runId,
+              phase: "tool",
+              turnCount: turnCount(),
+              lastMessageSequence: item.sequence,
+              contextSummarySequence: this.database.getContextSummary(sessionId)?.throughSequence,
+              safeToResume: !event.isError,
+            });
+            this.events.emit(sessionId, runId, "tool.completed", {
+              item,
+              toolCallId: event.toolCallId,
+              isError: event.isError,
+            });
           });
         }
       } else if (event.type === "message_end" && event.message.role === "toolResult") {
@@ -1101,40 +1490,46 @@ export class UmaRuntime {
     args: unknown,
     signal: AbortSignal,
   ): Promise<boolean> {
-    const approval = this.database.createApproval({ sessionId, runId, toolCallId, toolName, args });
-    this.database.addAudit({
-      runId,
-      kind: "approval",
-      name: toolName,
-      input: { toolCallId },
-      status: "pending",
+    let waiting: Promise<boolean> | undefined;
+    this.events.transaction(() => {
+      const approval = this.database.createApproval({ sessionId, runId, toolCallId, toolName, args });
+      this.database.addAudit({
+        runId,
+        kind: "approval",
+        name: toolName,
+        input: { toolCallId },
+        status: "pending",
+      });
+      waiting = new Promise<boolean>((resolve) => {
+        const finish = (approved: boolean) => {
+          signal.removeEventListener("abort", abort);
+          resolve(approved);
+        };
+        const abort = () => {
+          const pending = this.approvals.get(approval.id);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          this.approvals.delete(approval.id);
+          this.events.transaction(() => {
+            const expired = this.database.expireApproval(approval.id);
+            this.database.addAudit({
+              runId,
+              kind: "approval",
+              name: toolName,
+              input: { toolCallId },
+              status: "expired",
+            });
+            this.events.emit(sessionId, runId, "approval.resolved", expired);
+          });
+          finish(false);
+        };
+        const timer = setTimeout(abort, this.config.runtime.approvalTimeoutMs);
+        this.approvals.set(approval.id, { resolve: finish, timer });
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+      });
+      this.events.emit(sessionId, runId, "approval.requested", approval);
     });
-    this.events.emit(sessionId, runId, "approval.requested", approval);
-    return new Promise<boolean>((resolve) => {
-      const finish = (approved: boolean) => {
-        signal.removeEventListener("abort", abort);
-        resolve(approved);
-      };
-      const abort = () => {
-        const pending = this.approvals.get(approval.id);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        this.approvals.delete(approval.id);
-        const expired = this.database.expireApproval(approval.id);
-        this.database.addAudit({
-          runId,
-          kind: "approval",
-          name: toolName,
-          input: { toolCallId },
-          status: "expired",
-        });
-        this.events.emit(sessionId, runId, "approval.resolved", expired);
-        finish(false);
-      };
-      const timer = setTimeout(abort, this.config.runtime.approvalTimeoutMs);
-      this.approvals.set(approval.id, { resolve: finish, timer });
-      signal.addEventListener("abort", abort, { once: true });
-      if (signal.aborted) abort();
-    });
+    return waiting as Promise<boolean>;
   }
 }

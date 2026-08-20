@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 3 as const;
+export const PROTOCOL_VERSION = 4 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -198,6 +198,7 @@ export const EventTypeSchema = Type.Union([
   Type.Literal("server.status"),
   Type.Literal("run.awaiting_input"),
   Type.Literal("run.resumed"),
+  Type.Literal("run.action_decided"),
   Type.Literal("task.updated"),
   Type.Literal("memory.updated"),
 ]);
@@ -324,7 +325,7 @@ export const RunActionStatusSchema = Type.Union([
   Type.Literal("completed"),
   Type.Literal("failed"),
   Type.Literal("uncertain"),
-  Type.Literal("confirmed"),
+  Type.Literal("acknowledged"),
   Type.Literal("rejected"),
 ]);
 
@@ -344,3 +345,69 @@ export const RunActionSchema = Strict({
   error: Type.Optional(Type.String()),
 });
 export type RunAction = Static<typeof RunActionSchema>;
+
+export const RunCheckpointSchema = Strict({
+  id: Id,
+  runId: Id,
+  checkpointNo: Type.Integer({ minimum: 1 }),
+  phase: Type.Union([
+    Type.Literal("preflight"),
+    Type.Literal("plan"),
+    Type.Literal("step"),
+    Type.Literal("model"),
+    Type.Literal("tool"),
+    Type.Literal("verify"),
+  ]),
+  planStepId: Type.Optional(Id),
+  turnCount: Type.Integer({ minimum: 0, maximum: 400 }),
+  lastMessageSequence: Type.Integer({ minimum: 0 }),
+  contextSummarySequence: Type.Optional(Type.Integer({ minimum: 0 })),
+  safeToResume: Type.Boolean(),
+  createdAt: Timestamp,
+});
+export type RunCheckpoint = Static<typeof RunCheckpointSchema>;
+
+export const RunActionDecisionSchema = Strict({
+  decision: Type.Union([Type.Literal("approve"), Type.Literal("reject"), Type.Literal("acknowledge")]),
+});
+export type RunActionDecision = Static<typeof RunActionDecisionSchema>;
+
+export const SessionHistoryPageSchema = Strict({
+  sessionId: Id,
+  items: Type.Array(TranscriptItemSchema),
+  oldestSequence: Type.Integer({ minimum: 0 }),
+  hasMore: Type.Boolean(),
+});
+export type SessionHistoryPage = Static<typeof SessionHistoryPageSchema>;
+
+export interface AdapterHealth {
+  status: "ok" | "degraded" | "stopped";
+  connected: boolean;
+  lastInboundAt?: number;
+  lastError?: string;
+}
+
+export interface ExternalConversation {
+  adapter: string;
+  tenantId: string;
+  conversationId: string;
+  threadId?: string;
+  kind: "direct" | "group";
+}
+
+export interface ChannelInboundMessage {
+  conversation: ExternalConversation;
+  externalMessageId: string;
+  senderId?: string;
+  text: string;
+  attachmentIds?: string[];
+}
+
+export interface ChannelAdapter {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  health(): AdapterHealth;
+  mapConversation(input: ExternalConversation): Promise<string>;
+  handleInbound(input: ChannelInboundMessage): Promise<void>;
+  renderEvent(event: AgentEventEnvelope): Promise<void>;
+}

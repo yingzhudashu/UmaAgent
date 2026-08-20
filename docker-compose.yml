@@ -12,5 +12,31 @@ services:
       - uma-state:/data/state
       - ./workspace:/data/workspace
 
+  feishu-adapter:
+    profiles: ["feishu"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.feishu
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3220:3220"
+    environment:
+      FEISHU_APP_ID: ${FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+      FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN}
+      FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY}
+      UMA_SERVER_URL: http://uma:3210
+      UMA_TOKEN: ${UMA_AUTH_TOKEN}
+      FEISHU_STATE_DIR: /data/feishu
+      FEISHU_HOST: 0.0.0.0
+      FEISHU_PORT: 3220
+    volumes:
+      - feishu-state:/data/feishu
+    depends_on:
+      uma:
+        condition: service_healthy
+
 volumes:
   uma-state:
+  feishu-state:

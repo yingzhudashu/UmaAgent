@@ -131,7 +131,7 @@ export async function safeFetch(raw: string, signal?: AbortSignal): Promise<stri
         redirect: "manual",
         dispatcher,
         ...(signal ? { signal } : {}),
-        headers: { "user-agent": "UmaAgent/0.4" },
+        headers: { "user-agent": "UmaAgent/0.5" },
       });
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
@@ -304,7 +304,7 @@ export function createBuiltinTools(input: {
       label: "Fetch URL",
       description: "Fetch public HTTP(S) text. Private network destinations are blocked.",
       parameters: fetchSchema,
-      executionMode: "parallel",
+      executionMode: "sequential",
       async execute(_id, params, signal) {
         return result(await safeFetch(params.url, signal), { url: params.url });
       },
