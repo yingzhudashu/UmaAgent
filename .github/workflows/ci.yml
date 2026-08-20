@@ -15,7 +15,9 @@ jobs:
       - run: npm run build
       - run: docker build -t uma-agent:ci .
       - run: docker build -f docker/Dockerfile.feishu -t uma-agent-feishu:ci .
+      - run: docker build -f docker/Dockerfile.browser -t uma-agent-browser:ci .
       - run: npm run check
       - run: npm test
+      - run: npm run test:coverage
       - run: npx playwright install --with-deps chromium
       - run: npm run test:web:e2e

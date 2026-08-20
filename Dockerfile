@@ -37,5 +37,5 @@ RUN mkdir -p /data/state /data/workspace
 VOLUME ["/data/state", "/data/workspace"]
 EXPOSE 3210
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["node", "-e", "fetch('http://127.0.0.1:3210/api/v5/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+  CMD ["node", "-e", "fetch('http://127.0.0.1:3210/api/v6/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
 CMD ["node", "apps/server/dist/main.js", "--config=uma.config.json"]

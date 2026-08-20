@@ -294,6 +294,54 @@ async function taskCommand(): Promise<void> {
   else throw new Error("uma task start <prompt>|list|show <id>|cancel <id>");
 }
 
+async function scheduleCommand(): Promise<void> {
+  const action = positionals[0] ?? "list";
+  if (action === "list") {
+    for (const item of await client.listSchedules())
+      console.log(
+        `${item.id}\t${item.enabled ? "enabled" : "disabled"}\t${item.schedule.kind}\t${item.nextRunAt ?? "-"}\t${item.name}`,
+      );
+    return;
+  }
+  const id = positionals[1];
+  if (action === "run" && id) {
+    console.log(JSON.stringify(await client.runSchedule(id), null, 2));
+    return;
+  }
+  if (action === "history" && id) {
+    console.log(JSON.stringify(await client.listScheduleRuns(id), null, 2));
+    return;
+  }
+  if (action === "delete" && id) {
+    await client.deleteSchedule(id);
+    return;
+  }
+  if ((action === "enable" || action === "disable") && id) {
+    console.log(JSON.stringify(await client.updateSchedule(id, { enabled: action === "enable" }), null, 2));
+    return;
+  }
+  if (action === "create") {
+    const name = valueAfter("--name")?.trim();
+    const prompt = valueAfter("--prompt")?.trim();
+    if (!name || !prompt) throw new Error("schedule create requires --name= and --prompt=");
+    const once = valueAfter("--once");
+    const interval = valueAfter("--interval");
+    const cron = valueAfter("--cron");
+    const schedule = once
+      ? { kind: "once" as const, at: Date.parse(once) }
+      : interval
+        ? { kind: "interval" as const, everyMs: Number(interval) }
+        : cron
+          ? { kind: "cron" as const, expression: cron, timezone: valueAfter("--timezone") ?? "UTC" }
+          : undefined;
+    if (!schedule || (schedule.kind === "once" && !Number.isSafeInteger(schedule.at)))
+      throw new Error("schedule create requires --once=ISO, --interval=MS, or --cron=EXPR");
+    console.log(JSON.stringify(await client.createSchedule({ name, prompt, schedule }), null, 2));
+    return;
+  }
+  throw new Error("uma schedule list|create|run|history|enable|disable|delete");
+}
+
 async function memoryCommand(): Promise<void> {
   const action = positionals[0] ?? "list";
   if (action === "list" || action === "review") {
@@ -477,13 +525,14 @@ async function main(): Promise<void> {
   else if (command === "doctor") await doctorCommand();
   else if (command === "status") await doctorCommand();
   else if (command === "task") await taskCommand();
+  else if (command === "schedule") await scheduleCommand();
   else if (command === "memory") await memoryCommand();
   else if (command === "audit") await auditCommand();
   else if (command === "sync") await syncCommand();
   else if (command === "channel") await doctorCommand();
   else
     console.log(
-      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel\numa memory list|review|accept|reject\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa doctor",
+      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa doctor",
     );
   client.close();
 }

@@ -1,27 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  Agent,
-  type AgentEvent,
-  type AgentMessage,
-  type AgentTool,
-  estimateContextTokens,
-  generateSummary,
-  type ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
+import { Agent, type AgentEvent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AssistantMessage,
   contentText,
   type ImageContent,
   type Message,
-  type Model,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import type {
   Approval,
   Attachment,
   BackgroundTask,
+  CreateScheduledTaskRequest,
   CreateSessionRequest,
   ModelRef,
   Run,
@@ -33,120 +25,47 @@ import type {
   SessionSnapshot,
   SkillSummary,
   TranscriptItem,
+  UpdateScheduledTaskRequest,
 } from "@uma-agent/protocol";
-import Type from "typebox";
 import Value from "typebox/value";
+import { ContextManager } from "./context-manager.js";
 import { UmaDatabase } from "./database.js";
 import { EventHub, type EventListener } from "./events.js";
 import { KnowledgeService } from "./knowledge.js";
 import { McpManager } from "./mcp.js";
 import { ModelRegistry } from "./models.js";
 import { PermissionPolicy } from "./permissions.js";
+import {
+  decisionFrom,
+  extractJson,
+  injectRuntimeFault,
+  isSecretLike,
+  isTransientProviderError,
+  MemoryExtractionSchema,
+  type PendingApproval,
+  Semaphore,
+  TaskClassificationSchema,
+  textFromMessage,
+  VerificationSchema,
+} from "./runtime-support.js";
+import { SchedulerService } from "./scheduler.js";
+import { SearchService } from "./search.js";
 import { SkillRegistry } from "./skills.js";
 import { StateLock } from "./state-lock.js";
 import { createBuiltinTools } from "./tools.js";
-import type {
-  ContextSummary,
-  PreflightDecision,
-  RuntimeHealth,
-  StoredAgentMessage,
-  UmaConfig,
-} from "./types.js";
+import type { PreflightDecision, RuntimeHealth, UmaConfig } from "./types.js";
 import { WorkspacePolicy } from "./workspace.js";
-
-class Semaphore {
-  private active = 0;
-  private waiting: Array<() => void> = [];
-  constructor(private readonly limit: number) {}
-  async acquire(): Promise<() => void> {
-    if (this.active >= this.limit) await new Promise<void>((resolve) => this.waiting.push(resolve));
-    this.active++;
-    return () => {
-      this.active--;
-      this.waiting.shift()?.();
-    };
-  }
-  count(): number {
-    return this.active;
-  }
-}
-
-type PendingApproval = { resolve: (approved: boolean) => void; timer: NodeJS.Timeout };
-
-function textFromMessage(message: AgentMessage): string {
-  if (message.role === "assistant") return contentText(message.content);
-  if (message.role === "user")
-    return typeof message.content === "string"
-      ? message.content
-      : message.content
-          .filter((item) => item.type === "text")
-          .map((item) => item.text)
-          .join("\n");
-  if (message.role === "toolResult")
-    return message.content
-      .filter((item) => item.type === "text")
-      .map((item) => item.text)
-      .join("\n");
-  return "";
-}
-
-function extractJson(text: string): unknown {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  return JSON.parse((fenced ?? text).trim());
-}
-
-const TaskClassificationSchema = Type.Object(
-  { taskClass: Type.Union([Type.Literal("simple"), Type.Literal("standard"), Type.Literal("complex")]) },
-  { additionalProperties: false },
-);
-const PreflightDecisionSchema = Type.Object(
-  {
-    taskClass: Type.Union([Type.Literal("simple"), Type.Literal("standard"), Type.Literal("complex")]),
-    route: Type.Union([Type.Literal("direct"), Type.Literal("clarify"), Type.Literal("plan")]),
-    goal: Type.String({ minLength: 1 }),
-    reasoningSummary: Type.String(),
-    successCriteria: Type.Array(Type.String({ minLength: 1 })),
-    questions: Type.Array(Type.String({ minLength: 1 })),
-    steps: Type.Array(Type.String({ minLength: 1 })),
-  },
-  { additionalProperties: false },
-);
-const VerificationSchema = Type.Object(
-  { accepted: Type.Boolean(), feedback: Type.String() },
-  { additionalProperties: false },
-);
-const MemoryExtractionSchema = Type.Array(
-  Type.Object(
-    {
-      content: Type.String({ minLength: 1 }),
-      confidence: Type.Number({ minimum: 0, maximum: 1 }),
-      scope: Type.Union([Type.Literal("global"), Type.Literal("session")]),
-    },
-    { additionalProperties: false },
-  ),
-);
-
-function decisionFrom(value: unknown): PreflightDecision {
-  if (!Value.Check(PreflightDecisionSchema, value)) throw new Error("Preflight response is invalid");
-  return value;
-}
-
-function isSecretLike(value: string): boolean {
-  return /(api[_-]?key|bearer\s+|password|secret|token\s*[:=]|-----BEGIN)/i.test(value);
-}
-
-function isTransientProviderError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /(429|rate.?limit|5\d\d|network|timeout|timed out|econn|fetch failed|socket hang up)/i.test(message);
-}
 
 export class UmaRuntime {
   readonly database: UmaDatabase;
   readonly knowledge: KnowledgeService;
   readonly models: ModelRegistry;
   readonly skills: SkillRegistry;
+  readonly scheduler: SchedulerService;
+  readonly search = new SearchService();
   readonly mcp = new McpManager();
   readonly workspacePolicy: WorkspacePolicy;
+  private readonly contextManager: ContextManager;
   private readonly events: EventHub;
   private readonly semaphore: Semaphore;
   private readonly queueTails = new Map<string, Promise<void>>();
@@ -174,6 +93,8 @@ export class UmaRuntime {
       config.server.stateDir,
     );
     this.models = new ModelRegistry(config);
+    this.contextManager = new ContextManager(this.database, this.models);
+    this.scheduler = new SchedulerService(this.database, this);
     this.skills = new SkillRegistry(config.skillsDirs);
     this.workspacePolicy = new WorkspacePolicy(config.server.workspaceRoots);
     this.events = new EventHub(this.database);
@@ -186,6 +107,7 @@ export class UmaRuntime {
     await this.workspacePolicy.initialize();
     await this.skills.refresh();
     await this.mcp.connect(this.config.mcpServers, this.config.runtime.toolTimeoutMs);
+    this.scheduler.start();
     this.started = true;
   }
 
@@ -196,6 +118,7 @@ export class UmaRuntime {
 
   private async stopInternal(): Promise<void> {
     this.stopping = true;
+    this.scheduler.stop();
     for (const id of [...this.approvals.keys()]) this.resolveApproval(id, false);
     for (const controller of this.controllers.values()) controller.abort();
     await Promise.allSettled(this.queueTails.values());
@@ -222,6 +145,24 @@ export class UmaRuntime {
   }
   listTasks(): BackgroundTask[] {
     return this.database.listBackgroundTasks();
+  }
+  listScheduledTasks() {
+    return this.scheduler.list();
+  }
+  createScheduledTask(input: CreateScheduledTaskRequest) {
+    return this.scheduler.create(input);
+  }
+  updateScheduledTask(id: string, input: UpdateScheduledTaskRequest) {
+    return this.scheduler.update(id, input);
+  }
+  deleteScheduledTask(id: string): void {
+    this.scheduler.delete(id);
+  }
+  runScheduledTask(id: string) {
+    return this.scheduler.runNow(id);
+  }
+  listScheduledTaskRuns(id: string) {
+    return this.scheduler.runs(id);
   }
   listSessionEvents(sessionId: string, afterSequence: number, limit?: number) {
     return this.database.listEvents(sessionId, afterSequence, limit);
@@ -317,7 +258,7 @@ export class UmaRuntime {
 
   async compactSession(sessionId: string): Promise<{ throughSequence: number; content: string }> {
     const session = this.database.getSession(sessionId);
-    const result = await this.compactContext(
+    const result = await this.contextManager.compact(
       session,
       this.database.listAgentMessages(sessionId),
       new AbortController().signal,
@@ -329,11 +270,15 @@ export class UmaRuntime {
   getTask(id: string): BackgroundTask {
     return this.database.getBackgroundTask(id);
   }
-  async createTask(prompt: string, parentSessionId?: string): Promise<BackgroundTask> {
+  async createTask(
+    prompt: string,
+    parentSessionId?: string,
+    modeOverride?: Session["mode"],
+  ): Promise<BackgroundTask> {
     if (!prompt.trim()) throw new Error("Task prompt is required");
     const parent = parentSessionId ? this.database.getSession(parentSessionId) : undefined;
     const session = await this.createSession({
-      mode: parent?.mode ?? "assistant",
+      mode: parent?.mode ?? modeOverride ?? "assistant",
       ...(parent?.workspace ? { workspace: parent.workspace } : {}),
       ...(parent?.model ? { model: parent.model } : {}),
     });
@@ -720,6 +665,7 @@ export class UmaRuntime {
         model: model.id,
         role,
       });
+      injectRuntimeFault("model.started");
       try {
         const response = await this.models.models.completeSimple(
           model,
@@ -736,6 +682,7 @@ export class UmaRuntime {
           usage: response.usage,
           ...(response.errorMessage ? { error: response.errorMessage } : {}),
         });
+        injectRuntimeFault("model.completed");
         if (!retryable || attempt === 2) return response;
         lastError = new Error(response.errorMessage ?? "Provider request failed");
       } catch (error) {
@@ -933,6 +880,7 @@ export class UmaRuntime {
         });
         this.events.emit(session.id, runId, "run.updated", routed);
       });
+      injectRuntimeFault("preflight.completed");
       if (decision.route === "clarify") {
         const content = decision.questions.map((question, index) => `${index + 1}. ${question}`).join("\n");
         this.events.transaction(() => {
@@ -987,6 +935,7 @@ export class UmaRuntime {
           });
           this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
         });
+        injectRuntimeFault("verify.completed");
       }
       this.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
       const budget = { turns: this.database.getRun(runId).turnCount };
@@ -1189,10 +1138,64 @@ export class UmaRuntime {
         skills: this.skills,
         workspacePolicy: this.workspacePolicy,
         toolTimeoutMs: this.config.runtime.toolTimeoutMs,
+        search: this.search,
+        scheduleManage: (params) => this.manageScheduleTool(params),
         memoryWrite: (scope, content) => this.createMemoryFact(session.id, scope, content),
       }),
       ...(session.mode === "workspace" ? this.mcp.tools() : []),
     ];
+  }
+
+  private manageScheduleTool(params: Record<string, unknown>): unknown {
+    const operation = String(params.operation ?? "");
+    if (operation === "list") return this.listScheduledTasks();
+    const id = typeof params.id === "string" ? params.id : undefined;
+    if (operation === "run") {
+      if (!id) throw new Error("schedule_manage run requires id");
+      return this.runScheduledTask(id);
+    }
+    if (operation === "delete") {
+      if (!id) throw new Error("schedule_manage delete requires id");
+      this.deleteScheduledTask(id);
+      return { deleted: id };
+    }
+    const schedule = (() => {
+      if (params.kind === "once" && typeof params.at === "number")
+        return { kind: "once" as const, at: params.at };
+      if (params.kind === "interval" && typeof params.everyMs === "number")
+        return { kind: "interval" as const, everyMs: params.everyMs };
+      if (
+        params.kind === "cron" &&
+        typeof params.expression === "string" &&
+        typeof params.timezone === "string"
+      )
+        return {
+          kind: "cron" as const,
+          expression: params.expression,
+          timezone: params.timezone,
+        };
+      return undefined;
+    })();
+    if (operation === "create") {
+      if (typeof params.name !== "string" || typeof params.prompt !== "string" || !schedule)
+        throw new Error("schedule_manage create requires name, prompt, and a complete schedule");
+      return this.createScheduledTask({
+        name: params.name,
+        prompt: params.prompt,
+        schedule,
+        ...(typeof params.enabled === "boolean" ? { enabled: params.enabled } : {}),
+      });
+    }
+    if (operation === "update") {
+      if (!id) throw new Error("schedule_manage update requires id");
+      return this.updateScheduledTask(id, {
+        ...(typeof params.name === "string" ? { name: params.name } : {}),
+        ...(typeof params.prompt === "string" ? { prompt: params.prompt } : {}),
+        ...(typeof params.enabled === "boolean" ? { enabled: params.enabled } : {}),
+        ...(schedule ? { schedule } : {}),
+      });
+    }
+    throw new Error(`Unsupported schedule operation: ${operation}`);
   }
 
   private async executePreparedAction(run: Run, action: RunAction): Promise<RunAction> {
@@ -1390,7 +1393,7 @@ export class UmaRuntime {
   ): Promise<void> {
     const userMessage = this.database.getMessage(input.messageId);
     const frozenModel = this.models.fromSnapshot(this.database.getRun(runId).model);
-    const historyState = await this.compactContext(
+    const historyState = await this.contextManager.compact(
       session,
       this.database.listAgentMessages(session.id, userMessage.sequence),
       signal,
@@ -1466,6 +1469,7 @@ export class UmaRuntime {
             this.events.emit(session.id, runId, "run.action_prepared", prepared);
             return prepared;
           });
+        injectRuntimeFault("tool.prepared");
         if (permission.requiresApproval) {
           const approved = await this.requestApproval(
             session.id,
@@ -1497,6 +1501,7 @@ export class UmaRuntime {
           });
           if (running.changed) this.events.emit(session.id, runId, "run.action_prepared", running.action);
         });
+        injectRuntimeFault("tool.started");
         return undefined;
       },
     });
@@ -1513,59 +1518,6 @@ export class UmaRuntime {
     } finally {
       signal.removeEventListener("abort", abort);
     }
-  }
-
-  private async compactContext(
-    session: Session,
-    entries: StoredAgentMessage[],
-    signal: AbortSignal,
-    force = false,
-    modelOverride?: Model<UmaConfig["models"][number]["api"]>,
-  ): Promise<{ messages: AgentMessage[]; summary?: ContextSummary }> {
-    let summary = this.database.getContextSummary(session.id);
-    let pending = entries.filter((entry) => entry.sequence > (summary?.throughSequence ?? 0));
-    const summaryMessage: AgentMessage[] = summary
-      ? [{ role: "user", content: `Conversation summary:\n${summary.content}`, timestamp: summary.updatedAt }]
-      : [];
-    const model = modelOverride ?? this.models.get(session.model);
-    const contextTokens = estimateContextTokens([
-      ...summaryMessage,
-      ...pending.map((entry) => entry.message),
-    ]).tokens;
-    if ((!force && contextTokens < model.contextWindow * 0.65) || pending.length < 6) {
-      return { messages: pending.map((entry) => entry.message), ...(summary ? { summary } : {}) };
-    }
-
-    const keepRecentTokens = Math.min(20_000, Math.floor(model.contextWindow * 0.2));
-    let retainedTokens = 0;
-    let cut = pending.length;
-    while (cut > 0 && retainedTokens < keepRecentTokens) {
-      cut--;
-      const entry = pending[cut];
-      if (entry) retainedTokens += estimateContextTokens([entry.message]).tokens;
-    }
-    if (cut < 2) return { messages: pending.map((entry) => entry.message), ...(summary ? { summary } : {}) };
-    const toSummarize = pending.slice(0, cut);
-    try {
-      const generated = await generateSummary(
-        toSummarize.map((entry) => entry.message),
-        this.models.models,
-        model,
-        Math.min(8_192, Math.max(1_024, Math.floor(model.contextWindow * 0.05))),
-        signal,
-        "Preserve goals, decisions, constraints, file changes, tool outcomes, and unresolved work.",
-        summary?.content,
-        session.thinkingLevel,
-      );
-      if (generated.ok) {
-        const last = toSummarize.at(-1);
-        if (last) summary = this.database.putContextSummary(session.id, last.sequence, generated.value);
-        pending = pending.slice(cut);
-      }
-    } catch {
-      // Context compaction is advisory; the normal model call will report a hard context failure.
-    }
-    return { messages: pending.map((entry) => entry.message), ...(summary ? { summary } : {}) };
   }
 
   private bindAgentEvents(
@@ -1605,6 +1557,7 @@ export class UmaRuntime {
           }),
           startedAt: Date.now(),
         };
+        injectRuntimeFault("model.started");
       } else if (event.type === "message_start" && event.message.role === "assistant") {
         assistantItem = this.events.transaction(() => {
           const item = this.database.insertMessage({
@@ -1669,6 +1622,7 @@ export class UmaRuntime {
           });
           this.events.emit(sessionId, runId, "message.completed", item);
         });
+        injectRuntimeFault("model.completed");
         activeModelCall = undefined;
         assistantItem = undefined;
       } else if (event.type === "tool_execution_start") {
@@ -1762,6 +1716,7 @@ export class UmaRuntime {
               isError: event.isError,
             });
           });
+          injectRuntimeFault("tool.completed");
         }
       } else if (event.type === "message_end" && event.message.role === "toolResult") {
         const messageId = toolMessages.get(event.message.toolCallId);

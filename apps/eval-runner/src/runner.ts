@@ -1,0 +1,63 @@
+import type { Run, SessionSnapshot } from "@uma-agent/protocol";
+
+export interface EvalCase {
+  name: string;
+  prompt: string;
+  mode?: "auto" | "direct" | "plan";
+  expectedStatus: Run["status"];
+  expectedIncludes?: string;
+}
+
+export interface EvalClient {
+  createSession(input: { mode: "assistant"; title: string }): Promise<{ id: string }>;
+  sendMessage(
+    sessionId: string,
+    text: string,
+    input: { mode?: NonNullable<EvalCase["mode"]> },
+  ): Promise<{ runId: string }>;
+  waitForRun(runId: string, options: { pollMs: number }): Promise<Run>;
+  getSession(id: string): Promise<SessionSnapshot>;
+}
+
+export interface EvalResult {
+  name: string;
+  passed: boolean;
+  runId?: string;
+  status?: Run["status"];
+  error?: string;
+}
+
+export async function evaluateSuite(client: EvalClient, cases: EvalCase[]): Promise<EvalResult[]> {
+  const results: EvalResult[] = [];
+  for (const item of cases) {
+    try {
+      const session = await client.createSession({ mode: "assistant", title: `Eval: ${item.name}` });
+      const accepted = await client.sendMessage(session.id, item.prompt, {
+        ...(item.mode ? { mode: item.mode } : {}),
+      });
+      const run = await client.waitForRun(accepted.runId, { pollMs: 50 });
+      const snapshot = await client.getSession(session.id);
+      const output = snapshot.transcript
+        .filter((entry) => entry.runId === run.id && entry.role === "assistant")
+        .map((entry) => entry.content)
+        .join("\n");
+      const passed =
+        run.status === item.expectedStatus &&
+        (item.expectedIncludes === undefined || output.includes(item.expectedIncludes));
+      results.push({
+        name: item.name,
+        passed,
+        runId: run.id,
+        status: run.status,
+        ...(!passed ? { error: "Observed result did not match the expected public outcome" } : {}),
+      });
+    } catch (error) {
+      results.push({
+        name: item.name,
+        passed: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return results;
+}

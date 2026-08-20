@@ -8,6 +8,8 @@
     { "path": "apps/server" },
     { "path": "apps/cli" },
     { "path": "apps/web" },
-    { "path": "apps/feishu-adapter" }
+    { "path": "apps/feishu-adapter" },
+    { "path": "apps/browser-worker" },
+    { "path": "apps/eval-runner" }
   ]
 }

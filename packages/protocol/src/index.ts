@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 5 as const;
+export const PROTOCOL_VERSION = 6 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -221,9 +221,25 @@ export const KnowledgeSourceSchema = Strict({
   name: Type.String({ minLength: 1 }),
   path: Type.String({ minLength: 1 }),
   documentCount: Type.Integer({ minimum: 0 }),
+  status: Type.Union([
+    Type.Literal("queued"),
+    Type.Literal("parsing"),
+    Type.Literal("indexed"),
+    Type.Literal("failed"),
+  ]),
+  error: Type.Optional(Type.String()),
   createdAt: Timestamp,
+  updatedAt: Timestamp,
 });
 export type KnowledgeSource = Static<typeof KnowledgeSourceSchema>;
+
+export const SearchCitationSchema = Strict({
+  title: Type.String({ minLength: 1 }),
+  url: Type.String({ minLength: 1 }),
+  snippet: Type.String(),
+  source: Type.Union([Type.Literal("tavily"), Type.Literal("stackexchange")]),
+});
+export type SearchCitation = Static<typeof SearchCitationSchema>;
 
 export const EventTypeSchema = Type.Union([
   Type.Literal("sync.started"),
@@ -245,6 +261,8 @@ export const EventTypeSchema = Type.Union([
   Type.Literal("run.action_decided"),
   Type.Literal("task.updated"),
   Type.Literal("memory.updated"),
+  Type.Literal("schedule.updated"),
+  Type.Literal("knowledge.updated"),
 ]);
 export type AgentEventType = Static<typeof EventTypeSchema>;
 
@@ -340,6 +358,86 @@ export const BackgroundTaskSchema = Strict({
   updatedAt: Timestamp,
 });
 export type BackgroundTask = Static<typeof BackgroundTaskSchema>;
+
+export const ScheduleDefinitionSchema = Type.Union([
+  Strict({ kind: Type.Literal("once"), at: Timestamp }),
+  Strict({ kind: Type.Literal("interval"), everyMs: Type.Integer({ minimum: 60_000 }) }),
+  Strict({
+    kind: Type.Literal("cron"),
+    expression: Type.String({ minLength: 1, maxLength: 200 }),
+    timezone: Type.String({ minLength: 1, maxLength: 100 }),
+  }),
+]);
+export type ScheduleDefinition = Static<typeof ScheduleDefinitionSchema>;
+
+export const ScheduledTaskSchema = Strict({
+  id: Id,
+  name: Type.String({ minLength: 1, maxLength: 200 }),
+  prompt: Type.String({ minLength: 1, maxLength: 1_000_000 }),
+  sessionMode: SessionModeSchema,
+  schedule: ScheduleDefinitionSchema,
+  enabled: Type.Boolean(),
+  nextRunAt: Type.Optional(Timestamp),
+  lastRunAt: Type.Optional(Timestamp),
+  createdAt: Timestamp,
+  updatedAt: Timestamp,
+});
+export type ScheduledTask = Static<typeof ScheduledTaskSchema>;
+
+export const CreateScheduledTaskRequestSchema = Strict({
+  name: Type.String({ minLength: 1, maxLength: 200 }),
+  prompt: Type.String({ minLength: 1, maxLength: 1_000_000 }),
+  sessionMode: Type.Optional(SessionModeSchema),
+  schedule: ScheduleDefinitionSchema,
+  enabled: Type.Optional(Type.Boolean()),
+});
+export type CreateScheduledTaskRequest = Static<typeof CreateScheduledTaskRequestSchema>;
+
+export const UpdateScheduledTaskRequestSchema = Strict({
+  name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+  prompt: Type.Optional(Type.String({ minLength: 1, maxLength: 1_000_000 })),
+  sessionMode: Type.Optional(SessionModeSchema),
+  schedule: Type.Optional(ScheduleDefinitionSchema),
+  enabled: Type.Optional(Type.Boolean()),
+});
+export type UpdateScheduledTaskRequest = Static<typeof UpdateScheduledTaskRequestSchema>;
+
+export const ScheduledTaskRunSchema = Strict({
+  id: Id,
+  scheduledTaskId: Id,
+  backgroundTaskId: Type.Optional(Id),
+  status: BackgroundTaskStatusSchema,
+  scheduledFor: Timestamp,
+  startedAt: Type.Optional(Timestamp),
+  completedAt: Type.Optional(Timestamp),
+  error: Type.Optional(Type.String()),
+});
+export type ScheduledTaskRun = Static<typeof ScheduledTaskRunSchema>;
+
+export const OperationsReportSchema = Strict({
+  from: Timestamp,
+  to: Timestamp,
+  runs: Strict({
+    total: Type.Integer({ minimum: 0 }),
+    completed: Type.Integer({ minimum: 0 }),
+    failed: Type.Integer({ minimum: 0 }),
+    cancelled: Type.Integer({ minimum: 0 }),
+    interrupted: Type.Integer({ minimum: 0 }),
+  }),
+  model: Strict({
+    calls: Type.Integer({ minimum: 0 }),
+    failed: Type.Integer({ minimum: 0 }),
+    totalTokens: Type.Integer({ minimum: 0 }),
+    averageDurationMs: Type.Number({ minimum: 0 }),
+  }),
+  tools: Strict({
+    calls: Type.Integer({ minimum: 0 }),
+    failed: Type.Integer({ minimum: 0 }),
+  }),
+  approvals: Strict({ requested: Type.Integer({ minimum: 0 }), denied: Type.Integer({ minimum: 0 }) }),
+  recoveries: Type.Integer({ minimum: 0 }),
+});
+export type OperationsReport = Static<typeof OperationsReportSchema>;
 
 export const MemoryFactSchema = Strict({
   id: Id,

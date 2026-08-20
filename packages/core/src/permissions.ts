@@ -1,6 +1,14 @@
 import type { SessionMode } from "@uma-agent/protocol";
 
-export type ToolClass = "read" | "write" | "shell" | "http_get" | "attachment_read" | "memory_write" | "mcp";
+export type ToolClass =
+  | "read"
+  | "write"
+  | "shell"
+  | "http_get"
+  | "attachment_read"
+  | "memory_write"
+  | "schedule"
+  | "mcp";
 
 export interface PermissionDecision {
   allowed: boolean;
@@ -8,7 +16,15 @@ export interface PermissionDecision {
   reason: string;
 }
 
-const readTools = new Set(["read", "list", "search", "memory_search", "knowledge_search", "skill_read"]);
+const readTools = new Set([
+  "read",
+  "list",
+  "search",
+  "memory_search",
+  "knowledge_search",
+  "skill_read",
+  "web_search",
+]);
 const writeTools = new Set(["write", "edit"]);
 
 export class PermissionPolicy {
@@ -19,6 +35,7 @@ export class PermissionPolicy {
     if (toolName === "http_get") return "http_get";
     if (toolName === "attachment_read") return "attachment_read";
     if (toolName === "memory_write") return "memory_write";
+    if (toolName === "schedule_manage") return "schedule";
     return "mcp";
   }
 
@@ -33,11 +50,13 @@ export class PermissionPolicy {
         "skill_read",
         "attachment_read",
         "http_get",
+        "web_search",
+        "schedule_manage",
       ].includes(toolName)
     ) {
       return { allowed: false, requiresApproval: false, reason: "Tool is unavailable in assistant sessions" };
     }
-    if (kind === "shell" || kind === "mcp" || kind === "memory_write") {
+    if (kind === "shell" || kind === "mcp" || kind === "memory_write" || kind === "schedule") {
       return {
         allowed: true,
         requiresApproval: true,
@@ -46,7 +65,9 @@ export class PermissionPolicy {
             ? "Shell execution always requires approval"
             : kind === "memory_write"
               ? "Explicit memory writes require approval"
-              : "MCP tools require approval",
+              : kind === "schedule"
+                ? "Schedule changes always require approval"
+                : "MCP tools require approval",
       };
     }
     return { allowed: true, requiresApproval: false, reason: "Allowed by session policy" };

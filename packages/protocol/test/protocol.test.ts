@@ -2,6 +2,7 @@ import Value from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentEventEnvelopeSchema,
+  CreateScheduledTaskRequestSchema,
   CreateSessionRequestSchema,
   RunActionDecisionSchema,
   SendMessageRequestSchema,
@@ -32,10 +33,27 @@ describe("protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts only the v5 Action decisions", () => {
+  it("accepts only the v6 Action decisions", () => {
     for (const decision of ["approve", "reject", "acknowledge"])
       expect(Value.Check(RunActionDecisionSchema, { decision })).toBe(true);
     expect(Value.Check(RunActionDecisionSchema, { decision: "confirm" })).toBe(false);
     expect(Value.Check(RunActionDecisionSchema, { decision: "approve", extra: true })).toBe(false);
+  });
+
+  it("validates persistent schedule definitions", () => {
+    expect(
+      Value.Check(CreateScheduledTaskRequestSchema, {
+        name: "daily",
+        prompt: "summarize",
+        schedule: { kind: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(CreateScheduledTaskRequestSchema, {
+        name: "too-fast",
+        prompt: "run",
+        schedule: { kind: "interval", everyMs: 1000 },
+      }),
+    ).toBe(false);
   });
 });

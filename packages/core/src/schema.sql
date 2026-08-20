@@ -215,7 +215,10 @@ CREATE TABLE knowledge_sources (
   name TEXT NOT NULL,
   path TEXT NOT NULL UNIQUE,
   document_count INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  status TEXT NOT NULL CHECK (status IN ('queued','parsing','indexed','failed')),
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 CREATE TABLE knowledge_chunks (
   id TEXT PRIMARY KEY,
@@ -226,10 +229,36 @@ CREATE TABLE knowledge_chunks (
 );
 CREATE VIRTUAL TABLE knowledge_fts USING fts5(id UNINDEXED, source_id UNINDEXED, file_path UNINDEXED, content, tokenize='trigram');
 
+CREATE TABLE scheduled_tasks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  session_mode TEXT NOT NULL CHECK (session_mode IN ('workspace','assistant')),
+  schedule_json TEXT NOT NULL,
+  enabled INTEGER NOT NULL,
+  next_run_at INTEGER,
+  last_run_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX scheduled_tasks_due ON scheduled_tasks(enabled,next_run_at);
+
+CREATE TABLE scheduled_task_runs (
+  id TEXT PRIMARY KEY,
+  scheduled_task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+  background_task_id TEXT REFERENCES background_tasks(id) ON DELETE SET NULL,
+  status TEXT NOT NULL,
+  scheduled_for INTEGER NOT NULL,
+  started_at INTEGER,
+  completed_at INTEGER,
+  error TEXT
+);
+CREATE INDEX scheduled_task_runs_task_time ON scheduled_task_runs(scheduled_task_id,scheduled_for DESC);
+
 CREATE TABLE web_sessions (
   id_hash TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
 
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;

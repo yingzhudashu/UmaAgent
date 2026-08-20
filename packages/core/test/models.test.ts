@@ -62,4 +62,31 @@ describe("ModelRegistry snapshots", () => {
       input: ["text"],
     });
   });
+
+  it("lists models, resolves roles, and rejects unknown references", () => {
+    const registry = new ModelRegistry(config());
+    expect(registry.list()).toEqual([{ provider: "openai", id: "model" }]);
+    expect(registry.forRole("fast").id).toBe("model");
+    expect(() => registry.get({ provider: "openai", id: "missing" })).toThrow("Unknown model");
+    expect(() => registry.snapshot({ provider: "openai", id: "missing" })).toThrow("Unknown model");
+  });
+
+  it("requires provider entries to share connection configuration", () => {
+    const input = config();
+    const [model] = input.models;
+    if (!model) throw new Error("fixture model is missing");
+    input.models.push({ ...model, id: "other", baseUrl: "https://other.invalid/v1" });
+    expect(() => new ModelRegistry(input)).toThrow("must share baseUrl");
+  });
+
+  it("restores vision input from a persisted snapshot", () => {
+    const input = config();
+    const [model] = input.models;
+    if (!model) throw new Error("fixture model is missing");
+    model.vision = true;
+    const registry = new ModelRegistry(input);
+    const snapshot = registry.snapshot({ provider: "openai", id: "model" });
+    expect(snapshot.capabilities.vision).toBe(true);
+    expect(registry.fromSnapshot(snapshot).input).toEqual(["text", "image"]);
+  });
 });

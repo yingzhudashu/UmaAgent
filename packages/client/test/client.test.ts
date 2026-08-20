@@ -68,7 +68,7 @@ describe("UmaClient", () => {
     socket.open();
     await tick();
     socket.message({
-      protocolVersion: 5,
+      protocolVersion: 6,
       sessionId: "session-1",
       sequence: 1,
       timestamp: 2,
@@ -76,7 +76,7 @@ describe("UmaClient", () => {
       payload: {},
     });
     socket.message({
-      protocolVersion: 5,
+      protocolVersion: 6,
       sessionId: "session-1",
       sequence: 3,
       timestamp: 3,
@@ -125,7 +125,7 @@ describe("UmaClient", () => {
     });
     await client.decideRunAction("run-1", "action-1", "acknowledge");
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:3210/api/v5/runs/run-1/actions/action-1/decide",
+      "http://localhost:3210/api/v6/runs/run-1/actions/action-1/decide",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ decision: "acknowledge" }) }),
     );
   });
@@ -149,7 +149,7 @@ describe("UmaClient", () => {
 
   it("fetches every durable event page when a gap exceeds one thousand events", async () => {
     const event = (sequence: number): AgentEventEnvelope => ({
-      protocolVersion: 5,
+      protocolVersion: 6,
       sessionId: "session-1",
       sequence,
       timestamp: sequence,
@@ -226,5 +226,247 @@ describe("UmaClient", () => {
       requestId: "req-stable",
       message: "try later",
     });
+  });
+
+  it("uses the v6 schedule, knowledge, and operations report contracts", async () => {
+    const fetchMock = vi.fn(() => response({ ok: true }));
+    const client = new UmaClient({ baseUrl: "http://localhost:3210/", fetch: fetchMock as typeof fetch });
+    await client.createSchedule({
+      name: "daily",
+      prompt: "summarize",
+      schedule: { kind: "cron", expression: "0 9 * * *", timezone: "UTC" },
+    });
+    await client.updateSchedule("schedule/id", { enabled: false });
+    await client.runSchedule("schedule/id");
+    await client.listScheduleRuns("schedule/id");
+    await client.deleteSchedule("schedule/id");
+    await client.indexKnowledgeAttachment("notes", "attachment/id", "session/id");
+    await client.deleteKnowledge("knowledge/id");
+    await client.operationsReport(10, 20);
+    const requests = fetchMock.mock.calls.map(([url, init]) => ({ url: String(url), init }));
+    expect(requests.map((item) => item.url)).toEqual([
+      "http://localhost:3210/api/v6/schedules",
+      "http://localhost:3210/api/v6/schedules/schedule%2Fid",
+      "http://localhost:3210/api/v6/schedules/schedule%2Fid/run",
+      "http://localhost:3210/api/v6/schedules/schedule%2Fid/runs",
+      "http://localhost:3210/api/v6/schedules/schedule%2Fid",
+      "http://localhost:3210/api/v6/knowledge",
+      "http://localhost:3210/api/v6/knowledge/knowledge%2Fid",
+      "http://localhost:3210/api/v6/reports/operations?from=10&to=20",
+    ]);
+    expect(requests[5]?.init?.body).toBe(
+      JSON.stringify({ name: "notes", attachmentId: "attachment/id", sessionId: "session/id" }),
+    );
+  });
+
+  it("covers the complete HTTP facade and optional request shapes", async () => {
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.method === "DELETE" || url.endsWith("/cancel"))
+        return Promise.resolve(new Response(null, { status: 204 }));
+      return response({ status: "completed", id: "resource-1" });
+    });
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210/",
+      token: "secret",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await client.logout();
+    await client.listSessions();
+    await client.createSession();
+    await client.getSession("session/id");
+    await client.getSessionHistory("session/id");
+    await client.getSessionHistory("session/id", 10, 25);
+    await client.getSessionEvents("session/id", 2, 3);
+    await client.updateSession("session/id", { title: "renamed" });
+    await client.deleteSession("session/id");
+    await client.sendMessage("session/id", "hello");
+    await client.sendMessage("session/id", "hello", { messageId: "stable" });
+    await client.cancel("session/id");
+    await client.resolveApproval("approval/id", true);
+    await client.listModels();
+    await client.listSkills();
+    await client.refreshSkills();
+    await client.mcpStatus();
+    await client.listKnowledge();
+    await client.indexKnowledge("docs", "docs/readme.md");
+    await client.listTasks();
+    await client.createTask("prompt");
+    await client.createTask("prompt", "parent/id");
+    await client.getTask("task/id");
+    await client.listSchedules();
+    await client.operationsReport();
+    await client.listMemoryFacts();
+    await client.listMemoryFacts("candidate");
+    await client.createMemoryFact("session/id", "fact");
+    await client.createMemoryFact("session/id", "fact", "global");
+    await client.reviewMemoryFact("memory/id", "active");
+    await client.deleteMemoryFact("memory/id");
+    await client.listAudit("run/id");
+    await client.listRunActions("run/id");
+    await client.listRunCheckpoints("run/id");
+    await client.resumeRun("run/id");
+    await client.cancelRun("run/id");
+    await client.compactSession("session/id");
+    await client.upload(new Blob(["body"], { type: "text/plain" }), "note.txt");
+    await client.upload(new Blob(["body"], { type: "text/plain" }), "note.txt", "session/id");
+
+    const firstHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(firstHeaders.get("authorization")).toBe("Bearer secret");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.body instanceof FormData)).toBe(true);
+  });
+
+  it("waits through a non-terminal state and supports aborting a wait", async () => {
+    const runs = [{ status: "running" }, { status: "completed" }];
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: (() => response(runs.shift() ?? { status: "completed" })) as typeof fetch,
+    });
+    await expect(client.waitForRun("run-1", { pollMs: 0 })).resolves.toMatchObject({
+      status: "completed",
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(client.waitForRun("run-2", { signal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
+
+  it("aborts a wait while the polling timer is active", async () => {
+    const controller = new AbortController();
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: (() => response({ status: "running" })) as typeof fetch,
+    });
+    const waiting = client.waitForRun("run-1", { signal: controller.signal, pollMs: 10_000 });
+    await tick();
+    controller.abort();
+    await expect(waiting).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("downloads attachments and normalizes JSON and non-JSON errors", async () => {
+    const ok = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: (() => Promise.resolve(new Response("contents", { status: 200 }))) as typeof fetch,
+    });
+    expect(await (await ok.attachmentContent("attachment/id")).text()).toBe("contents");
+
+    const jsonError = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: (() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: { code: "forbidden", message: "denied", retryable: false, requestId: "req-1" },
+            }),
+            { status: 403, headers: { "content-type": "application/json" } },
+          ),
+        )) as typeof fetch,
+    });
+    await expect(jsonError.attachmentContent("missing")).rejects.toMatchObject({
+      status: 403,
+      code: "forbidden",
+      requestId: "req-1",
+    });
+
+    const textError = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: (() => Promise.resolve(new Response("bad gateway", { status: 502 }))) as typeof fetch,
+    });
+    await expect(textError.health()).rejects.toMatchObject({ status: 502, code: "http_error" });
+    await expect(textError.attachmentContent("missing")).rejects.toMatchObject({
+      status: 502,
+      code: "http_error",
+    });
+  });
+
+  it("authenticates sockets, ignores malformed or duplicate frames, and unsubscribes", async () => {
+    const socket = new FakeSocket();
+    const client = new UmaClient({
+      baseUrl: "https://core.example",
+      token: "secret",
+      fetch: (() => response(snapshot)) as typeof fetch,
+      webSocketFactory: (url) => {
+        expect(url).toBe("wss://core.example/api/v6/events");
+        return socket as unknown as WebSocket;
+      },
+    });
+    const received: AgentEventEnvelope[] = [];
+    const unsubscribe = client.subscribe("session-1", (event) => received.push(event));
+    client.connectEvents();
+    client.connectEvents();
+    socket.open();
+    await tick();
+    expect(socket.sent.map((value) => JSON.parse(value))).toContainEqual({ type: "auth", token: "secret" });
+    socket.message({
+      protocolVersion: 6,
+      sessionId: "not-subscribed",
+      sequence: 1,
+      timestamp: 1,
+      type: "run.updated",
+      payload: {},
+    });
+    socket.message({
+      protocolVersion: 6,
+      sessionId: "session-1",
+      sequence: 1,
+      timestamp: 1,
+      type: "run.updated",
+      payload: {},
+    });
+    socket.message({
+      protocolVersion: 6,
+      sessionId: "session-1",
+      sequence: 1,
+      timestamp: 1,
+      type: "run.updated",
+      payload: {},
+    });
+    for (const listener of socket.listeners.get("message") ?? []) listener({ data: "not json" });
+    expect(received.filter((event) => event.type === "run.updated")).toHaveLength(1);
+    unsubscribe();
+    client.close();
+    client.close();
+  });
+
+  it("falls back to a snapshot when event recovery cannot make progress", async () => {
+    const event: AgentEventEnvelope = {
+      protocolVersion: 6,
+      sessionId: "session-1",
+      sequence: 3,
+      timestamp: 3,
+      type: "run.updated",
+      payload: {},
+    };
+    const fetchMock = vi.fn((input: string | URL | Request) =>
+      String(input).includes("/events?")
+        ? response({
+            sessionId: "session-1",
+            fromSequence: 0,
+            toSequence: 0,
+            nextSequence: 0,
+            hasMore: false,
+            snapshotSequence: 3,
+            events: [],
+          })
+        : response({ ...snapshot, snapshotSequence: 3 }),
+    );
+    const socket = new FakeSocket();
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: fetchMock as typeof fetch,
+      webSocketFactory: () => socket as unknown as WebSocket,
+    });
+    const received: AgentEventEnvelope[] = [];
+    client.subscribeSessions([{ id: "session-1", lastSequence: 0 }], (value) => received.push(value));
+    client.connectEvents();
+    socket.open();
+    socket.message(event);
+    await tick();
+    await tick();
+    expect(received.at(-1)?.type).toBe("session.snapshot");
+    client.close();
   });
 });

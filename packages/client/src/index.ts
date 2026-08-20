@@ -4,11 +4,15 @@ import type {
   Attachment,
   AuditRecord,
   BackgroundTask,
+  CreateScheduledTaskRequest,
   CreateSessionRequest,
   Health,
   KnowledgeSource,
   MemoryFact,
   ModelRef,
+  OperationsReport,
+  ScheduledTask,
+  ScheduledTaskRun,
   SendMessageRequest,
   SendMessageResponse,
   Session,
@@ -16,6 +20,7 @@ import type {
   SessionHistoryPage,
   SessionSnapshot,
   SkillSummary,
+  UpdateScheduledTaskRequest,
   UpdateSessionRequest,
 } from "@uma-agent/protocol";
 import { PROTOCOL_VERSION } from "@uma-agent/protocol";
@@ -64,7 +69,7 @@ export class UmaClient {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v5${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v6${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -166,11 +171,14 @@ export class UmaClient {
   indexKnowledge(name: string, path: string): Promise<KnowledgeSource> {
     return this.request("/knowledge", { method: "POST", body: JSON.stringify({ name, path }) });
   }
-  indexKnowledgeAttachment(name: string, attachmentId: string): Promise<KnowledgeSource> {
+  indexKnowledgeAttachment(name: string, attachmentId: string, sessionId: string): Promise<KnowledgeSource> {
     return this.request("/knowledge", {
       method: "POST",
-      body: JSON.stringify({ name, attachmentId }),
+      body: JSON.stringify({ name, attachmentId, sessionId }),
     });
+  }
+  deleteKnowledge(id: string): Promise<void> {
+    return this.request(`/knowledge/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
   listTasks(): Promise<BackgroundTask[]> {
     return this.request("/tasks");
@@ -186,6 +194,33 @@ export class UmaClient {
   }
   cancelTask(id: string): Promise<BackgroundTask> {
     return this.request(`/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  }
+  listSchedules(): Promise<ScheduledTask[]> {
+    return this.request("/schedules");
+  }
+  createSchedule(input: CreateScheduledTaskRequest): Promise<ScheduledTask> {
+    return this.request("/schedules", { method: "POST", body: JSON.stringify(input) });
+  }
+  updateSchedule(id: string, input: UpdateScheduledTaskRequest): Promise<ScheduledTask> {
+    return this.request(`/schedules/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  }
+  deleteSchedule(id: string): Promise<void> {
+    return this.request(`/schedules/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  runSchedule(id: string): Promise<ScheduledTaskRun> {
+    return this.request(`/schedules/${encodeURIComponent(id)}/run`, { method: "POST" });
+  }
+  listScheduleRuns(id: string): Promise<ScheduledTaskRun[]> {
+    return this.request(`/schedules/${encodeURIComponent(id)}/runs`);
+  }
+  operationsReport(from?: number, to?: number): Promise<OperationsReport> {
+    const query = new URLSearchParams();
+    if (from !== undefined) query.set("from", String(from));
+    if (to !== undefined) query.set("to", String(to));
+    return this.request(`/reports/operations${query.size ? `?${query}` : ""}`);
   }
   listMemoryFacts(status?: MemoryFact["status"]): Promise<MemoryFact[]> {
     return this.request(`/memory${status ? `?status=${status}` : ""}`);
@@ -274,7 +309,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v5/attachments/${encodeURIComponent(id)}/content`,
+      `${this.baseUrl}/api/v6/attachments/${encodeURIComponent(id)}/content`,
       { headers, credentials: "include" },
     );
     if (!response.ok) {
@@ -325,7 +360,7 @@ export class UmaClient {
 
   connectEvents(): void {
     if (this.socket || this.closed) return;
-    const url = new URL("/api/v5/events", this.baseUrl);
+    const url = new URL("/api/v6/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())

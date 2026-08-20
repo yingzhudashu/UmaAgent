@@ -1,15 +1,17 @@
-import type { Health, Session } from "@uma-agent/protocol";
+import type { Health, OperationsReport, Session } from "@uma-agent/protocol";
 
 export function SettingsArea({
   session,
   health,
   installAvailable,
   install,
+  report,
 }: {
   session: Session | undefined;
   health: Health | undefined;
   installAvailable: boolean;
   install: () => void;
+  report: OperationsReport | undefined;
 }) {
   return (
     <div className="operation-list">
@@ -18,6 +20,14 @@ export function SettingsArea({
         <p>
           {health?.status ?? "offline"} · v{health?.version ?? "-"} · protocol{" "}
           {health?.protocolVersion ?? "-"}
+        </p>
+      </div>
+      <div>
+        <strong>近 7 天运行</strong>
+        <p>
+          {report
+            ? `${report.runs.completed}/${report.runs.total} completed · ${report.model.totalTokens} tokens · ${report.tools.failed} tool failures`
+            : "-"}
         </p>
       </div>
       <div>

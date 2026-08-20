@@ -9,6 +9,7 @@ import Type, { type TSchema } from "typebox";
 import { Agent as HttpAgent, fetch as undiciFetch } from "undici";
 import type { UmaDatabase } from "./database.js";
 import type { KnowledgeService } from "./knowledge.js";
+import type { SearchService } from "./search.js";
 import type { SkillRegistry } from "./skills.js";
 import type { WorkspacePolicy } from "./workspace.js";
 
@@ -152,7 +153,7 @@ export async function safeFetch(raw: string, signal?: AbortSignal): Promise<stri
         redirect: "manual",
         dispatcher,
         ...(signal ? { signal } : {}),
-        headers: { "user-agent": "UmaAgent/0.6" },
+        headers: { "user-agent": "UmaAgent/0.7" },
       });
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
@@ -177,9 +178,78 @@ export function createBuiltinTools(input: {
   skills: SkillRegistry;
   workspacePolicy: WorkspacePolicy;
   toolTimeoutMs: number;
+  search: SearchService;
+  scheduleManage: (input: Record<string, unknown>) => unknown;
   memoryWrite: (scope: "global" | "session", content: string) => ReturnType<UmaDatabase["addMemoryFact"]>;
 }): AgentTool[] {
-  const { session, database, knowledge, skills, workspacePolicy, toolTimeoutMs, memoryWrite } = input;
+  const {
+    session,
+    database,
+    knowledge,
+    skills,
+    workspacePolicy,
+    toolTimeoutMs,
+    search,
+    scheduleManage,
+    memoryWrite,
+  } = input;
+  const webSearchTool = () =>
+    defineTool({
+      name: "web_search",
+      label: "Search web",
+      description: "Search Tavily or Stack Overflow and return traceable citations.",
+      parameters: Type.Object({
+        query: Type.String(),
+        provider: Type.Optional(Type.Union([Type.Literal("tavily"), Type.Literal("stackexchange")])),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
+      }),
+      executionMode: "parallel",
+      async execute(_id, params, signal) {
+        const citations = await search.search(
+          params.provider ?? "tavily",
+          params.query,
+          params.limit ?? 5,
+          signal,
+        );
+        return result(
+          citations
+            .map((item, index) => `[${index + 1}] ${item.title}\n${item.url}\n${item.snippet}`)
+            .join("\n\n") || "No search results",
+          { citations },
+        );
+      },
+    });
+  const scheduleTool = () =>
+    defineTool({
+      name: "schedule_manage",
+      label: "Manage schedule",
+      description:
+        "List, create, update, run, or delete persistent scheduled tasks. Changes require approval.",
+      parameters: Type.Object({
+        operation: Type.Union([
+          Type.Literal("list"),
+          Type.Literal("create"),
+          Type.Literal("update"),
+          Type.Literal("run"),
+          Type.Literal("delete"),
+        ]),
+        id: Type.Optional(Type.String()),
+        name: Type.Optional(Type.String()),
+        prompt: Type.Optional(Type.String()),
+        kind: Type.Optional(
+          Type.Union([Type.Literal("once"), Type.Literal("interval"), Type.Literal("cron")]),
+        ),
+        at: Type.Optional(Type.Integer({ minimum: 0 })),
+        everyMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
+        expression: Type.Optional(Type.String()),
+        timezone: Type.Optional(Type.String()),
+        enabled: Type.Optional(Type.Boolean()),
+      }),
+      executionMode: "sequential",
+      async execute(_id, params) {
+        return result(JSON.stringify(scheduleManage(params), null, 2));
+      },
+    });
   if (!session.workspace)
     return [
       defineTool({
@@ -268,6 +338,8 @@ export function createBuiltinTools(input: {
           return result(await safeFetch(params.url, signal), { url: params.url });
         },
       }),
+      webSearchTool(),
+      scheduleTool(),
     ];
   const workspace = session.workspace;
   const readSchema = Type.Object({
@@ -454,5 +526,7 @@ export function createBuiltinTools(input: {
         return result(await readTextFile(path), { name: attachment.name });
       },
     }),
+    webSearchTool(),
+    scheduleTool(),
   ];
 }

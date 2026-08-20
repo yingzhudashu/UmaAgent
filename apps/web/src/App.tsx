@@ -19,6 +19,7 @@ import { marked } from "marked";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ResourceArea } from "./areas/ResourceArea.js";
 import { ApprovalBar, RunPanel } from "./areas/RunArea.js";
+import { ScheduleArea } from "./areas/ScheduleArea.js";
 import { SessionArea } from "./areas/SessionArea.js";
 import { SettingsArea } from "./areas/SettingsArea.js";
 import {
@@ -90,7 +91,7 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [detailsTab, setDetailsTab] = useState<
-    "run" | "tasks" | "memory" | "resources" | "settings" | "audit"
+    "run" | "tasks" | "schedules" | "memory" | "resources" | "settings" | "audit"
   >("run");
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
@@ -104,6 +105,8 @@ export function App() {
   const models = useQuery({ queryKey: ["models"], queryFn: () => client.listModels() });
   const health = useQuery({ queryKey: ["health"], queryFn: () => client.health(), refetchInterval: 15_000 });
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: () => client.listTasks() });
+  const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => client.listSchedules() });
+  const report = useQuery({ queryKey: ["operations-report"], queryFn: () => client.operationsReport() });
   const memories = useQuery({
     queryKey: ["memory", "candidate"],
     queryFn: () => client.listMemoryFacts("candidate"),
@@ -532,16 +535,18 @@ export function App() {
       {panelOpen && (
         <aside className="details">
           <div className="detail-tabs">
-            {(["run", "tasks", "memory", "resources", "settings", "audit"] as const).map((tab) => (
-              <button
-                type="button"
-                className={`detail-tab ${detailsTab === tab ? "active" : ""}`}
-                onClick={() => setDetailsTab(tab)}
-                key={tab}
-              >
-                {tab}
-              </button>
-            ))}
+            {(["run", "tasks", "schedules", "memory", "resources", "settings", "audit"] as const).map(
+              (tab) => (
+                <button
+                  type="button"
+                  className={`detail-tab ${detailsTab === tab ? "active" : ""}`}
+                  onClick={() => setDetailsTab(tab)}
+                  key={tab}
+                >
+                  {tab}
+                </button>
+              ),
+            )}
           </div>
           {detailsTab === "run" && (
             <RunPanel
@@ -624,6 +629,18 @@ export function App() {
               ))}
             </div>
           )}
+          {detailsTab === "schedules" && (
+            <ScheduleArea
+              schedules={schedules.data ?? []}
+              disabled={offline}
+              create={(input) => void client.createSchedule(input).then(() => schedules.refetch())}
+              toggle={(id, enabled) =>
+                void client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
+              }
+              run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
+              remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
+            />
+          )}
           {detailsTab === "resources" && (
             <ResourceArea
               skills={skills.data ?? []}
@@ -637,9 +654,13 @@ export function App() {
               uploadKnowledge={(file) =>
                 void client
                   .upload(file, file.name, selected)
-                  .then((attachment) => client.indexKnowledgeAttachment(file.name, attachment.id))
+                  .then((attachment) => {
+                    if (!selected) throw new Error("Select a session before uploading knowledge");
+                    return client.indexKnowledgeAttachment(file.name, attachment.id, selected);
+                  })
                   .then(() => knowledge.refetch())
               }
+              deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
             />
           )}
           {detailsTab === "settings" && (
@@ -648,6 +669,7 @@ export function App() {
               health={health.data}
               installAvailable={Boolean(installPrompt)}
               install={() => void installPrompt?.prompt()}
+              report={report.data}
             />
           )}
           {detailsTab === "audit" && (

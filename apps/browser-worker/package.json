@@ -1,0 +1,16 @@
+{
+  "name": "@uma-agent/browser-worker",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "playwright": "1.62.1",
+    "zod": "4.4.3"
+  }
+}

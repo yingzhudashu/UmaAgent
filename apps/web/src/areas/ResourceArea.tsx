@@ -8,6 +8,7 @@ export function ResourceArea({
   refreshSkills,
   addKnowledgePath,
   uploadKnowledge,
+  deleteKnowledge,
 }: {
   skills: SkillSummary[];
   mcp: Array<{ name: string; connected: boolean }>;
@@ -16,6 +17,7 @@ export function ResourceArea({
   refreshSkills: () => void;
   addKnowledgePath: (name: string, path: string) => void;
   uploadKnowledge: (file: File) => void;
+  deleteKnowledge: (id: string) => void;
 }) {
   return (
     <div className="operation-list">
@@ -32,7 +34,17 @@ export function ResourceArea({
       </div>
       <div>
         <strong>Knowledge</strong>
-        <p>{knowledge.map((item) => `${item.name} (${item.documentCount})`).join(", ") || "-"}</p>
+        {knowledge.map((item) => (
+          <div key={item.id}>
+            <p>
+              {item.name} ({item.documentCount}) · {item.status}
+            </p>
+            {item.error && <small className="error">{item.error}</small>}
+            <button type="button" disabled={disabled} onClick={() => deleteKnowledge(item.id)}>
+              删除
+            </button>
+          </div>
+        ))}
         <button
           type="button"
           disabled={disabled}

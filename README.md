@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.6.0`，协议版本为 `5`，SQLite schema 为 `6`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.7.0`，协议版本为 `6`，SQLite schema 为 `7`。
 
 ## 当前能力
 
@@ -13,6 +13,9 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 - Snapshot + 永久事件游标同步、运行检查点和显式副作用恢复决策
 - Web IndexedDB 离线只读缓存、PWA shell 和独立 Channel Adapter 契约
 - Bearer Token、HttpOnly Web Cookie、Origin 校验、登录限流和日志脱敏
+- 持久化 once/interval/cron 调度、Tavily/Stack Exchange 搜索和只读运营报告
+- PDF、DOCX、PPTX、XLSX 异步知识摄取，以及独立 Playwright Browser MCP Worker
+- 只通过 Client SDK 运行的黑盒 Eval Runner
 
 ## 本地启动
 
@@ -81,19 +84,21 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 ## API 摘要
 
-- `GET/POST /api/v5/sessions`
-- `GET /api/v5/sessions/:id/snapshot`
-- `GET /api/v5/sessions/:id/events?after=<sequence>` 增量事件
-- `GET /api/v5/sessions/:id/history?before=<sequence>` 历史分页
-- `POST /api/v5/sessions/:id/messages|cancel|compact`
-- `GET /api/v5/attachments/:id/content`
-- `GET /api/v5/runs/:id/checkpoints|actions`
-- `POST /api/v5/runs/:id/resume|cancel`
-- `POST /api/v5/runs/:id/actions/:actionId/decide`
-- `POST /api/v5/approvals/:id`、`POST /api/v5/uploads`
-- `GET /api/v5/health/live|ready`
-- `GET /api/v5/events` WebSocket
-- `/api/v5/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `GET/POST /api/v6/sessions`
+- `GET /api/v6/sessions/:id/snapshot`
+- `GET /api/v6/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v6/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v6/sessions/:id/messages|cancel|compact`
+- `GET /api/v6/attachments/:id/content`
+- `GET /api/v6/runs/:id/checkpoints|actions`
+- `POST /api/v6/runs/:id/resume|cancel`
+- `POST /api/v6/runs/:id/actions/:actionId/decide`
+- `POST /api/v6/approvals/:id`、`POST /api/v6/uploads`
+- `GET /api/v6/health/live|ready`
+- `GET /api/v6/events` WebSocket
+- `/api/v6/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `/api/v6/schedules` 调度 CRUD、立即执行与运行历史
+- `GET /api/v6/reports/operations` 脱敏运行统计
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
@@ -116,6 +121,25 @@ npm run start --workspace=@uma-agent/feishu-adapter
 
 Adapter 只接受 `FEISHU_ALLOWED_OPEN_IDS` 白名单中的所有者。Webhook 在签名校验后先持久化去重记录并立即 ACK，后台 Worker 再处理；重启会恢复 pending 入站。私聊全部进入 Core，群聊仅处理白名单用户 @机器人或回复 Adapter 已发送消息的内容；文本、图片和文件会转换为标准消息与 Attachment。运行卡片支持审批、恢复及副作用 Action 决策，更新采用一秒尾随节流且终态立即定稿。按钮只携带短期 opaque token，重复点击保持幂等。Adapter 自己的 SQLite 只保存会话映射、入站队列、卡片游标和回调状态。
 通用渠道类型、指数退避和节流工具由 `@uma-agent/channel-adapter` 提供；Core 不依赖任何渠道 SDK。
+
+## 浏览器 Worker 与评测
+
+Browser Worker 是独立 MCP Streamable HTTP 服务，只监听 `127.0.0.1:3230`，不挂载 Core state 或 workspace。所有页面请求和重定向都执行公网地址校验；Core 端仍把其工具视为 MCP 副作用并要求审批。启动后在 `mcpServers` 中配置 `http://127.0.0.1:3230/mcp`：
+
+```powershell
+npm run build --workspace=@uma-agent/browser-worker
+npm run start --workspace=@uma-agent/browser-worker
+```
+
+黑盒评测只使用公开 Client SDK：
+
+```powershell
+$env:UMA_SERVER_URL = "http://127.0.0.1:3210"
+$env:UMA_TOKEN = $env:UMA_AUTH_TOKEN
+node apps/eval-runner/dist/main.js eval-suite.json
+```
+
+评测只读取终态 Run 和公开 transcript，不读取数据库、隐藏思维链，也不修改代码或执行 Git。
 
 ## 部署
 
@@ -157,6 +181,7 @@ apps/server ─> packages/core ─> Pi AI/Agent
 ```bash
 npm run check
 npm test
+npm run test:coverage
 npm run build
 npx playwright install chromium
 npm run test:web:e2e

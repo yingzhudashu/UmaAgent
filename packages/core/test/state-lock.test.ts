@@ -16,6 +16,7 @@ describe("StateLock", () => {
     const first = StateLock.acquire(root);
     expect(() => StateLock.acquire(root)).toThrow("already in use");
     first.release();
+    expect(() => first.release()).not.toThrow();
     const next = StateLock.acquire(root);
     next.release();
   });

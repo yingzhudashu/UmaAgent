@@ -1,6 +1,6 @@
 {
   "name": "@uma-agent/client",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -15,6 +15,6 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@uma-agent/protocol": "0.6.0"
+    "@uma-agent/protocol": "0.7.0"
   }
 }

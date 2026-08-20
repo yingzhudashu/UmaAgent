@@ -4,6 +4,7 @@ import * as lark from "@larksuiteoapi/node-sdk";
 import { retryWithBackoff } from "@uma-agent/channel-adapter";
 import { UmaClient } from "@uma-agent/client";
 import type { Approval, RunAction, RunActionDecision, SessionSnapshot } from "@uma-agent/protocol";
+import { createFeishuAdapter } from "./adapter.js";
 import { type CoreGateway, LarkFeishuGateway } from "./gateways.js";
 import { acceptsInbound, isAllowedOpenId } from "./inbound-policy.js";
 import { AdapterStore } from "./store.js";
@@ -39,15 +40,17 @@ if (!Number.isSafeInteger(config.maxAttachmentBytes) || config.maxAttachmentByte
 if (config.allowedOpenIds.size === 0)
   throw new Error("FEISHU_ALLOWED_OPEN_IDS must contain at least one Open ID");
 
-const store = new AdapterStore(config.stateDir);
-const uma: CoreGateway = new UmaClient({ baseUrl: config.umaUrl, token: config.umaToken });
+const storeInstance = new AdapterStore(config.stateDir);
+const coreGateway: CoreGateway = new UmaClient({ baseUrl: config.umaUrl, token: config.umaToken });
 const feishuSdk = new lark.Client({
   appId: config.appId,
   appSecret: config.appSecret,
   appType: lark.AppType.SelfBuild,
   domain: lark.Domain.Feishu,
 });
-const feishu = new LarkFeishuGateway(feishuSdk);
+const feishuGateway = new LarkFeishuGateway(feishuSdk);
+const adapter = createFeishuAdapter({ core: coreGateway, feishu: feishuGateway, store: storeInstance });
+const { core: uma, feishu, store, clock } = adapter;
 const cards = new Map<string, { text: string; lastUpdate: number; messageId?: string }>();
 const pendingCards = new Map<string, Parameters<typeof sendCardNow>>();
 const cardTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -168,7 +171,7 @@ async function sendCardNow(
     store.markCardFailed(conversationId, runId, error instanceof Error ? error.message : String(error));
     throw error;
   }
-  cards.set(key, { text, lastUpdate: Date.now(), ...(messageId ? { messageId } : {}) });
+  cards.set(key, { text, lastUpdate: clock.now(), ...(messageId ? { messageId } : {}) });
   if (messageId)
     for (const { control, token } of callbacks)
       store.putActionCallback({
@@ -181,7 +184,7 @@ async function sendCardNow(
           : {}),
         feishuMessageId: messageId,
         tokenHash: createHash("sha256").update(token).digest("hex"),
-        expiresAt: Date.now() + 10 * 60_000,
+        expiresAt: clock.now() + 10 * 60_000,
       });
   return messageId;
 }
@@ -206,13 +209,13 @@ async function sendCard(
     final,
     controls,
   ];
-  if (!final && controls.length === 0 && previous && Date.now() - previous.lastUpdate < 1_000) {
+  if (!final && controls.length === 0 && previous && clock.now() - previous.lastUpdate < 1_000) {
     pendingCards.set(key, args);
     if (!cardTimers.has(key)) {
-      const remaining = Math.max(1, 1_000 - (Date.now() - previous.lastUpdate));
+      const remaining = Math.max(1, 1_000 - (clock.now() - previous.lastUpdate));
       cardTimers.set(
         key,
-        setTimeout(() => {
+        clock.setTimeout(() => {
           cardTimers.delete(key);
           const pending = pendingCards.get(key);
           pendingCards.delete(key);
@@ -223,7 +226,7 @@ async function sendCard(
     return previous.messageId;
   }
   const timer = cardTimers.get(key);
-  if (timer) clearTimeout(timer);
+  if (timer) clock.clearTimeout(timer);
   cardTimers.delete(key);
   pendingCards.delete(key);
   return sendCardNow(...args);
@@ -393,6 +396,7 @@ function scheduleInbound(input: { externalId: string; messageId: string; payload
 async function enqueueMessage(data: FeishuInbound): Promise<void> {
   const message = data.message;
   if (!acceptsInbound(data, config.allowedOpenIds, (id) => store.isOutboundMessage(id))) return;
+  adapter.inbound();
   const senderId = data.sender?.sender_id?.open_id;
   const claimed = store.claimInbound({
     externalId: message.message_id,
@@ -449,7 +453,7 @@ const cardHandler = lark.adaptDefault("/webhook/card", cardDispatcher);
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
   if (req.url === "/health" && req.method === "GET") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", service: "feishu-adapter" }));
+    res.end(JSON.stringify({ ...adapter.health(), service: "feishu-adapter" }));
     return;
   }
   if (req.url === "/webhook/event" && req.method === "POST") return void eventHandler(req, res);
@@ -458,6 +462,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 });
 
 uma.connectEvents();
+adapter.started();
 for (const pending of store.listPendingInbound<FeishuInbound>()) scheduleInbound(pending);
 for (const conversation of store.listConversations())
   subscribeSession(
@@ -468,13 +473,15 @@ for (const conversation of store.listConversations())
   );
 server.listen(config.port, config.host);
 process.once("SIGINT", () => {
-  for (const timer of cardTimers.values()) clearTimeout(timer);
+  adapter.stopped();
+  for (const timer of cardTimers.values()) clock.clearTimeout(timer);
   store.close();
   uma.close();
   server.close();
 });
 process.once("SIGTERM", () => {
-  for (const timer of cardTimers.values()) clearTimeout(timer);
+  adapter.stopped();
+  for (const timer of cardTimers.values()) clock.clearTimeout(timer);
   store.close();
   uma.close();
   server.close();

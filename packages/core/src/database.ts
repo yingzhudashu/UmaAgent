@@ -13,11 +13,15 @@ import type {
   MessageSource,
   ModelRef,
   ModelSnapshot,
+  OperationsReport,
   PlanStep,
   Run,
   RunAction,
   RunCheckpoint,
   RunStatus,
+  ScheduleDefinition,
+  ScheduledTask,
+  ScheduledTaskRun,
   Session,
   SessionEventPage,
   SessionHistoryPage,
@@ -28,7 +32,7 @@ import type {
 import { type AgentEventEnvelope, type AgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 type Row = Record<string, unknown>;
 
 function rows(statement: StatementSync, ...params: SQLInputValue[]): Row[] {
@@ -105,6 +109,38 @@ function toAttachment(value: Row): Attachment {
     mimeType: text(value.mime_type),
     size: integer(value.size),
     createdAt: integer(value.created_at),
+  };
+}
+
+function toScheduledTask(value: Row): ScheduledTask {
+  return {
+    id: text(value.id),
+    name: text(value.name),
+    prompt: text(value.prompt),
+    sessionMode: text(value.session_mode) as SessionMode,
+    schedule: parseJson(value.schedule_json, { kind: "once", at: 0 }) as ScheduleDefinition,
+    enabled: integer(value.enabled) === 1,
+    ...(value.next_run_at !== null && value.next_run_at !== undefined
+      ? { nextRunAt: integer(value.next_run_at) }
+      : {}),
+    ...(value.last_run_at !== null && value.last_run_at !== undefined
+      ? { lastRunAt: integer(value.last_run_at) }
+      : {}),
+    createdAt: integer(value.created_at),
+    updatedAt: integer(value.updated_at),
+  };
+}
+
+function toScheduledTaskRun(value: Row): ScheduledTaskRun {
+  return {
+    id: text(value.id),
+    scheduledTaskId: text(value.scheduled_task_id),
+    ...(value.background_task_id ? { backgroundTaskId: text(value.background_task_id) } : {}),
+    status: text(value.status) as ScheduledTaskRun["status"],
+    scheduledFor: integer(value.scheduled_for),
+    ...(value.started_at ? { startedAt: integer(value.started_at) } : {}),
+    ...(value.completed_at ? { completedAt: integer(value.completed_at) } : {}),
+    ...(value.error ? { error: text(value.error) } : {}),
   };
 }
 
@@ -1064,12 +1100,24 @@ export class UmaDatabase {
       for (const chunkId of oldIds) this.db.prepare("DELETE FROM knowledge_fts WHERE id=?").run(chunkId);
       this.db.prepare("DELETE FROM knowledge_chunks WHERE source_id=?").run(id);
       this.db
-        .prepare("UPDATE knowledge_sources SET name=?, document_count=? WHERE id=?")
-        .run(input.name, new Set(input.chunks.map((chunk) => chunk.filePath)).size, id);
+        .prepare(
+          "UPDATE knowledge_sources SET name=?,document_count=?,status='indexed',error=NULL,updated_at=? WHERE id=?",
+        )
+        .run(input.name, new Set(input.chunks.map((chunk) => chunk.filePath)).size, now, id);
     } else {
       this.db
-        .prepare("INSERT INTO knowledge_sources(id,name,path,document_count,created_at) VALUES(?,?,?,?,?)")
-        .run(id, input.name, input.path, new Set(input.chunks.map((chunk) => chunk.filePath)).size, now);
+        .prepare(
+          "INSERT INTO knowledge_sources(id,name,path,document_count,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+        )
+        .run(
+          id,
+          input.name,
+          input.path,
+          new Set(input.chunks.map((chunk) => chunk.filePath)).size,
+          "indexed",
+          now,
+          now,
+        );
     }
     const insertChunk = this.db.prepare(
       "INSERT INTO knowledge_chunks(id,source_id,file_path,position,content) VALUES(?,?,?,?,?)",
@@ -1085,6 +1133,49 @@ export class UmaDatabase {
     return this.getKnowledgeSource(id);
   }
 
+  createKnowledgeSource(input: { name: string; path: string }): KnowledgeSource {
+    const existing = row(this.db.prepare("SELECT id FROM knowledge_sources WHERE path=?"), input.path);
+    const now = Date.now();
+    const id = existing ? text(existing.id) : randomUUID();
+    if (existing) {
+      for (const value of rows(this.db.prepare("SELECT id FROM knowledge_chunks WHERE source_id=?"), id))
+        this.db.prepare("DELETE FROM knowledge_fts WHERE id=?").run(text(value.id));
+      this.db.prepare("DELETE FROM knowledge_chunks WHERE source_id=?").run(id);
+      this.db
+        .prepare(
+          "UPDATE knowledge_sources SET name=?,status='queued',error=NULL,document_count=0,updated_at=? WHERE id=?",
+        )
+        .run(input.name, now, id);
+    } else
+      this.db
+        .prepare(
+          "INSERT INTO knowledge_sources(id,name,path,document_count,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+        )
+        .run(id, input.name, input.path, 0, "queued", now, now);
+    return this.getKnowledgeSource(id);
+  }
+
+  updateKnowledgeSourceStatus(
+    id: string,
+    status: KnowledgeSource["status"],
+    error?: string,
+  ): KnowledgeSource {
+    const result = this.db
+      .prepare("UPDATE knowledge_sources SET status=?,error=?,updated_at=? WHERE id=?")
+      .run(status, error ?? null, Date.now(), id);
+    if (result.changes === 0) throw new Error(`Knowledge source not found: ${id}`);
+    return this.getKnowledgeSource(id);
+  }
+
+  deleteKnowledgeSource(id: string): void {
+    this.withTransaction(() => {
+      for (const value of rows(this.db.prepare("SELECT id FROM knowledge_chunks WHERE source_id=?"), id))
+        this.db.prepare("DELETE FROM knowledge_fts WHERE id=?").run(text(value.id));
+      const result = this.db.prepare("DELETE FROM knowledge_sources WHERE id=?").run(id);
+      if (result.changes === 0) throw new Error(`Knowledge source not found: ${id}`);
+    });
+  }
+
   getKnowledgeSource(id: string): KnowledgeSource {
     const value = row(this.db.prepare("SELECT * FROM knowledge_sources WHERE id=?"), id);
     if (!value) throw new Error(`Knowledge source not found: ${id}`);
@@ -1093,7 +1184,10 @@ export class UmaDatabase {
       name: text(value.name),
       path: text(value.path),
       documentCount: integer(value.document_count),
+      status: text(value.status) as KnowledgeSource["status"],
+      ...(value.error ? { error: text(value.error) } : {}),
       createdAt: integer(value.created_at),
+      updatedAt: integer(value.updated_at),
     };
   }
 
@@ -1387,6 +1481,239 @@ export class UmaDatabase {
       ...(value.error ? { error: text(value.error) } : {}),
       createdAt: integer(value.created_at),
     };
+  }
+
+  createScheduledTask(input: {
+    name: string;
+    prompt: string;
+    sessionMode: SessionMode;
+    schedule: ScheduleDefinition;
+    enabled: boolean;
+    nextRunAt?: number;
+  }): ScheduledTask {
+    const id = randomUUID();
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO scheduled_tasks(id,name,prompt,session_mode,schedule_json,enabled,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        input.name,
+        input.prompt,
+        input.sessionMode,
+        JSON.stringify(input.schedule),
+        input.enabled ? 1 : 0,
+        input.nextRunAt ?? null,
+        now,
+        now,
+      );
+    return this.getScheduledTask(id);
+  }
+
+  getScheduledTask(id: string): ScheduledTask {
+    const value = row(this.db.prepare("SELECT * FROM scheduled_tasks WHERE id=?"), id);
+    if (!value) throw new Error(`Scheduled task not found: ${id}`);
+    return toScheduledTask(value);
+  }
+
+  listScheduledTasks(): ScheduledTask[] {
+    return rows(this.db.prepare("SELECT * FROM scheduled_tasks ORDER BY created_at DESC")).map(
+      toScheduledTask,
+    );
+  }
+
+  listDueScheduledTasks(now: number): ScheduledTask[] {
+    return rows(
+      this.db.prepare(
+        "SELECT * FROM scheduled_tasks WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at<=? ORDER BY next_run_at",
+      ),
+      now,
+    ).map(toScheduledTask);
+  }
+
+  updateScheduledTask(
+    id: string,
+    patch: Partial<{
+      name: string;
+      prompt: string;
+      sessionMode: SessionMode;
+      schedule: ScheduleDefinition;
+      enabled: boolean;
+      nextRunAt: number | null;
+      lastRunAt: number | null;
+    }>,
+  ): ScheduledTask {
+    const current = this.getScheduledTask(id);
+    const next = {
+      name: patch.name ?? current.name,
+      prompt: patch.prompt ?? current.prompt,
+      sessionMode: patch.sessionMode ?? current.sessionMode,
+      schedule: patch.schedule ?? current.schedule,
+      enabled: patch.enabled ?? current.enabled,
+      nextRunAt: patch.nextRunAt === undefined ? current.nextRunAt : (patch.nextRunAt ?? undefined),
+      lastRunAt: patch.lastRunAt === undefined ? current.lastRunAt : (patch.lastRunAt ?? undefined),
+    };
+    this.db
+      .prepare(
+        "UPDATE scheduled_tasks SET name=?,prompt=?,session_mode=?,schedule_json=?,enabled=?,next_run_at=?,last_run_at=?,updated_at=? WHERE id=?",
+      )
+      .run(
+        next.name,
+        next.prompt,
+        next.sessionMode,
+        JSON.stringify(next.schedule),
+        next.enabled ? 1 : 0,
+        next.nextRunAt ?? null,
+        next.lastRunAt ?? null,
+        Date.now(),
+        id,
+      );
+    return this.getScheduledTask(id);
+  }
+
+  deleteScheduledTask(id: string): void {
+    const result = this.db.prepare("DELETE FROM scheduled_tasks WHERE id=?").run(id);
+    if (result.changes === 0) throw new Error(`Scheduled task not found: ${id}`);
+  }
+
+  createScheduledTaskRun(scheduledTaskId: string, scheduledFor: number): ScheduledTaskRun {
+    if (this.hasActiveScheduledTaskRun(scheduledTaskId))
+      throw new Error("Scheduled task already has an active run");
+    const id = randomUUID();
+    this.db
+      .prepare("INSERT INTO scheduled_task_runs(id,scheduled_task_id,status,scheduled_for) VALUES(?,?,?,?)")
+      .run(id, scheduledTaskId, "pending", scheduledFor);
+    return this.getScheduledTaskRun(id);
+  }
+
+  getScheduledTaskRun(id: string): ScheduledTaskRun {
+    const value = row(this.db.prepare("SELECT * FROM scheduled_task_runs WHERE id=?"), id);
+    if (!value) throw new Error(`Scheduled task run not found: ${id}`);
+    return toScheduledTaskRun(value);
+  }
+
+  listScheduledTaskRuns(scheduledTaskId: string): ScheduledTaskRun[] {
+    return rows(
+      this.db.prepare(
+        "SELECT * FROM scheduled_task_runs WHERE scheduled_task_id=? ORDER BY scheduled_for DESC",
+      ),
+      scheduledTaskId,
+    ).map(toScheduledTaskRun);
+  }
+
+  hasActiveScheduledTaskRun(scheduledTaskId: string): boolean {
+    return Boolean(
+      row(
+        this.db.prepare(
+          "SELECT 1 AS ok FROM scheduled_task_runs WHERE scheduled_task_id=? AND status IN ('pending','running') LIMIT 1",
+        ),
+        scheduledTaskId,
+      ),
+    );
+  }
+
+  updateScheduledTaskRun(
+    id: string,
+    patch: Partial<{
+      backgroundTaskId: string;
+      status: ScheduledTaskRun["status"];
+      startedAt: number;
+      completedAt: number;
+      error: string | null;
+    }>,
+  ): ScheduledTaskRun {
+    const current = this.getScheduledTaskRun(id);
+    this.db
+      .prepare(
+        "UPDATE scheduled_task_runs SET background_task_id=?,status=?,started_at=?,completed_at=?,error=? WHERE id=?",
+      )
+      .run(
+        patch.backgroundTaskId ?? current.backgroundTaskId ?? null,
+        patch.status ?? current.status,
+        patch.startedAt ?? current.startedAt ?? null,
+        patch.completedAt ?? current.completedAt ?? null,
+        patch.error === undefined ? (current.error ?? null) : patch.error,
+        id,
+      );
+    return this.getScheduledTaskRun(id);
+  }
+
+  operationsReport(from: number, to: number): OperationsReport {
+    const runRows = rows(
+      this.db.prepare(
+        "SELECT status,COUNT(*) AS count FROM runs WHERE created_at BETWEEN ? AND ? GROUP BY status",
+      ),
+      from,
+      to,
+    );
+    const runCount = (status: string) =>
+      integer(runRows.find((value) => text(value.status) === status)?.count);
+    const modelRows = rows(
+      this.db.prepare(
+        "SELECT status,duration_ms,usage_json FROM model_calls WHERE created_at BETWEEN ? AND ?",
+      ),
+      from,
+      to,
+    );
+    const durations = modelRows.map((value) => integer(value.duration_ms)).filter((value) => value > 0);
+    const totalTokens = modelRows.reduce((sum, value) => {
+      const usage = parseJson<Record<string, unknown>>(value.usage_json, {});
+      return sum + integer(usage.totalTokens ?? usage.total);
+    }, 0);
+    const tools = row(
+      this.db.prepare(
+        "SELECT COUNT(*) AS calls,SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS failed FROM audit_events WHERE kind='tool' AND created_at BETWEEN ? AND ?",
+      ),
+      from,
+      to,
+    );
+    const approvals = row(
+      this.db.prepare(
+        "SELECT COUNT(*) AS requested,SUM(CASE WHEN status IN ('denied','expired') THEN 1 ELSE 0 END) AS denied FROM approvals WHERE created_at BETWEEN ? AND ?",
+      ),
+      from,
+      to,
+    );
+    return {
+      from,
+      to,
+      runs: {
+        total: runRows.reduce((sum, value) => sum + integer(value.count), 0),
+        completed: runCount("completed"),
+        failed: runCount("failed"),
+        cancelled: runCount("cancelled"),
+        interrupted: runCount("interrupted"),
+      },
+      model: {
+        calls: modelRows.length,
+        failed: modelRows.filter((value) => ["error", "failed", "abandoned"].includes(text(value.status)))
+          .length,
+        totalTokens,
+        averageDurationMs: durations.length
+          ? durations.reduce((sum, value) => sum + value, 0) / durations.length
+          : 0,
+      },
+      tools: { calls: integer(tools?.calls), failed: integer(tools?.failed) },
+      approvals: { requested: integer(approvals?.requested), denied: integer(approvals?.denied) },
+      recoveries: integer(
+        row(
+          this.db.prepare(
+            "SELECT COUNT(*) AS count FROM audit_events WHERE kind='run' AND name='resume' AND created_at BETWEEN ? AND ?",
+          ),
+          from,
+          to,
+        )?.count,
+      ),
+    };
+  }
+
+  markActiveScheduledTaskRunsInterrupted(): void {
+    this.db
+      .prepare(
+        "UPDATE scheduled_task_runs SET status='interrupted',error='Server restarted during execution',completed_at=? WHERE status IN ('pending','running')",
+      )
+      .run(Date.now());
   }
 
   markActiveBackgroundTasksInterrupted(): void {
