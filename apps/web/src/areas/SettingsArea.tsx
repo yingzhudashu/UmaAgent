@@ -1,4 +1,5 @@
-import type { Health, OperationsReport, Session } from "@uma-agent/protocol";
+import type { AgentProfile, Health, OperationsReport, Session } from "@uma-agent/protocol";
+import { type FormEvent, useEffect, useState } from "react";
 
 export function SettingsArea({
   session,
@@ -6,13 +7,27 @@ export function SettingsArea({
   installAvailable,
   install,
   report,
+  profile,
+  saveProfile,
+  reloadConfig,
+  disabled,
 }: {
   session: Session | undefined;
   health: Health | undefined;
   installAvailable: boolean;
   install: () => void;
   report: OperationsReport | undefined;
+  profile: AgentProfile | undefined;
+  saveProfile: (content: string) => void;
+  reloadConfig: () => void;
+  disabled: boolean;
 }) {
+  const [content, setContent] = useState(profile?.content ?? "");
+  useEffect(() => setContent(profile?.content ?? ""), [profile?.content]);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    saveProfile(content.trim());
+  };
   return (
     <div className="operation-list">
       <div>
@@ -34,6 +49,18 @@ export function SettingsArea({
         <strong>Session</strong>
         <p>{session ? `${session.mode} · ${session.model.provider}/${session.model.id}` : "-"}</p>
       </div>
+      <form className="resource-form" onSubmit={submit}>
+        <label>
+          Agent Profile
+          <textarea value={content} onChange={(event) => setContent(event.target.value)} />
+        </label>
+        <button type="submit" disabled={disabled}>
+          保存 Profile
+        </button>
+      </form>
+      <button type="button" disabled={disabled} onClick={reloadConfig}>
+        重新加载配置
+      </button>
       {installAvailable && (
         <button type="button" className="run-action" onClick={install}>
           安装 UmaAgent PWA

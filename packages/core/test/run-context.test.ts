@@ -30,6 +30,13 @@ describe("run context builder", () => {
       getRun: vi.fn(() => ({ model: { ref: { provider: "test", id: "model" } } })),
       listAgentMessages: vi.fn(() => []),
       searchMemory: vi.fn(() => ["likes deterministic tests"]),
+      getAgentProfile: vi.fn(() => ({
+        ownerName: "",
+        identity: "",
+        instructions: "",
+        updatedAt: 1,
+      })),
+      listMemoryRollups: vi.fn(() => []),
       getAttachment: vi.fn((id: string) =>
         id === "image" ? { mimeType: "image/png" } : { mimeType: "text/plain" },
       ),

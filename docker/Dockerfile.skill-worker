@@ -1,0 +1,21 @@
+FROM node:22.19.0-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json tsconfig.json tsconfig.base.json biome.json ./
+COPY apps/skill-worker ./apps/skill-worker
+RUN npm ci --ignore-scripts
+RUN npm run build --workspace=@uma-agent/skill-worker
+
+FROM node:22.19.0-bookworm-slim
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps/skill-worker/package.json ./apps/skill-worker/package.json
+RUN npm ci --omit=dev --ignore-scripts --workspace=@uma-agent/skill-worker
+COPY --from=build /app/apps/skill-worker/dist ./apps/skill-worker/dist
+RUN mkdir -p /skills /scratch && chown -R node:node /scratch
+USER node
+VOLUME ["/scratch"]
+EXPOSE 3250
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:3250/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+CMD ["node", "apps/skill-worker/dist/main.js"]

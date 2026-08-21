@@ -45,7 +45,15 @@ describe("session capabilities", () => {
         workspacePolicy,
         toolTimeoutMs: 1_000,
         memoryWrite: (scope, content) =>
-          db.addMemoryFact({ sessionId: session.id, scope, content, confidence: 1, status: "active" }),
+          db.addMemoryFact({
+            sessionId: session.id,
+            scope,
+            key: `explicit.${crypto.randomUUID()}`,
+            value: content,
+            category: "explicit",
+            confidence: 1,
+            status: "active",
+          }),
       });
     const assistantTools = tools(assistant);
     const assistantNames = assistantTools.map((tool) => tool.name);
@@ -57,6 +65,8 @@ describe("session capabilities", () => {
         "memory_write",
         "knowledge_search",
         "skill_read",
+        "history_search",
+        "history_read",
       ]),
     );
     expect(assistantNames).not.toEqual(

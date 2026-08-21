@@ -33,6 +33,7 @@ export function nextScheduleTime(schedule: ScheduleDefinition, after = Date.now(
 export class SchedulerService {
   private timer: ReturnType<typeof setInterval> | undefined;
   private readonly running = new Set<string>();
+  private readonly executions = new Set<Promise<void>>();
 
   constructor(
     private readonly database: UmaDatabase,
@@ -52,6 +53,10 @@ export class SchedulerService {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+  }
+
+  async drain(): Promise<void> {
+    while (this.executions.size) await Promise.allSettled([...this.executions]);
   }
 
   list(): ScheduledTask[] {
@@ -191,7 +196,11 @@ export class SchedulerService {
   private launch(run: ScheduledTaskRun): void {
     this.running.add(run.scheduledTaskId);
     if (run.backgroundTaskId) this.executor.startTask(run.backgroundTaskId);
-    void this.execute(run).finally(() => this.running.delete(run.scheduledTaskId));
+    const execution = this.execute(run).finally(() => {
+      this.running.delete(run.scheduledTaskId);
+      this.executions.delete(execution);
+    });
+    this.executions.add(execution);
   }
 
   private async execute(run: ScheduledTaskRun): Promise<void> {

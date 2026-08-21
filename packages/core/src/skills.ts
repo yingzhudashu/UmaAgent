@@ -1,4 +1,4 @@
-import type { Dirent } from "node:fs";
+import { type Dirent, type FSWatcher, watch } from "node:fs";
 import { readdir, readFile, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { SkillSummary } from "@uma-agent/protocol";
@@ -40,12 +40,25 @@ async function scan(root: string, output: string[]): Promise<void> {
 
 export class SkillRegistry {
   private skills = new Map<string, LoadedSkill>();
+  private readonly roots: string[];
+  private watchers: FSWatcher[] = [];
+  private refreshTimer: NodeJS.Timeout | undefined;
 
-  constructor(private readonly dirs: string[]) {}
+  constructor(dirs: string[]) {
+    this.roots = [...dirs];
+  }
+
+  addRoot(root: string): void {
+    if (!this.roots.includes(root)) this.roots.push(root);
+  }
+
+  replaceRoots(roots: string[]): void {
+    this.roots.splice(0, this.roots.length, ...new Set(roots));
+  }
 
   async refresh(): Promise<SkillSummary[]> {
     const paths: string[] = [];
-    for (const dir of this.dirs) await scan(dir, paths);
+    for (const dir of this.roots) await scan(dir, paths);
     const next = new Map<string, LoadedSkill>();
     for (const path of paths) {
       const diagnostics: string[] = [];
@@ -69,6 +82,33 @@ export class SkillRegistry {
     }
     this.skills = next;
     return this.list();
+  }
+
+  startWatching(onRefresh: () => void): void {
+    this.stopWatching();
+    for (const root of this.roots) {
+      try {
+        const watcher = watch(root, { recursive: true }, () => {
+          if (this.refreshTimer) clearTimeout(this.refreshTimer);
+          this.refreshTimer = setTimeout(() => {
+            this.refreshTimer = undefined;
+            void this.refresh()
+              .then(onRefresh)
+              .catch(() => {});
+          }, 250);
+        });
+        this.watchers.push(watcher);
+      } catch {
+        // Missing optional roots are discovered by explicit refresh after installation.
+      }
+    }
+  }
+
+  stopWatching(): void {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    this.refreshTimer = undefined;
+    for (const watcher of this.watchers) watcher.close();
+    this.watchers = [];
   }
 
   list(): SkillSummary[] {

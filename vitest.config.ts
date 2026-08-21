@@ -6,7 +6,7 @@ export default defineConfig({
     testTimeout: 10_000,
     coverage: {
       provider: "v8",
-      reporter: ["text", "json-summary"],
+      reporter: ["text", "json", "json-summary"],
       reportsDirectory: "coverage",
       include: [
         "packages/core/src/**/*.ts",
@@ -17,6 +17,8 @@ export default defineConfig({
         "apps/feishu-adapter/src/**/*.ts",
         "apps/browser-worker/src/**/*.ts",
         "apps/eval-runner/src/**/*.ts",
+        "apps/feishu-mcp/src/service.ts",
+        "apps/skill-worker/src/loader.ts",
       ],
       exclude: [
         "**/*.d.ts",
@@ -24,6 +26,8 @@ export default defineConfig({
         "apps/feishu-adapter/src/main.ts",
         "apps/browser-worker/src/main.ts",
         "apps/eval-runner/src/main.ts",
+        "apps/feishu-mcp/src/main.ts",
+        "apps/skill-worker/src/main.ts",
         "packages/core/src/document-worker.ts",
       ],
       thresholds: {
@@ -35,6 +39,8 @@ export default defineConfig({
         "apps/feishu-adapter/src/**": { branches: 80 },
         "apps/browser-worker/src/**": { branches: 80 },
         "apps/eval-runner/src/**": { branches: 80 },
+        "apps/feishu-mcp/src/service.ts": { branches: 80 },
+        "apps/skill-worker/src/loader.ts": { branches: 80 },
       },
     },
   },

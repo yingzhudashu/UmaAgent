@@ -1,6 +1,6 @@
 {
   "name": "@uma-agent/cli",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@earendil-works/pi-tui": "0.84.2",
-    "@uma-agent/client": "0.8.0",
-    "@uma-agent/protocol": "0.8.0"
+    "@uma-agent/client": "1.0.0",
+    "@uma-agent/protocol": "1.0.0"
   }
 }

@@ -74,7 +74,10 @@ export const VerificationSchema = Type.Object(
 export const MemoryExtractionSchema = Type.Array(
   Type.Object(
     {
-      content: Type.String({ minLength: 1 }),
+      key: Type.String({ minLength: 1 }),
+      value: Type.String({ minLength: 1 }),
+      category: Type.String({ minLength: 1 }),
+      evidence: Type.Optional(Type.String()),
       confidence: Type.Number({ minimum: 0, maximum: 1 }),
       scope: Type.Union([Type.Literal("global"), Type.Literal("session")]),
     },

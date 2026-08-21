@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 7 as const;
+export const PROTOCOL_VERSION = 9 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -28,6 +28,17 @@ export type ModelSnapshot = Static<typeof ModelSnapshotSchema>;
 
 export const SessionModeSchema = Type.Union([Type.Literal("workspace"), Type.Literal("assistant")]);
 export type SessionMode = Static<typeof SessionModeSchema>;
+
+export const QueueModeSchema = Type.Union([Type.Literal("queue"), Type.Literal("preemptive")]);
+export type QueueMode = Static<typeof QueueModeSchema>;
+
+export const RunKindSchema = Type.Union([
+  Type.Literal("agent"),
+  Type.Literal("review"),
+  Type.Literal("improve"),
+  Type.Literal("command"),
+]);
+export type RunKind = Static<typeof RunKindSchema>;
 
 export const ThinkingLevelSchema = Type.Union([
   Type.Literal("off"),
@@ -85,6 +96,7 @@ export const TranscriptItemSchema = Strict({
   content: Type.String(),
   name: Type.Optional(Type.String()),
   runId: Type.Optional(Id),
+  revisionOfMessageId: Type.Optional(Id),
   attachments: Type.Array(AttachmentSchema),
   source: Type.Optional(MessageSourceSchema),
   createdAt: Timestamp,
@@ -124,6 +136,7 @@ export const RunSchema = Strict({
   id: Id,
   sessionId: Id,
   messageId: Id,
+  kind: RunKindSchema,
   status: RunStatusSchema,
   phase: RunPhaseSchema,
   taskClass: Type.Optional(TaskClassSchema),
@@ -172,6 +185,7 @@ export const SessionSchema = Strict({
   workspace: Type.Optional(Type.String({ minLength: 1 })),
   model: ModelRefSchema,
   thinkingLevel: ThinkingLevelSchema,
+  queueMode: QueueModeSchema,
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });
@@ -215,6 +229,73 @@ export const SkillSummarySchema = Strict({
   diagnostics: Type.Array(Type.String()),
 });
 export type SkillSummary = Static<typeof SkillSummarySchema>;
+
+export const SkillPackageSchema = Strict({
+  id: Id,
+  name: Id,
+  version: Type.String({ minLength: 1, maxLength: 100 }),
+  source: Strict({
+    type: Type.Union([Type.Literal("local"), Type.Literal("clawhub")]),
+    reference: Type.String({ minLength: 1 }),
+  }),
+  contentHash: Type.String({ minLength: 64, maxLength: 64 }),
+  status: Type.Union([
+    Type.Literal("staged"),
+    Type.Literal("enabled"),
+    Type.Literal("disabled"),
+    Type.Literal("rejected"),
+  ]),
+  risk: Type.Union([
+    Type.Literal("low"),
+    Type.Literal("medium"),
+    Type.Literal("high"),
+    Type.Literal("extreme"),
+  ]),
+  diagnostics: Type.Array(Type.String()),
+  installedAt: Timestamp,
+  updatedAt: Timestamp,
+});
+export type SkillPackage = Static<typeof SkillPackageSchema>;
+
+export const AgentProfileSchema = Strict({
+  content: Type.String({ maxLength: 50_000 }),
+  updatedAt: Timestamp,
+});
+export type AgentProfile = Static<typeof AgentProfileSchema>;
+
+export const QualityIssueSchema = Strict({
+  type: Type.Union([
+    Type.Literal("knowledge_error"),
+    Type.Literal("logic_error"),
+    Type.Literal("clarity"),
+    Type.Literal("omission"),
+  ]),
+  description: Type.String({ minLength: 1, maxLength: 2_000 }),
+});
+export type QualityIssue = Static<typeof QualityIssueSchema>;
+
+export const QualityAssessmentSchema = Strict({
+  id: Id,
+  runId: Id,
+  targetMessageId: Id,
+  passed: Type.Boolean(),
+  issues: Type.Array(QualityIssueSchema),
+  suggestions: Type.Array(Type.String()),
+  iteration: Type.Integer({ minimum: 1, maximum: 3 }),
+  createdAt: Timestamp,
+});
+export type QualityAssessment = Static<typeof QualityAssessmentSchema>;
+
+export const MemoryRollupSchema = Strict({
+  id: Id,
+  sessionId: Id,
+  kind: Type.Union([Type.Literal("turn"), Type.Literal("day"), Type.Literal("session")]),
+  fromSequence: Type.Integer({ minimum: 1 }),
+  toSequence: Type.Integer({ minimum: 1 }),
+  summary: Type.String(),
+  createdAt: Timestamp,
+});
+export type MemoryRollup = Static<typeof MemoryRollupSchema>;
 
 export const KnowledgeSourceSchema = Strict({
   id: Id,
@@ -306,6 +387,7 @@ export const CreateSessionRequestSchema = Strict({
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
   workspace: Type.Optional(Type.String({ minLength: 1 })),
   model: Type.Optional(ModelRefSchema),
+  queueMode: Type.Optional(QueueModeSchema),
 });
 export type CreateSessionRequest = Static<typeof CreateSessionRequestSchema>;
 
@@ -313,6 +395,7 @@ export const UpdateSessionRequestSchema = Strict({
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
   model: Type.Optional(ModelRefSchema),
   thinkingLevel: Type.Optional(ThinkingLevelSchema),
+  queueMode: Type.Optional(QueueModeSchema),
 });
 export type UpdateSessionRequest = Static<typeof UpdateSessionRequestSchema>;
 
@@ -487,6 +570,10 @@ export const ResourceKindSchema = Type.Union([
   Type.Literal("schedules"),
   Type.Literal("memory"),
   Type.Literal("knowledge"),
+  Type.Literal("skills"),
+  Type.Literal("profile"),
+  Type.Literal("quality"),
+  Type.Literal("config"),
 ]);
 export type ResourceKind = Static<typeof ResourceKindSchema>;
 
@@ -510,14 +597,66 @@ export const MemoryFactSchema = Strict({
   id: Id,
   sessionId: Type.Optional(Id),
   scope: Type.Union([Type.Literal("global"), Type.Literal("session")]),
-  content: Type.String({ minLength: 1 }),
+  key: Type.String({ minLength: 1, maxLength: 500 }),
+  value: Type.String({ minLength: 1 }),
+  category: Type.String({ minLength: 1, maxLength: 100 }),
   confidence: Type.Number({ minimum: 0, maximum: 1 }),
+  evidence: Type.Optional(Type.String()),
   sourceRunId: Type.Optional(Id),
-  status: Type.Union([Type.Literal("active"), Type.Literal("candidate"), Type.Literal("rejected")]),
+  status: Type.Union([
+    Type.Literal("active"),
+    Type.Literal("candidate"),
+    Type.Literal("superseded"),
+    Type.Literal("rejected"),
+  ]),
+  supersedes: Type.Optional(Id),
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });
 export type MemoryFact = Static<typeof MemoryFactSchema>;
+
+export const ReviewMessageRequestSchema = Strict({
+  feedback: Type.Optional(Type.String({ maxLength: 10_000 })),
+});
+export type ReviewMessageRequest = Static<typeof ReviewMessageRequestSchema>;
+
+export const ImproveMessageRequestSchema = Strict({
+  force: Type.Optional(Type.Boolean()),
+  reset: Type.Optional(Type.Boolean()),
+});
+export type ImproveMessageRequest = Static<typeof ImproveMessageRequestSchema>;
+
+export const CommandRequestSchema = Strict({
+  command: Type.String({ minLength: 1, maxLength: 100_000 }),
+  messageId: Type.Optional(Id),
+});
+export type CommandRequest = Static<typeof CommandRequestSchema>;
+
+export const SkillInstallRequestSchema = Strict({
+  source: Type.Union([Type.Literal("local"), Type.Literal("clawhub")]),
+  reference: Type.String({ minLength: 1, maxLength: 2_000 }),
+  version: Type.Optional(Type.String({ maxLength: 100 })),
+});
+export type SkillInstallRequest = Static<typeof SkillInstallRequestSchema>;
+
+export const ReloadResultSchema = Strict({
+  applied: Type.Array(Type.String()),
+  restartRequired: Type.Array(Type.String()),
+});
+export type ReloadResult = Static<typeof ReloadResultSchema>;
+
+export const OptimizationProposalSchema = Strict({
+  id: Id,
+  title: Type.String({ minLength: 1 }),
+  evidence: Type.Array(Type.String()),
+  risk: Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
+  recommendation: Type.String({ minLength: 1 }),
+  validation: Type.Array(Type.String()),
+  status: Type.Union([Type.Literal("pending"), Type.Literal("accepted"), Type.Literal("rejected")]),
+  createdAt: Timestamp,
+  updatedAt: Timestamp,
+});
+export type OptimizationProposal = Static<typeof OptimizationProposalSchema>;
 
 export const AuditRecordSchema = Strict({
   id: Id,

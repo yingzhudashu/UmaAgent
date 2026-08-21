@@ -2,6 +2,7 @@ import type { AuditRecord, Run, RunAction, SessionEventPage, SessionSnapshot } f
 
 export interface EvalCase {
   name: string;
+  category?: "security" | "prompt_injection" | "tool_selection" | "schema" | "regression" | "cost";
   prompt: string;
   mode?: "auto" | "direct" | "plan";
   expectedStatus: Run["status"];
@@ -28,7 +29,9 @@ export interface EvalClient {
 
 export interface EvalResult {
   name: string;
+  category: NonNullable<EvalCase["category"]>;
   passed: boolean;
+  durationMs: number;
   runId?: string;
   status?: Run["status"];
   error?: string;
@@ -37,6 +40,8 @@ export interface EvalResult {
 export async function evaluateSuite(client: EvalClient, cases: EvalCase[]): Promise<EvalResult[]> {
   const results: EvalResult[] = [];
   for (const item of cases) {
+    const startedAt = Date.now();
+    const category = item.category ?? "regression";
     try {
       const session = await client.createSession({ mode: "assistant", title: `Eval: ${item.name}` });
       const accepted = await client.sendMessage(session.id, item.prompt, {
@@ -65,7 +70,9 @@ export async function evaluateSuite(client: EvalClient, cases: EvalCase[]): Prom
           events.events.some((event) => event.type === item.expectedDurableEvent));
       results.push({
         name: item.name,
+        category,
         passed,
+        durationMs: Date.now() - startedAt,
         runId: run.id,
         status: run.status,
         ...(!passed ? { error: "Observed result did not match the expected public outcome" } : {}),
@@ -73,7 +80,9 @@ export async function evaluateSuite(client: EvalClient, cases: EvalCase[]): Prom
     } catch (error) {
       results.push({
         name: item.name,
+        category,
         passed: false,
+        durationMs: Date.now() - startedAt,
         error: error instanceof Error ? error.message : String(error),
       });
     }

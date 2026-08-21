@@ -55,23 +55,23 @@ describe("server", () => {
     process.env.UMA_TEST_TOKEN = "secret";
     const runtime = new UmaRuntime(config);
     await runtime.start();
-    const app = await createServer(runtime, { webRoot: false });
+    const app = await createServer(runtime, { webRoot: false, configLoader: async () => config });
     cleanup.push(async () => {
       await app.close();
       await runtime.stop();
       await rm(root, { recursive: true, force: true });
       delete process.env.UMA_TEST_TOKEN;
     });
-    expect((await app.inject({ method: "GET", url: "/api/v7/health/live" })).statusCode).toBe(200);
-    expect((await app.inject({ method: "GET", url: "/api/v7/health/ready" })).json()).toMatchObject({
+    expect((await app.inject({ method: "GET", url: "/api/v9/health/live" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v9/health/ready" })).json()).toMatchObject({
       status: "ok",
-      version: "0.8.0",
-      protocolVersion: 7,
+      version: "1.0.0",
+      protocolVersion: 9,
     });
-    expect((await app.inject({ method: "GET", url: "/api/v7/sessions" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/v9/sessions" })).statusCode).toBe(401);
     const preflight = await app.inject({
       method: "OPTIONS",
-      url: "/api/v7/sessions",
+      url: "/api/v9/sessions",
       headers: {
         origin: "https://web.example",
         "access-control-request-method": "POST",
@@ -83,7 +83,7 @@ describe("server", () => {
     expect(preflight.headers["access-control-allow-credentials"]).toBe("true");
     const deniedPreflight = await app.inject({
       method: "OPTIONS",
-      url: "/api/v7/sessions",
+      url: "/api/v9/sessions",
       headers: {
         origin: "https://attacker.example",
         "access-control-request-method": "POST",
@@ -92,7 +92,7 @@ describe("server", () => {
     expect(deniedPreflight.statusCode).toBe(403);
     const login = await app.inject({
       method: "POST",
-      url: "/api/v7/auth/login",
+      url: "/api/v9/auth/login",
       headers: { origin: "https://web.example" },
       payload: { token: "secret" },
     });
@@ -103,7 +103,7 @@ describe("server", () => {
     expect(webCookie).toBeDefined();
     const missingOrigin = await app.inject({
       method: "POST",
-      url: "/api/v7/sessions",
+      url: "/api/v9/sessions",
       headers: { cookie: `${webCookie?.name}=${webCookie?.value}` },
       payload: {},
     });
@@ -111,7 +111,7 @@ describe("server", () => {
     expect(missingOrigin.json().error.code).toBe("forbidden");
     const cookieSession = await app.inject({
       method: "POST",
-      url: "/api/v7/sessions",
+      url: "/api/v9/sessions",
       headers: {
         cookie: `${webCookie?.name}=${webCookie?.value}`,
         origin: "https://web.example",
@@ -120,7 +120,7 @@ describe("server", () => {
     });
     expect(cookieSession.statusCode).toBe(200);
     const cookieSessionId = cookieSession.json<{ id: string }>().id;
-    const socket = await app.injectWS("/api/v7/events", {
+    const socket = await app.injectWS("/api/v9/events", {
       headers: {
         cookie: `${webCookie?.name}=${webCookie?.value}`,
         origin: "https://web.example",
@@ -139,11 +139,11 @@ describe("server", () => {
     socket.terminate();
 
     await expect(
-      app.injectWS("/api/v7/events", { headers: { origin: "https://attacker.example" } }),
+      app.injectWS("/api/v9/events", { headers: { origin: "https://attacker.example" } }),
     ).rejects.toThrow("Unexpected server response: 403");
     const logout = await app.inject({
       method: "POST",
-      url: "/api/v7/auth/logout",
+      url: "/api/v9/auth/logout",
       headers: {
         cookie: `${webCookie?.name}=${webCookie?.value}`,
         origin: "https://web.example",
@@ -154,7 +154,7 @@ describe("server", () => {
     expect(logout.headers["set-cookie"]).toContain("Secure");
     const created = await app.inject({
       method: "POST",
-      url: "/api/v7/sessions",
+      url: "/api/v9/sessions",
       headers: { authorization: "Bearer secret" },
       payload: { title: "API test" },
     });
@@ -162,13 +162,13 @@ describe("server", () => {
     const session = created.json<{ id: string }>();
     const snapshot = await app.inject({
       method: "GET",
-      url: `/api/v7/sessions/${session.id}/snapshot`,
+      url: `/api/v9/sessions/${session.id}/snapshot`,
       headers: { authorization: "Bearer secret" },
     });
     expect(snapshot.json<{ session: { title: string } }>().session.title).toBe("API test");
     const memory = await app.inject({
       method: "POST",
-      url: "/api/v7/memory",
+      url: "/api/v9/memory",
       headers: { authorization: "Bearer secret" },
       payload: { sessionId: session.id, scope: "global", content: "prefers deterministic tests" },
     });
@@ -190,7 +190,7 @@ describe("server", () => {
     });
     const downloaded = await app.inject({
       method: "GET",
-      url: `/api/v7/attachments/${attachment.id}/content`,
+      url: `/api/v9/attachments/${attachment.id}/content`,
       headers: { authorization: "Bearer secret" },
     });
     expect(downloaded.statusCode).toBe(200);
@@ -217,19 +217,19 @@ describe("server", () => {
     });
     const history = await app.inject({
       method: "GET",
-      url: `/api/v7/sessions/${session.id}/history?limit=10`,
+      url: `/api/v9/sessions/${session.id}/history?limit=10`,
       headers: { authorization: "Bearer secret" },
     });
     expect(history.json<{ items: Array<{ content: string }> }>().items[0]?.content).toBe("history item");
     const checkpoints = await app.inject({
       method: "GET",
-      url: `/api/v7/runs/${run.id}/checkpoints`,
+      url: `/api/v9/runs/${run.id}/checkpoints`,
       headers: { authorization: "Bearer secret" },
     });
     expect(checkpoints.json<Array<{ phase: string }>>()[0]?.phase).toBe("preflight");
     const invalidPatch = await app.inject({
       method: "PATCH",
-      url: `/api/v7/sessions/${session.id}`,
+      url: `/api/v9/sessions/${session.id}`,
       headers: { authorization: "Bearer secret" },
       payload: { workspace: "elsewhere" },
     });
@@ -240,7 +240,7 @@ describe("server", () => {
     expect(invalidPatch.json<{ error: { requestId: string } }>().error.requestId).toMatch(/^req-/);
     const createdSchedule = await app.inject({
       method: "POST",
-      url: "/api/v7/schedules",
+      url: "/api/v9/schedules",
       headers: { authorization: "Bearer secret" },
       payload: {
         name: "hourly",
@@ -254,7 +254,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "GET",
-          url: "/api/v7/schedules",
+          url: "/api/v9/schedules",
           headers: { authorization: "Bearer secret" },
         })
       ).json<Array<{ id: string }>>(),
@@ -263,7 +263,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "PATCH",
-          url: `/api/v7/schedules/${scheduleId}`,
+          url: `/api/v9/schedules/${scheduleId}`,
           headers: { authorization: "Bearer secret" },
           payload: { enabled: false },
         })
@@ -273,26 +273,26 @@ describe("server", () => {
       (
         await app.inject({
           method: "GET",
-          url: `/api/v7/schedules/${scheduleId}/runs`,
+          url: `/api/v9/schedules/${scheduleId}/runs`,
           headers: { authorization: "Bearer secret" },
         })
       ).json(),
     ).toEqual([]);
     const report = await app.inject({
       method: "GET",
-      url: "/api/v7/reports/operations?from=0",
+      url: "/api/v9/reports/operations?from=0",
       headers: { authorization: "Bearer secret" },
     });
     expect(report.json()).toMatchObject({ runs: { total: 1 }, tools: { calls: 0 } });
     const diagnostics = await app.inject({
       method: "GET",
-      url: "/api/v7/reports/diagnostics?from=0",
+      url: "/api/v9/reports/diagnostics?from=0",
       headers: { authorization: "Bearer secret" },
     });
     expect(diagnostics.json()).toMatchObject({ summary: { runs: { total: 1 } } });
     const authHeaders = { authorization: "Bearer secret" };
     expect(
-      (await app.inject({ method: "GET", url: "/api/v7/sessions", headers: authHeaders })).json<
+      (await app.inject({ method: "GET", url: "/api/v9/sessions", headers: authHeaders })).json<
         Array<{ id: string }>
       >(),
     ).toEqual(expect.arrayContaining([expect.objectContaining({ id: session.id })]));
@@ -300,57 +300,115 @@ describe("server", () => {
       (
         await app.inject({
           method: "PATCH",
-          url: `/api/v7/sessions/${session.id}`,
+          url: `/api/v9/sessions/${session.id}`,
           headers: authHeaders,
-          payload: { title: "Renamed" },
+          payload: { title: "Renamed", queueMode: "preemptive" },
         })
       ).json(),
-    ).toMatchObject({ title: "Renamed" });
+    ).toMatchObject({ title: "Renamed", queueMode: "preemptive" });
     expect(
       (
         await app.inject({
           method: "GET",
-          url: `/api/v7/sessions/${session.id}/events?after=-10&limit=5000`,
+          url: `/api/v9/sessions/${session.id}/events?after=-10&limit=5000`,
           headers: authHeaders,
         })
       ).json(),
     ).toMatchObject({ sessionId: session.id });
     expect(
-      (await app.inject({ method: "GET", url: "/api/v7/models", headers: authHeaders })).json<
+      (await app.inject({ method: "GET", url: "/api/v9/models", headers: authHeaders })).json<
         Array<unknown>
       >(),
     ).toHaveLength(1);
-    expect((await app.inject({ method: "GET", url: "/api/v7/skills", headers: authHeaders })).json()).toEqual(
+    expect((await app.inject({ method: "GET", url: "/api/v9/skills", headers: authHeaders })).json()).toEqual(
+      { available: [], packages: [] },
+    );
+    expect(
+      (await app.inject({ method: "POST", url: "/api/v9/skills/refresh", headers: authHeaders })).json(),
+    ).toEqual([]);
+    expect(
+      (await app.inject({ method: "POST", url: "/api/v9/admin/reload", headers: authHeaders })).json(),
+    ).toMatchObject({ applied: expect.any(Array), restartRequired: expect.any(Array) });
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v9/profile", headers: authHeaders })).json(),
+    ).toMatchObject({ content: "" });
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/v9/profile",
+          headers: authHeaders,
+          payload: { content: "Prefer concise, evidence-backed answers." },
+        })
+      ).json(),
+    ).toMatchObject({ content: "Prefer concise, evidence-backed answers." });
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/api/v9/sessions/${session.id}/history/search?q=history&limit=5`,
+          headers: authHeaders,
+        })
+      ).json<Array<{ content: string }>>(),
+    ).toEqual([expect.objectContaining({ content: "history item" })]);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/api/v9/sessions/${session.id}/activity?limit=5`,
+          headers: authHeaders,
+        })
+      ).json<Array<unknown>>().length,
+    ).toBeGreaterThan(0);
+    const skillSource = join(root, "server-skill");
+    await import("node:fs/promises").then((fs) => fs.mkdir(skillSource));
+    await writeFile(
+      join(skillSource, "SKILL.md"),
+      "---\nname: server-skill\ndescription: Server route fixture\nversion: 1.0.0\n---\nUse safely.",
+    );
+    const installedSkill = await app.inject({
+      method: "POST",
+      url: "/api/v9/skills/install",
+      headers: authHeaders,
+      payload: { source: "local", reference: skillSource },
+    });
+    expect(installedSkill.statusCode).toBe(200);
+    const skillId = installedSkill.json<{ id: string }>().id;
+    for (const action of ["enable", "disable", "reject"])
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/api/v9/skills/${skillId}/${action}`,
+            headers: authHeaders,
+          })
+        ).statusCode,
+      ).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/api/v9/mcp", headers: authHeaders })).json()).toEqual(
       [],
     );
     expect(
-      (await app.inject({ method: "POST", url: "/api/v7/skills/refresh", headers: authHeaders })).json(),
+      (await app.inject({ method: "GET", url: "/api/v9/knowledge", headers: authHeaders })).json(),
     ).toEqual([]);
-    expect((await app.inject({ method: "GET", url: "/api/v7/mcp", headers: authHeaders })).json()).toEqual(
-      [],
-    );
-    expect(
-      (await app.inject({ method: "GET", url: "/api/v7/knowledge", headers: authHeaders })).json(),
-    ).toEqual([]);
-    expect((await app.inject({ method: "GET", url: "/api/v7/tasks", headers: authHeaders })).json()).toEqual(
+    expect((await app.inject({ method: "GET", url: "/api/v9/tasks", headers: authHeaders })).json()).toEqual(
       [],
     );
     const taskResponse = await app.inject({
       method: "POST",
-      url: "/api/v7/tasks",
+      url: "/api/v9/tasks",
       headers: authHeaders,
       payload: { prompt: "background prompt", parentSessionId: session.id },
     });
     expect(taskResponse.statusCode).toBe(200);
     const taskId = taskResponse.json<{ id: string }>().id;
     expect(
-      (await app.inject({ method: "GET", url: `/api/v7/tasks/${taskId}`, headers: authHeaders })).json(),
+      (await app.inject({ method: "GET", url: `/api/v9/tasks/${taskId}`, headers: authHeaders })).json(),
     ).toMatchObject({ id: taskId });
     expect(
       (
         await app.inject({
           method: "GET",
-          url: `/api/v7/tasks/${taskId}/snapshot`,
+          url: `/api/v9/tasks/${taskId}/snapshot`,
           headers: authHeaders,
         })
       ).json(),
@@ -359,7 +417,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "POST",
-          url: `/api/v7/tasks/${taskId}/cancel`,
+          url: `/api/v9/tasks/${taskId}/cancel`,
           headers: authHeaders,
         })
       ).json(),
@@ -371,7 +429,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "GET",
-          url: "/api/v7/memory?status=candidate",
+          url: "/api/v9/memory?status=candidate",
           headers: authHeaders,
         })
       ).json<Array<{ id: string }>>(),
@@ -380,7 +438,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "POST",
-          url: `/api/v7/memory/${candidateMemory.id}`,
+          url: `/api/v9/memory/${candidateMemory.id}`,
           headers: authHeaders,
           payload: { status: "active" },
         })
@@ -390,28 +448,111 @@ describe("server", () => {
       (
         await app.inject({
           method: "DELETE",
-          url: `/api/v7/memory/${candidateMemory.id}`,
+          url: `/api/v9/memory/${candidateMemory.id}`,
           headers: authHeaders,
         })
       ).statusCode,
     ).toBe(204);
     expect(
-      (await app.inject({ method: "GET", url: `/api/v7/runs/${run.id}`, headers: authHeaders })).json(),
+      (await app.inject({ method: "GET", url: `/api/v9/runs/${run.id}`, headers: authHeaders })).json(),
     ).toMatchObject({ id: run.id });
     expect(
       (
         await app.inject({
           method: "GET",
-          url: `/api/v7/runs/${run.id}/actions`,
+          url: `/api/v9/runs/${run.id}/actions`,
           headers: authHeaders,
         })
       ).json(),
     ).toEqual([]);
     expect(
       (
+        await app.inject({ method: "GET", url: `/api/v9/runs/${run.id}/quality`, headers: authHeaders })
+      ).json(),
+    ).toEqual([]);
+    expect(
+      (
+        await app.inject({ method: "GET", url: "/api/v9/optimization-proposals", headers: authHeaders })
+      ).json(),
+    ).toEqual([]);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v9/optimization-proposals/generate",
+          headers: authHeaders,
+          payload: { from: 0, to: Date.now() },
+        })
+      ).json(),
+    ).toEqual([]);
+    const proposal = runtime.database.addOptimizationProposal({
+      title: "Review latency",
+      evidence: ["fixture"],
+      risk: "low",
+      recommendation: "Inspect it",
+      validation: ["Run tests"],
+      status: "pending",
+    });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v9/optimization-proposals/${proposal.id}/decision`,
+          headers: authHeaders,
+          payload: { status: "accepted" },
+        })
+      ).json(),
+    ).toMatchObject({ id: proposal.id, status: "accepted" });
+
+    runtime.database.insertMessage({
+      id: "quality-question",
+      sessionId: session.id,
+      role: "user",
+      status: "complete",
+      content: "What is the result?",
+    });
+    runtime.database.insertMessage({
+      id: "quality-answer",
+      sessionId: session.id,
+      role: "assistant",
+      status: "complete",
+      content: "The result is concise.",
+    });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v9/messages/quality-answer/review",
+          headers: authHeaders,
+          payload: { feedback: "check clarity" },
+        })
+      ).statusCode,
+    ).toBe(202);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v9/messages/quality-answer/improve",
+          headers: authHeaders,
+          payload: { force: true, reset: true },
+        })
+      ).statusCode,
+    ).toBe(202);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/v9/sessions/${session.id}/commands`,
+          headers: authHeaders,
+          payload: { command: "node --version", messageId: "server-command" },
+        })
+      ).statusCode,
+    ).toBe(202);
+    expect(
+      (
         await app.inject({
           method: "GET",
-          url: `/api/v7/audit/runs/${run.id}`,
+          url: `/api/v9/audit/runs/${run.id}`,
           headers: authHeaders,
         })
       ).json(),
@@ -419,7 +560,7 @@ describe("server", () => {
 
     const upload = await app.inject({
       method: "POST",
-      url: "/api/v7/uploads",
+      url: "/api/v9/uploads",
       payload: Buffer.from(
         `--boundary\r\nContent-Disposition: form-data; name="sessionId"\r\n\r\n${session.id}\r\n--boundary\r\nContent-Disposition: form-data; name="file"; filename="upload.txt"\r\nContent-Type: text/plain\r\n\r\nupload body\r\n--boundary--\r\n`,
       ),
@@ -432,15 +573,22 @@ describe("server", () => {
     expect(upload.json()).toMatchObject({ name: "upload.txt" });
 
     for (const [method, url, payload] of [
-      ["POST", "/api/v7/sessions", { mode: "invalid" }],
-      ["POST", `/api/v7/sessions/${session.id}/messages`, { text: "missing id" }],
-      ["POST", "/api/v7/tasks", {}],
-      ["POST", "/api/v7/knowledge", {}],
-      ["POST", "/api/v7/knowledge", { name: "attachment", attachmentId: "missing" }],
-      ["POST", "/api/v7/schedules", { name: "bad" }],
-      ["PATCH", `/api/v7/schedules/${scheduleId}`, { schedule: { kind: "invalid" } }],
-      ["POST", `/api/v7/memory/${memory.json<{ id: string }>().id}`, { status: "invalid" }],
-      ["POST", `/api/v7/runs/${run.id}/actions/missing/decide`, { decision: "invalid" }],
+      ["POST", "/api/v9/sessions", { mode: "invalid" }],
+      ["POST", `/api/v9/sessions/${session.id}/messages`, { text: "missing id" }],
+      ["POST", "/api/v9/tasks", {}],
+      ["POST", "/api/v9/knowledge", {}],
+      ["POST", "/api/v9/knowledge", { name: "attachment", attachmentId: "missing" }],
+      ["POST", "/api/v9/schedules", { name: "bad" }],
+      ["PATCH", `/api/v9/schedules/${scheduleId}`, { schedule: { kind: "invalid" } }],
+      ["POST", `/api/v9/memory/${memory.json<{ id: string }>().id}`, { status: "invalid" }],
+      ["POST", `/api/v9/runs/${run.id}/actions/missing/decide`, { decision: "invalid" }],
+      ["POST", `/api/v9/messages/${run.messageId}/review`, { feedback: 42 }],
+      ["POST", `/api/v9/messages/${run.messageId}/improve`, { force: "yes" }],
+      ["POST", `/api/v9/sessions/${session.id}/commands`, { command: "" }],
+      ["POST", "/api/v9/skills/install", { source: "unknown", reference: "x" }],
+      ["PUT", "/api/v9/profile", {}],
+      ["POST", "/api/v9/optimization-proposals/generate", { from: 10, to: 1 }],
+      ["POST", `/api/v9/optimization-proposals/${proposal.id}/decision`, { status: "pending" }],
     ] as const) {
       expect((await app.inject({ method, url, headers: authHeaders, payload })).statusCode).toBe(400);
     }
@@ -448,7 +596,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "GET",
-          url: "/api/v7/reports/operations?from=10&to=1",
+          url: "/api/v9/reports/operations?from=10&to=1",
           headers: authHeaders,
         })
       ).statusCode,
@@ -456,7 +604,7 @@ describe("server", () => {
     expect((await app.inject({ method: "GET", url: "/" })).body).toContain("has not been built");
     const manualScheduleRun = await app.inject({
       method: "POST",
-      url: `/api/v7/schedules/${scheduleId}/run`,
+      url: `/api/v9/schedules/${scheduleId}/run`,
       headers: authHeaders,
     });
     expect(manualScheduleRun.statusCode).toBe(200);
@@ -465,7 +613,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "GET",
-          url: `/api/v7/schedule-runs/${scheduleRunId}`,
+          url: `/api/v9/schedule-runs/${scheduleRunId}`,
           headers: authHeaders,
         })
       ).json(),
@@ -474,7 +622,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "POST",
-          url: `/api/v7/schedule-runs/${scheduleRunId}/cancel`,
+          url: `/api/v9/schedule-runs/${scheduleRunId}/cancel`,
           headers: authHeaders,
         })
       ).json(),
@@ -483,14 +631,14 @@ describe("server", () => {
       (
         await app.inject({
           method: "POST",
-          url: `/api/v7/sessions/${session.id}/cancel`,
+          url: `/api/v9/sessions/${session.id}/cancel`,
           headers: authHeaders,
         })
       ).statusCode,
-    ).toBe(409);
+    ).toBe(204);
     const cancelledRun = await app.inject({
       method: "POST",
-      url: `/api/v7/runs/${run.id}/cancel`,
+      url: `/api/v9/runs/${run.id}/cancel`,
       headers: authHeaders,
     });
     expect(cancelledRun.json()).toMatchObject({ id: run.id, status: "cancelled" });
@@ -498,7 +646,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "POST",
-          url: `/api/v7/runs/${run.id}/resume`,
+          url: `/api/v9/runs/${run.id}/resume`,
           headers: authHeaders,
         })
       ).statusCode,
@@ -507,7 +655,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "GET",
-          url: "/api/v7/attachments/missing/content",
+          url: "/api/v9/attachments/missing/content",
           headers: authHeaders,
         })
       ).statusCode,
@@ -516,7 +664,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "POST",
-          url: "/api/v7/uploads",
+          url: "/api/v9/uploads",
           headers: { ...authHeaders, "content-type": "multipart/form-data; boundary=empty" },
           payload: Buffer.from("--empty--\r\n"),
         })
@@ -525,7 +673,7 @@ describe("server", () => {
     for (let attempt = 0; attempt < 5; attempt++) {
       const invalidLogin = await app.inject({
         method: "POST",
-        url: "/api/v7/auth/login",
+        url: "/api/v9/auth/login",
         headers: { origin: "https://web.example" },
         payload: { token: "wrong" },
       });
@@ -535,7 +683,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "POST",
-          url: "/api/v7/auth/login",
+          url: "/api/v9/auth/login",
           headers: { origin: "https://web.example" },
           payload: { token: "wrong" },
         })
@@ -545,7 +693,7 @@ describe("server", () => {
       (
         await app.inject({
           method: "DELETE",
-          url: `/api/v7/schedules/${scheduleId}`,
+          url: `/api/v9/schedules/${scheduleId}`,
           headers: { authorization: "Bearer secret" },
         })
       ).statusCode,
@@ -553,7 +701,7 @@ describe("server", () => {
     await writeFile(join(root, "notes.md"), "UmaAgent searchable knowledge");
     const queuedKnowledge = await app.inject({
       method: "POST",
-      url: "/api/v7/knowledge",
+      url: "/api/v9/knowledge",
       headers: { authorization: "Bearer secret" },
       payload: { name: "notes", path: "notes.md" },
     });
@@ -568,27 +716,27 @@ describe("server", () => {
       (
         await app.inject({
           method: "DELETE",
-          url: `/api/v7/knowledge/${knowledgeId}`,
+          url: `/api/v9/knowledge/${knowledgeId}`,
           headers: { authorization: "Bearer secret" },
         })
       ).statusCode,
     ).toBe(204);
     const crossOriginLogin = await app.inject({
       method: "POST",
-      url: "/api/v7/auth/login",
+      url: "/api/v9/auth/login",
       headers: { origin: "https://attacker.example" },
       payload: { token: "secret" },
     });
     expect(crossOriginLogin.statusCode).toBe(403);
     const bearerFromWrongOrigin = await app.inject({
       method: "GET",
-      url: "/api/v7/sessions",
+      url: "/api/v9/sessions",
       headers: { authorization: "Bearer secret", origin: "https://attacker.example" },
     });
     expect(bearerFromWrongOrigin.statusCode).toBe(403);
     const unknown = await app.inject({
       method: "GET",
-      url: "/api/v7/unknown",
+      url: "/api/v9/unknown",
       headers: { authorization: "Bearer secret" },
     });
     expect(unknown.statusCode).toBe(404);

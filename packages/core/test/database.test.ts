@@ -48,7 +48,9 @@ describe("UmaDatabase", () => {
     db.addMemoryFact({
       sessionId: session.id,
       scope: "session",
-      content: "用户偏好使用 TypeScript 编写工具",
+      key: "preference.language",
+      value: "用户偏好使用 TypeScript 编写工具",
+      category: "preference",
       confidence: 1,
       status: "active",
     });
@@ -207,28 +209,36 @@ describe("UmaDatabase", () => {
     });
     db.addMemoryFact({
       scope: "global",
-      content: "global zebrafish preference",
+      key: "global.zebrafish",
+      value: "global zebrafish preference",
+      category: "preference",
       confidence: 1,
       status: "active",
     });
     db.addMemoryFact({
       sessionId: session.id,
       scope: "session",
-      content: "session zebrafish preference",
+      key: "session.zebrafish",
+      value: "session zebrafish preference",
+      category: "preference",
       confidence: 1,
       status: "active",
     });
     db.addMemoryFact({
       sessionId: other.id,
       scope: "session",
-      content: "other zebrafish preference",
+      key: "other.zebrafish",
+      value: "other zebrafish preference",
+      category: "preference",
       confidence: 1,
       status: "active",
     });
     db.addMemoryFact({
       sessionId: session.id,
       scope: "session",
-      content: "candidate zebrafish preference",
+      key: "candidate.zebrafish",
+      value: "candidate zebrafish preference",
+      category: "preference",
       confidence: 0.7,
       status: "candidate",
     });
@@ -237,6 +247,48 @@ describe("UmaDatabase", () => {
     expect(results).toContain("session zebrafish preference");
     expect(results).not.toContain("other zebrafish preference");
     expect(results).not.toContain("candidate zebrafish preference");
+    db.close();
+  });
+
+  it("keeps fixed Chinese and English memory Recall@8 above the 85% embedding gate", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-memory-recall-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const session = db.createSession({
+      mode: "assistant",
+      title: "recall",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const samples = [
+      ["language.typescript", "用户主要使用 TypeScript 开发 Agent", "TypeScript Agent"],
+      ["editor.vscode", "用户偏好使用 VS Code 编辑代码", "VS Code 编辑"],
+      ["deploy.sqlite", "项目采用 SQLite WAL 单副本部署", "SQLite WAL"],
+      ["security.reasoning", "系统永不保存隐藏思维链", "隐藏思维链"],
+      ["channel.feishu", "飞书消息通过独立 Adapter 接入", "飞书 Adapter"],
+      ["runtime.pi", "Runtime reuses the stable Pi agent loop", "stable Pi agent"],
+      ["testing.playwright", "Web end-to-end tests use Playwright", "Playwright end-to-end"],
+      ["memory.active", "Only active facts are injected into prompts", "active facts prompts"],
+      ["skills.staged", "Executable skills remain staged until owner approval", "skills staged approval"],
+      [
+        "recovery.actions",
+        "Uncertain side effects are never replayed automatically",
+        "uncertain side effects",
+      ],
+    ] as const;
+    for (const [key, value] of samples)
+      db.addMemoryFact({
+        scope: "global",
+        key,
+        value,
+        category: "recall-eval",
+        confidence: 1,
+        status: "active",
+      });
+    const recalled = samples.filter(([, value, query]) =>
+      db.searchMemory(session.id, query, 8).includes(value),
+    );
+    expect(recalled.length / samples.length).toBeGreaterThanOrEqual(0.85);
     db.close();
   });
 

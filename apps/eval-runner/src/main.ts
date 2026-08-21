@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { UmaClient } from "@uma-agent/client";
 import { type EvalCase, evaluateSuite, junitReport } from "./runner.js";
 
@@ -12,10 +12,18 @@ if (!Array.isArray(parsed)) throw new Error("Evaluation suite must be a JSON arr
 const client = new UmaClient({ baseUrl, token });
 try {
   const results = await evaluateSuite(client, parsed as EvalCase[]);
-  const report = { protocolVersion: 7, results };
+  const categories = Object.fromEntries(
+    [...new Set(results.map((result) => result.category))].map((category) => {
+      const values = results.filter((result) => result.category === category);
+      return [category, { total: values.length, passed: values.filter((result) => result.passed).length }];
+    }),
+  );
+  const report = { protocolVersion: 9, timestamp: Date.now(), categories, results };
   process.stdout.write(`${JSON.stringify(report)}\n`);
   const junitPath = process.env.EVAL_JUNIT_PATH?.trim();
   if (junitPath) await writeFile(junitPath, junitReport(results), "utf8");
+  const historyPath = process.env.EVAL_HISTORY_PATH?.trim();
+  if (historyPath) await appendFile(historyPath, `${JSON.stringify(report)}\n`, "utf8");
   if (results.some((result) => !result.passed)) process.exitCode = 1;
 } finally {
   client.close();

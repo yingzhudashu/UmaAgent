@@ -15,6 +15,9 @@ services:
     depends_on:
       browser-worker:
         condition: service_healthy
+    networks:
+      - default
+      - skill-network
 
   browser-worker:
     build:
@@ -55,6 +58,59 @@ services:
       uma:
         condition: service_healthy
 
+  feishu-mcp:
+    profiles: ["feishu-tools"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.feishu-mcp
+    init: true
+    restart: unless-stopped
+    environment:
+      FEISHU_APP_ID: ${FEISHU_APP_ID:?set FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:?set FEISHU_APP_SECRET}
+      FEISHU_MCP_HOST: 0.0.0.0
+      FEISHU_MCP_PORT: 3240
+      FEISHU_MCP_AUTH_TOKEN: ${FEISHU_MCP_TOKEN:?set FEISHU_MCP_TOKEN}
+      UMA_SERVER_URL: http://uma:3210
+      UMA_TOKEN: ${UMA_AUTH_TOKEN}
+    expose:
+      - "3240"
+    depends_on:
+      uma:
+        condition: service_healthy
+
+  skill-worker:
+    profiles: ["skills"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.skill-worker
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    environment:
+      SKILL_WORKER_HOST: 0.0.0.0
+      SKILL_WORKER_PORT: 3250
+      SKILL_WORKER_AUTH_TOKEN: ${SKILL_WORKER_TOKEN:?set SKILL_WORKER_TOKEN}
+      SKILL_WORKER_PACKAGES_DIR: /skills
+      SKILL_WORKER_ALLOWED_HASHES: ${SKILL_WORKER_ALLOWED_HASHES:?set approved hashes}
+    volumes:
+      - ./approved-skills:/skills:ro
+      - skill-scratch:/scratch
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    expose:
+      - "3250"
+    networks:
+      - skill-network
+
 volumes:
   uma-state:
   feishu-state:
+  skill-scratch:
+
+networks:
+  skill-network:
+    internal: true

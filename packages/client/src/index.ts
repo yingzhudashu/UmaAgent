@@ -1,5 +1,6 @@
 import type {
   AgentEventEnvelope,
+  AgentProfile,
   Approval,
   Attachment,
   AuditRecord,
@@ -12,6 +13,9 @@ import type {
   MemoryFact,
   ModelRef,
   OperationsReport,
+  OptimizationProposal,
+  QualityAssessment,
+  ReloadResult,
   ResourceInvalidated,
   ResourceResyncRequired,
   ScheduledTask,
@@ -22,6 +26,8 @@ import type {
   SessionEventPage,
   SessionHistoryPage,
   SessionSnapshot,
+  SkillInstallRequest,
+  SkillPackage,
   SkillSummary,
   UpdateScheduledTaskRequest,
   UpdateSessionRequest,
@@ -74,7 +80,7 @@ export class UmaClient {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v7${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v9${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -161,11 +167,44 @@ export class UmaClient {
   listModels(): Promise<ModelRef[]> {
     return this.request("/models");
   }
-  listSkills(): Promise<SkillSummary[]> {
+  async listSkills(): Promise<SkillSummary[]> {
+    return (await this.skillState()).available;
+  }
+  skillState(): Promise<{ available: SkillSummary[]; packages: SkillPackage[] }> {
     return this.request("/skills");
   }
   refreshSkills(): Promise<SkillSummary[]> {
     return this.request("/skills/refresh", { method: "POST" });
+  }
+  reloadConfig(): Promise<ReloadResult> {
+    return this.request("/admin/reload", { method: "POST" });
+  }
+  searchSkills(query: string): Promise<Array<Record<string, unknown>>> {
+    return this.request(`/skills/search?q=${encodeURIComponent(query)}`);
+  }
+  installSkill(input: SkillInstallRequest): Promise<SkillPackage> {
+    return this.request("/skills/install", { method: "POST", body: JSON.stringify(input) });
+  }
+  setSkillStatus(id: string, action: "enable" | "disable" | "reject"): Promise<SkillPackage> {
+    return this.request(`/skills/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+  }
+  getAgentProfile(): Promise<AgentProfile> {
+    return this.request("/profile");
+  }
+  updateAgentProfile(content: string): Promise<AgentProfile> {
+    return this.request("/profile", { method: "PUT", body: JSON.stringify({ content }) });
+  }
+  searchHistory(
+    sessionId: string,
+    query: string,
+    limit = 20,
+  ): Promise<import("@uma-agent/protocol").TranscriptItem[]> {
+    return this.request(
+      `/sessions/${encodeURIComponent(sessionId)}/history/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+    );
+  }
+  listActivity(sessionId: string, limit = 200): Promise<Array<Record<string, unknown>>> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/activity?limit=${limit}`);
   }
   mcpStatus(): Promise<Array<{ name: string; connected: boolean; toolCount: number; error?: string }>> {
     return this.request("/mcp");
@@ -239,6 +278,21 @@ export class UmaClient {
     if (to !== undefined) query.set("to", String(to));
     return this.request(`/reports/diagnostics${query.size ? `?${query}` : ""}`);
   }
+  listOptimizationProposals(): Promise<OptimizationProposal[]> {
+    return this.request("/optimization-proposals");
+  }
+  generateOptimizationProposals(from?: number, to?: number): Promise<OptimizationProposal[]> {
+    return this.request("/optimization-proposals/generate", {
+      method: "POST",
+      body: JSON.stringify({ ...(from === undefined ? {} : { from }), ...(to === undefined ? {} : { to }) }),
+    });
+  }
+  decideOptimizationProposal(id: string, status: "accepted" | "rejected"): Promise<OptimizationProposal> {
+    return this.request(`/optimization-proposals/${encodeURIComponent(id)}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    });
+  }
   listMemoryFacts(status?: MemoryFact["status"]): Promise<MemoryFact[]> {
     return this.request(`/memory${status ? `?status=${status}` : ""}`);
   }
@@ -263,6 +317,30 @@ export class UmaClient {
   }
   listAudit(runId: string): Promise<AuditRecord[]> {
     return this.request(`/audit/runs/${encodeURIComponent(runId)}`);
+  }
+  reviewMessage(messageId: string, feedback?: string): Promise<SendMessageResponse> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/review`, {
+      method: "POST",
+      body: JSON.stringify(feedback ? { feedback } : {}),
+    });
+  }
+  improveMessage(
+    messageId: string,
+    options: { force?: boolean; reset?: boolean } = {},
+  ): Promise<SendMessageResponse> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/improve`, {
+      method: "POST",
+      body: JSON.stringify(options),
+    });
+  }
+  listRunQuality(runId: string): Promise<QualityAssessment[]> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/quality`);
+  }
+  sendCommand(sessionId: string, command: string, messageId?: string): Promise<SendMessageResponse> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/commands`, {
+      method: "POST",
+      body: JSON.stringify({ command, ...(messageId ? { messageId } : {}) }),
+    });
   }
   getRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
     return this.request(`/runs/${encodeURIComponent(runId)}`);
@@ -326,7 +404,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v7/attachments/${encodeURIComponent(id)}/content`,
+      `${this.baseUrl}/api/v9/attachments/${encodeURIComponent(id)}/content`,
       { headers, credentials: "include" },
     );
     if (!response.ok) {
@@ -382,7 +460,7 @@ export class UmaClient {
 
   connectEvents(): void {
     if (this.socket || this.closed) return;
-    const url = new URL("/api/v7/events", this.baseUrl);
+    const url = new URL("/api/v9/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())

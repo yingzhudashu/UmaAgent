@@ -9,6 +9,7 @@ CREATE TABLE sessions (
   model_provider TEXT NOT NULL,
   model_id TEXT NOT NULL,
   thinking_level TEXT NOT NULL,
+  queue_mode TEXT NOT NULL DEFAULT 'queue' CHECK (queue_mode IN ('queue','preemptive')),
   next_sequence INTEGER NOT NULL DEFAULT 1,
   next_event_sequence INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
@@ -19,6 +20,7 @@ CREATE TABLE runs (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   message_id TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL DEFAULT 'agent' CHECK (kind IN ('agent','review','improve','command')),
   status TEXT NOT NULL,
   phase TEXT NOT NULL,
   task_class TEXT,
@@ -70,6 +72,7 @@ CREATE TABLE messages (
   content TEXT NOT NULL,
   payload_json TEXT,
   source_json TEXT,
+  revision_of_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
   attachment_ids_json TEXT NOT NULL DEFAULT '[]',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -105,15 +108,85 @@ CREATE TABLE memory_facts (
   id TEXT PRIMARY KEY,
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
   scope TEXT NOT NULL CHECK (scope IN ('global','session')),
-  content TEXT NOT NULL,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL,
+  category TEXT NOT NULL,
   confidence REAL NOT NULL,
+  evidence TEXT,
   source_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-  status TEXT NOT NULL CHECK (status IN ('active','candidate','rejected')),
+  status TEXT NOT NULL CHECK (status IN ('active','candidate','superseded','rejected')),
+  supersedes TEXT REFERENCES memory_facts(id) ON DELETE SET NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX memory_facts_scope_status ON memory_facts(scope,status,updated_at DESC);
 CREATE VIRTUAL TABLE memory_fts USING fts5(id UNINDEXED, content, tokenize='trigram');
+
+CREATE TABLE memory_rollups (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('turn','day','session')),
+  from_sequence INTEGER NOT NULL,
+  to_sequence INTEGER NOT NULL,
+  summary TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(session_id,kind,from_sequence,to_sequence)
+);
+CREATE INDEX memory_rollups_session_range ON memory_rollups(session_id,to_sequence DESC);
+
+CREATE VIRTUAL TABLE history_fts USING fts5(
+  message_id UNINDEXED,
+  session_id UNINDEXED,
+  sequence UNINDEXED,
+  content,
+  tokenize='trigram'
+);
+
+CREATE TABLE agent_profile (
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+  content TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+INSERT INTO agent_profile(singleton,content,updated_at) VALUES(1,'',0);
+
+CREATE TABLE quality_assessments (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  target_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  passed INTEGER NOT NULL,
+  issues_json TEXT NOT NULL,
+  suggestions_json TEXT NOT NULL,
+  iteration INTEGER NOT NULL CHECK(iteration BETWEEN 1 AND 3),
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX quality_assessments_run ON quality_assessments(run_id,created_at);
+
+CREATE TABLE skill_packages (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  version TEXT NOT NULL,
+  source_type TEXT NOT NULL CHECK(source_type IN ('local','clawhub')),
+  source_reference TEXT NOT NULL,
+  install_path TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('staged','enabled','disabled','rejected')),
+  risk TEXT NOT NULL CHECK(risk IN ('low','medium','high','extreme')),
+  diagnostics_json TEXT NOT NULL,
+  installed_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE optimization_proposals (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  evidence_json TEXT NOT NULL,
+  risk TEXT NOT NULL CHECK(risk IN ('low','medium','high')),
+  recommendation TEXT NOT NULL,
+  validation_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','accepted','rejected')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 
 CREATE TABLE background_tasks (
   id TEXT PRIMARY KEY,
@@ -269,4 +342,4 @@ CREATE TABLE web_sessions (
   created_at INTEGER NOT NULL
 );
 
-PRAGMA user_version = 8;
+PRAGMA user_version = 10;

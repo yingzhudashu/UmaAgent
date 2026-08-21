@@ -439,13 +439,30 @@ describe("UmaRuntime preflight", () => {
     ).rejects.toThrow("cannot bind");
     await expect(runtime.createSession({ model: { provider: "missing", id: "missing" } })).rejects.toThrow();
     const session = await runtime.createSession({ mode: "assistant" });
+    const workspace = await runtime.createSession({ mode: "workspace" });
     expect(runtime.health()).toMatchObject({ started: true, activeRuns: 0 });
     await expect(runtime.createTask("   ")).rejects.toThrow("prompt");
+    const task = await runtime.createTask("background work", workspace.id, undefined, {
+      type: "schedule",
+      scheduleId: crypto.randomUUID(),
+      scheduleRunId: crypto.randomUUID(),
+    });
+    expect(task).toMatchObject({
+      parentSessionId: workspace.id,
+      source: { type: "schedule" },
+    });
+    expect(runtime.database.getSession(task.sessionId)).toMatchObject({
+      mode: "workspace",
+      workspace: workspace.workspace,
+      model: workspace.model,
+    });
     expect(() => runtime.cancel(session.id)).toThrow("no active run");
     await runtime.stop();
     expect(() => runtime.sendMessage(session.id, { messageId: "stopped", text: "no" })).toThrow(
       "not accepting",
     );
+    expect(() => runtime.sendCommand(workspace.id, "pwd")).toThrow("not accepting");
+    expect(() => runtime.reviewMessage("missing")).toThrow("not accepting");
     await expect(runtime.start()).rejects.toThrow("cannot restart");
   });
 
@@ -526,7 +543,9 @@ describe("UmaRuntime preflight", () => {
     ).toThrow("secret");
     const global = runtime.database.addMemoryFact({
       scope: "global",
-      content: "global preference",
+      key: "preference.global",
+      value: "global preference",
+      category: "preference",
       confidence: 0.8,
       status: "candidate",
     });
@@ -648,18 +667,46 @@ describe("UmaRuntime preflight", () => {
       fauxAssistantMessage("finished with preferences"),
       fauxAssistantMessage(
         JSON.stringify([
-          { content: "Prefers TypeScript", confidence: 0.99, scope: "global" },
-          { content: "May prefer concise output", confidence: 0.7, scope: "session" },
-          { content: "OPENAI_API_KEY=secret-value", confidence: 1, scope: "global" },
-          { content: "   ", confidence: 1, scope: "session" },
+          {
+            key: "preference.language",
+            value: "Prefers TypeScript",
+            category: "preference",
+            evidence: "Prefers TypeScript",
+            confidence: 0.99,
+            scope: "global",
+          },
+          {
+            key: "preference.concise",
+            value: "May prefer concise output",
+            category: "preference",
+            evidence: "May prefer concise output",
+            confidence: 0.7,
+            scope: "session",
+          },
+          {
+            key: "secret.api",
+            value: "OPENAI_API_KEY=secret-value",
+            category: "secret",
+            evidence: "secret",
+            confidence: 1,
+            scope: "global",
+          },
+          {
+            key: "empty",
+            value: "   ",
+            category: "other",
+            evidence: "empty",
+            confidence: 1,
+            scope: "session",
+          },
         ]),
       ),
     ]);
     const { run } = await runOnce(runtime);
     expect(run.status, run.error).toBe("completed");
     expect(runtime.listMemoryFacts()).toEqual([
-      expect.objectContaining({ content: "May prefer concise output", status: "candidate" }),
-      expect.objectContaining({ content: "Prefers TypeScript", status: "active" }),
+      expect.objectContaining({ value: "May prefer concise output", status: "candidate" }),
+      expect.objectContaining({ value: "Prefers TypeScript", status: "active" }),
     ]);
   });
 
@@ -668,11 +715,22 @@ describe("UmaRuntime preflight", () => {
       classification("simple"),
       fauxAssistantMessage("finished"),
       fauxAssistantMessage("not-json"),
-      fauxAssistantMessage(JSON.stringify([{ content: "Uses Windows", confidence: 1, scope: "global" }])),
+      fauxAssistantMessage(
+        JSON.stringify([
+          {
+            key: "environment.os",
+            value: "Uses Windows",
+            category: "environment",
+            evidence: "Uses Windows",
+            confidence: 1,
+            scope: "global",
+          },
+        ]),
+      ),
     ]);
     expect((await runOnce(repaired)).run.status).toBe("completed");
     expect(repaired.listMemoryFacts()).toEqual([
-      expect.objectContaining({ content: "Uses Windows", status: "active" }),
+      expect.objectContaining({ value: "Uses Windows", status: "active" }),
     ]);
 
     const failed = await runtimeWith([
@@ -810,5 +868,326 @@ describe("UmaRuntime preflight", () => {
     expect(() => manage({ operation: "create", name: "bad", prompt: "bad" })).toThrow("complete schedule");
     expect(() => manage({ operation: "update" })).toThrow("requires id");
     expect(() => manage({ operation: "unknown" })).toThrow("Unsupported");
+  });
+
+  it("executes an exact Core shell command only after approval", async () => {
+    const runtime = await runtimeWith([]);
+    const session = await runtime.createSession({ title: "Command" });
+    const approval = new Promise<string>((resolve) => {
+      const unsubscribe = runtime.subscribe((event) => {
+        if (event.sessionId !== session.id || event.type !== "approval.requested") return;
+        unsubscribe();
+        resolve((event.payload as { id: string }).id);
+      });
+    });
+    const run = runtime.sendCommand(
+      session.id,
+      `node -e "process.stdout.write('exact-command-output')"`,
+      "command-message",
+    );
+    const id = await approval;
+    expect(runtime.database.getRun(run.id).kind).toBe("command");
+    runtime.resolveApproval(id, true);
+    const terminal = await waitForRunTerminal(runtime, run.id);
+    expect(terminal.status, terminal.error).toBe("completed");
+    expect(runtime.getSnapshot(session.id).transcript.at(-1)?.content).toContain("exact-command-output");
+    expect(runtime.listRunActions(run.id)).toEqual([
+      expect.objectContaining({ toolName: "shell", status: "completed" }),
+    ]);
+  });
+
+  it("reviews and improves an immutable answer through tool-free quality Runs", async () => {
+    const runtime = await runtimeWith([
+      fauxAssistantMessage(
+        JSON.stringify({
+          passed: false,
+          issues: [{ type: "omission", description: "Missing one detail" }],
+          suggestions: ["Add the missing detail"],
+        }),
+      ),
+      fauxAssistantMessage(JSON.stringify({ improvedAnswer: "Answer with the missing detail" })),
+    ]);
+    const session = await runtime.createSession({ mode: "assistant" });
+    const source = runtime.database.createRun(
+      session.id,
+      "quality-question",
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+    ).run;
+    runtime.database.insertMessage({
+      id: "quality-question",
+      sessionId: session.id,
+      runId: source.id,
+      role: "user",
+      status: "complete",
+      content: "What is the answer?",
+    });
+    runtime.database.insertMessage({
+      id: "quality-answer",
+      sessionId: session.id,
+      runId: source.id,
+      role: "assistant",
+      status: "complete",
+      content: "Original answer",
+    });
+    runtime.database.updateRun(source.id, { status: "completed" });
+    const review = runtime.reviewMessage("quality-answer", "Check completeness");
+    expect((await waitForRunTerminal(runtime, review.id)).status).toBe("completed");
+    expect(runtime.listQualityAssessments(review.id)[0]).toMatchObject({
+      targetMessageId: "quality-answer",
+      passed: false,
+      iteration: 1,
+    });
+    const improve = runtime.improveMessage("quality-answer");
+    expect((await waitForRunTerminal(runtime, improve.id)).status).toBe("completed");
+    const revision = runtime
+      .getSnapshot(session.id)
+      .transcript.find((item) => item.runId === improve.id && item.role === "assistant");
+    expect(revision).toMatchObject({
+      content: "Answer with the missing detail",
+      revisionOfMessageId: "quality-answer",
+    });
+    expect(runtime.database.getMessage("quality-answer").content).toBe("Original answer");
+  });
+
+  it("reloads validated dynamic configuration atomically and defers unsafe active changes", async () => {
+    const runtime = await runtimeWith([]);
+    const next = structuredClone(runtime.config);
+    next.server.port++;
+    next.defaultThinkingLevel = "high";
+    next.skillsDirs = [runtime.config.server.workspaceRoots[0] as string];
+    const result = await runtime.reloadConfig(next);
+    expect(result.applied).toEqual(expect.arrayContaining(["models", "roles", "skills"]));
+    expect(result.restartRequired).toContain("server");
+    expect(runtime.config.defaultThinkingLevel).toBe("high");
+
+    const session = await runtime.createSession();
+    const active = runtime.database.createRun(
+      session.id,
+      "reload-active",
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+    ).run;
+    runtime.database.insertMessage({
+      id: "reload-active",
+      sessionId: session.id,
+      runId: active.id,
+      role: "user",
+      status: "complete",
+      content: "waiting",
+    });
+    runtime.database.updateRun(active.id, { status: "awaiting_input" });
+    const deferred = structuredClone(runtime.config);
+    deferred.roles.reasoning = { provider: "faux", id: "model-2" };
+    deferred.mcpServers = [{ name: "deferred", transport: "http", url: "http://worker/mcp" }];
+    const blocked = await runtime.reloadConfig(deferred);
+    expect(blocked.restartRequired).toEqual(expect.arrayContaining(["models", "roles", "mcpServers"]));
+    expect(runtime.config.roles.reasoning.id).toBe("model");
+  });
+
+  it("creates evidence-only optimization proposals with no apply operation", async () => {
+    const runtime = await runtimeWith([]);
+    const database = runtime.database as typeof runtime.database & {
+      diagnosticsReport: typeof runtime.database.diagnosticsReport;
+    };
+    database.diagnosticsReport = () =>
+      ({
+        slowModels: [{ provider: "faux", model: "slow", calls: 3, averageDurationMs: 6_000 }],
+        toolFailures: [{ tool: "shell", failures: 2, latestError: "exit 1" }],
+        recoveryFrequency: 0.1,
+      }) as ReturnType<typeof runtime.database.diagnosticsReport>;
+    const proposals = runtime.generateOptimizationProposals();
+    expect(proposals).toHaveLength(3);
+    expect(runtime.decideOptimizationProposal(proposals[0]?.id as string, "accepted").status).toBe(
+      "accepted",
+    );
+    expect(runtime.listOptimizationProposals()).toHaveLength(3);
+  });
+
+  it("enforces command, attachment, profile, message-id, and memory safety edges", async () => {
+    const runtime = await runtimeWith([]);
+    const workspace = await runtime.createSession({ title: "Edges" });
+    const assistant = await runtime.createSession({ mode: "assistant" });
+    await expect(
+      runtime.createSession({ mode: "assistant", workspace: workspace.workspace }),
+    ).rejects.toThrow("cannot bind");
+
+    expect(
+      runtime.updateSession(workspace.id, {
+        title: "Updated edges",
+        model: { provider: "faux", id: "model-2" },
+        thinkingLevel: "high",
+        queueMode: "queue",
+      }),
+    ).toMatchObject({ title: "Updated edges", thinkingLevel: "high", model: { id: "model-2" } });
+    await expect(runtime.reloadConfig(structuredClone(runtime.config))).resolves.toEqual({
+      applied: [],
+      restartRequired: [],
+    });
+    const staticChanges = structuredClone(runtime.config);
+    staticChanges.auth.webSessionHours++;
+    staticChanges.runtime.toolTimeoutMs++;
+    await expect(runtime.reloadConfig(staticChanges)).resolves.toMatchObject({
+      restartRequired: expect.arrayContaining(["auth", "runtime"]),
+    });
+
+    expect(runtime.updateAgentProfile("Prefer tests.").content).toBe("Prefer tests.");
+    await expect(() => runtime.updateAgentProfile("x".repeat(50_001))).toThrow("too large");
+    await expect(
+      runtime.addAttachment({ name: "huge.txt", mimeType: "text/plain", data: new Uint8Array(1_025) }),
+    ).rejects.toThrow("exceeds");
+    const attachment = await runtime.addAttachment({
+      sessionId: workspace.id,
+      name: "unsafe name?.txt",
+      mimeType: "text/plain",
+      data: new TextEncoder().encode("safe"),
+    });
+    expect(attachment.name).toBe("unsafe_name_.txt");
+    expect(
+      (
+        await runtime.addAttachment({
+          name: "",
+          mimeType: "text/plain",
+          data: new TextEncoder().encode("anonymous"),
+        })
+      ).name,
+    ).toBe("upload");
+
+    expect(() => runtime.sendCommand(workspace.id, "   ")).toThrow("required");
+    expect(() => runtime.sendCommand(assistant.id, "pwd")).toThrow("workspace session");
+    runtime.database.insertMessage({
+      id: "non-run-message",
+      sessionId: workspace.id,
+      role: "user",
+      status: "complete",
+      content: "already used",
+    });
+    expect(() => runtime.sendCommand(workspace.id, "pwd", "non-run-message")).toThrow("already used");
+    expect(() =>
+      runtime.sendMessage(assistant.id, { messageId: "non-run-message", text: "duplicate" }),
+    ).toThrow("another session");
+    const existingRun = runtime.database.createRun(
+      workspace.id,
+      "existing-run-message",
+      runtime.models.snapshot(workspace.model),
+      workspace.thinkingLevel,
+    ).run;
+    runtime.database.insertMessage({
+      id: "existing-run-message",
+      sessionId: workspace.id,
+      runId: existingRun.id,
+      role: "user",
+      status: "complete",
+      content: "existing",
+    });
+    expect(runtime.sendMessage(workspace.id, { messageId: "existing-run-message", text: "retry" }).id).toBe(
+      existingRun.id,
+    );
+    const image = await runtime.addAttachment({
+      sessionId: workspace.id,
+      name: "image.png",
+      mimeType: "image/png",
+      data: new Uint8Array([1, 2, 3]),
+    });
+    expect(() =>
+      runtime.sendMessage(workspace.id, {
+        messageId: "unsupported-image",
+        text: "inspect",
+        attachmentIds: [image.id],
+      }),
+    ).toThrow("does not support image");
+
+    const clarification = runtime.database.createRun(
+      assistant.id,
+      "clarification-original",
+      runtime.models.snapshot(assistant.model),
+      assistant.thinkingLevel,
+    ).run;
+    runtime.database.insertMessage({
+      id: "clarification-original",
+      sessionId: assistant.id,
+      runId: clarification.id,
+      role: "user",
+      status: "complete",
+      content: "original",
+    });
+    runtime.database.updateRun(clarification.id, { status: "awaiting_input", clarificationCount: 3 });
+    expect(() =>
+      runtime.sendMessage(assistant.id, { messageId: "fourth-clarification", text: "more" }),
+    ).toThrow("Clarification limit exceeded");
+    expect(runtime.database.getRun(clarification.id).status).toBe("failed");
+
+    const global = runtime.createMemoryFact(workspace.id, "global", "Global preference");
+    expect(() => runtime.createMemoryFact(workspace.id, "session", "   ")).toThrow("required");
+    expect(() =>
+      runtime.createMemoryFact(workspace.id, "session", "api_key = '1234567890abcdefghijklmnop'"),
+    ).toThrow("secret");
+    runtime.deleteMemoryFact(global.id);
+    const sessionFact = runtime.createMemoryFact(workspace.id, "session", "Session preference");
+    runtime.deleteMemoryFact(sessionFact.id);
+    expect(runtime.listMemoryFacts()).toEqual([]);
+  });
+
+  it("preempts queued work, makes running side effects uncertain, and replays only reads", async () => {
+    const runtime = await runtimeWith([]);
+    const session = await runtime.createSession({ queueMode: "preemptive" });
+    const active = runtime.database.createRun(
+      session.id,
+      "active-message",
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+    ).run;
+    runtime.database.insertMessage({
+      id: "active-message",
+      sessionId: session.id,
+      runId: active.id,
+      role: "user",
+      status: "complete",
+      content: "active",
+    });
+    runtime.database.updateRun(active.id, { status: "running" });
+    const read = runtime.database.createRunAction({
+      runId: active.id,
+      toolCallId: "preempt-read",
+      toolName: "read",
+      toolClass: "read",
+      idempotencyKey: "preempt-read-once",
+      input: {},
+    });
+    runtime.database.updateRunAction(read.id, { status: "running" });
+    const shell = runtime.database.createRunAction({
+      runId: active.id,
+      toolCallId: "preempt-shell",
+      toolName: "shell",
+      toolClass: "shell",
+      idempotencyKey: "preempt-shell-once",
+      input: {},
+    });
+    runtime.database.updateRunAction(shell.id, { status: "running" });
+    const queued = runtime.database.createRun(
+      session.id,
+      "old-queued",
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+    ).run;
+    runtime.database.insertMessage({
+      id: "old-queued",
+      sessionId: session.id,
+      runId: queued.id,
+      role: "user",
+      status: "complete",
+      content: "old",
+    });
+
+    const replacement = runtime.sendMessage(session.id, {
+      messageId: "replacement",
+      text: "new work",
+    });
+    expect(runtime.database.getRunAction(read.id).status).toBe("prepared");
+    expect(runtime.database.getRunAction(shell.id).status).toBe("uncertain");
+    expect(runtime.database.getRun(queued.id).status).toBe("cancelled");
+    expect(runtime.database.getRun(replacement.id).status).toBe("queued");
+    expect((await runtime.decideRunAction(active.id, shell.id, "reject")).status).toBe("rejected");
+    expect((await waitForRunTerminal(runtime, replacement.id)).status).toBe("failed");
   });
 });

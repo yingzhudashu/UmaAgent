@@ -10,6 +10,8 @@
     { "path": "apps/web" },
     { "path": "apps/feishu-adapter" },
     { "path": "apps/browser-worker" },
-    { "path": "apps/eval-runner" }
+    { "path": "apps/eval-runner" },
+    { "path": "apps/feishu-mcp" },
+    { "path": "apps/skill-worker" }
   ]
 }

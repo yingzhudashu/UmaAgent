@@ -80,6 +80,8 @@ describe("builtin tools", () => {
   it("keeps assistant capabilities useful without exposing workspace tools", async () => {
     const value = await fixture(false);
     expect(value.tools.map((tool) => tool.name)).toEqual([
+      "history_search",
+      "history_read",
       "memory_write",
       "memory_search",
       "knowledge_search",

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Agent, type AgentEvent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AssistantMessage,
@@ -9,12 +9,16 @@ import {
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import type {
+  AgentProfile,
   Approval,
   Attachment,
   BackgroundTask,
   CreateScheduledTaskRequest,
   CreateSessionRequest,
   ModelRef,
+  OptimizationProposal,
+  QualityAssessment,
+  ReloadResult,
   Run,
   RunAction,
   RunActionDecision,
@@ -22,6 +26,8 @@ import type {
   SendMessageRequest,
   Session,
   SessionSnapshot,
+  SkillInstallRequest,
+  SkillPackage,
   SkillSummary,
   TranscriptItem,
   UpdateScheduledTaskRequest,
@@ -38,6 +44,9 @@ import { RunApprovals } from "./run-approvals.js";
 import { RunContextBuilder } from "./run-context.js";
 import { RunOrchestrator } from "./run-orchestrator.js";
 import { RunPreflight } from "./run-preflight.js";
+import { RunQualityService } from "./run-quality.js";
+import { RuntimeOptimizationService } from "./runtime-optimization.js";
+import { RuntimeQualityOperations } from "./runtime-quality-operations.js";
 import {
   extractJson,
   injectRuntimeFault,
@@ -49,6 +58,7 @@ import {
 } from "./runtime-support.js";
 import { SchedulerService } from "./scheduler.js";
 import { SearchService } from "./search.js";
+import { SkillPackageService } from "./skill-packages.js";
 import { SkillRegistry } from "./skills.js";
 import { StateLock } from "./state-lock.js";
 import { createBuiltinTools } from "./tools.js";
@@ -58,18 +68,23 @@ import { WorkspacePolicy } from "./workspace.js";
 export class UmaRuntime {
   readonly database: UmaDatabase;
   readonly knowledge: KnowledgeService;
-  readonly models: ModelRegistry;
+  models: ModelRegistry;
   readonly skills: SkillRegistry;
+  readonly skillPackages: SkillPackageService;
   readonly scheduler: SchedulerService;
   readonly search = new SearchService();
-  readonly mcp = new McpManager();
+  mcp = new McpManager();
   readonly workspacePolicy: WorkspacePolicy;
-  private readonly contextManager: ContextManager;
+  private contextManager: ContextManager;
   private readonly events: EventHub;
   private readonly orchestrator: RunOrchestrator;
-  private readonly contextBuilder: RunContextBuilder;
-  private readonly preflight: RunPreflight;
+  private contextBuilder: RunContextBuilder;
+  private preflight: RunPreflight;
+  private quality: RunQualityService;
+  private readonly qualityOperations: RuntimeQualityOperations;
+  private readonly optimization: RuntimeOptimizationService;
   private readonly controllers = new Map<string, AbortController>();
+  private readonly preemptedRuns = new Set<string>();
   private readonly approvals: RunApprovals;
   private readonly stateLock: StateLock;
   readonly permissions = new PermissionPolicy();
@@ -79,7 +94,10 @@ export class UmaRuntime {
   private stopping = false;
   private stopPromise: Promise<void> | undefined;
 
-  constructor(readonly config: UmaConfig) {
+  config: UmaConfig;
+
+  constructor(config: UmaConfig) {
+    this.config = config;
     this.stateLock = StateLock.acquire(config.server.stateDir);
     try {
       this.database = new UmaDatabase(config.server.stateDir);
@@ -96,6 +114,9 @@ export class UmaRuntime {
     );
     this.models = new ModelRegistry(config);
     this.skills = new SkillRegistry(config.skillsDirs);
+    this.skillPackages = new SkillPackageService(config.server.stateDir, this.database, this.skills, () =>
+      this.invalidateResource("skills"),
+    );
     this.contextManager = new ContextManager(this.database, this.models);
     this.contextBuilder = new RunContextBuilder(
       this.database,
@@ -106,17 +127,32 @@ export class UmaRuntime {
       this.permissions,
     );
     this.preflight = new RunPreflight(this.database, this.models);
+    this.quality = new RunQualityService(this.preflight);
+    this.orchestrator = new RunOrchestrator(config.runtime.maxParallelSessions);
+    this.qualityOperations = new RuntimeQualityOperations({
+      database: this.database,
+      events: this.events,
+      orchestrator: this.orchestrator,
+      controllers: this.controllers,
+      isAcceptingRuns: () => this.started && !this.stopping,
+      getQualityService: () => this.quality,
+      getReasoningModel: () => this.models.snapshot(this.config.roles.reasoning),
+    });
+    this.optimization = new RuntimeOptimizationService(this.database, () =>
+      this.invalidateResource("quality"),
+    );
     this.approvals = new RunApprovals(this.database, this.events, config.runtime.approvalTimeoutMs);
     this.scheduler = new SchedulerService(this.database, this, () => this.invalidateResource("schedules"));
     this.workspacePolicy = new WorkspacePolicy(config.server.workspaceRoots);
-    this.orchestrator = new RunOrchestrator(config.runtime.maxParallelSessions);
   }
 
   async start(): Promise<void> {
     if (this.stopping || this.stopPromise) throw new Error("UmaRuntime cannot restart after stopping");
     if (this.started) throw new Error("UmaRuntime is already started");
     await this.workspacePolicy.initialize();
+    await this.skillPackages.initialize();
     await this.skills.refresh();
+    this.skills.startWatching(() => this.invalidateResource("skills"));
     await this.mcp.connect(this.config.mcpServers, this.config.runtime.toolTimeoutMs);
     this.scheduler.start();
     this.started = true;
@@ -130,9 +166,11 @@ export class UmaRuntime {
   private async stopInternal(): Promise<void> {
     this.stopping = true;
     this.scheduler.stop();
+    this.skills.stopWatching();
     this.approvals.rejectAll();
     for (const controller of this.controllers.values()) controller.abort();
     await this.orchestrator.drain();
+    await this.scheduler.drain();
     await this.mcp.close();
     this.database.close();
     this.stateLock.release();
@@ -142,13 +180,109 @@ export class UmaRuntime {
   health(): RuntimeHealth {
     return { activeRuns: this.orchestrator.activeCount(), started: this.started };
   }
+
+  async reloadConfig(next: UmaConfig): Promise<ReloadResult> {
+    const applied: string[] = [];
+    const restartRequired: string[] = [];
+    const changed = (left: unknown, right: unknown) => JSON.stringify(left) !== JSON.stringify(right);
+    if (changed(this.config.server, next.server)) restartRequired.push("server");
+    if (changed(this.config.auth, next.auth)) restartRequired.push("auth");
+    if (changed(this.config.runtime, next.runtime)) restartRequired.push("runtime");
+    const modelChanged = changed(
+      {
+        models: this.config.models,
+        defaultModel: this.config.defaultModel,
+        defaultThinkingLevel: this.config.defaultThinkingLevel,
+        roles: this.config.roles,
+      },
+      {
+        models: next.models,
+        defaultModel: next.defaultModel,
+        defaultThinkingLevel: next.defaultThinkingLevel,
+        roles: next.roles,
+      },
+    );
+    const skillsChanged = changed(this.config.skillsDirs, next.skillsDirs);
+    const mcpChanged = changed(this.config.mcpServers, next.mcpServers);
+    const hasQueued = this.database
+      .listSessions()
+      .some((session) =>
+        this.database
+          .listRuns(session.id)
+          .some((run) =>
+            ["queued", "preflight", "running", "verifying", "awaiting_input"].includes(run.status),
+          ),
+      );
+    if (hasQueued && modelChanged) restartRequired.push("models", "roles");
+    if (hasQueued && mcpChanged) restartRequired.push("mcpServers");
+    const nextModels = !hasQueued && modelChanged ? new ModelRegistry(next) : this.models;
+    let nextMcp: McpManager | undefined;
+    if (!hasQueued && mcpChanged) {
+      nextMcp = new McpManager();
+      await nextMcp.connect(next.mcpServers, next.runtime.toolTimeoutMs);
+      if (nextMcp.status().some((server) => !server.connected)) {
+        const errors = nextMcp
+          .status()
+          .filter((server) => !server.connected)
+          .map((server) => server.error);
+        await nextMcp.close();
+        throw new Error(`MCP reload failed: ${errors.join("; ")}`);
+      }
+    }
+    const previousMcp = this.mcp;
+    if (!hasQueued && modelChanged) {
+      this.models = nextModels;
+      this.contextManager = new ContextManager(this.database, this.models);
+      this.contextBuilder = new RunContextBuilder(
+        this.database,
+        this.models,
+        this.contextManager,
+        this.knowledge,
+        this.skills,
+        this.permissions,
+      );
+      this.preflight = new RunPreflight(this.database, this.models);
+      this.quality = new RunQualityService(this.preflight);
+      applied.push("models", "roles");
+    }
+    if (!hasQueued && nextMcp) {
+      this.mcp = nextMcp;
+      applied.push("mcpServers");
+      await previousMcp.close();
+    }
+    if (skillsChanged) {
+      this.skills.stopWatching();
+      this.skillPackages.reconfigureRoots(next.skillsDirs);
+      await this.skills.refresh();
+      this.skills.startWatching(() => this.invalidateResource("skills"));
+      applied.push("skills");
+    }
+    this.config = {
+      ...this.config,
+      ...(!hasQueued && modelChanged
+        ? {
+            models: next.models,
+            defaultModel: next.defaultModel,
+            defaultThinkingLevel: next.defaultThinkingLevel,
+            roles: next.roles,
+          }
+        : {}),
+      ...(skillsChanged ? { skillsDirs: next.skillsDirs } : {}),
+      ...(!hasQueued && mcpChanged ? { mcpServers: next.mcpServers } : {}),
+    };
+    this.invalidateResource("config");
+    if (skillsChanged) this.invalidateResource("skills");
+    return { applied, restartRequired: [...new Set(restartRequired)] };
+  }
   subscribe(listener: EventListener): () => void {
     return this.events.subscribe(listener);
   }
   subscribeResources(listener: ResourceListener): () => void {
     return this.events.subscribeResources(listener);
   }
-  invalidateResource(resource: "tasks" | "schedules" | "memory" | "knowledge"): void {
+  invalidateResource(
+    resource: "tasks" | "schedules" | "memory" | "knowledge" | "skills" | "profile" | "quality" | "config",
+  ): void {
     this.events.transaction(() => this.events.invalidate(resource));
   }
   listSessions(): Session[] {
@@ -373,7 +507,7 @@ export class UmaRuntime {
     }
     return task;
   }
-  listMemoryFacts(status?: "active" | "candidate" | "rejected") {
+  listMemoryFacts(status?: "active" | "candidate" | "superseded" | "rejected") {
     return this.database.listMemoryFacts(status);
   }
   createMemoryFact(sessionId: string, scope: "global" | "session", content: string) {
@@ -385,8 +519,15 @@ export class UmaRuntime {
       const fact = this.database.addMemoryFact({
         sessionId,
         scope,
-        content: normalized,
+        key: `explicit.${normalized
+          .slice(0, 80)
+          .normalize("NFKC")
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}]+/gu, ".")}`,
+        value: normalized,
+        category: "explicit",
         confidence: 1,
+        evidence: normalized,
         status: "active",
       });
       this.events.emit(sessionId, undefined, "memory.updated", fact);
@@ -394,7 +535,7 @@ export class UmaRuntime {
       return fact;
     });
   }
-  reviewMemoryFact(id: string, status: "active" | "candidate" | "rejected") {
+  reviewMemoryFact(id: string, status: "active" | "candidate" | "superseded" | "rejected") {
     return this.events.transaction(() => {
       const fact = this.database.updateMemoryFact(id, status);
       if (fact.sessionId) {
@@ -433,6 +574,58 @@ export class UmaRuntime {
     return this.skills.refresh();
   }
 
+  listSkillPackages(): SkillPackage[] {
+    return this.skillPackages.list();
+  }
+
+  searchSkills(query: string): Promise<Array<Record<string, unknown>>> {
+    return this.skillPackages.search(query);
+  }
+
+  installSkill(input: SkillInstallRequest): Promise<SkillPackage> {
+    return this.skillPackages.install(input);
+  }
+
+  setSkillStatus(id: string, status: "enabled" | "disabled" | "rejected"): Promise<SkillPackage> {
+    return this.skillPackages.setStatus(id, status);
+  }
+
+  getAgentProfile(): AgentProfile {
+    return this.database.getAgentProfile();
+  }
+
+  updateAgentProfile(content: string): AgentProfile {
+    if (content.length > 50_000) throw new Error("Agent profile is too large");
+    const profile = this.database.putAgentProfile(content);
+    this.invalidateResource("profile");
+    return profile;
+  }
+
+  searchHistory(sessionId: string, query: string, limit?: number): TranscriptItem[] {
+    return this.database.searchHistory(sessionId, query, limit);
+  }
+
+  listActivity(sessionId: string, limit?: number): Array<Record<string, unknown>> {
+    return this.database.listActivity(sessionId, limit);
+  }
+
+  listOptimizationProposals(): OptimizationProposal[] {
+    return this.optimization.list();
+  }
+
+  generateOptimizationProposals(from = 0, to = Date.now()): OptimizationProposal[] {
+    return this.optimization.generate(from, to);
+  }
+
+  decideOptimizationProposal(id: string, status: "accepted" | "rejected"): OptimizationProposal {
+    return this.optimization.decide(id, status);
+  }
+
+  listQualityAssessments(runId: string): QualityAssessment[] {
+    this.database.getRun(runId);
+    return this.database.listQualityAssessments(runId);
+  }
+
   private transitionRun(
     sessionId: string,
     runId: string,
@@ -463,6 +656,7 @@ export class UmaRuntime {
       ...(workspace ? { workspace } : {}),
       model,
       thinkingLevel: this.config.defaultThinkingLevel,
+      ...(input.queueMode ? { queueMode: input.queueMode } : {}),
     });
   }
 
@@ -569,7 +763,12 @@ export class UmaRuntime {
 
   updateSession(
     id: string,
-    patch: { title?: string; model?: ModelRef; thinkingLevel?: ThinkingLevel },
+    patch: {
+      title?: string;
+      model?: ModelRef;
+      thinkingLevel?: ThinkingLevel;
+      queueMode?: Session["queueMode"];
+    },
   ): Session {
     if (patch.model) this.models.get(patch.model);
     return this.events.transaction(() => {
@@ -615,6 +814,33 @@ export class UmaRuntime {
       throw new Error("Clarification limit exceeded; send a new message to start another run");
     }
     const continuation = awaiting && (awaiting.clarificationCount ?? 0) < 3 ? awaiting : undefined;
+    if (!continuation && session.queueMode === "preemptive") {
+      const active = this.database
+        .listRuns(sessionId)
+        .find((candidate) => ["preflight", "running", "verifying"].includes(candidate.status));
+      if (active) {
+        this.events.transaction(() => {
+          const pending = this.database.interruptRunActions(
+            active.id,
+            "Run was preempted by a newer message",
+          );
+          for (const action of pending) this.events.emit(sessionId, active.id, "run.action_prepared", action);
+        });
+        this.preemptedRuns.add(active.id);
+      }
+      this.controllers.get(sessionId)?.abort();
+      for (const queued of this.database.listQueuedRuns(sessionId)) {
+        this.events.transaction(() => {
+          const cancelled = this.database.updateRun(queued.id, {
+            status: "cancelled",
+            error: "Superseded by a newer message",
+          });
+          this.events.emit(sessionId, queued.id, "run.updated", cancelled);
+        });
+      }
+    } else if (!continuation && this.database.listQueuedRuns(sessionId).length >= 100) {
+      throw new Error("Session queue is full");
+    }
     const { run, created } = this.events.transaction(() => {
       const result = continuation
         ? { run: continuation, created: true }
@@ -662,6 +888,137 @@ export class UmaRuntime {
       ),
     );
     return run;
+  }
+
+  reviewMessage(messageId: string, feedback = ""): Run {
+    return this.qualityOperations.start("review", messageId, { feedback });
+  }
+
+  improveMessage(messageId: string, options: { force?: boolean; reset?: boolean } = {}): Run {
+    return this.qualityOperations.start("improve", messageId, options);
+  }
+
+  sendCommand(sessionId: string, command: string, messageId: string = randomUUID()): Run {
+    const normalized = command.trim();
+    if (!normalized) throw new Error("Command is required");
+    if (!this.started || this.stopping) throw new Error("UmaRuntime is not accepting new runs");
+    const session = this.database.getSession(sessionId);
+    if (session.mode !== "workspace") throw new Error("Commands require a workspace session");
+    const existing = this.database.findMessageOwner(messageId);
+    if (existing) {
+      if (existing.sessionId !== sessionId || !existing.runId)
+        throw new Error("messageId is already used by another message");
+      return this.database.getRun(existing.runId);
+    }
+    if (this.database.listQueuedRuns(sessionId).length >= 100) throw new Error("Session queue is full");
+    const run = this.events.transaction(() => {
+      const created = this.database.createRun(
+        sessionId,
+        messageId,
+        this.models.snapshot(session.model),
+        session.thinkingLevel,
+        "command",
+      ).run;
+      const message = this.database.insertMessage({
+        id: messageId,
+        sessionId,
+        runId: created.id,
+        role: "user",
+        status: "complete",
+        content: `!${normalized}`,
+      });
+      this.events.emit(sessionId, created.id, "message.completed", message);
+      this.events.emit(sessionId, created.id, "run.updated", created);
+      return created;
+    });
+    this.orchestrator.enqueue(sessionId, () => this.executeCommand(session, run.id, normalized));
+    return run;
+  }
+
+  private async executeCommand(session: Session, runId: string, command: string): Promise<void> {
+    await this.waitForSideEffectGate(session.id, runId);
+    const release = await this.orchestrator.acquire();
+    if (this.database.getRun(runId).status === "cancelled") {
+      release();
+      return;
+    }
+    const controller = new AbortController();
+    this.controllers.set(session.id, controller);
+    const toolCallId = randomUUID();
+    try {
+      this.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
+      const action = this.events.transaction(() => {
+        const value = this.database.createRunAction({
+          runId,
+          checkpointId: this.database.getLatestCheckpoint(runId)?.id,
+          toolCallId,
+          toolName: "shell",
+          toolClass: "shell",
+          idempotencyKey: `${runId}:command`,
+          input: { command },
+        });
+        this.events.emit(session.id, runId, "run.action_prepared", value);
+        return value;
+      });
+      const approved = await this.approvals.request({
+        sessionId: session.id,
+        runId,
+        toolCallId,
+        toolName: "shell",
+        args: { command },
+        signal: controller.signal,
+      });
+      if (!approved) {
+        this.events.transaction(() => {
+          const rejected = this.database.transitionRunAction(action.id, ["prepared"], {
+            status: "rejected",
+            error: "Command execution was not approved",
+          }).action;
+          this.events.emit(session.id, runId, "run.action_decided", { action: rejected, decision: "reject" });
+        });
+        throw new Error("Command execution was not approved");
+      }
+      this.database.createToolCall({ id: toolCallId, runId, name: "shell", args: { command } });
+      const result = await this.executeRecoveredAction(
+        this.database.getRun(runId),
+        action,
+        false,
+        controller.signal,
+      );
+      if (result.status !== "completed") throw new Error(result.error ?? "Command execution failed");
+      const output =
+        result.result && typeof result.result === "object"
+          ? JSON.stringify(result.result, null, 2)
+          : String(result.result ?? "Command completed");
+      this.events.transaction(() => {
+        const message = this.database.insertMessage({
+          sessionId: session.id,
+          runId,
+          role: "assistant",
+          status: "complete",
+          content: output,
+        });
+        const completed = this.database.updateRun(runId, { status: "completed", error: null });
+        this.events.emit(session.id, runId, "message.completed", message);
+        this.events.emit(session.id, runId, "run.updated", completed);
+      });
+    } catch (error) {
+      const interrupted = this.database.listRunActions(runId).some((action) => action.status === "uncertain");
+      this.transitionRun(session.id, runId, {
+        status: interrupted ? "interrupted" : controller.signal.aborted ? "cancelled" : "failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.controllers.delete(session.id);
+      release();
+    }
+  }
+
+  private async waitForSideEffectGate(sessionId: string, runId: string): Promise<void> {
+    while (this.database.hasPendingSideEffects(sessionId)) {
+      if (this.stopping || this.database.getRun(runId).status === "cancelled") return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }
 
   cancel(sessionId: string): void {
@@ -725,6 +1082,7 @@ export class UmaRuntime {
     promptOverride?: string,
     resumeFromCheckpoint = false,
   ): Promise<void> {
+    await this.waitForSideEffectGate(sessionAtQueueTime.id, runId);
     const release = await this.orchestrator.acquire();
     if (this.database.getRun(runId).status === "cancelled") {
       release();
@@ -918,6 +1276,7 @@ export class UmaRuntime {
         });
         injectRuntimeFault("verify.completed");
       }
+      this.persistTurnRollup(session.id, runId);
       await this.extractMemories(session, runId, controller.signal);
       this.events.transaction(() => {
         const completed = this.database.updateRun(runId, { status: "completed", error: null });
@@ -931,19 +1290,25 @@ export class UmaRuntime {
         this.events.emit(session.id, runId, "run.updated", completed);
       });
     } catch (error) {
+      const wasPreempted = this.preemptedRuns.delete(runId);
+      const pendingSideEffect = this.database
+        .listRunActions(runId)
+        .some((action) => action.status === "uncertain");
       const cancelled =
         controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError");
       this.events.transaction(() => {
         const failed = this.database.updateRun(runId, {
-          status: cancelled ? "cancelled" : "failed",
+          status: wasPreempted && pendingSideEffect ? "interrupted" : cancelled ? "cancelled" : "failed",
           error: error instanceof Error ? error.message : String(error),
         });
         this.database.addAudit({
           runId,
           kind: "run",
           name: "status",
-          input: { status: cancelled ? "cancelled" : "failed" },
-          status: cancelled ? "cancelled" : "failed",
+          input: {
+            status: wasPreempted && pendingSideEffect ? "interrupted" : cancelled ? "cancelled" : "failed",
+          },
+          status: wasPreempted && pendingSideEffect ? "interrupted" : cancelled ? "cancelled" : "failed",
           ...(error instanceof Error ? { error: error.message } : {}),
         });
         for (const step of this.database.listPlan(runId)) {
@@ -961,6 +1326,51 @@ export class UmaRuntime {
       this.controllers.delete(sessionAtQueueTime.id);
       release();
     }
+  }
+
+  private persistTurnRollup(sessionId: string, runId: string): void {
+    const items = this.database.listMessages(sessionId).filter((item) => item.runId === runId);
+    if (!items.length) return;
+    const publicText = items
+      .filter((item) => item.role !== "tool")
+      .map((item) => `${item.role}: ${item.content}`)
+      .join("\n")
+      .slice(0, 4_000);
+    this.database.addMemoryRollup({
+      sessionId,
+      kind: "turn",
+      fromSequence: items[0]?.sequence ?? 1,
+      toSequence: items.at(-1)?.sequence ?? 1,
+      summary: publicText,
+    });
+    const all = this.database.listMessages(sessionId);
+    const latest = all.at(-1);
+    if (!latest) return;
+    const day = new Date(latest.createdAt).toISOString().slice(0, 10);
+    const daily = all.filter((item) => new Date(item.createdAt).toISOString().startsWith(day));
+    const summarize = (values: TranscriptItem[], limit: number) =>
+      values
+        .filter((item) => item.role !== "tool")
+        .slice(-limit)
+        .map((item) => `${item.role}: ${item.content}`)
+        .join("\n")
+        .slice(0, 8_000);
+    if (daily.length)
+      this.database.replaceAggregateRollup({
+        sessionId,
+        kind: "day",
+        fromSequence: daily[0]?.sequence ?? 1,
+        toSequence: daily.at(-1)?.sequence ?? 1,
+        summary: `${day}\n${summarize(daily, 100)}`,
+      });
+    this.database.replaceAggregateRollup({
+      sessionId,
+      kind: "session",
+      fromSequence: all[0]?.sequence ?? 1,
+      toSequence: latest.sequence,
+      summary: summarize(all, 50),
+    });
+    this.database.maintainMemoryRollups(sessionId);
   }
 
   private async extractMemories(session: Session, runId: string, signal: AbortSignal): Promise<void> {
@@ -1006,7 +1416,7 @@ export class UmaRuntime {
     };
     try {
       const systemPrompt =
-        "Extract durable user facts only. Return JSON array of objects with content, confidence (0..1), and scope (global|session). Return [] when none. Never extract secrets or hidden reasoning.";
+        "Extract durable user facts only. Return JSON array of objects with key, value, category, optional evidence, confidence (0..1), and scope (global|session). Use stable dotted keys. Return [] when none. Never extract secrets or hidden reasoning.";
       let response = await invoke(systemPrompt, transcript);
       if (response.stopReason === "error" || response.stopReason === "aborted") return;
       let values: unknown;
@@ -1028,14 +1438,17 @@ export class UmaRuntime {
           throw new Error("Provider contract error: invalid memory extraction response");
       }
       for (const value of values) {
-        const content = value.content.trim();
+        const content = value.value.trim();
         const { confidence, scope } = value;
         if (!content || isSecretLike(content)) continue;
         this.events.transaction(() => {
           const fact = this.database.addMemoryFact({
             sessionId: session.id,
             scope,
-            content,
+            key: value.key.trim(),
+            value: content,
+            category: value.category.trim(),
+            ...(value.evidence ? { evidence: value.evidence.trim() } : {}),
             confidence,
             sourceRunId: runId,
             status: confidence >= 0.95 ? "active" : "candidate",
@@ -1062,6 +1475,19 @@ export class UmaRuntime {
         search: this.search,
         scheduleManage: (params) => this.manageScheduleTool(params),
         memoryWrite: (scope, content) => this.createMemoryFact(session.id, scope, content),
+        attachmentCreateFromWorkspace: async (path) => {
+          const data = await import("node:fs/promises").then((fs) => fs.readFile(path));
+          const extension = basename(path).split(".").pop()?.toLowerCase();
+          const mimeType =
+            extension === "png"
+              ? "image/png"
+              : extension === "jpg" || extension === "jpeg"
+                ? "image/jpeg"
+                : extension === "pdf"
+                  ? "application/pdf"
+                  : "application/octet-stream";
+          return this.addAttachment({ sessionId: session.id, name: basename(path), mimeType, data });
+        },
       }),
       ...(session.mode === "workspace" ? this.mcp.tools() : []),
     ];
@@ -1177,7 +1603,12 @@ export class UmaRuntime {
     for (const action of safe) await this.executeRecoveredAction(run, action, true);
   }
 
-  private async executeRecoveredAction(run: Run, action: RunAction, automatic: boolean): Promise<RunAction> {
+  private async executeRecoveredAction(
+    run: Run,
+    action: RunAction,
+    automatic: boolean,
+    signal?: AbortSignal,
+  ): Promise<RunAction> {
     const session = this.database.getSession(run.sessionId);
     const tool = this.toolsForSession(session).find((candidate) => candidate.name === action.toolName);
     if (!tool) throw new Error(`Tool is unavailable: ${action.toolName}`);
@@ -1201,10 +1632,10 @@ export class UmaRuntime {
       return transition.action;
     });
     if (running.status !== "running") return running;
-    const controller = new AbortController();
+    const controller = signal ? undefined : new AbortController();
     try {
       const toolInput = action.input;
-      const result = await tool.execute(action.toolCallId, toolInput as never, controller.signal);
+      const result = await tool.execute(action.toolCallId, toolInput as never, signal ?? controller?.signal);
       return this.events.transaction(() => {
         this.database.completeToolCall(action.toolCallId, result, false);
         const completed = this.database.transitionRunAction(action.id, ["running"], {

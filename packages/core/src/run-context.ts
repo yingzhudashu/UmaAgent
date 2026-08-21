@@ -50,9 +50,15 @@ export class RunContextBuilder {
       model,
     );
     const memory = this.database.searchMemory(input.session.id, input.request.text, 5);
+    const profile = this.database.getAgentProfile();
+    const rollups = this.database.listMemoryRollups(input.session.id, 10);
     const knowledge = this.knowledge.search(input.request.text, 3);
     const supportingContext = [
+      profile.content ? `<agent_profile>\n${profile.content}\n</agent_profile>` : "",
       memory.length ? `<relevant_memory>\n${memory.join("\n")}\n</relevant_memory>` : "",
+      rollups.length
+        ? `<history_rollups>\n${rollups.map((item) => `[${item.fromSequence}-${item.toSequence}] ${item.summary}`).join("\n")}\n</history_rollups>`
+        : "",
       knowledge.length
         ? `<relevant_knowledge>\n${knowledge.map((item) => `${item.filePath}\n${item.content}`).join("\n\n")}\n</relevant_knowledge>`
         : "",

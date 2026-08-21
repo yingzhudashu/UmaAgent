@@ -115,19 +115,33 @@ describe("evaluation runner", () => {
         { name: "string", prompt: "two", expectedStatus: "completed" },
       ]),
     ).resolves.toEqual([
-      { name: "error", passed: false, error: "core unavailable" },
-      { name: "string", passed: false, error: "connection lost" },
+      expect.objectContaining({
+        name: "error",
+        category: "regression",
+        passed: false,
+        error: "core unavailable",
+      }),
+      expect.objectContaining({
+        name: "string",
+        category: "regression",
+        passed: false,
+        error: "connection lost",
+      }),
     ]);
   });
 
   it("renders escaped JUnit with a single failure count", () => {
     expect(
       junitReport([
-        { name: 'pass & "quote"', passed: true },
-        { name: "fail <case>", passed: false, error: 'bad > "value"' },
+        { name: 'pass & "quote"', category: "regression", durationMs: 1, passed: true },
+        { name: "fail <case>", category: "security", durationMs: 1, passed: false, error: 'bad > "value"' },
       ]),
     ).toContain('<testsuite name="UmaAgent Faux" tests="2" failures="1">');
-    expect(junitReport([{ name: "fail <case>", passed: false, error: 'bad > "value"' }])).toContain(
+    expect(
+      junitReport([
+        { name: "fail <case>", category: "security", durationMs: 1, passed: false, error: 'bad > "value"' },
+      ]),
+    ).toContain(
       '<testcase name="fail &lt;case&gt;"><failure message="bad &gt; &quot;value&quot;"/></testcase>',
     );
   });

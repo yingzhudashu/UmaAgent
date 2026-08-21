@@ -112,7 +112,8 @@ export function App() {
     queryKey: ["memory", "candidate"],
     queryFn: () => client.listMemoryFacts("candidate"),
   });
-  const skills = useQuery({ queryKey: ["skills"], queryFn: () => client.listSkills() });
+  const skills = useQuery({ queryKey: ["skills"], queryFn: () => client.skillState() });
+  const profile = useQuery({ queryKey: ["profile"], queryFn: () => client.getAgentProfile() });
   const mcp = useQuery({ queryKey: ["mcp"], queryFn: () => client.mcpStatus() });
   const knowledge = useQuery({ queryKey: ["knowledge"], queryFn: () => client.listKnowledge() });
   const snapshot = useQuery({
@@ -347,6 +348,20 @@ export function App() {
             {snapshot.data && (
               <select
                 className="model-select"
+                value={snapshot.data.session.queueMode}
+                disabled={offline}
+                onChange={(event) =>
+                  updateSession.mutate({ queueMode: event.target.value as "queue" | "preemptive" })
+                }
+                title="消息队列模式"
+              >
+                <option value="queue">queue</option>
+                <option value="preemptive">preemptive</option>
+              </select>
+            )}
+            {snapshot.data && (
+              <select
+                className="model-select"
                 value={`${snapshot.data.session.model.provider}/${snapshot.data.session.model.id}`}
                 disabled={offline}
                 onChange={(event) => {
@@ -445,7 +460,28 @@ export function App() {
                 {item.status === "streaming" && <span className="streaming">运行中</span>}
               </div>
               {item.role === "assistant" ? (
-                <Markdown content={item.content} />
+                <>
+                  {item.revisionOfMessageId && (
+                    <small className="operation-meta">修订自 {item.revisionOfMessageId}</small>
+                  )}
+                  <Markdown content={item.content} />
+                  <div className="approval-actions">
+                    <button
+                      type="button"
+                      disabled={offline}
+                      onClick={() => void client.reviewMessage(item.id).then(() => snapshot.refetch())}
+                    >
+                      审查
+                    </button>
+                    <button
+                      type="button"
+                      disabled={offline}
+                      onClick={() => void client.improveMessage(item.id).then(() => snapshot.refetch())}
+                    >
+                      改进
+                    </button>
+                  </div>
+                </>
               ) : item.role === "tool" ? (
                 <pre>{item.content}</pre>
               ) : (
@@ -630,7 +666,9 @@ export function App() {
             <div className="operation-list">
               {memories.data?.map((fact) => (
                 <div key={fact.id}>
-                  <p>{fact.content}</p>
+                  <p>
+                    {fact.key} = {fact.value}
+                  </p>
                   <small className="operation-meta">{fact.confidence.toFixed(2)}</small>
                   <div className="approval-actions">
                     <button
@@ -673,11 +711,18 @@ export function App() {
           )}
           {detailsTab === "resources" && (
             <ResourceArea
-              skills={skills.data ?? []}
+              skills={skills.data?.available ?? []}
+              packages={skills.data?.packages ?? []}
               mcp={mcp.data ?? []}
               knowledge={knowledge.data ?? []}
               disabled={offline}
               refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
+              installSkill={(reference) =>
+                void client.installSkill({ source: "local", reference }).then(() => skills.refetch())
+              }
+              setSkillStatus={(id, action) =>
+                void client.setSkillStatus(id, action).then(() => skills.refetch())
+              }
               addKnowledgePath={(name, path) =>
                 void client.indexKnowledge(name, path).then(() => knowledge.refetch())
               }
@@ -700,6 +745,10 @@ export function App() {
               installAvailable={Boolean(installPrompt)}
               install={() => void installPrompt?.prompt()}
               report={report.data}
+              profile={profile.data}
+              saveProfile={(content) => void client.updateAgentProfile(content).then(() => profile.refetch())}
+              reloadConfig={() => void client.reloadConfig().then(() => queryClient.invalidateQueries())}
+              disabled={offline}
             />
           )}
           {detailsTab === "audit" && (

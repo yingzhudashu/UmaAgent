@@ -24,8 +24,10 @@ const readTools = new Set([
   "knowledge_search",
   "skill_read",
   "web_search",
+  "history_search",
+  "history_read",
 ]);
-const writeTools = new Set(["write", "edit"]);
+const writeTools = new Set(["write", "edit", "attachment_create_from_workspace"]);
 
 export class PermissionPolicy {
   classify(toolName: string): ToolClass {
@@ -52,6 +54,8 @@ export class PermissionPolicy {
         "http_get",
         "web_search",
         "schedule_manage",
+        "history_search",
+        "history_read",
       ].includes(toolName)
     ) {
       return { allowed: false, requiresApproval: false, reason: "Tool is unavailable in assistant sessions" };

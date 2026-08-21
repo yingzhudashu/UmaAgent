@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import {
   Box,
+  CombinedAutocompleteProvider,
   Editor,
   Markdown,
   ProcessTerminal,
@@ -90,6 +91,30 @@ async function chat(): Promise<void> {
       noMatch: style,
     },
   });
+  input.setAutocompleteProvider(
+    new CombinedAutocompleteProvider(
+      [
+        "/help",
+        "/new",
+        "/sessions",
+        "/use",
+        "/older",
+        "/newer",
+        "/review",
+        "/improve",
+        "/queue",
+        "/btw",
+        "/reload-skills",
+        "/reload-config",
+        "/stats",
+        "/actions",
+        "/resume",
+        "/cancel",
+        "/exit",
+      ].map((value) => ({ value, label: value })),
+      process.cwd(),
+    ),
+  );
   inputBox.addChild(new Text("Message", 0, 0));
   inputBox.addChild(input);
   ui.addChild(header);
@@ -168,6 +193,7 @@ async function chat(): Promise<void> {
   });
   const handle = async (raw: string) => {
     const value = raw.trim();
+    if (value) input.addToHistory(value);
     input.setText("");
     ui.requestRender();
     if (!value) return;
@@ -177,7 +203,7 @@ async function chat(): Promise<void> {
     }
     if (value === "/help") {
       render(
-        "/new  /sessions  /use <id>  /older  /newer  /rename <title>  /model <provider/id>  /attach <path>  /approve <id> yes|no  /actions  /decide <action> approve|reject|acknowledge  /resume  /cancel  /exit",
+        "/new  /sessions  /use <id>  /older  /newer  /review [feedback]  /improve [--force|--reset]  /queue status|set queue|set preemptive|abort  /btw start|status|result|cancel  /reload-skills  /reload-config  /stats  !<shell>  /rename  /model  /attach  /approve  /actions  /decide  /resume  /cancel  /exit",
       );
       return;
     }
@@ -244,6 +270,72 @@ async function chat(): Promise<void> {
       render(`Compacted through message ${summary.throughSequence}`);
       return;
     }
+    if (value === "/review" || value.startsWith("/review ")) {
+      const target = [...snapshot.transcript].reverse().find((item) => item.role === "assistant");
+      if (!target) throw new Error("No assistant answer is available to review");
+      await client.reviewMessage(target.id, value.slice(7).trim());
+      refresh("Review queued");
+      return;
+    }
+    if (value === "/improve" || value.startsWith("/improve ")) {
+      const target = [...snapshot.transcript].reverse().find((item) => item.role === "assistant");
+      if (!target) throw new Error("No assistant answer is available to improve");
+      await client.improveMessage(target.id, {
+        force: value.includes("--force"),
+        reset: value.includes("--reset"),
+      });
+      refresh("Improvement queued");
+      return;
+    }
+    if (value === "/queue status") {
+      render(`Queue mode: ${active.queueMode}`);
+      return;
+    }
+    if (value.startsWith("/queue set ")) {
+      const mode = value.slice(11).trim();
+      if (mode !== "queue" && mode !== "preemptive") throw new Error("Use /queue set queue|preemptive");
+      active = await client.updateSession(active.id, { queueMode: mode });
+      render(`Queue mode: ${active.queueMode}`);
+      return;
+    }
+    if (value === "/queue abort") {
+      const runs = snapshot.recentRuns.filter((run) => run.status === "queued");
+      await Promise.all(runs.map((run) => client.cancelRun(run.id)));
+      refresh(`Cancelled ${runs.length} queued run(s)`);
+      return;
+    }
+    if (value.startsWith("/btw start ")) {
+      const task = await client.createTask(value.slice(11).trim(), active.id);
+      render(`Background task ${task.id} started`);
+      return;
+    }
+    if (value === "/btw status" || value === "/btw result") {
+      const tasks = await client.listTasks();
+      render(tasks.map((task) => `${task.id} ${task.status} ${task.result ?? task.prompt}`).join("  "));
+      return;
+    }
+    if (value.startsWith("/btw cancel ")) {
+      const task = await client.cancelTask(value.slice(12).trim());
+      render(`Background task ${task.id}: ${task.status}`);
+      return;
+    }
+    if (value === "/reload-skills") {
+      const skills = await client.refreshSkills();
+      render(`Reloaded ${skills.length} skill(s)`);
+      return;
+    }
+    if (value === "/reload-config") {
+      const result = await client.reloadConfig();
+      render(
+        `Applied: ${result.applied.join(", ") || "none"}; restart: ${result.restartRequired.join(", ") || "none"}`,
+      );
+      return;
+    }
+    if (value === "/stats") {
+      const report = await client.diagnosticsReport();
+      render(JSON.stringify(report, null, 2));
+      return;
+    }
     if (value.startsWith("/approve ")) {
       const [, id, answer] = value.split(/\s+/);
       if (!id || !approvals.has(id)) throw new Error("Approval is not pending");
@@ -272,6 +364,13 @@ async function chat(): Promise<void> {
       if (!run) throw new Error("No run is available");
       await client.resumeRun(run.id);
       refresh();
+      return;
+    }
+    if (value.startsWith("!")) {
+      const command = value.slice(1).trim();
+      if (!command) throw new Error("Shell command is required");
+      await client.sendCommand(active.id, command);
+      refresh("Command awaiting approval");
       return;
     }
     await client.sendMessage(
@@ -391,7 +490,7 @@ async function memoryCommand(): Promise<void> {
   if (action === "list" || action === "review") {
     const status = action === "review" ? "candidate" : undefined;
     for (const fact of await client.listMemoryFacts(status))
-      console.log(`${fact.id}\t${fact.status}\t${fact.confidence.toFixed(2)}\t${fact.content}`);
+      console.log(`${fact.id}\t${fact.status}\t${fact.confidence.toFixed(2)}\t${fact.key}=${fact.value}`);
     return;
   }
   const id = positionals[1];

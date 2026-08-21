@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type {
+  AgentProfile,
   Approval,
   Attachment,
   AuditRecord,
@@ -11,11 +12,14 @@ import type {
   DiagnosticsReport,
   KnowledgeSource,
   MemoryFact,
+  MemoryRollup,
   MessageSource,
   ModelRef,
   ModelSnapshot,
   OperationsReport,
+  OptimizationProposal,
   PlanStep,
+  QualityAssessment,
   Run,
   RunAction,
   RunCheckpoint,
@@ -28,12 +32,13 @@ import type {
   SessionHistoryPage,
   SessionMode,
   SessionSnapshot,
+  SkillPackage,
   TranscriptItem,
 } from "@uma-agent/protocol";
 import { type AgentEventEnvelope, type AgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 10;
 type Row = Record<string, unknown>;
 
 function rows(statement: StatementSync, ...params: SQLInputValue[]): Row[] {
@@ -98,6 +103,7 @@ function toSession(value: Row): Session {
     ...(value.workspace ? { workspace: text(value.workspace) } : {}),
     model: { provider: text(value.model_provider), id: text(value.model_id) },
     thinkingLevel: text(value.thinking_level) as ThinkingLevel,
+    queueMode: text(value.queue_mode || "queue") as Session["queueMode"],
     createdAt: integer(value.created_at),
     updatedAt: integer(value.updated_at),
   };
@@ -274,12 +280,13 @@ export class UmaDatabase {
     workspace?: string;
     model: ModelRef;
     thinkingLevel: ThinkingLevel;
+    queueMode?: Session["queueMode"];
   }): Session {
     const id = randomUUID();
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO sessions(id,mode,title,workspace,model_provider,model_id,thinking_level,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO sessions(id,mode,title,workspace,model_provider,model_id,thinking_level,queue_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
@@ -289,6 +296,7 @@ export class UmaDatabase {
         input.model.provider,
         input.model.id,
         input.thinkingLevel,
+        input.queueMode ?? "queue",
         now,
         now,
       );
@@ -303,13 +311,19 @@ export class UmaDatabase {
 
   updateSession(
     id: string,
-    patch: { title?: string; mode?: SessionMode; model?: ModelRef; thinkingLevel?: ThinkingLevel },
+    patch: {
+      title?: string;
+      mode?: SessionMode;
+      model?: ModelRef;
+      thinkingLevel?: ThinkingLevel;
+      queueMode?: Session["queueMode"];
+    },
   ): Session {
     const current = this.getSession(id);
     const now = Date.now();
     this.db
       .prepare(
-        "UPDATE sessions SET title=?, mode=?, model_provider=?, model_id=?, thinking_level=?, updated_at=? WHERE id=?",
+        "UPDATE sessions SET title=?, mode=?, model_provider=?, model_id=?, thinking_level=?, queue_mode=?, updated_at=? WHERE id=?",
       )
       .run(
         patch.title ?? current.title,
@@ -317,6 +331,7 @@ export class UmaDatabase {
         patch.model?.provider ?? current.model.provider,
         patch.model?.id ?? current.model.id,
         patch.thinkingLevel ?? current.thinkingLevel,
+        patch.queueMode ?? current.queueMode,
         now,
         id,
       );
@@ -362,13 +377,14 @@ export class UmaDatabase {
     payload?: AgentMessage;
     attachmentIds?: string[];
     source?: MessageSource;
+    revisionOfMessageId?: string;
   }): TranscriptItem {
     const id = input.id ?? randomUUID();
     const now = Date.now();
     const sequence = this.allocateMessageSequence(input.sessionId);
     this.db
       .prepare(
-        "INSERT INTO messages(id,session_id,run_id,sequence,role,status,name,content,payload_json,source_json,attachment_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO messages(id,session_id,run_id,sequence,role,status,name,content,payload_json,source_json,revision_of_message_id,attachment_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
@@ -381,10 +397,14 @@ export class UmaDatabase {
         input.content,
         input.payload ? JSON.stringify(input.payload) : null,
         input.source ? JSON.stringify(input.source) : null,
+        input.revisionOfMessageId ?? null,
         JSON.stringify(input.attachmentIds ?? []),
         now,
         now,
       );
+    this.db
+      .prepare("INSERT INTO history_fts(message_id,session_id,sequence,content) VALUES(?,?,?,?)")
+      .run(id, input.sessionId, sequence, input.content);
     return this.getMessage(id);
   }
 
@@ -407,6 +427,12 @@ export class UmaDatabase {
         Date.now(),
         id,
       );
+    if (patch.content !== undefined) {
+      this.db.prepare("DELETE FROM history_fts WHERE message_id=?").run(id);
+      this.db
+        .prepare("INSERT INTO history_fts(message_id,session_id,sequence,content) VALUES(?,?,?,?)")
+        .run(id, text(current.session_id), integer(current.sequence), patch.content);
+    }
     return this.getMessage(id);
   }
 
@@ -425,6 +451,7 @@ export class UmaDatabase {
       content: text(value.content),
       ...(value.name ? { name: text(value.name) } : {}),
       ...(value.run_id ? { runId: text(value.run_id) } : {}),
+      ...(value.revision_of_message_id ? { revisionOfMessageId: text(value.revision_of_message_id) } : {}),
       attachments: attachmentIds
         .map((attachmentId) => this.getAttachment(attachmentId))
         .filter((item): item is Attachment => item !== undefined),
@@ -516,6 +543,7 @@ export class UmaDatabase {
     messageId: string,
     model: ModelSnapshot,
     thinkingLevel: Run["thinkingLevel"],
+    kind: Run["kind"] = "agent",
   ): { run: Run; created: boolean } {
     const existing = row(this.db.prepare("SELECT id,session_id FROM runs WHERE message_id=?"), messageId);
     if (existing) {
@@ -527,9 +555,20 @@ export class UmaDatabase {
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO runs(id,session_id,message_id,status,phase,model_snapshot_json,thinking_level,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO runs(id,session_id,message_id,kind,status,phase,model_snapshot_json,thinking_level,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
       )
-      .run(id, sessionId, messageId, "queued", "queued", JSON.stringify(model), thinkingLevel, now, now);
+      .run(
+        id,
+        sessionId,
+        messageId,
+        kind,
+        "queued",
+        "queued",
+        JSON.stringify(model),
+        thinkingLevel,
+        now,
+        now,
+      );
     return { run: this.getRun(id), created: true };
   }
 
@@ -572,6 +611,14 @@ export class UmaDatabase {
     return this.getRun(id);
   }
 
+  setRunKind(id: string, kind: Run["kind"]): Run {
+    const result = this.db
+      .prepare("UPDATE runs SET kind=?,updated_at=? WHERE id=?")
+      .run(kind, Date.now(), id);
+    if (!result.changes) throw new Error(`Run not found: ${id}`);
+    return this.getRun(id);
+  }
+
   setPlan(runId: string, titles: string[]): PlanStep[] {
     this.db.prepare("DELETE FROM plan_steps WHERE run_id=?").run(runId);
     const insert = this.db.prepare(
@@ -606,6 +653,7 @@ export class UmaDatabase {
       id: text(value.id),
       sessionId: text(value.session_id),
       messageId: text(value.message_id),
+      kind: text(value.kind || "agent") as Run["kind"],
       status: text(value.status) as RunStatus,
       phase: text(value.phase) as Run["phase"],
       ...(value.task_class ? { taskClass: text(value.task_class) as NonNullable<Run["taskClass"]> } : {}),
@@ -843,6 +891,31 @@ export class UmaDatabase {
       .run();
   }
 
+  interruptRunActions(runId: string, reason: string): RunAction[] {
+    this.db
+      .prepare(
+        "UPDATE run_actions SET status='prepared',started_at=NULL,error=? WHERE run_id=? AND status='running' AND tool_class IN ('read','attachment_read')",
+      )
+      .run(`${reason}; safe read action may be replayed`, runId);
+    this.db
+      .prepare(
+        "UPDATE run_actions SET status='uncertain',error=? WHERE run_id=? AND status='running' AND tool_class NOT IN ('read','attachment_read')",
+      )
+      .run(reason, runId);
+    return this.listRunActions(runId).filter((action) => ["prepared", "uncertain"].includes(action.status));
+  }
+
+  hasPendingSideEffects(sessionId: string): boolean {
+    return Boolean(
+      row(
+        this.db.prepare(
+          "SELECT 1 AS pending FROM run_actions a JOIN runs r ON r.id=a.run_id WHERE r.session_id=? AND a.status IN ('prepared','running','uncertain') AND a.tool_class NOT IN ('read','attachment_read') LIMIT 1",
+        ),
+        sessionId,
+      ),
+    );
+  }
+
   listRuns(sessionId: string): Run[] {
     return rows(this.db.prepare("SELECT id FROM runs WHERE session_id=? ORDER BY created_at"), sessionId).map(
       (value) => this.getRun(text(value.id)),
@@ -865,6 +938,13 @@ export class UmaDatabase {
       [...active, ...recent].map((value) => [text(value.id), integer(value.created_at)]),
     );
     return [...unique.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => this.getRun(id));
+  }
+
+  listQueuedRuns(sessionId: string): Run[] {
+    return rows(
+      this.db.prepare("SELECT id FROM runs WHERE session_id=? AND status='queued' ORDER BY created_at"),
+      sessionId,
+    ).map((value) => this.getRun(text(value.id)));
   }
 
   listPendingApprovals(sessionId: string): Approval[] {
@@ -1084,12 +1164,39 @@ export class UmaDatabase {
     if (!match) return [];
     return rows(
       this.db.prepare(
-        "SELECT m.content FROM memory_fts f JOIN memory_facts m ON m.id=f.id WHERE memory_fts MATCH ? AND m.status='active' AND (m.scope='global' OR m.session_id=?) ORDER BY bm25(memory_fts) LIMIT ?",
+        "SELECT m.value FROM memory_fts f JOIN memory_facts m ON m.id=f.id WHERE memory_fts MATCH ? AND m.status='active' AND (m.scope='global' OR m.session_id=?) ORDER BY bm25(memory_fts) LIMIT ?",
       ),
       match,
       sessionId,
       limit,
-    ).map((value) => text(value.content));
+    ).map((value) => text(value.value));
+  }
+
+  searchHistory(sessionId: string, query: string, limit = 20): TranscriptItem[] {
+    this.getSession(sessionId);
+    const match = ftsQuery(query);
+    if (!match) return [];
+    return rows(
+      this.db.prepare(
+        "SELECT message_id FROM history_fts WHERE history_fts MATCH ? AND session_id=? ORDER BY bm25(history_fts) LIMIT ?",
+      ),
+      match,
+      sessionId,
+      Math.max(1, Math.min(100, limit)),
+    ).map((value) => this.getMessage(text(value.message_id)));
+  }
+
+  readHistoryRange(sessionId: string, fromSequence: number, toSequence: number): TranscriptItem[] {
+    this.getSession(sessionId);
+    if (toSequence < fromSequence) throw new Error("Invalid history sequence range");
+    return rows(
+      this.db.prepare(
+        "SELECT id FROM messages WHERE session_id=? AND sequence BETWEEN ? AND ? ORDER BY sequence LIMIT 200",
+      ),
+      sessionId,
+      Math.max(1, fromSequence),
+      toSequence,
+    ).map((value) => this.getMessage(text(value.id)));
   }
 
   replaceKnowledgeSource(input: {
@@ -1337,29 +1444,55 @@ export class UmaDatabase {
   addMemoryFact(input: {
     sessionId?: string;
     scope: MemoryFact["scope"];
-    content: string;
+    key: string;
+    value: string;
+    category: string;
     confidence: number;
+    evidence?: string;
     sourceRunId?: string;
     status: MemoryFact["status"];
   }): MemoryFact {
     const id = randomUUID();
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO memory_facts(id,session_id,scope,content,confidence,source_run_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.sessionId ?? null,
-        input.scope,
-        input.content,
-        input.confidence,
-        input.sourceRunId ?? null,
-        input.status,
-        now,
-        now,
-      );
-    this.db.prepare("INSERT INTO memory_fts(id,content) VALUES(?,?)").run(id, input.content);
+    this.withTransaction(() => {
+      const previous =
+        input.status === "active"
+          ? row(
+              this.db.prepare(
+                "SELECT id,value FROM memory_facts WHERE scope=? AND COALESCE(session_id,'')=COALESCE(?,'') AND key=? AND status='active' ORDER BY updated_at DESC LIMIT 1",
+              ),
+              input.scope,
+              input.sessionId ?? null,
+              input.key,
+            )
+          : undefined;
+      if (previous && text(previous.value) !== input.value)
+        this.db
+          .prepare("UPDATE memory_facts SET status='superseded',updated_at=? WHERE id=?")
+          .run(now, text(previous.id));
+      this.db
+        .prepare(
+          "INSERT INTO memory_facts(id,session_id,scope,key,value,category,confidence,evidence,source_run_id,status,supersedes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .run(
+          id,
+          input.sessionId ?? null,
+          input.scope,
+          input.key,
+          input.value,
+          input.category,
+          input.confidence,
+          input.evidence ?? null,
+          input.sourceRunId ?? null,
+          input.status,
+          previous && text(previous.value) !== input.value ? text(previous.id) : null,
+          now,
+          now,
+        );
+      this.db
+        .prepare("INSERT INTO memory_fts(id,content) VALUES(?,?)")
+        .run(id, `${input.key} ${input.value}`);
+    });
     return this.getMemoryFact(id);
   }
 
@@ -1370,10 +1503,14 @@ export class UmaDatabase {
       id: text(value.id),
       ...(value.session_id ? { sessionId: text(value.session_id) } : {}),
       scope: text(value.scope) as MemoryFact["scope"],
-      content: text(value.content),
+      key: text(value.key),
+      value: text(value.value),
+      category: text(value.category),
       confidence: Number(value.confidence),
+      ...(value.evidence ? { evidence: text(value.evidence) } : {}),
       ...(value.source_run_id ? { sourceRunId: text(value.source_run_id) } : {}),
       status: text(value.status) as MemoryFact["status"],
+      ...(value.supersedes ? { supersedes: text(value.supersedes) } : {}),
       createdAt: integer(value.created_at),
       updatedAt: integer(value.updated_at),
     };
@@ -1403,6 +1540,267 @@ export class UmaDatabase {
       if (result.changes === 0) throw new Error(`Memory fact not found: ${id}`);
       this.db.prepare("DELETE FROM memory_fts WHERE id=?").run(id);
     });
+  }
+
+  addMemoryRollup(input: Omit<MemoryRollup, "id" | "createdAt">): MemoryRollup {
+    const id = randomUUID();
+    const createdAt = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO memory_rollups(id,session_id,kind,from_sequence,to_sequence,summary,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id,kind,from_sequence,to_sequence) DO UPDATE SET summary=excluded.summary,created_at=excluded.created_at",
+      )
+      .run(id, input.sessionId, input.kind, input.fromSequence, input.toSequence, input.summary, createdAt);
+    const value = row(
+      this.db.prepare(
+        "SELECT * FROM memory_rollups WHERE session_id=? AND kind=? AND from_sequence=? AND to_sequence=?",
+      ),
+      input.sessionId,
+      input.kind,
+      input.fromSequence,
+      input.toSequence,
+    ) as Row;
+    return {
+      id: text(value.id),
+      sessionId: text(value.session_id),
+      kind: text(value.kind) as MemoryRollup["kind"],
+      fromSequence: integer(value.from_sequence),
+      toSequence: integer(value.to_sequence),
+      summary: text(value.summary),
+      createdAt: integer(value.created_at),
+    };
+  }
+
+  listMemoryRollups(sessionId: string, limit = 20): MemoryRollup[] {
+    return rows(
+      this.db.prepare("SELECT * FROM memory_rollups WHERE session_id=? ORDER BY to_sequence DESC LIMIT ?"),
+      sessionId,
+      Math.max(1, Math.min(100, limit)),
+    ).map((value) => ({
+      id: text(value.id),
+      sessionId: text(value.session_id),
+      kind: text(value.kind) as MemoryRollup["kind"],
+      fromSequence: integer(value.from_sequence),
+      toSequence: integer(value.to_sequence),
+      summary: text(value.summary),
+      createdAt: integer(value.created_at),
+    }));
+  }
+
+  replaceAggregateRollup(input: Omit<MemoryRollup, "id" | "createdAt">): MemoryRollup {
+    if (input.kind === "turn") return this.addMemoryRollup(input);
+    this.db
+      .prepare("DELETE FROM memory_rollups WHERE session_id=? AND kind=?")
+      .run(input.sessionId, input.kind);
+    return this.addMemoryRollup(input);
+  }
+
+  maintainMemoryRollups(sessionId: string): void {
+    this.db
+      .prepare(
+        "DELETE FROM memory_rollups WHERE id IN (SELECT id FROM memory_rollups WHERE session_id=? AND kind='turn' ORDER BY to_sequence DESC LIMIT -1 OFFSET 500)",
+      )
+      .run(sessionId);
+    this.db
+      .prepare(
+        "DELETE FROM memory_rollups WHERE id IN (SELECT id FROM memory_rollups WHERE session_id=? AND kind='day' ORDER BY to_sequence DESC LIMIT -1 OFFSET 90)",
+      )
+      .run(sessionId);
+  }
+
+  getAgentProfile(): AgentProfile {
+    const value = row(this.db.prepare("SELECT content,updated_at FROM agent_profile WHERE singleton=1"));
+    return { content: text(value?.content), updatedAt: integer(value?.updated_at) };
+  }
+
+  putAgentProfile(content: string): AgentProfile {
+    this.db
+      .prepare("UPDATE agent_profile SET content=?,updated_at=? WHERE singleton=1")
+      .run(content, Date.now());
+    return this.getAgentProfile();
+  }
+
+  addQualityAssessment(input: Omit<QualityAssessment, "id" | "createdAt">): QualityAssessment {
+    const id = randomUUID();
+    const createdAt = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO quality_assessments(id,run_id,target_message_id,passed,issues_json,suggestions_json,iteration,created_at) VALUES(?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        input.runId,
+        input.targetMessageId,
+        input.passed ? 1 : 0,
+        JSON.stringify(input.issues),
+        JSON.stringify(input.suggestions),
+        input.iteration,
+        createdAt,
+      );
+    return { id, createdAt, ...input };
+  }
+
+  listQualityAssessments(runId: string): QualityAssessment[] {
+    return rows(
+      this.db.prepare("SELECT * FROM quality_assessments WHERE run_id=? ORDER BY iteration,created_at"),
+      runId,
+    ).map((value) => ({
+      id: text(value.id),
+      runId: text(value.run_id),
+      targetMessageId: text(value.target_message_id),
+      passed: integer(value.passed) === 1,
+      issues: parseJson(value.issues_json, []),
+      suggestions: parseJson(value.suggestions_json, []),
+      iteration: integer(value.iteration),
+      createdAt: integer(value.created_at),
+    }));
+  }
+
+  listQualityForMessage(messageId: string): QualityAssessment[] {
+    return rows(
+      this.db.prepare("SELECT run_id FROM quality_assessments WHERE target_message_id=? ORDER BY created_at"),
+      messageId,
+    ).flatMap((value) => this.listQualityAssessments(text(value.run_id)));
+  }
+
+  listActivity(sessionId: string, limit = 200): Array<Record<string, unknown>> {
+    this.getSession(sessionId);
+    return rows(
+      this.db.prepare(
+        "SELECT sequence,type,payload_json,created_at FROM session_events WHERE session_id=? ORDER BY sequence DESC LIMIT ?",
+      ),
+      sessionId,
+      Math.max(1, Math.min(1000, limit)),
+    )
+      .reverse()
+      .map((value) => ({
+        sequence: integer(value.sequence),
+        type: text(value.type),
+        payload: parseJson(value.payload_json, {}),
+        createdAt: integer(value.created_at),
+      }));
+  }
+
+  upsertSkillPackage(
+    input: Omit<SkillPackage, "id" | "installedAt" | "updatedAt"> & { installPath: string },
+  ): SkillPackage {
+    const existing = row(
+      this.db.prepare("SELECT id,installed_at FROM skill_packages WHERE name=?"),
+      input.name,
+    );
+    const id = existing ? text(existing.id) : randomUUID();
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO skill_packages(id,name,version,source_type,source_reference,install_path,content_hash,status,risk,diagnostics_json,installed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET version=excluded.version,source_type=excluded.source_type,source_reference=excluded.source_reference,install_path=excluded.install_path,content_hash=excluded.content_hash,status=excluded.status,risk=excluded.risk,diagnostics_json=excluded.diagnostics_json,updated_at=excluded.updated_at",
+      )
+      .run(
+        id,
+        input.name,
+        input.version,
+        input.source.type,
+        input.source.reference,
+        input.installPath,
+        input.contentHash,
+        input.status,
+        input.risk,
+        JSON.stringify(input.diagnostics),
+        existing ? integer(existing.installed_at) : now,
+        now,
+      );
+    return this.getSkillPackage(id);
+  }
+
+  getSkillPackage(id: string): SkillPackage {
+    const value = row(this.db.prepare("SELECT * FROM skill_packages WHERE id=?"), id);
+    if (!value) throw new Error(`Skill package not found: ${id}`);
+    return {
+      id: text(value.id),
+      name: text(value.name),
+      version: text(value.version),
+      source: {
+        type: text(value.source_type) as SkillPackage["source"]["type"],
+        reference: text(value.source_reference),
+      },
+      contentHash: text(value.content_hash),
+      status: text(value.status) as SkillPackage["status"],
+      risk: text(value.risk) as SkillPackage["risk"],
+      diagnostics: parseJson(value.diagnostics_json, []),
+      installedAt: integer(value.installed_at),
+      updatedAt: integer(value.updated_at),
+    };
+  }
+
+  getSkillPackagePath(id: string): string {
+    const value = row(this.db.prepare("SELECT install_path FROM skill_packages WHERE id=?"), id);
+    if (!value) throw new Error(`Skill package not found: ${id}`);
+    return text(value.install_path);
+  }
+
+  listSkillPackages(): SkillPackage[] {
+    return rows(this.db.prepare("SELECT id FROM skill_packages ORDER BY name")).map((value) =>
+      this.getSkillPackage(text(value.id)),
+    );
+  }
+
+  updateSkillPackageStatus(id: string, status: SkillPackage["status"]): SkillPackage {
+    const result = this.db
+      .prepare("UPDATE skill_packages SET status=?,updated_at=? WHERE id=?")
+      .run(status, Date.now(), id);
+    if (!result.changes) throw new Error(`Skill package not found: ${id}`);
+    return this.getSkillPackage(id);
+  }
+
+  addOptimizationProposal(
+    input: Omit<OptimizationProposal, "id" | "createdAt" | "updatedAt">,
+  ): OptimizationProposal {
+    const id = randomUUID();
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO optimization_proposals(id,title,evidence_json,risk,recommendation,validation_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        input.title,
+        JSON.stringify(input.evidence),
+        input.risk,
+        input.recommendation,
+        JSON.stringify(input.validation),
+        input.status,
+        now,
+        now,
+      );
+    return this.getOptimizationProposal(id);
+  }
+
+  getOptimizationProposal(id: string): OptimizationProposal {
+    const value = row(this.db.prepare("SELECT * FROM optimization_proposals WHERE id=?"), id);
+    if (!value) throw new Error(`Optimization proposal not found: ${id}`);
+    return {
+      id: text(value.id),
+      title: text(value.title),
+      evidence: parseJson(value.evidence_json, []),
+      risk: text(value.risk) as OptimizationProposal["risk"],
+      recommendation: text(value.recommendation),
+      validation: parseJson(value.validation_json, []),
+      status: text(value.status) as OptimizationProposal["status"],
+      createdAt: integer(value.created_at),
+      updatedAt: integer(value.updated_at),
+    };
+  }
+
+  listOptimizationProposals(): OptimizationProposal[] {
+    return rows(this.db.prepare("SELECT id FROM optimization_proposals ORDER BY created_at DESC")).map(
+      (value) => this.getOptimizationProposal(text(value.id)),
+    );
+  }
+
+  updateOptimizationProposal(id: string, status: "accepted" | "rejected"): OptimizationProposal {
+    const result = this.db
+      .prepare("UPDATE optimization_proposals SET status=?,updated_at=? WHERE id=?")
+      .run(status, Date.now(), id);
+    if (!result.changes) throw new Error(`Optimization proposal not found: ${id}`);
+    return this.getOptimizationProposal(id);
   }
 
   addAudit(input: {

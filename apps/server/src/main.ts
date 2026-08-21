@@ -10,7 +10,7 @@ const runtime = new UmaRuntime(config);
 let app: Awaited<ReturnType<typeof createServer>> | undefined;
 try {
   await runtime.start();
-  app = await createServer(runtime);
+  app = await createServer(runtime, { configLoader: () => loadConfig(configPath) });
   await app.listen({ host: config.server.host, port: config.server.port });
 } catch (error) {
   await app?.close().catch(() => {});

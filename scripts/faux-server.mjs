@@ -106,6 +106,8 @@ const response = (context) => {
       return fauxAssistantMessage("FAUX_TOOL_RESULT");
     return fauxAssistantMessage([fauxToolCall("memory_search", { query: "deterministic", limit: 1 })]);
   }
+  if (content.includes("FAUX_SECURITY_TEST")) return fauxAssistantMessage("FAUX_SECURITY_SAFE");
+  if (content.includes("FAUX_PROMPT_INJECTION")) return fauxAssistantMessage("FAUX_INJECTION_REFUSED");
   if (content.includes("Execute only plan step 1")) return fauxAssistantMessage("FAUX_PLAN_STEP_1");
   if (content.includes("Execute only plan step 2")) return fauxAssistantMessage("FAUX_PLAN_STEP_2");
   return fauxAssistantMessage(`Faux Core received: ${content.slice(0, 300)}`);

@@ -181,6 +181,7 @@ export function createBuiltinTools(input: {
   search: SearchService;
   scheduleManage: (input: Record<string, unknown>) => unknown;
   memoryWrite: (scope: "global" | "session", content: string) => ReturnType<UmaDatabase["addMemoryFact"]>;
+  attachmentCreateFromWorkspace?: (path: string) => Promise<{ id: string; name: string }>;
 }): AgentTool[] {
   const {
     session,
@@ -192,6 +193,7 @@ export function createBuiltinTools(input: {
     search,
     scheduleManage,
     memoryWrite,
+    attachmentCreateFromWorkspace,
   } = input;
   const webSearchTool = () =>
     defineTool({
@@ -250,8 +252,43 @@ export function createBuiltinTools(input: {
         return result(JSON.stringify(scheduleManage(params), null, 2));
       },
     });
+  const historyTools = (): AgentTool[] => [
+    defineTool({
+      name: "history_search",
+      label: "Search history",
+      description: "Search this session's durable transcript and return matching public messages.",
+      parameters: Type.Object({
+        query: Type.String(),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      }),
+      executionMode: "parallel",
+      async execute(_id, params) {
+        const items = database.searchHistory(session.id, params.query, params.limit ?? 20);
+        return result(
+          items.map((item) => `[${item.sequence}] ${item.role}: ${item.content}`).join("\n\n") ||
+            "No history found",
+          { sequences: items.map((item) => item.sequence) },
+        );
+      },
+    }),
+    defineTool({
+      name: "history_read",
+      label: "Read history",
+      description: "Read a bounded sequence range from this session's public transcript.",
+      parameters: Type.Object({
+        fromSequence: Type.Integer({ minimum: 1 }),
+        toSequence: Type.Integer({ minimum: 1 }),
+      }),
+      executionMode: "parallel",
+      async execute(_id, params) {
+        const items = database.readHistoryRange(session.id, params.fromSequence, params.toSequence);
+        return result(items.map((item) => `[${item.sequence}] ${item.role}: ${item.content}`).join("\n\n"));
+      },
+    }),
+  ];
   if (!session.workspace)
     return [
+      ...historyTools(),
       defineTool({
         name: "memory_write",
         label: "Remember",
@@ -364,6 +401,7 @@ export function createBuiltinTools(input: {
   const attachmentSchema = Type.Object({ attachmentId: Type.String() });
 
   return [
+    ...historyTools(),
     defineTool({
       name: "read",
       label: "Read file",
@@ -526,6 +564,23 @@ export function createBuiltinTools(input: {
         return result(await readTextFile(path), { name: attachment.name });
       },
     }),
+    ...(attachmentCreateFromWorkspace
+      ? [
+          defineTool({
+            name: "attachment_create_from_workspace",
+            label: "Create attachment from workspace",
+            description:
+              "Copy one file from the current workspace into this session as an attachment after path validation.",
+            parameters: Type.Object({ path: Type.String() }),
+            executionMode: "sequential",
+            async execute(_id, params) {
+              const path = await workspacePolicy.resolvePath(workspace, params.path);
+              const attachment = await attachmentCreateFromWorkspace(path);
+              return result(JSON.stringify(attachment), attachment);
+            },
+          }),
+        ]
+      : []),
     webSearchTool(),
     scheduleTool(),
   ];

@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.8.0`，协议版本为 `7`，SQLite schema 为 `8`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.0.0`，协议版本为 `9`，SQLite schema 为 `10`。
 
 ## 当前能力
 
@@ -16,6 +16,12 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 - 持久化 once/interval/cron 调度、Tavily/Stack Exchange 搜索和只读运营报告
 - PDF、DOCX、PPTX、XLSX 异步知识摄取，以及独立 Playwright Browser MCP Worker
 - 只通过 Client SDK 运行的黑盒 Eval Runner
+- Session 可选择严格 FIFO `queue` 或安全抢占 `preemptive`；澄清消息始终续接原 Run，副作用未决时不会启动替代 Run
+- `/review` 三轮内无工具审查与 `/improve` 不可变答案修订链
+- Agent Profile、结构化渐进记忆、事实 supersede、历史 rollup 与按需原文回溯
+- 技能包 staging、风险扫描、人工启用、热刷新，以及可选的隔离 Skill Worker
+- 独立 Feishu MCP，提供文档、多维表格和云盘工具，不污染消息 Adapter 或 Core
+- 证据化只读优化提案；接受提案只进入人工待办，不存在 apply API
 
 ## 本地启动
 
@@ -78,27 +84,35 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 - `providers`、`models`、`roles`：Provider 凭据、模型 profile 和 default/reasoning/fast/vision 路由；所有角色必须显式配置
 - `skillsDirs`：递归扫描 `SKILL.md`，只加载说明，不执行技能代码
 - `mcpServers`：`stdio` 需要 `command/args`，`http` 需要 Streamable HTTP `url`
-- `runtime.maxParallelSessions`：跨会话并发上限；单会话始终 FIFO
+- `mcpServers`：非回环 HTTP MCP 应设置 `authTokenEnv`，Core 从该环境变量注入 Bearer Token
+- `runtime.maxParallelSessions`：跨会话并发上限；单会话默认 FIFO，也可在 Session 上设为安全抢占模式
 
 数据库只接受当前 `PRAGMA user_version`。版本不匹配会拒绝启动；本项目不提供旧格式迁移或兼容层。
 
 ## API 摘要
 
-- `GET/POST /api/v7/sessions`
-- `GET /api/v7/sessions/:id/snapshot`
-- `GET /api/v7/sessions/:id/events?after=<sequence>` 增量事件
-- `GET /api/v7/sessions/:id/history?before=<sequence>` 历史分页
-- `POST /api/v7/sessions/:id/messages|cancel|compact`
-- `GET /api/v7/attachments/:id/content`
-- `GET /api/v7/runs/:id/checkpoints|actions`
-- `POST /api/v7/runs/:id/resume|cancel`
-- `POST /api/v7/runs/:id/actions/:actionId/decide`
-- `POST /api/v7/approvals/:id`、`POST /api/v7/uploads`
-- `GET /api/v7/health/live|ready`
-- `GET /api/v7/events` WebSocket
-- `/api/v7/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
-- `/api/v7/schedules` 调度 CRUD、立即执行与运行历史
-- `GET /api/v7/reports/operations` 脱敏运行统计
+- `GET/POST /api/v9/sessions`
+- `GET /api/v9/sessions/:id/snapshot`
+- `GET /api/v9/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v9/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v9/sessions/:id/messages|cancel|compact`
+- `PATCH /api/v9/sessions/:id` 可更新 `queueMode`
+- `POST /api/v9/messages/:id/review|improve`、`GET /api/v9/runs/:id/quality`
+- `POST /api/v9/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
+- `GET /api/v9/attachments/:id/content`
+- `GET /api/v9/runs/:id/checkpoints|actions`
+- `POST /api/v9/runs/:id/resume|cancel`
+- `POST /api/v9/runs/:id/actions/:actionId/decide`
+- `POST /api/v9/approvals/:id`、`POST /api/v9/uploads`
+- `GET /api/v9/health/live|ready`
+- `GET /api/v9/events` WebSocket
+- `/api/v9/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `/api/v9/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
+- `/api/v9/skills/search|install` 与技能 enable/disable/reject 生命周期
+- `POST /api/v9/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
+- `/api/v9/schedules` 调度 CRUD、立即执行与运行历史
+- `GET /api/v9/reports/operations|diagnostics` 脱敏运行统计
+- `/api/v9/optimization-proposals` 只读证据、建议和人工接受/拒绝状态
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
@@ -122,6 +136,16 @@ npm run start --workspace=@uma-agent/feishu-adapter
 Adapter 只接受 `FEISHU_ALLOWED_OPEN_IDS` 白名单中的所有者。Webhook 在签名校验后先持久化去重记录并立即 ACK，后台 Worker 再处理；重启会恢复 pending 入站。私聊全部进入 Core，群聊仅处理白名单用户 @机器人或回复 Adapter 已发送消息的内容；文本、图片和文件会转换为标准消息与 Attachment。运行卡片支持审批、恢复及副作用 Action 决策，更新采用一秒尾随节流且终态立即定稿。按钮只携带短期 opaque token，重复点击保持幂等。Adapter 自己的 SQLite 只保存会话映射、入站队列、卡片游标和回调状态。
 通用渠道类型、指数退避和节流工具由 `@uma-agent/channel-adapter` 提供；Core 不依赖任何渠道 SDK。
 
+## 质量、记忆与技能
+
+`queue` 模式按 Session 严格 FIFO，最多等待 100 条；`preemptive` 在新消息到达时取消旧排队 Run，并请求取消活动 Run。若活动工具可能产生副作用，其 Action 会转为 `uncertain`，必须先 acknowledge 或 reject，新 Run 才能继续。`awaiting_input` 的下一条消息始终作为原 Run 的澄清补充，不参与抢占。
+
+`/review [反馈]` 对目标答案执行最多三轮、无工具的结构化审查；`/improve` 根据最近评估只重写一次，`--force` 先评估，`--reset` 从原始答案而不是最近修订重写。原答案永久不变，新答案使用 `revisionOfMessageId` 建立版本链。
+
+Core 仅向上下文注入 Profile、active 事实和相关历史 rollup。事实 key 出现明确新值时，旧事实转为 `superseded` 并保留来源和证据；原始 transcript 仍是唯一历史原文。`history_search` 与 `history_read` 是只读工具，允许 Agent 从摘要回溯原文。
+
+技能安装先进入 staging：Core 校验元数据、路径、数量、大小、疑似凭据、危险命令和动态执行，再由所有者 enable。Core 只读取 `SKILL.md` 与静态资源，从不加载技能代码。配置和技能重载采用“完整校验后原子替换”；活动 Run 继续使用其冻结的模型与工具快照。`stateDir`、监听地址、认证及 workspace roots 等变更只报告 `restartRequired`。
+
 ## 浏览器 Worker 与评测
 
 Browser Worker 是独立 MCP Streamable HTTP 服务，只监听 `127.0.0.1:3230`，不挂载 Core state 或 workspace。所有页面请求和重定向都执行公网地址校验；Core 端仍把其工具视为 MCP 副作用并要求审批。启动后在 `mcpServers` 中配置 `http://127.0.0.1:3230/mcp`：
@@ -141,6 +165,22 @@ node apps/eval-runner/dist/main.js eval-suite.json
 
 评测只读取终态 Run 和公开 transcript，不读取数据库、隐藏思维链，也不修改代码或执行 Git。
 
+## Feishu MCP 与隔离 Skill Worker
+
+消息 Adapter 只处理通道。飞书业务工具由 `apps/feishu-mcp` 独立提供，使用官方 SDK 暴露云文档、Bitable 与 Drive MCP 工具；文件输入使用 Uma Attachment ID，通过 Client SDK 下载，不挂载 Core state 或 workspace。服务必须设置独立 Bearer Token，并仅部署在内部网络：
+
+```powershell
+$env:FEISHU_APP_ID = "..."
+$env:FEISHU_APP_SECRET = "..."
+$env:FEISHU_MCP_AUTH_TOKEN = "独立高熵令牌"
+$env:UMA_SERVER_URL = "http://core:3210"
+$env:UMA_TOKEN = "Core 令牌"
+npm run build --workspace=@uma-agent/feishu-mcp
+npm run start --workspace=@uma-agent/feishu-mcp
+```
+
+`apps/skill-worker` 只运行已批准且内容哈希与 `skill-worker.json` 清单一致的预打包 JavaScript ESM 工具。它不执行 `npm install`，技能目录只读，scratch 独立；容器默认无 Core state、workspace 或宿主路径挂载。Worker 未部署时，静态技能指令仍可用，但对应可执行工具显示 unavailable。
+
 ## 部署
 
 ```bash
@@ -153,6 +193,12 @@ docker compose up --build
 
 ```bash
 docker compose --profile feishu up --build
+```
+
+飞书 MCP 与 Skill Worker 使用独立 profile：
+
+```bash
+docker compose --profile feishu-tools --profile skills up --build
 ```
 
 Compose 默认只发布到 `127.0.0.1`，镜像包含健康检查并使用 `/data/state`、`/data/workspace` 独立卷。公网部署应通过 Caddy/Nginx 终止 TLS，并在配置中列出允许的 `webOrigins`。Core Server 使用状态目录锁和单进程 SQLite，不能横向启动多个副本共享同一状态卷。
@@ -185,6 +231,8 @@ npm run test:coverage
 npm run build
 npx playwright install chromium
 npm run test:web:e2e
+npm run test:eval:faux
+npm run test:soak:faux # 默认 4 小时；可用 UMA_SOAK_HOURS=8 延长
 ```
 
-单元与集成测试覆盖 Runtime、SQLite、Protocol、Client、Server、CLI JSON 流、Web 离线缓存和飞书持久队列；Playwright 使用两个独立浏览器上下文验证同一 Session 的实时同步与离线只读。Docker 构建也属于 CI 门禁；本机没有 Docker 时可先完成其余门禁，再在 CI 或具备 Docker Engine 的环境验证两个镜像。
+单元与集成测试覆盖 Runtime、SQLite、Protocol、Client、Server、CLI JSON 流、Web 离线缓存、飞书持久队列、Feishu MCP、Skill Worker、Browser Worker 和 Eval Runner；Playwright 使用两个独立浏览器上下文验证同一 Session 的实时同步与离线只读。Docker 构建也属于 CI 门禁；本机没有 Docker 时可先完成其余门禁，再在 CI 或具备 Docker Engine 的环境验证全部镜像。

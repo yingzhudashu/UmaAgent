@@ -125,7 +125,7 @@ describe("UmaClient", () => {
     });
     await client.decideRunAction("run-1", "action-1", "acknowledge");
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:3210/api/v7/runs/run-1/actions/action-1/decide",
+      "http://localhost:3210/api/v9/runs/run-1/actions/action-1/decide",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ decision: "acknowledge" }) }),
     );
   });
@@ -275,17 +275,17 @@ describe("UmaClient", () => {
     await client.diagnosticsReport(10, 20);
     const requests = fetchMock.mock.calls.map(([url, init]) => ({ url: String(url), init }));
     expect(requests.map((item) => item.url)).toEqual([
-      "http://localhost:3210/api/v7/schedules",
-      "http://localhost:3210/api/v7/schedules/schedule%2Fid",
-      "http://localhost:3210/api/v7/schedules/schedule%2Fid/run",
-      "http://localhost:3210/api/v7/schedules/schedule%2Fid/runs",
-      "http://localhost:3210/api/v7/schedule-runs/schedule-run%2Fid",
-      "http://localhost:3210/api/v7/schedule-runs/schedule-run%2Fid/cancel",
-      "http://localhost:3210/api/v7/schedules/schedule%2Fid",
-      "http://localhost:3210/api/v7/knowledge",
-      "http://localhost:3210/api/v7/knowledge/knowledge%2Fid",
-      "http://localhost:3210/api/v7/reports/operations?from=10&to=20",
-      "http://localhost:3210/api/v7/reports/diagnostics?from=10&to=20",
+      "http://localhost:3210/api/v9/schedules",
+      "http://localhost:3210/api/v9/schedules/schedule%2Fid",
+      "http://localhost:3210/api/v9/schedules/schedule%2Fid/run",
+      "http://localhost:3210/api/v9/schedules/schedule%2Fid/runs",
+      "http://localhost:3210/api/v9/schedule-runs/schedule-run%2Fid",
+      "http://localhost:3210/api/v9/schedule-runs/schedule-run%2Fid/cancel",
+      "http://localhost:3210/api/v9/schedules/schedule%2Fid",
+      "http://localhost:3210/api/v9/knowledge",
+      "http://localhost:3210/api/v9/knowledge/knowledge%2Fid",
+      "http://localhost:3210/api/v9/reports/operations?from=10&to=20",
+      "http://localhost:3210/api/v9/reports/diagnostics?from=10&to=20",
     ]);
     expect(requests[7]?.init?.body).toBe(
       JSON.stringify({ name: "notes", attachmentId: "attachment/id", sessionId: "session/id" }),
@@ -320,7 +320,20 @@ describe("UmaClient", () => {
     await client.resolveApproval("approval/id", true);
     await client.listModels();
     await client.listSkills();
+    await client.skillState();
     await client.refreshSkills();
+    await client.reloadConfig();
+    await client.searchSkills("safe skill");
+    await client.installSkill({ source: "local", reference: "skills/demo" });
+    await client.setSkillStatus("skill/id", "enable");
+    await client.setSkillStatus("skill/id", "disable");
+    await client.setSkillStatus("skill/id", "reject");
+    await client.getAgentProfile();
+    await client.updateAgentProfile("Be concise.");
+    await client.searchHistory("session/id", "old answer");
+    await client.searchHistory("session/id", "old answer", 5);
+    await client.listActivity("session/id");
+    await client.listActivity("session/id", 10);
     await client.mcpStatus();
     await client.listKnowledge();
     await client.indexKnowledge("docs", "docs/readme.md");
@@ -330,6 +343,12 @@ describe("UmaClient", () => {
     await client.getTask("task/id");
     await client.listSchedules();
     await client.operationsReport();
+    await client.diagnosticsReport();
+    await client.listOptimizationProposals();
+    await client.generateOptimizationProposals();
+    await client.generateOptimizationProposals(10, 20);
+    await client.decideOptimizationProposal("proposal/id", "accepted");
+    await client.decideOptimizationProposal("proposal/id", "rejected");
     await client.listMemoryFacts();
     await client.listMemoryFacts("candidate");
     await client.createMemoryFact("session/id", "fact");
@@ -337,6 +356,13 @@ describe("UmaClient", () => {
     await client.reviewMemoryFact("memory/id", "active");
     await client.deleteMemoryFact("memory/id");
     await client.listAudit("run/id");
+    await client.reviewMessage("message/id");
+    await client.reviewMessage("message/id", "check facts");
+    await client.improveMessage("message/id");
+    await client.improveMessage("message/id", { force: true, reset: true });
+    await client.listRunQuality("run/id");
+    await client.sendCommand("session/id", "pwd");
+    await client.sendCommand("session/id", "pwd", "message/id");
     await client.listRunActions("run/id");
     await client.listRunCheckpoints("run/id");
     await client.resumeRun("run/id");
@@ -422,7 +448,7 @@ describe("UmaClient", () => {
       token: "secret",
       fetch: (() => response(snapshot)) as typeof fetch,
       webSocketFactory: (url) => {
-        expect(url).toBe("wss://core.example/api/v7/events");
+        expect(url).toBe("wss://core.example/api/v9/events");
         return socket as unknown as WebSocket;
       },
     });
