@@ -24,7 +24,7 @@ export class McpManager {
   async connect(configs: McpServerConfig[], toolTimeoutMs: number): Promise<void> {
     await this.close();
     for (const config of configs) {
-      const client = new Client({ name: "uma-agent", version: "0.7.0" });
+      const client = new Client({ name: "uma-agent", version: "0.8.0" });
       try {
         const transport =
           config.transport === "stdio"
@@ -33,7 +33,17 @@ export class McpManager {
                 args: config.args ?? [],
                 ...(config.env ? { env: { ...process.env, ...config.env } as Record<string, string> } : {}),
               })
-            : new StreamableHTTPClientTransport(new URL(config.url as string));
+            : new StreamableHTTPClientTransport(new URL(config.url as string), {
+                ...(config.authTokenEnv
+                  ? {
+                      requestInit: {
+                        headers: {
+                          authorization: `Bearer ${process.env[config.authTokenEnv] as string}`,
+                        },
+                      },
+                    }
+                  : {}),
+              });
         await client.connect(transport as Parameters<Client["connect"]>[0]);
         const listed = await client.listTools();
         const tools = listed.tools.map((tool): AgentTool => {

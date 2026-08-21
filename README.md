@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.7.0`，协议版本为 `6`，SQLite schema 为 `7`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `0.8.0`，协议版本为 `7`，SQLite schema 为 `8`。
 
 ## 当前能力
 
@@ -84,21 +84,21 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 ## API 摘要
 
-- `GET/POST /api/v6/sessions`
-- `GET /api/v6/sessions/:id/snapshot`
-- `GET /api/v6/sessions/:id/events?after=<sequence>` 增量事件
-- `GET /api/v6/sessions/:id/history?before=<sequence>` 历史分页
-- `POST /api/v6/sessions/:id/messages|cancel|compact`
-- `GET /api/v6/attachments/:id/content`
-- `GET /api/v6/runs/:id/checkpoints|actions`
-- `POST /api/v6/runs/:id/resume|cancel`
-- `POST /api/v6/runs/:id/actions/:actionId/decide`
-- `POST /api/v6/approvals/:id`、`POST /api/v6/uploads`
-- `GET /api/v6/health/live|ready`
-- `GET /api/v6/events` WebSocket
-- `/api/v6/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
-- `/api/v6/schedules` 调度 CRUD、立即执行与运行历史
-- `GET /api/v6/reports/operations` 脱敏运行统计
+- `GET/POST /api/v7/sessions`
+- `GET /api/v7/sessions/:id/snapshot`
+- `GET /api/v7/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v7/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v7/sessions/:id/messages|cancel|compact`
+- `GET /api/v7/attachments/:id/content`
+- `GET /api/v7/runs/:id/checkpoints|actions`
+- `POST /api/v7/runs/:id/resume|cancel`
+- `POST /api/v7/runs/:id/actions/:actionId/decide`
+- `POST /api/v7/approvals/:id`、`POST /api/v7/uploads`
+- `GET /api/v7/health/live|ready`
+- `GET /api/v7/events` WebSocket
+- `/api/v7/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `/api/v7/schedules` 调度 CRUD、立即执行与运行历史
+- `GET /api/v7/reports/operations` 脱敏运行统计
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 

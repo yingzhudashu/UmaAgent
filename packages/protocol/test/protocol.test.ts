@@ -33,7 +33,7 @@ describe("protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts only the v6 Action decisions", () => {
+  it("accepts only the v7 Action decisions", () => {
     for (const decision of ["approve", "reject", "acknowledge"])
       expect(Value.Check(RunActionDecisionSchema, { decision })).toBe(true);
     expect(Value.Check(RunActionDecisionSchema, { decision: "confirm" })).toBe(false);

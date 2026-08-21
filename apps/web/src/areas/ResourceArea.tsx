@@ -1,4 +1,5 @@
 import type { KnowledgeSource, SkillSummary } from "@uma-agent/protocol";
+import { type FormEvent, useState } from "react";
 
 export function ResourceArea({
   skills,
@@ -19,6 +20,16 @@ export function ResourceArea({
   uploadKnowledge: (file: File) => void;
   deleteKnowledge: (id: string) => void;
 }) {
+  const [showPathForm, setShowPathForm] = useState(false);
+  const [path, setPath] = useState("");
+  const [name, setName] = useState("");
+  const submitPath = (event: FormEvent) => {
+    event.preventDefault();
+    addKnowledgePath(name.trim(), path.trim());
+    setShowPathForm(false);
+    setName("");
+    setPath("");
+  };
   return (
     <div className="operation-list">
       <div>
@@ -45,18 +56,29 @@ export function ResourceArea({
             </button>
           </div>
         ))}
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => {
-            const path = window.prompt("服务器上的知识目录路径")?.trim();
-            if (!path) return;
-            const name = window.prompt("知识库名称", path.split(/[\\/]/).at(-1) || "Knowledge")?.trim();
-            if (name) addKnowledgePath(name, path);
-          }}
-        >
+        <button type="button" disabled={disabled} onClick={() => setShowPathForm(true)}>
           添加目录
         </button>
+        {showPathForm && (
+          <form className="resource-form" onSubmit={submitPath}>
+            <label>
+              名称
+              <input required value={name} onChange={(event) => setName(event.target.value)} />
+            </label>
+            <label>
+              服务器工作区路径
+              <input required value={path} onChange={(event) => setPath(event.target.value)} />
+            </label>
+            <div className="approval-actions">
+              <button type="button" onClick={() => setShowPathForm(false)}>
+                取消
+              </button>
+              <button type="submit" className="primary" disabled={disabled}>
+                导入
+              </button>
+            </div>
+          </form>
+        )}
         <label className="run-action">
           上传知识文件
           <input

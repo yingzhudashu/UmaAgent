@@ -16,13 +16,14 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     command: "npm run dev:faux",
-    url: "http://127.0.0.1:33210/api/v6/health/ready",
+    url: "http://127.0.0.1:33210/api/v7/health/ready",
     timeout: 120_000,
     reuseExistingServer: false,
     env: {
       ...process.env,
       UMA_FAUX_PORT: "33210",
       UMA_FAUX_STATE: ".uma-faux-e2e",
+      UMA_FAUX_RESET_STATE: "1",
     },
   },
 });

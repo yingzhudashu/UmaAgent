@@ -30,7 +30,7 @@ describe("scheduler", () => {
     });
     const tasks = new Map<string, BackgroundTask>();
     const executor = {
-      async createTask(prompt: string) {
+      prepareScheduledTask(prompt: string) {
         database.createBackgroundTask({
           id: "background-1",
           sessionId: session.id,
@@ -43,10 +43,14 @@ describe("scheduler", () => {
         tasks.set(task.id, task);
         return task;
       },
+      startTask() {},
       getTask(id: string) {
         const task = tasks.get(id);
         if (!task) throw new Error("missing task");
         return task;
+      },
+      cancelTask(id: string) {
+        return database.updateBackgroundTask(id, { status: "cancelled" });
       },
     };
     const scheduler = new SchedulerService(database, executor);
@@ -74,10 +78,14 @@ describe("scheduler", () => {
     temporary.push(root);
     const database = new UmaDatabase(root);
     const scheduler = new SchedulerService(database, {
-      async createTask() {
+      prepareScheduledTask() {
         throw new Error("not used");
       },
+      startTask() {},
       getTask() {
+        throw new Error("not used");
+      },
+      cancelTask() {
         throw new Error("not used");
       },
     });
@@ -86,7 +94,12 @@ describe("scheduler", () => {
       prompt: "wait",
       schedule: { kind: "interval", everyMs: 60_000 },
     });
-    const run = database.createScheduledTaskRun(task.id, Date.now());
+    const run = database.createScheduledTaskRun({
+      scheduledTaskId: task.id,
+      scheduledFor: Date.now(),
+      occurrenceKey: `${task.id}:active`,
+      trigger: "manual",
+    });
     expect(() => scheduler.delete(task.id)).toThrow("running");
     database.updateScheduledTaskRun(run.id, {
       status: "cancelled",
@@ -101,10 +114,14 @@ describe("scheduler", () => {
     temporary.push(root);
     const database = new UmaDatabase(root);
     const scheduler = new SchedulerService(database, {
-      async createTask() {
+      prepareScheduledTask() {
         throw new Error("not used");
       },
+      startTask() {},
       getTask() {
+        throw new Error("not used");
+      },
+      cancelTask() {
         throw new Error("not used");
       },
     });
@@ -149,11 +166,15 @@ describe("scheduler", () => {
       prompt: "manual",
     });
     const scheduler = new SchedulerService(database, {
-      async createTask() {
+      prepareScheduledTask() {
         return database.getBackgroundTask(background.id);
       },
+      startTask() {},
       getTask(id) {
         return database.updateBackgroundTask(id, { status: "completed", result: "done" });
+      },
+      cancelTask(id) {
+        return database.updateBackgroundTask(id, { status: "cancelled" });
       },
     });
     const task = scheduler.create({
@@ -176,9 +197,28 @@ describe("scheduler", () => {
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-failure-"));
     temporary.push(root);
     const database = new UmaDatabase(root);
+    let executionError: unknown = "provider unavailable";
+    let prepared = 0;
     const executor = {
-      createTask: vi.fn().mockRejectedValue("provider unavailable"),
+      prepareScheduledTask: vi.fn((prompt: string) => {
+        const id = `failed-background-${++prepared}`;
+        database.createBackgroundTask({
+          id,
+          sessionId: database.createSession({
+            mode: "assistant",
+            title: "failed",
+            model: { provider: "test", id: "model" },
+            thinkingLevel: "off",
+          }).id,
+          prompt,
+        });
+        return database.getBackgroundTask(id);
+      }),
+      startTask: vi.fn(),
       getTask: vi.fn(() => {
+        throw executionError;
+      }),
+      cancelTask: vi.fn(() => {
         throw new Error("not reached");
       }),
     };
@@ -188,9 +228,14 @@ describe("scheduler", () => {
       prompt: "fail",
       schedule: { kind: "once", at: 100 },
     });
-    const active = database.createScheduledTaskRun(task.id, 50);
+    const active = database.createScheduledTaskRun({
+      scheduledTaskId: task.id,
+      scheduledFor: 50,
+      occurrenceKey: `${task.id}:50`,
+      trigger: "scheduled",
+    });
     await scheduler.tick(200);
-    expect(executor.createTask).not.toHaveBeenCalled();
+    expect(executor.prepareScheduledTask).not.toHaveBeenCalled();
     database.updateScheduledTaskRun(active.id, { status: "cancelled", completedAt: Date.now() });
     await scheduler.tick(200);
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -201,7 +246,7 @@ describe("scheduler", () => {
       expect.arrayContaining([expect.objectContaining({ status: "failed", error: "provider unavailable" })]),
     );
 
-    executor.createTask.mockRejectedValueOnce(new Error("model failed"));
+    executionError = new Error("model failed");
     const second = scheduler.create({
       name: "error-object",
       prompt: "fail again",
@@ -222,10 +267,14 @@ describe("scheduler", () => {
     temporary.push(root);
     const database = new UmaDatabase(root);
     const scheduler = new SchedulerService(database, {
-      async createTask() {
+      prepareScheduledTask() {
         throw new Error("not used");
       },
+      startTask() {},
       getTask() {
+        throw new Error("not used");
+      },
+      cancelTask() {
         throw new Error("not used");
       },
     });
@@ -235,5 +284,268 @@ describe("scheduler", () => {
     scheduler.stop();
     database.close();
     vi.useRealTimers();
+  });
+
+  it("gets runs and cancels active executions idempotently", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-scheduler-cancel-"));
+    temporary.push(root);
+    const database = new UmaDatabase(root);
+    const session = database.createSession({
+      mode: "assistant",
+      title: "cancel",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const background = database.createBackgroundTask({
+      id: "cancel-background",
+      sessionId: session.id,
+      prompt: "cancel me",
+    });
+    const cancelTask = vi.fn((id: string) => database.updateBackgroundTask(id, { status: "cancelled" }));
+    const changed = vi.fn();
+    const scheduler = new SchedulerService(
+      database,
+      {
+        prepareScheduledTask() {
+          throw new Error("not used");
+        },
+        startTask() {},
+        getTask(id) {
+          return database.getBackgroundTask(id);
+        },
+        cancelTask,
+      },
+      changed,
+    );
+    const task = scheduler.create({
+      name: "cancel",
+      prompt: "cancel me",
+      schedule: { kind: "interval", everyMs: 60_000 },
+    });
+    const run = database.createScheduledTaskRun({
+      scheduledTaskId: task.id,
+      scheduledFor: Date.now(),
+      occurrenceKey: `${task.id}:cancel`,
+      trigger: "manual",
+    });
+    database.updateScheduledTaskRun(run.id, {
+      backgroundTaskId: background.id,
+      status: "running",
+      startedAt: Date.now(),
+    });
+
+    expect(scheduler.getRun(run.id).id).toBe(run.id);
+    expect(scheduler.cancelRun(run.id)).toMatchObject({
+      status: "cancelled",
+      error: "Cancelled by user",
+    });
+    expect(cancelTask).toHaveBeenCalledOnce();
+    const changedCalls = changed.mock.calls.length;
+    expect(scheduler.cancelRun(run.id).status).toBe("cancelled");
+    expect(cancelTask).toHaveBeenCalledOnce();
+    expect(changed).toHaveBeenCalledTimes(changedCalls);
+    database.close();
+  });
+
+  it("resumes only awaiting schedule runs and monitors their existing background task", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-scheduler-resume-"));
+    temporary.push(root);
+    const database = new UmaDatabase(root);
+    const session = database.createSession({
+      mode: "assistant",
+      title: "resume",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const background = database.createBackgroundTask({
+      id: "resume-background",
+      sessionId: session.id,
+      prompt: "resume me",
+    });
+    const coreRun = database.createRun(
+      session.id,
+      "resume-message",
+      {
+        ref: { provider: "test", id: "model" },
+        name: "Test Model",
+        api: "openai-responses",
+        contextWindow: 100_000,
+        maxOutputTokens: 4_096,
+        capabilities: { tools: true, vision: false, reasoning: false, structuredOutput: true },
+      },
+      "off",
+    ).run;
+    database.updateBackgroundTask(background.id, {
+      status: "completed",
+      result: "done",
+      runId: coreRun.id,
+    });
+    const scheduler = new SchedulerService(database, {
+      prepareScheduledTask() {
+        throw new Error("not used");
+      },
+      startTask() {},
+      getTask(id) {
+        return database.getBackgroundTask(id);
+      },
+      cancelTask(id) {
+        return database.updateBackgroundTask(id, { status: "cancelled" });
+      },
+    });
+    const task = scheduler.create({
+      name: "resume",
+      prompt: "resume me",
+      schedule: { kind: "interval", everyMs: 60_000 },
+    });
+    const unrelated = database.createScheduledTaskRun({
+      scheduledTaskId: task.id,
+      scheduledFor: Date.now(),
+      occurrenceKey: `${task.id}:unrelated`,
+      trigger: "manual",
+    });
+
+    scheduler.onRunResumed("missing-run");
+    database.updateScheduledTaskRun(unrelated.id, { runId: coreRun.id, status: "running" });
+    scheduler.onRunResumed(coreRun.id);
+    expect(scheduler.getRun(unrelated.id).status).toBe("running");
+
+    database.updateScheduledTaskRun(unrelated.id, {
+      backgroundTaskId: background.id,
+      runId: coreRun.id,
+      status: "awaiting_resume",
+      error: "interrupted",
+    });
+    scheduler.onRunResumed(coreRun.id);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (scheduler.getRun(unrelated.id).status === "completed") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(scheduler.getRun(unrelated.id).status).toBe("completed");
+    database.close();
+  });
+
+  it("recovers a claimed occurrence with an existing background task", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-scheduler-claimed-"));
+    temporary.push(root);
+    const database = new UmaDatabase(root);
+    const session = database.createSession({
+      mode: "assistant",
+      title: "claimed",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const background = database.createBackgroundTask({
+      id: "claimed-background",
+      sessionId: session.id,
+      prompt: "recover",
+    });
+    database.updateBackgroundTask(background.id, { status: "completed", result: "done" });
+    const task = database.createScheduledTask({
+      name: "claimed",
+      prompt: "recover",
+      sessionMode: "assistant",
+      schedule: { kind: "interval", everyMs: 60_000 },
+      enabled: true,
+      nextRunAt: Date.now() + 60_000,
+    });
+    const run = database.createScheduledTaskRun({
+      scheduledTaskId: task.id,
+      scheduledFor: Date.now(),
+      occurrenceKey: `${task.id}:claimed`,
+      trigger: "catchup",
+    });
+    database.updateScheduledTaskRun(run.id, { backgroundTaskId: background.id });
+    const prepareScheduledTask = vi.fn();
+    const startTask = vi.fn();
+    const scheduler = new SchedulerService(database, {
+      prepareScheduledTask,
+      startTask,
+      getTask(id) {
+        return database.getBackgroundTask(id);
+      },
+      cancelTask(id) {
+        return database.updateBackgroundTask(id, { status: "cancelled" });
+      },
+    });
+
+    scheduler.start();
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (scheduler.getRun(run.id).status === "completed") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    scheduler.stop();
+    expect(prepareScheduledTask).not.toHaveBeenCalled();
+    expect(startTask).toHaveBeenCalledWith(background.id);
+    expect(scheduler.getRun(run.id)).toMatchObject({ status: "completed", trigger: "catchup" });
+    database.close();
+  });
+
+  it("propagates an interrupted background run into awaiting resume", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-scheduler-interrupted-"));
+    temporary.push(root);
+    const database = new UmaDatabase(root);
+    const session = database.createSession({
+      mode: "assistant",
+      title: "interrupted",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const coreRun = database.createRun(
+      session.id,
+      "interrupted-message",
+      {
+        ref: { provider: "test", id: "model" },
+        name: "Test Model",
+        api: "openai-responses",
+        contextWindow: 100_000,
+        maxOutputTokens: 4_096,
+        capabilities: { tools: true, vision: false, reasoning: false, structuredOutput: true },
+      },
+      "off",
+    ).run;
+    database.updateRun(coreRun.id, {
+      status: "interrupted",
+      resume: { state: "available", pendingActionIds: [], lastSafePhase: "preflight" },
+    });
+    const background = database.createBackgroundTask({
+      id: "interrupted-background",
+      sessionId: session.id,
+      prompt: "resume later",
+    });
+    database.updateBackgroundTask(background.id, {
+      status: "interrupted",
+      runId: coreRun.id,
+      error: "server restarted",
+    });
+    const scheduler = new SchedulerService(database, {
+      prepareScheduledTask() {
+        return database.getBackgroundTask(background.id);
+      },
+      startTask() {},
+      getTask(id) {
+        return database.getBackgroundTask(id);
+      },
+      cancelTask(id) {
+        return database.updateBackgroundTask(id, { status: "cancelled" });
+      },
+    });
+    const task = scheduler.create({
+      name: "interrupted",
+      prompt: "resume later",
+      schedule: { kind: "interval", everyMs: 60_000 },
+    });
+
+    const scheduledRun = scheduler.runNow(task.id);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (scheduler.getRun(scheduledRun.id).status === "awaiting_resume") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(scheduler.getRun(scheduledRun.id)).toMatchObject({
+      status: "awaiting_resume",
+      runId: coreRun.id,
+      error: "server restarted",
+      resume: { pendingActionIds: [] },
+    });
+    database.close();
   });
 });

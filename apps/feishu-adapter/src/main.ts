@@ -14,12 +14,13 @@ const required = (name: string): string => {
   if (!value) throw new Error(`Missing ${name}`);
   return value;
 };
+const optional = (name: string): string | undefined => process.env[name]?.trim() || undefined;
 
 const config = {
   appId: required("FEISHU_APP_ID"),
   appSecret: required("FEISHU_APP_SECRET"),
-  verificationToken: required("FEISHU_VERIFICATION_TOKEN"),
-  encryptKey: required("FEISHU_ENCRYPT_KEY"),
+  verificationToken: optional("FEISHU_VERIFICATION_TOKEN"),
+  encryptKey: optional("FEISHU_ENCRYPT_KEY"),
   umaUrl: required("UMA_SERVER_URL"),
   umaToken: required("UMA_TOKEN"),
   stateDir: process.env.FEISHU_STATE_DIR?.trim() || ".uma-feishu",
@@ -33,6 +34,7 @@ const config = {
       .filter(Boolean),
   ),
 };
+const cardCallbacksEnabled = Boolean(config.verificationToken && config.encryptKey);
 if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535)
   throw new Error("FEISHU_PORT must be a valid TCP port");
 if (!Number.isSafeInteger(config.maxAttachmentBytes) || config.maxAttachmentBytes < 1)
@@ -45,11 +47,56 @@ const coreGateway: CoreGateway = new UmaClient({ baseUrl: config.umaUrl, token: 
 const feishuSdk = new lark.Client({
   appId: config.appId,
   appSecret: config.appSecret,
-  appType: lark.AppType.SelfBuild,
   domain: lark.Domain.Feishu,
 });
 const feishuGateway = new LarkFeishuGateway(feishuSdk);
-const adapter = createFeishuAdapter({ core: coreGateway, feishu: feishuGateway, store: storeInstance });
+let eventDispatcher: lark.EventDispatcher;
+let longConnected = false;
+const longConnection = new lark.WSClient({
+  appId: config.appId,
+  appSecret: config.appSecret,
+  domain: lark.Domain.Feishu,
+  autoReconnect: true,
+  onReady: () => {
+    longConnected = true;
+  },
+  onReconnecting: () => {
+    longConnected = false;
+  },
+  onReconnected: () => {
+    longConnected = true;
+  },
+  onError: (error) => {
+    longConnected = false;
+    adapter.failed(error);
+  },
+});
+const adapter = createFeishuAdapter({
+  core: coreGateway,
+  feishu: feishuGateway,
+  store: storeInstance,
+  connection: {
+    start: () => longConnection.start({ eventDispatcher }),
+    stop: () => longConnection.close({ force: true }),
+    connected: () => longConnected,
+  },
+  onStart: () => {
+    coreGateway.connectEvents();
+    for (const pending of storeInstance.listPendingInbound<FeishuInbound>()) scheduleInbound(pending);
+    for (const conversation of storeInstance.listConversations())
+      subscribeSession(
+        conversation.sessionId,
+        conversation.chatId,
+        conversation.id,
+        storeInstance.latestConversationSequence(conversation.id),
+      );
+  },
+  onStop: () => {
+    for (const timer of cardTimers.values()) clock.clearTimeout(timer);
+    coreGateway.close();
+    storeInstance.close();
+  },
+});
 const { core: uma, feishu, store, clock } = adapter;
 const cards = new Map<string, { text: string; lastUpdate: number; messageId?: string }>();
 const pendingCards = new Map<string, Parameters<typeof sendCardNow>>();
@@ -243,36 +290,42 @@ async function renderSession(
   if (!run) return;
   const actions = run.status === "interrupted" ? await uma.listRunActions(run.id) : [];
   const pending = actions.find((action) => ["prepared", "uncertain"].includes(action.status));
-  const controls: CardControl[] = approval
-    ? [
-        { label: "拒绝", kind: "approval", targetId: approval.id, decision: "reject" },
-        { label: "允许", kind: "approval", targetId: approval.id, decision: "approve" },
-      ]
-    : pending
+  const controls: CardControl[] = !cardCallbacksEnabled
+    ? []
+    : approval
       ? [
-          {
-            label: "拒绝并结束",
-            kind: "run_action",
-            targetId: pending.id,
-            runId: run.id,
-            decision: "reject",
-          },
-          {
-            label: pending.status === "prepared" ? "确认执行一次" : "确认可能已执行",
-            kind: "run_action",
-            targetId: pending.id,
-            runId: run.id,
-            decision: pending.status === "prepared" ? "approve" : "acknowledge",
-          },
+          { label: "拒绝", kind: "approval", targetId: approval.id, decision: "reject" },
+          { label: "允许", kind: "approval", targetId: approval.id, decision: "approve" },
         ]
-      : run.status === "interrupted" && run.resume?.state === "available"
-        ? [{ label: "继续运行", kind: "resume", targetId: run.id, runId: run.id }]
-        : [];
+      : pending
+        ? [
+            {
+              label: "拒绝并结束",
+              kind: "run_action",
+              targetId: pending.id,
+              runId: run.id,
+              decision: "reject",
+            },
+            {
+              label: pending.status === "prepared" ? "确认执行一次" : "确认可能已执行",
+              kind: "run_action",
+              targetId: pending.id,
+              runId: run.id,
+              decision: pending.status === "prepared" ? "approve" : "acknowledge",
+            },
+          ]
+        : run.status === "interrupted" && run.resume?.state === "available"
+          ? [{ label: "继续运行", kind: "resume", targetId: run.id, runId: run.id }]
+          : [];
+  const callbackHint =
+    !cardCallbacksEnabled && (approval || pending || run.status === "interrupted")
+      ? "\n\n交互回调未启用，请在 Web 或 CLI 中完成审批/恢复。"
+      : "";
   await sendCard(
     chatId,
     conversationId,
     run.id,
-    cardText(snapshot, actions),
+    `${cardText(snapshot, actions)}${callbackHint}`,
     snapshot.snapshotSequence,
     ["completed", "failed", "cancelled"].includes(run.status),
     controls,
@@ -412,13 +465,16 @@ async function enqueueMessage(data: FeishuInbound): Promise<void> {
     });
 }
 
-const eventDispatcher = new lark.EventDispatcher({
-  verificationToken: config.verificationToken,
-  encryptKey: config.encryptKey,
+eventDispatcher = new lark.EventDispatcher({
+  ...(config.verificationToken ? { verificationToken: config.verificationToken } : {}),
+  ...(config.encryptKey ? { encryptKey: config.encryptKey } : {}),
 }).register({ "im.message.receive_v1": enqueueMessage });
 
 const cardDispatcher = new lark.CardActionHandler(
-  { verificationToken: config.verificationToken, encryptKey: config.encryptKey },
+  {
+    ...(config.verificationToken ? { verificationToken: config.verificationToken } : {}),
+    ...(config.encryptKey ? { encryptKey: config.encryptKey } : {}),
+  },
   async (event: { operator?: { open_id?: string }; action?: { value?: Record<string, string> } }) => {
     if (!isAllowedOpenId(event.operator?.open_id, config.allowedOpenIds))
       return { toast: { type: "error", content: "无权执行此操作" } };
@@ -447,7 +503,6 @@ const cardDispatcher = new lark.CardActionHandler(
   },
 );
 
-const eventHandler = lark.adaptDefault("/webhook/event", eventDispatcher);
 const cardHandler = lark.adaptDefault("/webhook/card", cardDispatcher);
 
 const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -456,33 +511,22 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     res.end(JSON.stringify({ ...adapter.health(), service: "feishu-adapter" }));
     return;
   }
-  if (req.url === "/webhook/event" && req.method === "POST") return void eventHandler(req, res);
-  if (req.url === "/webhook/card" && req.method === "POST") return void cardHandler(req, res);
+  if (req.url === "/webhook/card" && req.method === "POST") {
+    if (!cardCallbacksEnabled) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "card callbacks are disabled" }));
+      return;
+    }
+    return void cardHandler(req, res);
+  }
   res.writeHead(404).end();
 });
 
-uma.connectEvents();
-adapter.started();
-for (const pending of store.listPendingInbound<FeishuInbound>()) scheduleInbound(pending);
-for (const conversation of store.listConversations())
-  subscribeSession(
-    conversation.sessionId,
-    conversation.chatId,
-    conversation.id,
-    store.latestConversationSequence(conversation.id),
-  );
+await adapter.start();
 server.listen(config.port, config.host);
-process.once("SIGINT", () => {
-  adapter.stopped();
-  for (const timer of cardTimers.values()) clock.clearTimeout(timer);
-  store.close();
-  uma.close();
+const stop = async () => {
+  await adapter.stop();
   server.close();
-});
-process.once("SIGTERM", () => {
-  adapter.stopped();
-  for (const timer of cardTimers.values()) clock.clearTimeout(timer);
-  store.close();
-  uma.close();
-  server.close();
-});
+};
+process.once("SIGINT", () => void stop());
+process.once("SIGTERM", () => void stop());

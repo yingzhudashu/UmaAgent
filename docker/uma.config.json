@@ -29,6 +29,13 @@
   },
   "defaultThinkingLevel": "medium",
   "skillsDirs": ["/data/state/skills"],
-  "mcpServers": [],
+  "mcpServers": [
+    {
+      "name": "browser",
+      "transport": "http",
+      "url": "http://browser-worker:3230/mcp",
+      "authTokenEnv": "BROWSER_WORKER_TOKEN"
+    }
+  ],
   "runtime": { "maxParallelSessions": 4, "approvalTimeoutMs": 120000, "toolTimeoutMs": 60000 }
 }

@@ -21,7 +21,7 @@ class FakeSocket {
     this.readyState = 1;
     this.emit("open");
   }
-  message(event: AgentEventEnvelope): void {
+  message(event: unknown): void {
     this.emit("message", JSON.stringify(event));
   }
   private emit(type: string, data?: string): void {
@@ -68,7 +68,7 @@ describe("UmaClient", () => {
     socket.open();
     await tick();
     socket.message({
-      protocolVersion: 6,
+      protocolVersion: 7,
       sessionId: "session-1",
       sequence: 1,
       timestamp: 2,
@@ -76,7 +76,7 @@ describe("UmaClient", () => {
       payload: {},
     });
     socket.message({
-      protocolVersion: 6,
+      protocolVersion: 7,
       sessionId: "session-1",
       sequence: 3,
       timestamp: 3,
@@ -125,7 +125,7 @@ describe("UmaClient", () => {
     });
     await client.decideRunAction("run-1", "action-1", "acknowledge");
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:3210/api/v6/runs/run-1/actions/action-1/decide",
+      "http://localhost:3210/api/v7/runs/run-1/actions/action-1/decide",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ decision: "acknowledge" }) }),
     );
   });
@@ -147,9 +147,36 @@ describe("UmaClient", () => {
     client.close();
   });
 
+  it("delivers resource invalidation and reconnect resync frames outside session cursors", () => {
+    const socket = new FakeSocket();
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: (() => response(snapshot)) as typeof fetch,
+      webSocketFactory: () => socket as unknown as WebSocket,
+    });
+    const received: string[] = [];
+    client.subscribeResources((event) => received.push(event.type));
+    client.connectEvents();
+    socket.open();
+    socket.message({
+      type: "resource.resync_required",
+      protocolVersion: 7,
+      resources: ["tasks", "schedules"],
+      timestamp: 1,
+    });
+    socket.message({
+      type: "resource.invalidated",
+      protocolVersion: 7,
+      resource: "tasks",
+      timestamp: 2,
+    });
+    expect(received).toEqual(["resource.resync_required", "resource.invalidated"]);
+    client.close();
+  });
+
   it("fetches every durable event page when a gap exceeds one thousand events", async () => {
     const event = (sequence: number): AgentEventEnvelope => ({
-      protocolVersion: 6,
+      protocolVersion: 7,
       sessionId: "session-1",
       sequence,
       timestamp: sequence,
@@ -228,7 +255,7 @@ describe("UmaClient", () => {
     });
   });
 
-  it("uses the v6 schedule, knowledge, and operations report contracts", async () => {
+  it("uses the v7 schedule, knowledge, and operations report contracts", async () => {
     const fetchMock = vi.fn(() => response({ ok: true }));
     const client = new UmaClient({ baseUrl: "http://localhost:3210/", fetch: fetchMock as typeof fetch });
     await client.createSchedule({
@@ -239,22 +266,28 @@ describe("UmaClient", () => {
     await client.updateSchedule("schedule/id", { enabled: false });
     await client.runSchedule("schedule/id");
     await client.listScheduleRuns("schedule/id");
+    await client.getScheduleRun("schedule-run/id");
+    await client.cancelScheduleRun("schedule-run/id");
     await client.deleteSchedule("schedule/id");
     await client.indexKnowledgeAttachment("notes", "attachment/id", "session/id");
     await client.deleteKnowledge("knowledge/id");
     await client.operationsReport(10, 20);
+    await client.diagnosticsReport(10, 20);
     const requests = fetchMock.mock.calls.map(([url, init]) => ({ url: String(url), init }));
     expect(requests.map((item) => item.url)).toEqual([
-      "http://localhost:3210/api/v6/schedules",
-      "http://localhost:3210/api/v6/schedules/schedule%2Fid",
-      "http://localhost:3210/api/v6/schedules/schedule%2Fid/run",
-      "http://localhost:3210/api/v6/schedules/schedule%2Fid/runs",
-      "http://localhost:3210/api/v6/schedules/schedule%2Fid",
-      "http://localhost:3210/api/v6/knowledge",
-      "http://localhost:3210/api/v6/knowledge/knowledge%2Fid",
-      "http://localhost:3210/api/v6/reports/operations?from=10&to=20",
+      "http://localhost:3210/api/v7/schedules",
+      "http://localhost:3210/api/v7/schedules/schedule%2Fid",
+      "http://localhost:3210/api/v7/schedules/schedule%2Fid/run",
+      "http://localhost:3210/api/v7/schedules/schedule%2Fid/runs",
+      "http://localhost:3210/api/v7/schedule-runs/schedule-run%2Fid",
+      "http://localhost:3210/api/v7/schedule-runs/schedule-run%2Fid/cancel",
+      "http://localhost:3210/api/v7/schedules/schedule%2Fid",
+      "http://localhost:3210/api/v7/knowledge",
+      "http://localhost:3210/api/v7/knowledge/knowledge%2Fid",
+      "http://localhost:3210/api/v7/reports/operations?from=10&to=20",
+      "http://localhost:3210/api/v7/reports/diagnostics?from=10&to=20",
     ]);
-    expect(requests[5]?.init?.body).toBe(
+    expect(requests[7]?.init?.body).toBe(
       JSON.stringify({ name: "notes", attachmentId: "attachment/id", sessionId: "session/id" }),
     );
   });
@@ -389,7 +422,7 @@ describe("UmaClient", () => {
       token: "secret",
       fetch: (() => response(snapshot)) as typeof fetch,
       webSocketFactory: (url) => {
-        expect(url).toBe("wss://core.example/api/v6/events");
+        expect(url).toBe("wss://core.example/api/v7/events");
         return socket as unknown as WebSocket;
       },
     });
@@ -401,7 +434,7 @@ describe("UmaClient", () => {
     await tick();
     expect(socket.sent.map((value) => JSON.parse(value))).toContainEqual({ type: "auth", token: "secret" });
     socket.message({
-      protocolVersion: 6,
+      protocolVersion: 7,
       sessionId: "not-subscribed",
       sequence: 1,
       timestamp: 1,
@@ -409,7 +442,7 @@ describe("UmaClient", () => {
       payload: {},
     });
     socket.message({
-      protocolVersion: 6,
+      protocolVersion: 7,
       sessionId: "session-1",
       sequence: 1,
       timestamp: 1,
@@ -417,7 +450,7 @@ describe("UmaClient", () => {
       payload: {},
     });
     socket.message({
-      protocolVersion: 6,
+      protocolVersion: 7,
       sessionId: "session-1",
       sequence: 1,
       timestamp: 1,
@@ -433,7 +466,7 @@ describe("UmaClient", () => {
 
   it("falls back to a snapshot when event recovery cannot make progress", async () => {
     const event: AgentEventEnvelope = {
-      protocolVersion: 6,
+      protocolVersion: 7,
       sessionId: "session-1",
       sequence: 3,
       timestamp: 3,

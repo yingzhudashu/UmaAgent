@@ -16,8 +16,99 @@ jobs:
       - run: docker build -t uma-agent:ci .
       - run: docker build -f docker/Dockerfile.feishu -t uma-agent-feishu:ci .
       - run: docker build -f docker/Dockerfile.browser -t uma-agent-browser:ci .
+      - name: Smoke-test containers, persistence, and the Core state lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          network=uma-ci-network
+          state_volume=uma-ci-state
+          workspace_volume=uma-ci-workspace
+          feishu_volume=uma-ci-feishu
+          cleanup() {
+            docker rm -f uma-core-lock uma-feishu uma-core browser-worker >/dev/null 2>&1 || true
+            docker volume rm "$state_volume" "$workspace_volume" "$feishu_volume" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          cleanup
+          docker network create "$network" >/dev/null
+          docker volume create "$state_volume" >/dev/null
+          docker volume create "$workspace_volume" >/dev/null
+          docker volume create "$feishu_volume" >/dev/null
+
+          wait_healthy() {
+            local container=$1
+            for _ in $(seq 1 90); do
+              status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container")
+              if [ "$status" = healthy ]; then return 0; fi
+              if [ "$status" = exited ] || [ "$status" = unhealthy ]; then
+                docker logs "$container"
+                return 1
+              fi
+              sleep 2
+            done
+            docker logs "$container"
+            return 1
+          }
+
+          docker run -d --name browser-worker --network "$network" \
+            -e BROWSER_WORKER_HOST=0.0.0.0 \
+            -e BROWSER_WORKER_PORT=3230 \
+            -e BROWSER_WORKER_AUTH_TOKEN=ci-browser-token \
+            uma-agent-browser:ci >/dev/null
+          wait_healthy browser-worker
+
+          start_core() {
+            docker run -d --name uma-core --network "$network" \
+              -e UMA_AUTH_TOKEN=ci-core-token \
+              -e OPENAI_API_KEY=ci-placeholder-key \
+              -e BROWSER_WORKER_TOKEN=ci-browser-token \
+              -v "$state_volume:/data/state" \
+              -v "$workspace_volume:/data/workspace" \
+              uma-agent:ci >/dev/null
+            wait_healthy uma-core
+          }
+          start_core
+          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v7/sessions',{method:'POST',headers:{authorization:'Bearer ci-core-token','content-type':'application/json'},body:JSON.stringify({mode:'assistant',title:'CI persistence'})}).then(async r=>{if(!r.ok)throw new Error(await r.text())})"
+
+          docker stop uma-core >/dev/null
+          docker rm uma-core >/dev/null
+          start_core
+          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v7/sessions',{headers:{authorization:'Bearer ci-core-token'}}).then(r=>r.json()).then(items=>{if(!items.some(item=>item.title==='CI persistence'))process.exit(1)})"
+
+          docker create --name uma-core-lock --network "$network" \
+            -e UMA_AUTH_TOKEN=ci-core-token \
+            -e OPENAI_API_KEY=ci-placeholder-key \
+            -e BROWSER_WORKER_TOKEN=ci-browser-token \
+            -v "$state_volume:/data/state" \
+            -v "$workspace_volume:/data/workspace" \
+            uma-agent:ci >/dev/null
+          docker start uma-core-lock >/dev/null
+          lock_exit=$(docker wait uma-core-lock)
+          if [ "$lock_exit" -eq 0 ]; then
+            docker logs uma-core-lock
+            echo "Second Core unexpectedly acquired the same state directory" >&2
+            exit 1
+          fi
+          docker logs uma-core-lock 2>&1 | grep -q "State directory is already in use"
+
+          docker run -d --name uma-feishu --network "$network" \
+            -e FEISHU_APP_ID=ci-app-id \
+            -e FEISHU_APP_SECRET=ci-app-secret \
+            -e FEISHU_ALLOWED_OPEN_IDS=ci-owner \
+            -e UMA_SERVER_URL=http://uma-core:3210 \
+            -e UMA_TOKEN=ci-core-token \
+            -e FEISHU_STATE_DIR=/data/feishu \
+            -e FEISHU_HOST=0.0.0.0 \
+            -e FEISHU_PORT=3220 \
+            -v "$feishu_volume:/data/feishu" \
+            uma-agent-feishu:ci >/dev/null
+          wait_healthy uma-feishu
+          docker restart uma-feishu >/dev/null
+          wait_healthy uma-feishu
       - run: npm run check
       - run: npm test
       - run: npm run test:coverage
+      - run: npm run test:eval:faux
       - run: npx playwright install --with-deps chromium
       - run: npm run test:web:e2e

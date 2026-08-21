@@ -1,0 +1,116 @@
+import { mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
+import {
+  type FauxResponseStep,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxToolCall,
+} from "@earendil-works/pi-ai";
+import type { Approval } from "@uma-agent/protocol";
+import { UmaRuntime } from "../../src/runtime.js";
+
+const stateDir = process.argv[2];
+const point = process.argv[3];
+if (!stateDir || !point) throw new Error("state directory and crash point are required");
+await mkdir(resolve(stateDir, "workspace"), { recursive: true });
+
+process.env.NODE_ENV = "test";
+process.env.UMA_TEST_FAULT_MODE = "abort";
+process.env.UMA_TEST_FAULT_POINT =
+  point === "preflight"
+    ? "preflight.completed"
+    : point === "model"
+      ? "model.started"
+      : point === "read" || point === "side-effect"
+        ? "tool.started"
+        : "verify.completed";
+
+const config = {
+  server: {
+    host: "127.0.0.1",
+    port: 0,
+    stateDir,
+    workspaceRoots: [resolve(stateDir, "workspace")],
+    webOrigins: [],
+    maxUploadBytes: 1024 * 1024,
+  },
+  auth: { tokenEnv: "UMA_TEST_TOKEN", webSessionHours: 1 },
+  models: [
+    {
+      provider: "faux",
+      id: "model",
+      name: "Faux",
+      api: "openai-responses" as const,
+      baseUrl: "http://127.0.0.1:9/v1",
+      apiKeyEnv: "UMA_TEST_KEY",
+      reasoning: false,
+      tools: true,
+      vision: false,
+      structuredOutput: true,
+      contextWindow: 100_000,
+      maxTokens: 4_096,
+    },
+  ],
+  defaultModel: { provider: "faux", id: "model" },
+  defaultThinkingLevel: "off" as const,
+  roles: {
+    default: { provider: "faux", id: "model" },
+    reasoning: { provider: "faux", id: "model" },
+    fast: { provider: "faux", id: "model" },
+    vision: { provider: "faux", id: "model" },
+  },
+  skillsDirs: [],
+  mcpServers: [],
+  runtime: { maxParallelSessions: 1, approvalTimeoutMs: 5_000, toolTimeoutMs: 5_000 },
+};
+
+const runtime = new UmaRuntime(config);
+const faux = fauxProvider({
+  provider: "faux",
+  models: [{ id: "model", contextWindow: 100_000, maxTokens: 4_096 }],
+  tokensPerSecond: 100_000,
+});
+const responses: FauxResponseStep[] =
+  point === "read"
+    ? [fauxAssistantMessage([fauxToolCall("memory_search", { query: "crash" })])]
+    : point === "side-effect"
+      ? [
+          fauxAssistantMessage([
+            fauxToolCall("memory_write", { scope: "session", content: "crash recovery fact" }),
+          ]),
+        ]
+      : point === "verify"
+        ? [
+            fauxAssistantMessage(
+              JSON.stringify({
+                taskClass: "complex",
+                route: "plan",
+                goal: "exercise verification recovery",
+                reasoningSummary: "A deterministic recovery plan is required.",
+                successCriteria: ["complete the step"],
+                questions: [],
+                steps: ["complete the deterministic step"],
+              }),
+            ),
+            fauxAssistantMessage("step completed"),
+            fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" })),
+          ]
+        : [fauxAssistantMessage("runtime crash boundary")];
+faux.setResponses(responses);
+runtime.models.models.setProvider(faux.provider);
+await runtime.start();
+runtime.subscribe((event) => {
+  if (point === "side-effect" && event.type === "approval.requested") {
+    runtime.resolveApproval((event.payload as Approval).id, true);
+  }
+});
+const session = await runtime.createSession({ mode: point === "side-effect" ? "assistant" : "assistant" });
+runtime.sendMessage(session.id, {
+  messageId: `message-${point}`,
+  text: `crash at ${point}`,
+  mode: point === "verify" ? "plan" : "direct",
+});
+
+await new Promise((_, reject) =>
+  setTimeout(() => reject(new Error(`Runtime did not reach crash point: ${point}`)), 15_000),
+);

@@ -1,4 +1,4 @@
-const CACHE = "uma-agent-shell-v5";
+const CACHE = "uma-agent-shell-v7";
 self.addEventListener("install", (event) =>
   event.waitUntil(
     caches.open(CACHE).then((cache) => cache.addAll(["/", "/manifest.webmanifest", "/icon.svg"])),

@@ -5,7 +5,6 @@ import { Agent, type AgentEvent, type AgentTool, type ThinkingLevel } from "@ear
 import {
   type AssistantMessage,
   contentText,
-  type ImageContent,
   type Message,
   type ToolResultMessage,
 } from "@earendil-works/pi-ai";
@@ -30,21 +29,21 @@ import type {
 import Value from "typebox/value";
 import { ContextManager } from "./context-manager.js";
 import { UmaDatabase } from "./database.js";
-import { EventHub, type EventListener } from "./events.js";
+import { EventHub, type EventListener, type ResourceListener } from "./events.js";
 import { KnowledgeService } from "./knowledge.js";
 import { McpManager } from "./mcp.js";
 import { ModelRegistry } from "./models.js";
 import { PermissionPolicy } from "./permissions.js";
+import { RunApprovals } from "./run-approvals.js";
+import { RunContextBuilder } from "./run-context.js";
+import { RunOrchestrator } from "./run-orchestrator.js";
+import { RunPreflight } from "./run-preflight.js";
 import {
-  decisionFrom,
   extractJson,
   injectRuntimeFault,
   isSecretLike,
-  isTransientProviderError,
   MemoryExtractionSchema,
-  type PendingApproval,
   Semaphore,
-  TaskClassificationSchema,
   textFromMessage,
   VerificationSchema,
 } from "./runtime-support.js";
@@ -67,10 +66,11 @@ export class UmaRuntime {
   readonly workspacePolicy: WorkspacePolicy;
   private readonly contextManager: ContextManager;
   private readonly events: EventHub;
-  private readonly semaphore: Semaphore;
-  private readonly queueTails = new Map<string, Promise<void>>();
+  private readonly orchestrator: RunOrchestrator;
+  private readonly contextBuilder: RunContextBuilder;
+  private readonly preflight: RunPreflight;
   private readonly controllers = new Map<string, AbortController>();
-  private readonly approvals = new Map<string, PendingApproval>();
+  private readonly approvals: RunApprovals;
   private readonly stateLock: StateLock;
   readonly permissions = new PermissionPolicy();
   private readonly taskSemaphore = new Semaphore(4);
@@ -87,18 +87,29 @@ export class UmaRuntime {
       this.stateLock.release();
       throw error;
     }
+    this.events = new EventHub(this.database);
     this.knowledge = new KnowledgeService(
       this.database,
       config.server.workspaceRoots,
       config.server.stateDir,
+      () => this.invalidateResource("knowledge"),
     );
     this.models = new ModelRegistry(config);
-    this.contextManager = new ContextManager(this.database, this.models);
-    this.scheduler = new SchedulerService(this.database, this);
     this.skills = new SkillRegistry(config.skillsDirs);
+    this.contextManager = new ContextManager(this.database, this.models);
+    this.contextBuilder = new RunContextBuilder(
+      this.database,
+      this.models,
+      this.contextManager,
+      this.knowledge,
+      this.skills,
+      this.permissions,
+    );
+    this.preflight = new RunPreflight(this.database, this.models);
+    this.approvals = new RunApprovals(this.database, this.events, config.runtime.approvalTimeoutMs);
+    this.scheduler = new SchedulerService(this.database, this, () => this.invalidateResource("schedules"));
     this.workspacePolicy = new WorkspacePolicy(config.server.workspaceRoots);
-    this.events = new EventHub(this.database);
-    this.semaphore = new Semaphore(config.runtime.maxParallelSessions);
+    this.orchestrator = new RunOrchestrator(config.runtime.maxParallelSessions);
   }
 
   async start(): Promise<void> {
@@ -119,9 +130,9 @@ export class UmaRuntime {
   private async stopInternal(): Promise<void> {
     this.stopping = true;
     this.scheduler.stop();
-    for (const id of [...this.approvals.keys()]) this.resolveApproval(id, false);
+    this.approvals.rejectAll();
     for (const controller of this.controllers.values()) controller.abort();
-    await Promise.allSettled(this.queueTails.values());
+    await this.orchestrator.drain();
     await this.mcp.close();
     this.database.close();
     this.stateLock.release();
@@ -129,10 +140,16 @@ export class UmaRuntime {
   }
 
   health(): RuntimeHealth {
-    return { activeRuns: this.semaphore.count(), started: this.started };
+    return { activeRuns: this.orchestrator.activeCount(), started: this.started };
   }
   subscribe(listener: EventListener): () => void {
     return this.events.subscribe(listener);
+  }
+  subscribeResources(listener: ResourceListener): () => void {
+    return this.events.subscribeResources(listener);
+  }
+  invalidateResource(resource: "tasks" | "schedules" | "memory" | "knowledge"): void {
+    this.events.transaction(() => this.events.invalidate(resource));
   }
   listSessions(): Session[] {
     return this.database.listSessions();
@@ -164,6 +181,12 @@ export class UmaRuntime {
   listScheduledTaskRuns(id: string) {
     return this.scheduler.runs(id);
   }
+  getScheduledTaskRun(id: string) {
+    return this.scheduler.getRun(id);
+  }
+  cancelScheduledTaskRun(id: string) {
+    return this.scheduler.cancelRun(id);
+  }
   listSessionEvents(sessionId: string, afterSequence: number, limit?: number) {
     return this.database.listEvents(sessionId, afterSequence, limit);
   }
@@ -191,23 +214,29 @@ export class UmaRuntime {
       this.events.emit(session.id, runId, "run.resumed", value);
       return value;
     });
-    const previous = this.queueTails.get(session.id) ?? Promise.resolve();
-    const next = previous
-      .catch(() => {})
-      .then(async () => {
-        await this.replaySafeActions(run);
-        await this.executeRun(
-          session,
-          runId,
-          { messageId: message.id, text: message.content },
-          undefined,
-          true,
-        );
+    const backgroundTask = this.database.findBackgroundTaskByRunId(runId);
+    if (backgroundTask) {
+      this.events.transaction(() => {
+        const updated = this.database.updateBackgroundTask(backgroundTask.id, {
+          status: "running",
+          error: null,
+        });
+        this.events.emit(updated.sessionId, undefined, "task.updated", updated);
+        this.events.invalidate("tasks");
       });
-    const tail = next.finally(() => {
-      if (this.queueTails.get(session.id) === tail) this.queueTails.delete(session.id);
+      this.watchResumedBackgroundTask(backgroundTask.id, runId);
+      this.scheduler.onRunResumed(runId);
+    }
+    this.orchestrator.enqueue(session.id, async () => {
+      await this.replaySafeActions(run);
+      await this.executeRun(
+        session,
+        runId,
+        { messageId: message.id, text: message.content },
+        undefined,
+        true,
+      );
     });
-    this.queueTails.set(session.id, tail);
     return resumed;
   }
   async decideRunAction(
@@ -274,6 +303,7 @@ export class UmaRuntime {
     prompt: string,
     parentSessionId?: string,
     modeOverride?: Session["mode"],
+    source?: BackgroundTask["source"],
   ): Promise<BackgroundTask> {
     if (!prompt.trim()) throw new Error("Task prompt is required");
     const parent = parentSessionId ? this.database.getSession(parentSessionId) : undefined;
@@ -288,12 +318,37 @@ export class UmaRuntime {
         sessionId: session.id,
         prompt,
         ...(parentSessionId ? { parentSessionId } : {}),
+        ...(source ? { source } : {}),
       });
       this.events.emit(session.id, undefined, "task.updated", value);
+      this.events.invalidate("tasks");
       return value;
     });
     void this.executeTask(task.id);
     return task;
+  }
+  prepareScheduledTask(
+    prompt: string,
+    sessionMode: "workspace" | "assistant",
+    source: NonNullable<BackgroundTask["source"]>,
+  ): BackgroundTask {
+    if (!prompt.trim()) throw new Error("Task prompt is required");
+    const session = this.database.createSession({
+      mode: sessionMode,
+      title: "Scheduled task",
+      ...(sessionMode === "workspace" ? { workspace: this.config.server.workspaceRoots[0] as string } : {}),
+      model: this.config.defaultModel,
+      thinkingLevel: this.config.defaultThinkingLevel,
+    });
+    return this.database.createBackgroundTask({
+      id: randomUUID(),
+      sessionId: session.id,
+      prompt,
+      source,
+    });
+  }
+  startTask(id: string): void {
+    void this.executeTask(id);
   }
   cancelTask(id: string): BackgroundTask {
     const task = this.database.getBackgroundTask(id);
@@ -312,6 +367,7 @@ export class UmaRuntime {
           error: "Cancelled by user",
         });
         this.events.emit(task.sessionId, undefined, "task.updated", updated);
+        this.events.invalidate("tasks");
         return updated;
       });
     }
@@ -334,6 +390,7 @@ export class UmaRuntime {
         status: "active",
       });
       this.events.emit(sessionId, undefined, "memory.updated", fact);
+      this.events.invalidate("memory");
       return fact;
     });
   }
@@ -346,6 +403,7 @@ export class UmaRuntime {
         const run = this.database.getRun(fact.sourceRunId);
         this.events.emit(run.sessionId, run.id, "memory.updated", fact);
       }
+      this.events.invalidate("memory");
       return fact;
     });
   }
@@ -353,6 +411,7 @@ export class UmaRuntime {
     const fact = this.database.getMemoryFact(id);
     if (!fact.sessionId) {
       this.database.deleteMemoryFact(id);
+      this.invalidateResource("memory");
       return;
     }
     this.events.transaction(() => {
@@ -361,6 +420,7 @@ export class UmaRuntime {
         ...fact,
         deleted: true,
       });
+      this.events.invalidate("memory");
     });
   }
   audit(runId: string) {
@@ -419,9 +479,15 @@ export class UmaRuntime {
       this.events.transaction(() => {
         const value = this.database.updateBackgroundTask(id, { status: "running" });
         this.events.emit(value.sessionId, undefined, "task.updated", value);
+        this.events.invalidate("tasks");
         return value;
       });
       const run = this.sendMessage(task.sessionId, { messageId: randomUUID(), text: task.prompt });
+      this.events.transaction(() => {
+        const updated = this.database.updateBackgroundTask(id, { runId: run.id });
+        this.events.emit(task.sessionId, undefined, "task.updated", updated);
+        this.events.invalidate("tasks");
+      });
       await new Promise<void>((resolve) => {
         const off = this.subscribe((event) => {
           if (event.runId !== run.id || event.type !== "run.updated") return;
@@ -443,6 +509,7 @@ export class UmaRuntime {
                   },
             );
             this.events.emit(task.sessionId, undefined, "task.updated", updated);
+            this.events.invalidate("tasks");
           });
           resolve();
         });
@@ -462,11 +529,42 @@ export class UmaRuntime {
           error: error instanceof Error ? error.message : String(error),
         });
         this.events.emit(task.sessionId, undefined, "task.updated", updated);
+        this.events.invalidate("tasks");
       });
     } finally {
       this.taskControllers.delete(id);
       release();
     }
+  }
+
+  private watchResumedBackgroundTask(taskId: string, runId: string): void {
+    const off = this.subscribe((event) => {
+      if (event.runId !== runId || event.type !== "run.updated") return;
+      const run = event.payload as Run;
+      if (!["completed", "failed", "cancelled", "interrupted"].includes(run.status)) return;
+      off();
+      const task = this.database.getBackgroundTask(taskId);
+      const snapshot = this.database.getSnapshot(task.sessionId);
+      const final = [...snapshot.transcript]
+        .reverse()
+        .find((item) => item.runId === runId && item.role === "assistant");
+      this.events.transaction(() => {
+        const updated = this.database.updateBackgroundTask(
+          taskId,
+          run.status === "completed"
+            ? { status: "completed", ...(final?.content ? { result: final.content } : {}) }
+            : {
+                status:
+                  run.status === "failed" || run.status === "cancelled" || run.status === "interrupted"
+                    ? run.status
+                    : "failed",
+                ...(run.error ? { error: run.error } : {}),
+              },
+        );
+        this.events.emit(task.sessionId, undefined, "task.updated", updated);
+        this.events.invalidate("tasks");
+      });
+    });
   }
 
   updateSession(
@@ -552,24 +650,17 @@ export class UmaRuntime {
       return result;
     });
     if (!created) return run;
-    const previous = this.queueTails.get(sessionId) ?? Promise.resolve();
     const originalPrompt = continuation
       ? this.database.getMessage(continuation.messageId).content
       : undefined;
-    const next = previous
-      .catch(() => {})
-      .then(() =>
-        this.executeRun(
-          session,
-          run.id,
-          input,
-          continuation ? `${originalPrompt}\n\nClarification: ${input.text}` : undefined,
-        ),
-      );
-    const tail = next.finally(() => {
-      if (this.queueTails.get(sessionId) === tail) this.queueTails.delete(sessionId);
-    });
-    this.queueTails.set(sessionId, tail);
+    this.orchestrator.enqueue(sessionId, () =>
+      this.executeRun(
+        session,
+        run.id,
+        input,
+        continuation ? `${originalPrompt}\n\nClarification: ${input.text}` : undefined,
+      ),
+    );
     return run;
   }
 
@@ -601,27 +692,7 @@ export class UmaRuntime {
   }
 
   resolveApproval(id: string, approved: boolean): Approval {
-    const current = this.database.getApproval(id);
-    if (current.status !== "pending") return current;
-    const approval = this.events.transaction(() => {
-      const value = this.database.resolveApproval(id, approved);
-      this.database.addAudit({
-        runId: value.runId,
-        kind: "approval",
-        name: value.toolName,
-        input: { toolCallId: value.toolCallId },
-        status: approved ? "approved" : "denied",
-      });
-      this.events.emit(value.sessionId, value.runId, "approval.resolved", value);
-      return value;
-    });
-    const pending = this.approvals.get(id);
-    if (pending) {
-      clearTimeout(pending.timer);
-      this.approvals.delete(id);
-      pending.resolve(approved);
-    }
-    return approval;
+    return this.approvals.resolve(id, approved);
   }
 
   async addAttachment(input: {
@@ -647,157 +718,6 @@ export class UmaRuntime {
     });
   }
 
-  private async completeControl(
-    runId: string,
-    role: "fast" | "reasoning",
-    systemPrompt: string,
-    prompt: string,
-    signal: AbortSignal,
-    allowTransientRetries = true,
-  ): Promise<AssistantMessage> {
-    const model = this.models.forRole(role);
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const startedAt = Date.now();
-      const callId = this.database.startModelCall({
-        runId,
-        provider: model.provider,
-        model: model.id,
-        role,
-      });
-      injectRuntimeFault("model.started");
-      try {
-        const response = await this.models.models.completeSimple(
-          model,
-          { systemPrompt, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
-          { signal, temperature: 0 },
-        );
-        const retryable =
-          allowTransientRetries &&
-          response.stopReason === "error" &&
-          /(429|rate.?limit|5\d\d|network|timeout|econn|fetch failed)/i.test(response.errorMessage ?? "");
-        this.database.finishModelCall(callId, {
-          status: response.stopReason,
-          durationMs: Date.now() - startedAt,
-          usage: response.usage,
-          ...(response.errorMessage ? { error: response.errorMessage } : {}),
-        });
-        injectRuntimeFault("model.completed");
-        if (!retryable || attempt === 2) return response;
-        lastError = new Error(response.errorMessage ?? "Provider request failed");
-      } catch (error) {
-        this.database.finishModelCall(callId, {
-          status: signal.aborted ? "aborted" : "failed",
-          durationMs: Date.now() - startedAt,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        lastError = error;
-        if (signal.aborted || attempt === 2 || !allowTransientRetries || !isTransientProviderError(error))
-          throw error;
-      }
-    }
-    throw lastError instanceof Error ? lastError : new Error("Provider request failed");
-  }
-
-  private async preflight(
-    session: Session,
-    prompt: string,
-    mode: SendMessageRequest["mode"],
-    signal: AbortSignal,
-    runId: string,
-  ): Promise<PreflightDecision> {
-    let taskClass: PreflightDecision["taskClass"];
-    if (mode === "direct") taskClass = "simple";
-    else if (mode === "plan") taskClass = "complex";
-    else {
-      const classify = async (repair?: string) =>
-        this.completeControl(
-          runId,
-          "fast",
-          'Classify the request. Return JSON only: {"taskClass":"simple|standard|complex"}. Simple is a direct answer or one obvious action; standard may need clarification; complex needs multiple ordered steps. Do not include reasoning.',
-          repair ?? prompt,
-          signal,
-        );
-      let response = await classify();
-      if (response.stopReason === "error" || response.stopReason === "aborted")
-        throw new Error(response.errorMessage ?? "Task classification failed");
-      try {
-        const value = extractJson(contentText(response.content));
-        if (!Value.Check(TaskClassificationSchema, value)) throw new Error("Invalid taskClass");
-        taskClass = value.taskClass;
-      } catch {
-        response = await classify(
-          `The previous response was invalid. Return exactly one valid JSON object for this request:\n${prompt}`,
-        );
-        if (response.stopReason === "error" || response.stopReason === "aborted")
-          throw new Error(response.errorMessage ?? "Task classification repair failed");
-        let value: unknown;
-        try {
-          value = extractJson(contentText(response.content));
-        } catch {
-          throw new Error("Provider contract error: invalid task classification");
-        }
-        if (!Value.Check(TaskClassificationSchema, value))
-          throw new Error("Provider contract error: invalid task classification");
-        taskClass = value.taskClass;
-      }
-    }
-    if (taskClass === "simple") {
-      return {
-        taskClass,
-        route: "direct",
-        goal: prompt,
-        reasoningSummary: "Direct execution is sufficient",
-        successCriteria: ["Satisfy the user request accurately"],
-        questions: [],
-        steps: [],
-      };
-    }
-    const memory = this.database.searchMemory(session.id, prompt, 5);
-    const controlPrompt = `${prompt}${memory.length ? `\n\nKnown active user facts:\n${memory.join("\n")}` : ""}`;
-    const decide = async (repair?: string) =>
-      this.completeControl(
-        runId,
-        "reasoning",
-        "Specify an agent request. Return JSON only with taskClass (standard|complex), route (direct|clarify|plan), goal, reasoningSummary (one public sentence), successCriteria (string[]), questions (string[]), and steps (string[]). Clarify only if missing information blocks safe work. Complex work must plan unless clarification is required. Never include chain-of-thought.",
-        repair ?? controlPrompt,
-        signal,
-      );
-    let response = await decide();
-    if (response.stopReason === "error" || response.stopReason === "aborted")
-      throw new Error(response.errorMessage ?? "Preflight failed");
-    let decision: PreflightDecision;
-    try {
-      decision = decisionFrom(extractJson(contentText(response.content)));
-    } catch {
-      response = await decide(
-        `The previous response was invalid. Return exactly one valid JSON object for this request:\n${controlPrompt}`,
-      );
-      if (response.stopReason === "error" || response.stopReason === "aborted")
-        throw new Error(response.errorMessage ?? "Preflight repair failed");
-      try {
-        decision = decisionFrom(extractJson(contentText(response.content)));
-      } catch {
-        throw new Error("Provider contract error: invalid preflight response");
-      }
-    }
-    decision.taskClass = taskClass;
-    if (taskClass === "complex" && decision.route === "direct")
-      throw new Error("Provider contract error: complex tasks require a plan or clarification");
-    this.database.addAudit({
-      runId,
-      kind: "model",
-      name: `${this.models.forRole("reasoning").provider}/${this.models.forRole("reasoning").id}:preflight`,
-      output: decision,
-      status: response.stopReason,
-      usage: response.usage,
-    });
-    if (decision.route === "clarify" && decision.questions.length === 0)
-      throw new Error("Clarification route requires questions");
-    if (decision.route === "plan" && decision.steps.length === 0) decision.steps = [decision.goal];
-    return decision;
-  }
-
   private async executeRun(
     sessionAtQueueTime: Session,
     runId: string,
@@ -805,7 +725,7 @@ export class UmaRuntime {
     promptOverride?: string,
     resumeFromCheckpoint = false,
   ): Promise<void> {
-    const release = await this.semaphore.acquire();
+    const release = await this.orchestrator.acquire();
     if (this.database.getRun(runId).status === "cancelled") {
       release();
       return;
@@ -855,7 +775,7 @@ export class UmaRuntime {
               questions: [],
               steps: currentRun.plan.map((step) => step.title),
             }
-          : await this.preflight(
+          : await this.preflight.decide(
               session,
               promptOverride ?? input.text,
               input.mode ?? "auto",
@@ -935,7 +855,6 @@ export class UmaRuntime {
           });
           this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
         });
-        injectRuntimeFault("verify.completed");
       }
       this.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
       const budget = { turns: this.database.getRun(runId).turnCount };
@@ -997,6 +916,7 @@ export class UmaRuntime {
           });
           this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
         });
+        injectRuntimeFault("verify.completed");
       }
       await this.extractMemories(session, runId, controller.signal);
       this.events.transaction(() => {
@@ -1121,6 +1041,7 @@ export class UmaRuntime {
             status: confidence >= 0.95 ? "active" : "candidate",
           });
           this.events.emit(session.id, runId, "memory.updated", fact);
+          this.events.invalidate("memory");
         });
       }
     } catch (error) {
@@ -1391,55 +1312,26 @@ export class UmaRuntime {
     budget: { turns: number } = { turns: 0 },
     readOnly = false,
   ): Promise<void> {
-    const userMessage = this.database.getMessage(input.messageId);
-    const frozenModel = this.models.fromSnapshot(this.database.getRun(runId).model);
-    const historyState = await this.contextManager.compact(
+    const context = await this.contextBuilder.build({
       session,
-      this.database.listAgentMessages(session.id, userMessage.sequence),
+      runId,
+      request: input,
+      decision,
       signal,
-      false,
-      frozenModel,
-    );
-    const memory = this.database.searchMemory(session.id, input.text, 5);
-    const knowledge = this.knowledge.search(input.text, 3);
-    const context = [
-      memory.length ? `<relevant_memory>\n${memory.join("\n")}\n</relevant_memory>` : "",
-      knowledge.length
-        ? `<relevant_knowledge>\n${knowledge.map((item) => `${item.filePath}\n${item.content}`).join("\n\n")}\n</relevant_knowledge>`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-    const planText =
-      decision.route === "plan"
-        ? `\n\nApproved execution plan:\n${decision.steps.map((step, index) => `${index + 1}. ${step}`).join("\n")}`
-        : "";
-    const attachmentText = input.attachmentIds?.length
-      ? `\n\nAttachments: ${input.attachmentIds.join(", ")}. Use attachment_read when needed.`
-      : "";
-    const prompt = `${promptOverride ?? input.text}${planText}${attachmentText}`;
-    const images: ImageContent[] = [];
-    for (const attachmentId of input.attachmentIds ?? []) {
-      const attachment = this.database.getAttachment(attachmentId);
-      if (!attachment?.mimeType.startsWith("image/")) continue;
-      const data = await import("node:fs/promises").then((fs) =>
-        fs.readFile(this.database.getAttachmentPath(attachmentId, session.id), "base64"),
-      );
-      images.push({ type: "image", data, mimeType: attachment.mimeType });
-    }
-    const tools = this.toolsForSession(session).filter(
-      (tool) => !readOnly || ["read", "attachment_read"].includes(this.permissions.classify(tool.name)),
-    );
+      tools: this.toolsForSession(session),
+      ...(promptOverride ? { promptOverride } : {}),
+      readOnly,
+    });
     let stepTurns = 0;
     let turnLimitReached = false;
     const turnLimit = decision.route === "plan" ? 48 : 400;
     const agent = new Agent({
       initialState: {
-        systemPrompt: `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought.${this.skills.systemPrompt()}${historyState.summary ? `\n\n<conversation_summary>\n${historyState.summary.content}\n</conversation_summary>` : ""}${context ? `\n\n${context}` : ""}`,
-        model: frozenModel,
+        systemPrompt: context.systemPrompt,
+        model: context.model,
         thinkingLevel: session.thinkingLevel,
-        tools,
-        messages: historyState.messages,
+        tools: context.tools,
+        messages: context.messages,
       },
       streamFn: this.models.models.streamSimple.bind(this.models.models),
       toolExecution: "parallel",
@@ -1471,14 +1363,14 @@ export class UmaRuntime {
           });
         injectRuntimeFault("tool.prepared");
         if (permission.requiresApproval) {
-          const approved = await this.requestApproval(
-            session.id,
+          const approved = await this.approvals.request({
+            sessionId: session.id,
             runId,
-            toolCall.id,
-            toolCall.name,
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
             args,
-            toolSignal ?? signal,
-          );
+            signal: toolSignal ?? signal,
+          });
           if (!approved) {
             this.events.transaction(() => {
               const rejected = this.database.transitionRunAction(action.id, ["prepared"], {
@@ -1509,7 +1401,7 @@ export class UmaRuntime {
     const abort = () => agent.abort();
     signal.addEventListener("abort", abort, { once: true });
     try {
-      await agent.prompt(prompt, images);
+      await agent.prompt(context.prompt, context.images);
       if (agent.state.errorMessage) throw new Error(agent.state.errorMessage);
       if (turnLimitReached)
         throw new Error(
@@ -1756,7 +1648,7 @@ export class UmaRuntime {
       successCriteria: decision.successCriteria,
       result: final.content,
     });
-    let response = await this.completeControl(
+    let response = await this.preflight.complete(
       runId,
       "reasoning",
       'Verify whether the result satisfies the goal and success criteria. Return JSON only: {"accepted":boolean,"feedback":string}. Do not include chain-of-thought.',
@@ -1772,7 +1664,7 @@ export class UmaRuntime {
       if (!Value.Check(VerificationSchema, value)) throw new Error("Invalid verification verdict");
       verdict = value;
     } catch {
-      response = await this.completeControl(
+      response = await this.preflight.complete(
         runId,
         "reasoning",
         'Return exactly one JSON object: {"accepted":boolean,"feedback":string}.',
@@ -1823,56 +1715,5 @@ export class UmaRuntime {
       String(internal.content),
       { turns: current.turnCount },
     );
-  }
-
-  private requestApproval(
-    sessionId: string,
-    runId: string,
-    toolCallId: string,
-    toolName: string,
-    args: unknown,
-    signal: AbortSignal,
-  ): Promise<boolean> {
-    let waiting: Promise<boolean> | undefined;
-    this.events.transaction(() => {
-      const approval = this.database.createApproval({ sessionId, runId, toolCallId, toolName, args });
-      this.database.addAudit({
-        runId,
-        kind: "approval",
-        name: toolName,
-        input: { toolCallId },
-        status: "pending",
-      });
-      waiting = new Promise<boolean>((resolve) => {
-        const finish = (approved: boolean) => {
-          signal.removeEventListener("abort", abort);
-          resolve(approved);
-        };
-        const abort = () => {
-          const pending = this.approvals.get(approval.id);
-          if (!pending) return;
-          clearTimeout(pending.timer);
-          this.approvals.delete(approval.id);
-          this.events.transaction(() => {
-            const expired = this.database.expireApproval(approval.id);
-            this.database.addAudit({
-              runId,
-              kind: "approval",
-              name: toolName,
-              input: { toolCallId },
-              status: "expired",
-            });
-            this.events.emit(sessionId, runId, "approval.resolved", expired);
-          });
-          finish(false);
-        };
-        const timer = setTimeout(abort, this.config.runtime.approvalTimeoutMs);
-        this.approvals.set(approval.id, { resolve: finish, timer });
-        signal.addEventListener("abort", abort, { once: true });
-        if (signal.aborted) abort();
-      });
-      this.events.emit(sessionId, runId, "approval.requested", approval);
-    });
-    return waiting as Promise<boolean>;
   }
 }

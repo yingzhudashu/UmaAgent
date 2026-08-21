@@ -28,6 +28,7 @@ export interface McpServerConfig {
   command?: string;
   args?: string[];
   url?: string;
+  authTokenEnv?: string;
   env?: Record<string, string>;
 }
 

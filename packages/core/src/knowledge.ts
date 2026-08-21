@@ -52,6 +52,7 @@ export class KnowledgeService {
     private readonly database: UmaDatabase,
     roots: string[],
     stateDir: string,
+    private readonly changed: () => void = () => undefined,
   ) {
     this.allowedRoots = [...roots, join(stateDir, "uploads")].map((root) => resolve(root));
   }
@@ -67,17 +68,20 @@ export class KnowledgeService {
   async enqueue(name: string, sourcePath: string): Promise<KnowledgeSource> {
     const canonical = await this.validateSource(sourcePath);
     const source = this.database.createKnowledgeSource({ name, path: canonical });
+    this.changed();
     void this.process(source.id, name, canonical).catch(() => undefined);
     return source;
   }
 
   delete(id: string): void {
     this.database.deleteKnowledgeSource(id);
+    this.changed();
   }
 
   async index(name: string, sourcePath: string): Promise<KnowledgeSource> {
     const canonical = await this.validateSource(sourcePath);
     const source = this.database.createKnowledgeSource({ name, path: canonical });
+    this.changed();
     return this.process(source.id, name, canonical);
   }
 
@@ -93,6 +97,7 @@ export class KnowledgeService {
 
   private async process(id: string, name: string, canonical: string): Promise<KnowledgeSource> {
     this.database.updateKnowledgeSourceStatus(id, "parsing");
+    this.changed();
     try {
       const info = await stat(canonical);
       const files: string[] = [];
@@ -110,13 +115,16 @@ export class KnowledgeService {
           indexed.push({ filePath: info.isFile() ? path : relative(canonical, path), content: chunk });
         });
       }
-      return this.database.replaceKnowledgeSource({ name, path: canonical, chunks: indexed });
+      const source = this.database.replaceKnowledgeSource({ name, path: canonical, chunks: indexed });
+      this.changed();
+      return source;
     } catch (error) {
       this.database.updateKnowledgeSourceStatus(
         id,
         "failed",
         error instanceof Error ? error.message : String(error),
       );
+      this.changed();
       throw error;
     }
   }

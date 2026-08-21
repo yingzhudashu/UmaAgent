@@ -119,6 +119,10 @@ CREATE TABLE background_tasks (
   id TEXT PRIMARY KEY,
   parent_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  source_type TEXT CHECK (source_type IS NULL OR source_type='schedule'),
+  source_schedule_id TEXT,
+  source_schedule_run_id TEXT,
   prompt TEXT NOT NULL,
   status TEXT NOT NULL,
   result TEXT,
@@ -246,8 +250,12 @@ CREATE INDEX scheduled_tasks_due ON scheduled_tasks(enabled,next_run_at);
 CREATE TABLE scheduled_task_runs (
   id TEXT PRIMARY KEY,
   scheduled_task_id TEXT NOT NULL REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+  occurrence_key TEXT NOT NULL UNIQUE,
+  trigger TEXT NOT NULL CHECK (trigger IN ('scheduled','catchup','manual')),
   background_task_id TEXT REFERENCES background_tasks(id) ON DELETE SET NULL,
-  status TEXT NOT NULL,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  status TEXT NOT NULL CHECK (status IN ('claimed','running','awaiting_resume','completed','failed','cancelled')),
+  resume_json TEXT,
   scheduled_for INTEGER NOT NULL,
   started_at INTEGER,
   completed_at INTEGER,
@@ -261,4 +269,4 @@ CREATE TABLE web_sessions (
   created_at INTEGER NOT NULL
 );
 
-PRAGMA user_version = 7;
+PRAGMA user_version = 8;

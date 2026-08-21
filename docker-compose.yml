@@ -8,9 +8,26 @@ services:
     environment:
       UMA_AUTH_TOKEN: ${UMA_AUTH_TOKEN:?set UMA_AUTH_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
+      BROWSER_WORKER_TOKEN: ${BROWSER_WORKER_TOKEN:?set BROWSER_WORKER_TOKEN}
     volumes:
       - uma-state:/data/state
       - ./workspace:/data/workspace
+    depends_on:
+      browser-worker:
+        condition: service_healthy
+
+  browser-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.browser
+    init: true
+    restart: unless-stopped
+    environment:
+      BROWSER_WORKER_HOST: 0.0.0.0
+      BROWSER_WORKER_PORT: 3230
+      BROWSER_WORKER_AUTH_TOKEN: ${BROWSER_WORKER_TOKEN:?set BROWSER_WORKER_TOKEN}
+    expose:
+      - "3230"
 
   feishu-adapter:
     profiles: ["feishu"]
@@ -24,8 +41,8 @@ services:
     environment:
       FEISHU_APP_ID: ${FEISHU_APP_ID}
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
-      FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN}
-      FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY}
+      FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:-}
+      FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
       FEISHU_ALLOWED_OPEN_IDS: ${FEISHU_ALLOWED_OPEN_IDS:?set FEISHU_ALLOWED_OPEN_IDS}
       UMA_SERVER_URL: http://uma:3210
       UMA_TOKEN: ${UMA_AUTH_TOKEN}

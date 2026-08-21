@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 6 as const;
+export const PROTOCOL_VERSION = 7 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -350,6 +350,14 @@ export const BackgroundTaskSchema = Strict({
   id: Id,
   parentSessionId: Type.Optional(Id),
   sessionId: Id,
+  runId: Type.Optional(Id),
+  source: Type.Optional(
+    Strict({
+      type: Type.Literal("schedule"),
+      scheduleId: Id,
+      scheduleRunId: Id,
+    }),
+  ),
   prompt: Type.String({ minLength: 1, maxLength: 1_000_000 }),
   status: BackgroundTaskStatusSchema,
   result: Type.Optional(Type.String()),
@@ -402,11 +410,24 @@ export const UpdateScheduledTaskRequestSchema = Strict({
 });
 export type UpdateScheduledTaskRequest = Static<typeof UpdateScheduledTaskRequestSchema>;
 
+export const ScheduledTaskRunStatusSchema = Type.Union([
+  Type.Literal("claimed"),
+  Type.Literal("running"),
+  Type.Literal("awaiting_resume"),
+  Type.Literal("completed"),
+  Type.Literal("failed"),
+  Type.Literal("cancelled"),
+]);
+export type ScheduledTaskRunStatus = Static<typeof ScheduledTaskRunStatusSchema>;
+
 export const ScheduledTaskRunSchema = Strict({
   id: Id,
   scheduledTaskId: Id,
+  trigger: Type.Union([Type.Literal("scheduled"), Type.Literal("catchup"), Type.Literal("manual")]),
   backgroundTaskId: Type.Optional(Id),
-  status: BackgroundTaskStatusSchema,
+  runId: Type.Optional(Id),
+  status: ScheduledTaskRunStatusSchema,
+  resume: Type.Optional(RunSchema.properties.resume),
   scheduledFor: Timestamp,
   startedAt: Type.Optional(Timestamp),
   completedAt: Type.Optional(Timestamp),
@@ -438,6 +459,52 @@ export const OperationsReportSchema = Strict({
   recoveries: Type.Integer({ minimum: 0 }),
 });
 export type OperationsReport = Static<typeof OperationsReportSchema>;
+
+export const DiagnosticsReportSchema = Strict({
+  from: Timestamp,
+  to: Timestamp,
+  summary: OperationsReportSchema,
+  slowModels: Type.Array(
+    Strict({
+      provider: Id,
+      model: Id,
+      calls: Type.Integer({ minimum: 0 }),
+      averageDurationMs: Type.Number({ minimum: 0 }),
+    }),
+  ),
+  toolFailures: Type.Array(
+    Strict({ tool: Id, failures: Type.Integer({ minimum: 0 }), latestError: Type.Optional(Type.String()) }),
+  ),
+  recoveryFrequency: Type.Number({ minimum: 0 }),
+  approvalBottlenecks: Type.Array(
+    Strict({ tool: Id, requested: Type.Integer({ minimum: 0 }), denied: Type.Integer({ minimum: 0 }) }),
+  ),
+});
+export type DiagnosticsReport = Static<typeof DiagnosticsReportSchema>;
+
+export const ResourceKindSchema = Type.Union([
+  Type.Literal("tasks"),
+  Type.Literal("schedules"),
+  Type.Literal("memory"),
+  Type.Literal("knowledge"),
+]);
+export type ResourceKind = Static<typeof ResourceKindSchema>;
+
+export const ResourceInvalidatedSchema = Strict({
+  type: Type.Literal("resource.invalidated"),
+  protocolVersion: Type.Literal(PROTOCOL_VERSION),
+  resource: ResourceKindSchema,
+  timestamp: Timestamp,
+});
+export type ResourceInvalidated = Static<typeof ResourceInvalidatedSchema>;
+
+export const ResourceResyncRequiredSchema = Strict({
+  type: Type.Literal("resource.resync_required"),
+  protocolVersion: Type.Literal(PROTOCOL_VERSION),
+  resources: Type.Array(ResourceKindSchema),
+  timestamp: Timestamp,
+});
+export type ResourceResyncRequired = Static<typeof ResourceResyncRequiredSchema>;
 
 export const MemoryFactSchema = Strict({
   id: Id,

@@ -1,17 +1,18 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
 import { z } from "zod";
-import { assertPublicUrl } from "./network.js";
+import { assertPublicUrl, createValidatingProxy } from "./network.js";
 
 type Handle = { context: BrowserContext; page: Page; expiresAt: number };
 const handles = new Map<string, Handle>();
 let browser: Browser | undefined;
+const proxy = await createValidatingProxy();
 
 async function browserInstance(): Promise<Browser> {
-  browser ??= await chromium.launch({ headless: true });
+  browser ??= await chromium.launch({ headless: true, args: [`--proxy-server=${proxy.url}`] });
   return browser;
 }
 
@@ -28,12 +29,14 @@ async function closeHandle(id: string): Promise<void> {
   await handle?.context.close();
 }
 
-const mcp = new McpServer({ name: "uma-browser-worker", version: "0.7.0" });
+const mcp = new McpServer({ name: "uma-browser-worker", version: "0.8.0" });
 mcp.registerTool(
   "open",
   { description: "Open a public HTTP(S) page.", inputSchema: { url: z.url() } },
   async ({ url }) => {
     await assertPublicUrl(url);
+    for (const [id, handle] of handles) if (handle.expiresAt <= Date.now()) await closeHandle(id);
+    if (handles.size >= 4) throw new Error("Browser context limit reached");
     const context = await (await browserInstance()).newContext();
     await context.route(/^https?:\/\//, async (route) => {
       try {
@@ -112,16 +115,33 @@ const transport = new StreamableHTTPServerTransport({
 } as unknown as ConstructorParameters<typeof StreamableHTTPServerTransport>[0]);
 await mcp.connect(transport as Parameters<McpServer["connect"]>[0]);
 const port = Number(process.env.BROWSER_WORKER_PORT ?? 3230);
+const host = process.env.BROWSER_WORKER_HOST?.trim() || "127.0.0.1";
+const authToken = process.env.BROWSER_WORKER_AUTH_TOKEN?.trim();
+const loopback = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]).has(host);
+if (!loopback && !authToken) throw new Error("BROWSER_WORKER_AUTH_TOKEN is required for non-loopback hosts");
+const authenticated = (authorization: string | undefined): boolean => {
+  if (!authToken) return true;
+  const actual = Buffer.from(authorization ?? "");
+  const expected = Buffer.from(`Bearer ${authToken}`);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+};
 const server = createServer((request, response) => {
   if (request.url === "/health" && request.method === "GET") {
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({ status: "ok", service: "browser-worker" }));
     return;
   }
-  if (request.url === "/mcp") return void transport.handleRequest(request, response);
+  if (request.url === "/mcp") {
+    if (!authenticated(request.headers.authorization)) {
+      response.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" });
+      response.end(JSON.stringify({ error: "authentication required" }));
+      return;
+    }
+    return void transport.handleRequest(request, response);
+  }
   response.writeHead(404).end();
 });
-server.listen(port, "127.0.0.1");
+server.listen(port, host);
 
 const expiry = setInterval(() => {
   for (const [id, handle] of handles) if (handle.expiresAt <= Date.now()) void closeHandle(id);
@@ -130,6 +150,7 @@ const stop = async () => {
   clearInterval(expiry);
   for (const id of [...handles.keys()]) await closeHandle(id);
   await browser?.close();
+  await proxy.close();
   await transport.close();
   server.close();
 };

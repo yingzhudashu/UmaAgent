@@ -108,11 +108,11 @@ export async function createServer(
       return reply.code(403).send(errorBody(request.id, "forbidden", "Origin is required for Web sessions"));
     if (request.method === "OPTIONS") return reply.code(204).send();
     if (
-      !request.url.startsWith("/api/v6/") ||
-      request.url === "/api/v6/health/live" ||
-      request.url === "/api/v6/health/ready" ||
-      request.url === "/api/v6/auth/login" ||
-      request.url === "/api/v6/events"
+      !request.url.startsWith("/api/v7/") ||
+      request.url === "/api/v7/health/live" ||
+      request.url === "/api/v7/health/ready" ||
+      request.url === "/api/v7/auth/login" ||
+      request.url === "/api/v7/events"
     )
       return;
     if (!auth.requestAuthenticated(request))
@@ -121,12 +121,12 @@ export async function createServer(
 
   const health = (ready: boolean) => ({
     status: ready ? ("ok" as const) : ("degraded" as const),
-    version: "0.7.0",
+    version: "0.8.0",
     protocolVersion: PROTOCOL_VERSION,
     activeRuns: runtime.health().activeRuns,
   });
-  app.get("/api/v6/health/live", async () => health(true));
-  app.get("/api/v6/health/ready", async (_request, reply) => {
+  app.get("/api/v7/health/live", async () => health(true));
+  app.get("/api/v7/health/ready", async (_request, reply) => {
     let databaseReady = true;
     try {
       runtime.database.db.prepare("SELECT 1").get();
@@ -150,7 +150,7 @@ export async function createServer(
     );
     return reply.code(value.status === "ok" ? 200 : 503).send(value);
   });
-  app.post<{ Body: { token?: string } }>("/api/v6/auth/login", async (request, reply) => {
+  app.post<{ Body: { token?: string } }>("/api/v7/auth/login", async (request, reply) => {
     if (!auth.loginAllowed(request.ip))
       return reply.code(429).send(errorBody(request.id, "rate_limited", "Too many login attempts", true));
     if (!auth.tokenMatches(request.body?.token)) {
@@ -164,7 +164,7 @@ export async function createServer(
     });
     return { ok: true };
   });
-  app.post("/api/v6/auth/logout", async (request, reply) => {
+  app.post("/api/v7/auth/logout", async (request, reply) => {
     const origin = request.headers.origin;
     auth.logout(request, reply, {
       crossOrigin: crossOrigin(origin, request.headers.host),
@@ -173,17 +173,17 @@ export async function createServer(
     return reply.code(204).send();
   });
 
-  app.get("/api/v6/sessions", async () => runtime.listSessions());
-  app.post("/api/v6/sessions", async (request) => {
+  app.get("/api/v7/sessions", async () => runtime.listSessions());
+  app.post("/api/v7/sessions", async (request) => {
     const body = request.body ?? {};
     if (!Value.Check(CreateSessionRequestSchema, body)) throw new Error("Invalid create-session request");
     return runtime.createSession(body);
   });
-  app.get<{ Params: { id: string } }>("/api/v6/sessions/:id/snapshot", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v7/sessions/:id/snapshot", async (request) =>
     runtime.getSnapshot(request.params.id),
   );
   app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: string } }>(
-    "/api/v6/sessions/:id/events",
+    "/api/v7/sessions/:id/events",
     async (request) =>
       runtime.listSessionEvents(
         request.params.id,
@@ -192,7 +192,7 @@ export async function createServer(
       ),
   );
   app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string } }>(
-    "/api/v6/sessions/:id/history",
+    "/api/v7/sessions/:id/history",
     async (request) =>
       runtime.listSessionHistory(
         request.params.id,
@@ -200,38 +200,38 @@ export async function createServer(
         Math.max(1, Math.min(500, Number(request.query.limit ?? 100))),
       ),
   );
-  app.post<{ Params: { id: string } }>("/api/v6/sessions/:id/compact", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v7/sessions/:id/compact", async (request) =>
     runtime.compactSession(request.params.id),
   );
-  app.patch<{ Params: { id: string } }>("/api/v6/sessions/:id", async (request) => {
+  app.patch<{ Params: { id: string } }>("/api/v7/sessions/:id", async (request) => {
     if (!Value.Check(UpdateSessionRequestSchema, request.body))
       throw new Error("Invalid update-session request");
     return runtime.updateSession(request.params.id, request.body);
   });
-  app.delete<{ Params: { id: string } }>("/api/v6/sessions/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v7/sessions/:id", async (request, reply) => {
     runtime.deleteSession(request.params.id);
     return reply.code(204).send();
   });
-  app.post<{ Params: { id: string } }>("/api/v6/sessions/:id/messages", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/v7/sessions/:id/messages", async (request, reply) => {
     if (!Value.Check(SendMessageRequestSchema, request.body)) throw new Error("Invalid message request");
     const run = runtime.sendMessage(request.params.id, request.body);
     return reply.code(202).send({ runId: run.id, status: run.status });
   });
-  app.post<{ Params: { id: string } }>("/api/v6/sessions/:id/cancel", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/v7/sessions/:id/cancel", async (request, reply) => {
     runtime.cancel(request.params.id);
     return reply.code(204).send();
   });
   app.post<{ Params: { id: string }; Body: { approved?: boolean } }>(
-    "/api/v6/approvals/:id",
+    "/api/v7/approvals/:id",
     async (request) => runtime.resolveApproval(request.params.id, request.body?.approved === true),
   );
-  app.get("/api/v6/models", async () => runtime.listModels());
-  app.get("/api/v6/skills", async () => runtime.listSkills());
-  app.post("/api/v6/skills/refresh", async () => runtime.refreshSkills());
-  app.get("/api/v6/mcp", async () => runtime.mcp.status());
-  app.get("/api/v6/knowledge", async () => runtime.knowledge.list());
+  app.get("/api/v7/models", async () => runtime.listModels());
+  app.get("/api/v7/skills", async () => runtime.listSkills());
+  app.post("/api/v7/skills/refresh", async () => runtime.refreshSkills());
+  app.get("/api/v7/mcp", async () => runtime.mcp.status());
+  app.get("/api/v7/knowledge", async () => runtime.knowledge.list());
   app.post<{ Body: { name?: string; path?: string; attachmentId?: string; sessionId?: string } }>(
-    "/api/v6/knowledge",
+    "/api/v7/knowledge",
     async (request) => {
       if (!request.body?.name || (!request.body.path && !request.body.attachmentId))
         throw new Error("name and either path or attachmentId are required");
@@ -243,55 +243,64 @@ export async function createServer(
             runtime.config.server.workspaceRoots[0] as string,
             request.body.path as string,
           );
-      return runtime.knowledge.enqueue(request.body.name, path);
+      const source = await runtime.knowledge.enqueue(request.body.name, path);
+      runtime.invalidateResource("knowledge");
+      return source;
     },
   );
-  app.delete<{ Params: { id: string } }>("/api/v6/knowledge/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v7/knowledge/:id", async (request, reply) => {
     runtime.knowledge.delete(request.params.id);
+    runtime.invalidateResource("knowledge");
     return reply.code(204).send();
   });
-  app.get("/api/v6/tasks", async () => runtime.listTasks());
-  app.post<{ Body: { prompt?: string; parentSessionId?: string } }>("/api/v6/tasks", async (request) => {
+  app.get("/api/v7/tasks", async () => runtime.listTasks());
+  app.post<{ Body: { prompt?: string; parentSessionId?: string } }>("/api/v7/tasks", async (request) => {
     if (!request.body?.prompt || typeof request.body.prompt !== "string")
       throw new Error("prompt is required");
     return runtime.createTask(request.body.prompt, request.body.parentSessionId);
   });
-  app.get<{ Params: { id: string } }>("/api/v6/tasks/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v7/tasks/:id", async (request) =>
     runtime.getTask(request.params.id),
   );
-  app.get<{ Params: { id: string } }>("/api/v6/tasks/:id/snapshot", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v7/tasks/:id/snapshot", async (request) =>
     runtime.getSnapshot(runtime.getTask(request.params.id).sessionId),
   );
-  app.post<{ Params: { id: string } }>("/api/v6/tasks/:id/cancel", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v7/tasks/:id/cancel", async (request) =>
     runtime.cancelTask(request.params.id),
   );
-  app.get("/api/v6/schedules", async () => runtime.listScheduledTasks());
-  app.post("/api/v6/schedules", async (request) => {
+  app.get("/api/v7/schedules", async () => runtime.listScheduledTasks());
+  app.post("/api/v7/schedules", async (request) => {
     if (!Value.Check(CreateScheduledTaskRequestSchema, request.body))
       throw new Error("Invalid scheduled task request");
     return runtime.createScheduledTask(request.body);
   });
-  app.patch<{ Params: { id: string } }>("/api/v6/schedules/:id", async (request) => {
+  app.patch<{ Params: { id: string } }>("/api/v7/schedules/:id", async (request) => {
     if (!Value.Check(UpdateScheduledTaskRequestSchema, request.body))
       throw new Error("Invalid scheduled task update");
     return runtime.updateScheduledTask(request.params.id, request.body);
   });
-  app.delete<{ Params: { id: string } }>("/api/v6/schedules/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v7/schedules/:id", async (request, reply) => {
     runtime.deleteScheduledTask(request.params.id);
     return reply.code(204).send();
   });
-  app.post<{ Params: { id: string } }>("/api/v6/schedules/:id/run", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v7/schedules/:id/run", async (request) =>
     runtime.runScheduledTask(request.params.id),
   );
-  app.get<{ Params: { id: string } }>("/api/v6/schedules/:id/runs", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v7/schedules/:id/runs", async (request) =>
     runtime.listScheduledTaskRuns(request.params.id),
   );
+  app.get<{ Params: { id: string } }>("/api/v7/schedule-runs/:id", async (request) =>
+    runtime.getScheduledTaskRun(request.params.id),
+  );
+  app.post<{ Params: { id: string } }>("/api/v7/schedule-runs/:id/cancel", async (request) =>
+    runtime.cancelScheduledTaskRun(request.params.id),
+  );
   app.get<{ Querystring: { status?: "active" | "candidate" | "rejected" } }>(
-    "/api/v6/memory",
+    "/api/v7/memory",
     async (request) => runtime.listMemoryFacts(request.query.status),
   );
   app.post<{ Body: { sessionId?: string; scope?: "global" | "session"; content?: string } }>(
-    "/api/v6/memory",
+    "/api/v7/memory",
     async (request) => {
       if (!request.body?.sessionId || !request.body.content)
         throw new Error("sessionId and content are required");
@@ -303,7 +312,7 @@ export async function createServer(
     },
   );
   app.post<{ Params: { id: string }; Body: { status?: "active" | "candidate" | "rejected" } }>(
-    "/api/v6/memory/:id",
+    "/api/v7/memory/:id",
     async (request) => {
       const status = request.body?.status;
       if (!status || !["active", "candidate", "rejected"].includes(status))
@@ -311,43 +320,50 @@ export async function createServer(
       return runtime.reviewMemoryFact(request.params.id, status);
     },
   );
-  app.delete<{ Params: { id: string } }>("/api/v6/memory/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v7/memory/:id", async (request, reply) => {
     runtime.deleteMemoryFact(request.params.id);
     return reply.code(204).send();
   });
-  app.get<{ Params: { runId: string } }>("/api/v6/audit/runs/:runId", async (request) =>
+  app.get<{ Params: { runId: string } }>("/api/v7/audit/runs/:runId", async (request) =>
     runtime.audit(request.params.runId),
   );
-  app.get<{ Querystring: { from?: string; to?: string } }>("/api/v6/reports/operations", async (request) => {
+  app.get<{ Querystring: { from?: string; to?: string } }>("/api/v7/reports/operations", async (request) => {
     const to = request.query.to ? Number(request.query.to) : Date.now();
     const from = request.query.from ? Number(request.query.from) : to - 7 * 24 * 60 * 60_000;
     if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from)
       throw new Error("Invalid report time range");
     return runtime.database.operationsReport(from, to);
   });
-  app.get<{ Params: { id: string } }>("/api/v6/runs/:id", async (request) =>
+  app.get<{ Querystring: { from?: string; to?: string } }>("/api/v7/reports/diagnostics", async (request) => {
+    const from = Number(request.query.from ?? 0);
+    const to = Number(request.query.to ?? Date.now());
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < from)
+      throw new Error("Invalid diagnostics report range");
+    return runtime.database.diagnosticsReport(from, to);
+  });
+  app.get<{ Params: { id: string } }>("/api/v7/runs/:id", async (request) =>
     runtime.getRun(request.params.id),
   );
-  app.get<{ Params: { id: string } }>("/api/v6/runs/:id/checkpoints", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v7/runs/:id/checkpoints", async (request) =>
     runtime.listRunCheckpoints(request.params.id),
   );
-  app.get<{ Params: { id: string } }>("/api/v6/runs/:id/actions", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v7/runs/:id/actions", async (request) =>
     runtime.listRunActions(request.params.id),
   );
-  app.post<{ Params: { id: string } }>("/api/v6/runs/:id/resume", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v7/runs/:id/resume", async (request) =>
     runtime.resumeRun(request.params.id),
   );
   app.post<{ Params: { id: string; actionId: string }; Body: { decision?: string } }>(
-    "/api/v6/runs/:id/actions/:actionId/decide",
+    "/api/v7/runs/:id/actions/:actionId/decide",
     async (request) => {
       if (!Value.Check(RunActionDecisionSchema, request.body)) throw new Error("Invalid action decision");
       return runtime.decideRunAction(request.params.id, request.params.actionId, request.body.decision);
     },
   );
-  app.post<{ Params: { id: string } }>("/api/v6/runs/:id/cancel", async (request) => {
+  app.post<{ Params: { id: string } }>("/api/v7/runs/:id/cancel", async (request) => {
     return runtime.cancelRun(request.params.id);
   });
-  app.post("/api/v6/uploads", async (request) => {
+  app.post("/api/v7/uploads", async (request) => {
     const parts = request.parts();
     let sessionId: string | undefined;
     let upload: { name: string; mimeType: string; data: Buffer } | undefined;
@@ -359,7 +375,7 @@ export async function createServer(
     if (!upload) throw new Error("file is required");
     return runtime.addAttachment({ ...(sessionId ? { sessionId } : {}), ...upload });
   });
-  app.get<{ Params: { id: string } }>("/api/v6/attachments/:id/content", async (request, reply) => {
+  app.get<{ Params: { id: string } }>("/api/v7/attachments/:id/content", async (request, reply) => {
     const attachment = runtime.database.getAttachment(request.params.id);
     if (!attachment) throw new Error(`Attachment not found: ${request.params.id}`);
     const data = await readFile(runtime.database.getAttachmentPath(request.params.id));
@@ -369,18 +385,35 @@ export async function createServer(
       .send(data);
   });
 
-  app.get("/api/v6/events", { websocket: true }, (socket, request) => {
+  app.get("/api/v7/events", { websocket: true }, (socket, request) => {
     const origin = request.headers.origin;
     if (origin && !allowedOrigin(origin, runtime.config.server.webOrigins)) {
       socket.close(1008, "Origin is not allowed");
       return;
     }
     let authenticated = auth.requestAuthenticated(request);
+    let resourceResyncSent = false;
     const sessions = new Set<string>();
     const unsubscribe = runtime.subscribe((event) => {
       if (authenticated && sessions.has(event.sessionId) && socket.readyState === socket.OPEN)
         socket.send(JSON.stringify(event));
     });
+    const unsubscribeResources = runtime.subscribeResources((event) => {
+      if (authenticated && socket.readyState === socket.OPEN) socket.send(JSON.stringify(event));
+    });
+    const sendResourceResync = () => {
+      if (!authenticated || resourceResyncSent || socket.readyState !== socket.OPEN) return;
+      resourceResyncSent = true;
+      socket.send(
+        JSON.stringify({
+          type: "resource.resync_required",
+          protocolVersion: PROTOCOL_VERSION,
+          resources: ["tasks", "schedules", "memory", "knowledge"],
+          timestamp: Date.now(),
+        }),
+      );
+    };
+    sendResourceResync();
     const timer = setTimeout(() => {
       if (!authenticated) socket.close(1008, "Authentication timeout");
     }, 5_000);
@@ -397,6 +430,7 @@ export async function createServer(
         socket.close(1008, "Authentication required");
         return;
       }
+      sendResourceResync();
       if (message.type === "subscribe" && Array.isArray(message.sessions)) {
         sessions.clear();
         for (const subscription of message.sessions.slice(0, 100)) {
@@ -421,10 +455,11 @@ export async function createServer(
     socket.on("close", () => {
       clearTimeout(timer);
       unsubscribe();
+      unsubscribeResources();
     });
   });
 
-  app.all("/api/v6/*", async (request, reply) =>
+  app.all("/api/v7/*", async (request, reply) =>
     reply.code(404).send(errorBody(request.id, "not_found", "API route not found")),
   );
 

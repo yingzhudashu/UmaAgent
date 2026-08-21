@@ -1,0 +1,35 @@
+[
+  {
+    "name": "clarify-request",
+    "prompt": "Ask which FAUX_CLARIFY target should be used.",
+    "expectedStatus": "awaiting_input",
+    "expectedIncludes": "Which FAUX_CLARIFY target",
+    "expectedRoute": "clarify",
+    "expectedDurableEvent": "run.awaiting_input"
+  },
+  {
+    "name": "direct-answer",
+    "prompt": "Reply with FAUX_DIRECT.",
+    "mode": "direct",
+    "expectedStatus": "completed",
+    "expectedIncludes": "FAUX_DIRECT",
+    "expectedDurableEvent": "message.completed"
+  },
+  {
+    "name": "planned-task",
+    "prompt": "Create and execute a two-step deterministic plan.",
+    "mode": "plan",
+    "expectedStatus": "completed",
+    "expectedRoute": "plan",
+    "expectedIncludes": "FAUX_PLAN_STEP_2",
+    "expectedDurableEvent": "plan.updated"
+  },
+  {
+    "name": "tool-loop",
+    "prompt": "Use the configured deterministic read tool and report its result.",
+    "expectedStatus": "completed",
+    "expectedIncludes": "FAUX_TOOL_RESULT",
+    "expectedTool": "memory_search",
+    "expectedDurableEvent": "tool.completed"
+  }
+]

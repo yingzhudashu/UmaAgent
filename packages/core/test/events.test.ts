@@ -63,4 +63,56 @@ describe("EventHub", () => {
     expect(database.listEvents(session.id, 0).events).toHaveLength(0);
     database.close();
   });
+
+  it("requires transactions for resource invalidation and broadcasts each committed resource once", async () => {
+    const { database, hub } = await fixture();
+    expect(() => hub.invalidate("tasks")).toThrow("inside");
+
+    const listener = vi.fn();
+    const unsubscribe = hub.subscribeResources(listener);
+    hub.subscribeResources(() => {
+      throw new Error("consumer failure");
+    });
+
+    hub.transaction(() => {
+      hub.invalidate("tasks");
+      hub.transaction(() => {
+        hub.invalidate("tasks");
+        hub.invalidate("memory");
+      });
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "resource.invalidated",
+        protocolVersion: 7,
+        resource: "tasks",
+      }),
+    );
+    expect(listener).toHaveBeenNthCalledWith(2, expect.objectContaining({ resource: "memory" }));
+
+    unsubscribe();
+    hub.transaction(() => hub.invalidate("knowledge"));
+    expect(listener).toHaveBeenCalledTimes(2);
+    database.close();
+  });
+
+  it("does not broadcast rolled-back resource invalidations", async () => {
+    const { database, hub } = await fixture();
+    const listener = vi.fn();
+    hub.subscribeResources(listener);
+
+    expect(() =>
+      hub.transaction(() => {
+        hub.invalidate("schedules");
+        throw new Error("rollback");
+      }),
+    ).toThrow("rollback");
+
+    expect(listener).not.toHaveBeenCalled();
+    database.close();
+  });
 });

@@ -101,4 +101,55 @@ describe("AdapterStore", () => {
     expect(store.isOutboundMessage("user-message-1")).toBe(false);
     store.close();
   });
+
+  it("covers card state, conversation lists, and inbound failure transitions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-feishu-cards-"));
+    temporary.push(root);
+    const store = new AdapterStore(root);
+    expect(
+      store.getConversation({ tenant: "missing", chatType: "p2p", chatId: "chat", threadRoot: "" }),
+    ).toBeUndefined();
+    const conversation = store.createConversation(
+      { tenant: "tenant", chatType: "p2p", chatId: "chat", threadRoot: "" },
+      "session-1",
+    );
+    expect(store.listConversations()).toEqual([conversation]);
+
+    const inbound = store.claimInbound({ externalId: "failed-1", rawType: "file", payload: { key: 1 } });
+    expect(store.startInbound("missing")).toBe(false);
+    expect(store.startInbound("failed-1")).toBe(true);
+    store.markInbound(inbound.messageId, "failed", "download failed");
+    expect(store.isOutboundMessage(undefined)).toBe(false);
+
+    expect(store.getCard(conversation.id, "missing")).toBeUndefined();
+    store.upsertCard(conversation.id, "run-1", 1, "running");
+    expect(store.getCard(conversation.id, "run-1")).toEqual({ sequence: 1 });
+    store.upsertCard(conversation.id, "run-1", 3, "completed", "message-1");
+    expect(store.getCard(conversation.id, "run-1")).toEqual({ messageId: "message-1", sequence: 3 });
+    expect(store.latestConversationSequence(conversation.id)).toBe(3);
+    expect(store.latestConversationSequence("missing")).toBe(0);
+    store.markCardFailed(conversation.id, "run-1", "rate limited");
+    store.close();
+  });
+
+  it("rejects expired callbacks and unsupported on-disk schemas", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-feishu-schema-"));
+    temporary.push(root);
+    let store = new AdapterStore(root);
+    store.putActionCallback({
+      id: "expired",
+      kind: "approval",
+      targetId: "approval-1",
+      feishuMessageId: "message-1",
+      tokenHash: "expired-hash",
+      expiresAt: Date.now() - 1,
+    });
+    expect(store.claimActionCallback("expired-hash")).toBeUndefined();
+    store.close();
+
+    store = new AdapterStore(root);
+    store.db.exec("PRAGMA user_version=99");
+    store.close();
+    expect(() => new AdapterStore(root)).toThrow("Unsupported Feishu adapter schema 99");
+  });
 });

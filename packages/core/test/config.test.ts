@@ -8,6 +8,7 @@ const temporary: string[] = [];
 afterEach(async () => {
   delete process.env.UMA_CONFIG_TOKEN;
   delete process.env.UMA_CONFIG_KEY;
+  delete process.env.UMA_CONFIG_MCP_TOKEN;
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -69,6 +70,7 @@ describe("loadConfig", () => {
   it("rejects public listeners without an explicit web origin", async () => {
     process.env.UMA_CONFIG_TOKEN = "secret";
     process.env.UMA_CONFIG_KEY = "key";
+    process.env.UMA_CONFIG_MCP_TOKEN = "mcp-secret";
     await expect(loadConfig(await configFile({ host: "0.0.0.0", webOrigins: [] }))).rejects.toThrow(
       "Public server hosts require",
     );
@@ -103,6 +105,7 @@ describe("loadConfig", () => {
   it("loads defaults, resolves relative paths, removes duplicate origins, and parses MCP transports", async () => {
     process.env.UMA_CONFIG_TOKEN = "secret";
     process.env.UMA_CONFIG_KEY = "key";
+    process.env.UMA_CONFIG_MCP_TOKEN = "mcp-secret";
     const path = await mutateConfig((value) => {
       const server = value.server as Record<string, unknown>;
       delete server.port;
@@ -111,7 +114,12 @@ describe("loadConfig", () => {
       delete value.defaultThinkingLevel;
       value.mcpServers = [
         { name: "stdio", transport: "stdio", command: "node", args: ["server.js"], env: { A: "B" } },
-        { name: "http", transport: "http", url: "https://mcp.example" },
+        {
+          name: "http",
+          transport: "http",
+          url: "https://mcp.example",
+          authTokenEnv: "UMA_CONFIG_MCP_TOKEN",
+        },
       ];
     });
     const loaded = await loadConfig(path);

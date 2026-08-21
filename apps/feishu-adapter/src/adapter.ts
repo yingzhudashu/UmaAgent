@@ -13,6 +13,9 @@ export interface FeishuAdapterDependencies {
   feishu: FeishuGateway;
   store: AdapterStore;
   clock?: AdapterClock;
+  connection?: { start(): Promise<void>; stop(): Promise<void> | void; connected(): boolean };
+  onStart?: () => Promise<void> | void;
+  onStop?: () => Promise<void> | void;
 }
 
 export function createFeishuAdapter(dependencies: FeishuAdapterDependencies) {
@@ -31,10 +34,16 @@ export function createFeishuAdapter(dependencies: FeishuAdapterDependencies) {
     feishu: dependencies.feishu,
     store: dependencies.store,
     clock,
-    started() {
+    async start() {
+      if (started) return;
+      await dependencies.onStart?.();
+      await dependencies.connection?.start();
       started = true;
     },
-    stopped() {
+    async stop() {
+      if (!started) return;
+      await dependencies.connection?.stop();
+      await dependencies.onStop?.();
       started = false;
     },
     inbound() {
@@ -46,7 +55,7 @@ export function createFeishuAdapter(dependencies: FeishuAdapterDependencies) {
     health(): AdapterHealth {
       return {
         status: started ? (lastError ? "degraded" : "ok") : "stopped",
-        connected: started,
+        connected: started && (dependencies.connection?.connected() ?? true),
         ...(lastInboundAt !== undefined ? { lastInboundAt } : {}),
         ...(lastError ? { lastError } : {}),
       };

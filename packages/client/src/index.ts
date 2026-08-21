@@ -6,11 +6,14 @@ import type {
   BackgroundTask,
   CreateScheduledTaskRequest,
   CreateSessionRequest,
+  DiagnosticsReport,
   Health,
   KnowledgeSource,
   MemoryFact,
   ModelRef,
   OperationsReport,
+  ResourceInvalidated,
+  ResourceResyncRequired,
   ScheduledTask,
   ScheduledTaskRun,
   SendMessageRequest,
@@ -46,6 +49,7 @@ export interface UmaClientOptions {
 }
 
 type Listener = (event: AgentEventEnvelope) => void;
+type ResourceListener = (event: ResourceInvalidated | ResourceResyncRequired) => void;
 export type SessionSubscription = { id: string; lastSequence?: number };
 
 export class UmaClient {
@@ -53,6 +57,7 @@ export class UmaClient {
   private readonly fetchFn: typeof globalThis.fetch;
   private readonly listeners = new Map<string, Set<Listener>>();
   private readonly subscriptions = new Set<string>();
+  private readonly resourceListeners = new Set<ResourceListener>();
   private readonly lastSequences = new Map<string, number>();
   private readonly recoveryTargets = new Map<string, number>();
   private socket: WebSocket | undefined;
@@ -69,7 +74,7 @@ export class UmaClient {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v6${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v7${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -216,11 +221,23 @@ export class UmaClient {
   listScheduleRuns(id: string): Promise<ScheduledTaskRun[]> {
     return this.request(`/schedules/${encodeURIComponent(id)}/runs`);
   }
+  getScheduleRun(id: string): Promise<ScheduledTaskRun> {
+    return this.request(`/schedule-runs/${encodeURIComponent(id)}`);
+  }
+  cancelScheduleRun(id: string): Promise<ScheduledTaskRun> {
+    return this.request(`/schedule-runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  }
   operationsReport(from?: number, to?: number): Promise<OperationsReport> {
     const query = new URLSearchParams();
     if (from !== undefined) query.set("from", String(from));
     if (to !== undefined) query.set("to", String(to));
     return this.request(`/reports/operations${query.size ? `?${query}` : ""}`);
+  }
+  diagnosticsReport(from?: number, to?: number): Promise<DiagnosticsReport> {
+    const query = new URLSearchParams();
+    if (from !== undefined) query.set("from", String(from));
+    if (to !== undefined) query.set("to", String(to));
+    return this.request(`/reports/diagnostics${query.size ? `?${query}` : ""}`);
   }
   listMemoryFacts(status?: MemoryFact["status"]): Promise<MemoryFact[]> {
     return this.request(`/memory${status ? `?status=${status}` : ""}`);
@@ -309,7 +326,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v6/attachments/${encodeURIComponent(id)}/content`,
+      `${this.baseUrl}/api/v7/attachments/${encodeURIComponent(id)}/content`,
       { headers, credentials: "include" },
     );
     if (!response.ok) {
@@ -358,9 +375,14 @@ export class UmaClient {
     };
   }
 
+  subscribeResources(listener: ResourceListener): () => void {
+    this.resourceListeners.add(listener);
+    return () => this.resourceListeners.delete(listener);
+  }
+
   connectEvents(): void {
     if (this.socket || this.closed) return;
-    const url = new URL("/api/v6/events", this.baseUrl);
+    const url = new URL("/api/v7/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())
@@ -378,6 +400,11 @@ export class UmaClient {
       try {
         const parsed = JSON.parse(String(message.data)) as Record<string, unknown>;
         if (parsed.type === "sync.started" || parsed.type === "sync.completed") return;
+        if (parsed.type === "resource.invalidated" || parsed.type === "resource.resync_required") {
+          for (const listener of this.resourceListeners)
+            listener(parsed as unknown as ResourceInvalidated | ResourceResyncRequired);
+          return;
+        }
         this.dispatch(parsed as unknown as AgentEventEnvelope);
       } catch {
         /* Ignore malformed remote frames. */

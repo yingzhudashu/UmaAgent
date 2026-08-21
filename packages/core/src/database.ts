@@ -8,6 +8,7 @@ import type {
   Attachment,
   AuditRecord,
   BackgroundTask,
+  DiagnosticsReport,
   KnowledgeSource,
   MemoryFact,
   MessageSource,
@@ -32,7 +33,7 @@ import type {
 import { type AgentEventEnvelope, type AgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 8;
 type Row = Record<string, unknown>;
 
 function rows(statement: StatementSync, ...params: SQLInputValue[]): Row[] {
@@ -132,11 +133,17 @@ function toScheduledTask(value: Row): ScheduledTask {
 }
 
 function toScheduledTaskRun(value: Row): ScheduledTaskRun {
+  const resume = value.resume_json
+    ? parseJson<ScheduledTaskRun["resume"] | undefined>(value.resume_json, undefined)
+    : undefined;
   return {
     id: text(value.id),
     scheduledTaskId: text(value.scheduled_task_id),
+    trigger: text(value.trigger) as ScheduledTaskRun["trigger"],
     ...(value.background_task_id ? { backgroundTaskId: text(value.background_task_id) } : {}),
+    ...(value.run_id ? { runId: text(value.run_id) } : {}),
     status: text(value.status) as ScheduledTaskRun["status"],
+    ...(resume ? { resume } : {}),
     scheduledFor: integer(value.scheduled_for),
     ...(value.started_at ? { startedAt: integer(value.started_at) } : {}),
     ...(value.completed_at ? { completedAt: integer(value.completed_at) } : {}),
@@ -1244,14 +1251,26 @@ export class UmaDatabase {
     id: string;
     parentSessionId?: string;
     sessionId: string;
+    source?: BackgroundTask["source"];
     prompt: string;
   }): BackgroundTask {
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO background_tasks(id,parent_session_id,session_id,prompt,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO background_tasks(id,parent_session_id,session_id,source_type,source_schedule_id,source_schedule_run_id,prompt,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
       )
-      .run(input.id, input.parentSessionId ?? null, input.sessionId, input.prompt, "pending", now, now);
+      .run(
+        input.id,
+        input.parentSessionId ?? null,
+        input.sessionId,
+        input.source?.type ?? null,
+        input.source?.scheduleId ?? null,
+        input.source?.scheduleRunId ?? null,
+        input.prompt,
+        "pending",
+        now,
+        now,
+      );
     return this.getBackgroundTask(input.id);
   }
 
@@ -1262,6 +1281,16 @@ export class UmaDatabase {
       id: text(value.id),
       ...(value.parent_session_id ? { parentSessionId: text(value.parent_session_id) } : {}),
       sessionId: text(value.session_id),
+      ...(value.run_id ? { runId: text(value.run_id) } : {}),
+      ...(value.source_type
+        ? {
+            source: {
+              type: "schedule" as const,
+              scheduleId: text(value.source_schedule_id),
+              scheduleRunId: text(value.source_schedule_run_id),
+            },
+          }
+        : {}),
       prompt: text(value.prompt),
       status: text(value.status) as BackgroundTask["status"],
       ...(value.result ? { result: text(value.result) } : {}),
@@ -1269,6 +1298,11 @@ export class UmaDatabase {
       createdAt: integer(value.created_at),
       updatedAt: integer(value.updated_at),
     };
+  }
+
+  findBackgroundTaskByRunId(runId: string): BackgroundTask | undefined {
+    const value = row(this.db.prepare("SELECT id FROM background_tasks WHERE run_id=?"), runId);
+    return value ? this.getBackgroundTask(text(value.id)) : undefined;
   }
 
   listBackgroundTasks(): BackgroundTask[] {
@@ -1279,15 +1313,21 @@ export class UmaDatabase {
 
   updateBackgroundTask(
     id: string,
-    patch: { status?: BackgroundTask["status"]; result?: string; error?: string },
+    patch: {
+      status?: BackgroundTask["status"];
+      runId?: string;
+      result?: string;
+      error?: string | null;
+    },
   ): BackgroundTask {
     const current = this.getBackgroundTask(id);
     this.db
-      .prepare("UPDATE background_tasks SET status=?,result=?,error=?,updated_at=? WHERE id=?")
+      .prepare("UPDATE background_tasks SET status=?,run_id=?,result=?,error=?,updated_at=? WHERE id=?")
       .run(
         patch.status ?? current.status,
+        patch.runId ?? current.runId ?? null,
         patch.result ?? current.result ?? null,
-        patch.error ?? current.error ?? null,
+        patch.error === undefined ? (current.error ?? null) : patch.error,
         Date.now(),
         id,
       );
@@ -1341,8 +1381,11 @@ export class UmaDatabase {
 
   listMemoryFacts(status?: MemoryFact["status"]): MemoryFact[] {
     const values = status
-      ? rows(this.db.prepare("SELECT id FROM memory_facts WHERE status=? ORDER BY updated_at DESC"), status)
-      : rows(this.db.prepare("SELECT id FROM memory_facts ORDER BY updated_at DESC"));
+      ? rows(
+          this.db.prepare("SELECT id FROM memory_facts WHERE status=? ORDER BY updated_at DESC,rowid DESC"),
+          status,
+        )
+      : rows(this.db.prepare("SELECT id FROM memory_facts ORDER BY updated_at DESC,rowid DESC"));
     return values.map((value) => this.getMemoryFact(text(value.id)));
   }
 
@@ -1577,13 +1620,20 @@ export class UmaDatabase {
     if (result.changes === 0) throw new Error(`Scheduled task not found: ${id}`);
   }
 
-  createScheduledTaskRun(scheduledTaskId: string, scheduledFor: number): ScheduledTaskRun {
-    if (this.hasActiveScheduledTaskRun(scheduledTaskId))
+  createScheduledTaskRun(input: {
+    scheduledTaskId: string;
+    scheduledFor: number;
+    occurrenceKey: string;
+    trigger: ScheduledTaskRun["trigger"];
+  }): ScheduledTaskRun {
+    if (this.hasActiveScheduledTaskRun(input.scheduledTaskId))
       throw new Error("Scheduled task already has an active run");
     const id = randomUUID();
     this.db
-      .prepare("INSERT INTO scheduled_task_runs(id,scheduled_task_id,status,scheduled_for) VALUES(?,?,?,?)")
-      .run(id, scheduledTaskId, "pending", scheduledFor);
+      .prepare(
+        "INSERT INTO scheduled_task_runs(id,scheduled_task_id,occurrence_key,trigger,status,scheduled_for) VALUES(?,?,?,?,?,?)",
+      )
+      .run(id, input.scheduledTaskId, input.occurrenceKey, input.trigger, "claimed", input.scheduledFor);
     return this.getScheduledTaskRun(id);
   }
 
@@ -1591,6 +1641,11 @@ export class UmaDatabase {
     const value = row(this.db.prepare("SELECT * FROM scheduled_task_runs WHERE id=?"), id);
     if (!value) throw new Error(`Scheduled task run not found: ${id}`);
     return toScheduledTaskRun(value);
+  }
+
+  findScheduledTaskRunByRunId(runId: string): ScheduledTaskRun | undefined {
+    const value = row(this.db.prepare("SELECT * FROM scheduled_task_runs WHERE run_id=?"), runId);
+    return value ? toScheduledTaskRun(value) : undefined;
   }
 
   listScheduledTaskRuns(scheduledTaskId: string): ScheduledTaskRun[] {
@@ -1606,7 +1661,7 @@ export class UmaDatabase {
     return Boolean(
       row(
         this.db.prepare(
-          "SELECT 1 AS ok FROM scheduled_task_runs WHERE scheduled_task_id=? AND status IN ('pending','running') LIMIT 1",
+          "SELECT 1 AS ok FROM scheduled_task_runs WHERE scheduled_task_id=? AND status IN ('claimed','running','awaiting_resume') LIMIT 1",
         ),
         scheduledTaskId,
       ),
@@ -1617,7 +1672,9 @@ export class UmaDatabase {
     id: string,
     patch: Partial<{
       backgroundTaskId: string;
+      runId: string;
       status: ScheduledTaskRun["status"];
+      resume: ScheduledTaskRun["resume"] | null;
       startedAt: number;
       completedAt: number;
       error: string | null;
@@ -1626,11 +1683,19 @@ export class UmaDatabase {
     const current = this.getScheduledTaskRun(id);
     this.db
       .prepare(
-        "UPDATE scheduled_task_runs SET background_task_id=?,status=?,started_at=?,completed_at=?,error=? WHERE id=?",
+        "UPDATE scheduled_task_runs SET background_task_id=?,run_id=?,status=?,resume_json=?,started_at=?,completed_at=?,error=? WHERE id=?",
       )
       .run(
         patch.backgroundTaskId ?? current.backgroundTaskId ?? null,
+        patch.runId ?? current.runId ?? null,
         patch.status ?? current.status,
+        patch.resume === undefined
+          ? current.resume
+            ? JSON.stringify(current.resume)
+            : null
+          : patch.resume
+            ? JSON.stringify(patch.resume)
+            : null,
         patch.startedAt ?? current.startedAt ?? null,
         patch.completedAt ?? current.completedAt ?? null,
         patch.error === undefined ? (current.error ?? null) : patch.error,
@@ -1708,12 +1773,74 @@ export class UmaDatabase {
     };
   }
 
-  markActiveScheduledTaskRunsInterrupted(): void {
+  diagnosticsReport(from: number, to: number): DiagnosticsReport {
+    const summary = this.operationsReport(from, to);
+    const slowModels = rows(
+      this.db.prepare(
+        "SELECT provider,model,COUNT(*) AS calls,AVG(COALESCE(duration_ms,0)) AS average_duration FROM model_calls WHERE created_at BETWEEN ? AND ? GROUP BY provider,model ORDER BY average_duration DESC LIMIT 20",
+      ),
+      from,
+      to,
+    ).map((value) => ({
+      provider: text(value.provider),
+      model: text(value.model),
+      calls: integer(value.calls),
+      averageDurationMs: Number(value.average_duration ?? 0),
+    }));
+    const toolFailures = rows(
+      this.db.prepare(
+        "SELECT name,COUNT(*) AS failures,MAX(error) AS latest_error FROM audit_events WHERE kind='tool' AND status IN ('error','failed') AND created_at BETWEEN ? AND ? GROUP BY name ORDER BY failures DESC LIMIT 20",
+      ),
+      from,
+      to,
+    ).map((value) => ({
+      tool: text(value.name),
+      failures: integer(value.failures),
+      ...(value.latest_error ? { latestError: text(value.latest_error) } : {}),
+    }));
+    const approvalBottlenecks = rows(
+      this.db.prepare(
+        "SELECT tool_name,COUNT(*) AS requested,SUM(CASE WHEN status IN ('denied','expired') THEN 1 ELSE 0 END) AS denied FROM approvals WHERE created_at BETWEEN ? AND ? GROUP BY tool_name ORDER BY requested DESC LIMIT 20",
+      ),
+      from,
+      to,
+    ).map((value) => ({
+      tool: text(value.tool_name),
+      requested: integer(value.requested),
+      denied: integer(value.denied),
+    }));
+    return {
+      from,
+      to,
+      summary,
+      slowModels,
+      toolFailures,
+      recoveryFrequency: summary.runs.total ? summary.recoveries / summary.runs.total : 0,
+      approvalBottlenecks,
+    };
+  }
+
+  recoverScheduledTaskRuns(): ScheduledTaskRun[] {
     this.db
       .prepare(
-        "UPDATE scheduled_task_runs SET status='interrupted',error='Server restarted during execution',completed_at=? WHERE status IN ('pending','running')",
+        "UPDATE background_tasks SET status='pending',error=NULL,updated_at=? WHERE status='interrupted' AND run_id IS NULL AND id IN (SELECT background_task_id FROM scheduled_task_runs WHERE status='running' AND run_id IS NULL)",
       )
       .run(Date.now());
+    this.db
+      .prepare(
+        "UPDATE scheduled_task_runs SET status='claimed',error=NULL WHERE status='running' AND run_id IS NULL",
+      )
+      .run();
+    this.db
+      .prepare(
+        "UPDATE scheduled_task_runs SET status='awaiting_resume',error='Background run requires explicit resume' WHERE status='running' AND run_id IS NOT NULL",
+      )
+      .run();
+    return rows(
+      this.db.prepare(
+        "SELECT * FROM scheduled_task_runs WHERE status IN ('claimed','awaiting_resume') ORDER BY scheduled_for",
+      ),
+    ).map(toScheduledTaskRun);
   }
 
   markActiveBackgroundTasksInterrupted(): void {

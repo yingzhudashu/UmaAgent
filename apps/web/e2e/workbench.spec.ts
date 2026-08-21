@@ -28,6 +28,15 @@ test("two devices converge on one session and offline mode is read-only", async 
   await expect(first.getByText("Faux Core received: multi device hello")).toBeVisible();
   await expect(second.getByText("Faux Core received: multi device hello")).toBeVisible();
 
+  await first.getByRole("button", { name: "schedules", exact: true }).click();
+  await second.getByRole("button", { name: "schedules", exact: true }).click();
+  await first.getByRole("button", { name: "新建调度" }).click();
+  await first.getByLabel("名称").fill("cross-device schedule");
+  await first.getByLabel("任务").fill("resource invalidation check");
+  await first.getByRole("button", { name: "创建", exact: true }).click();
+  await expect(first.getByText("cross-device schedule")).toBeVisible();
+  await expect(second.getByText("cross-device schedule")).toBeVisible();
+
   await secondContext.setOffline(true);
   await expect(second.getByPlaceholder("向 UmaAgent 发送消息")).toBeDisabled();
   await expect(second.getByText("Faux Core received: multi device hello")).toBeVisible();

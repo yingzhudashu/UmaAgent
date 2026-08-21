@@ -1,5 +1,6 @@
+import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { UmaRuntime } from "@uma-agent/core";
 import { createServer } from "../apps/server/dist/app.js";
 
@@ -10,12 +11,16 @@ const webOrigins = (process.env.UMA_FAUX_WEB_ORIGINS ?? `http://127.0.0.1:${port
   .map((value) => value.trim())
   .filter(Boolean);
 process.env.UMA_FAUX_TOKEN = token;
+const stateDir = resolve(process.env.UMA_FAUX_STATE ?? ".uma-faux");
+if (process.env.UMA_FAUX_RESET_STATE === "1") {
+  await rm(stateDir, { recursive: true, force: true });
+}
 
 const config = {
   server: {
     host: "127.0.0.1",
     port,
-    stateDir: resolve(process.env.UMA_FAUX_STATE ?? ".uma-faux"),
+    stateDir,
     workspaceRoots: [resolve(".")],
     webOrigins,
     maxUploadBytes: 20 * 1024 * 1024,
@@ -57,24 +62,6 @@ const faux = fauxProvider({
   tokensPerSecond: 80,
 });
 const response = (context) => {
-  if (context.systemPrompt.includes("Classify the request"))
-    return fauxAssistantMessage(JSON.stringify({ taskClass: "simple" }));
-  if (context.systemPrompt.includes("Specify an agent request")) {
-    return fauxAssistantMessage(
-      JSON.stringify({
-        taskClass: "standard",
-        route: "direct",
-        goal: "Respond to the user",
-        reasoningSummary: "Direct response is sufficient.",
-        successCriteria: ["Address the request"],
-        questions: [],
-        steps: [],
-      }),
-    );
-  }
-  if (context.systemPrompt.includes("Verify whether the result"))
-    return fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" }));
-  if (context.systemPrompt.includes("Extract durable user facts")) return fauxAssistantMessage("[]");
   const latest = [...context.messages].reverse().find((message) => message.role === "user");
   const content =
     typeof latest?.content === "string"
@@ -85,6 +72,42 @@ const response = (context) => {
             .map((item) => item.text)
             .join("\n")
         : "your request";
+  if (context.systemPrompt.includes("Classify the request")) {
+    const taskClass = content.includes("FAUX_CLARIFY")
+      ? "standard"
+      : content.includes("deterministic plan")
+        ? "complex"
+        : "simple";
+    return fauxAssistantMessage(JSON.stringify({ taskClass }));
+  }
+  if (context.systemPrompt.includes("Specify an agent request")) {
+    const route = content.includes("FAUX_CLARIFY")
+      ? "clarify"
+      : content.includes("deterministic plan")
+        ? "plan"
+        : "direct";
+    return fauxAssistantMessage(
+      JSON.stringify({
+        taskClass: route === "plan" ? "complex" : "standard",
+        route,
+        goal: route === "clarify" ? "Clarify the target" : "Complete the deterministic evaluation",
+        reasoningSummary: `Deterministic ${route} evaluation route.`,
+        successCriteria: ["Produce the expected public evaluation result"],
+        questions: route === "clarify" ? ["Which FAUX_CLARIFY target should be used?"] : [],
+        steps: route === "plan" ? ["Produce the first plan result", "Produce the final plan result"] : [],
+      }),
+    );
+  }
+  if (context.systemPrompt.includes("Verify whether the result"))
+    return fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" }));
+  if (context.systemPrompt.includes("Extract durable user facts")) return fauxAssistantMessage("[]");
+  if (content.includes("configured deterministic read tool")) {
+    if (context.messages.some((message) => message.role === "toolResult"))
+      return fauxAssistantMessage("FAUX_TOOL_RESULT");
+    return fauxAssistantMessage([fauxToolCall("memory_search", { query: "deterministic", limit: 1 })]);
+  }
+  if (content.includes("Execute only plan step 1")) return fauxAssistantMessage("FAUX_PLAN_STEP_1");
+  if (content.includes("Execute only plan step 2")) return fauxAssistantMessage("FAUX_PLAN_STEP_2");
   return fauxAssistantMessage(`Faux Core received: ${content.slice(0, 300)}`);
 };
 faux.setResponses(Array.from({ length: 500 }, () => response));

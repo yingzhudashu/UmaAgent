@@ -87,6 +87,7 @@ export function App() {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<string>();
   const [prompt, setPrompt] = useState("");
+  const [taskPrompt, setTaskPrompt] = useState("");
   const [loginRequired, setLoginRequired] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
@@ -139,6 +140,17 @@ export function App() {
     window.addEventListener("beforeinstallprompt", capture);
     return () => window.removeEventListener("beforeinstallprompt", capture);
   }, []);
+  useEffect(
+    () =>
+      client.subscribeResources((event) => {
+        const resources = event.type === "resource.invalidated" ? [event.resource] : event.resources;
+        for (const resource of resources) {
+          const key = resource === "memory" ? ["memory"] : [resource];
+          void queryClient.invalidateQueries({ queryKey: key });
+        }
+      }),
+    [queryClient],
+  );
   useEffect(() => {
     const online = () => setBrowserOnline(true);
     const offline = () => setBrowserOnline(false);
@@ -567,24 +579,40 @@ export function App() {
           )}
           {detailsTab === "tasks" && (
             <div className="operation-list">
-              <button
-                type="button"
-                className="run-action"
-                disabled={offline}
-                onClick={() => {
-                  const value = window.prompt("后台任务内容")?.trim();
-                  if (value)
-                    void client.createTask(value, selected).then(() => {
-                      void tasks.refetch();
-                    });
+              <form
+                className="resource-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!taskPrompt.trim()) return;
+                  void client.createTask(taskPrompt.trim(), selected).then(() => {
+                    setTaskPrompt("");
+                    void tasks.refetch();
+                  });
                 }}
               >
-                新建后台任务
-              </button>
+                <label>
+                  后台任务
+                  <textarea value={taskPrompt} onChange={(event) => setTaskPrompt(event.target.value)} />
+                </label>
+                <button type="submit" className="run-action" disabled={offline || !taskPrompt.trim()}>
+                  新建后台任务
+                </button>
+              </form>
               {tasks.data?.map((task) => (
                 <div key={task.id}>
                   <strong>{task.status}</strong>
                   <p>{task.prompt}</p>
+                  {task.runId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelected(task.sessionId);
+                        setDetailsTab("run");
+                      }}
+                    >
+                      打开运行
+                    </button>
+                  )}
                   {["pending", "running"].includes(task.status) && (
                     <button
                       type="button"
@@ -639,6 +667,8 @@ export function App() {
               }
               run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
               remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
+              loadRuns={(id) => client.listScheduleRuns(id)}
+              cancelRun={(id) => void client.cancelScheduleRun(id).then(() => schedules.refetch())}
             />
           )}
           {detailsTab === "resources" && (

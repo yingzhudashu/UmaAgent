@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { Box, Input, ProcessTerminal, Spacer, Text, TuiMainScreen } from "@earendil-works/pi-tui";
+import {
+  Box,
+  Editor,
+  Markdown,
+  ProcessTerminal,
+  ScrollView,
+  Spacer,
+  Text,
+  TuiMainScreen,
+} from "@earendil-works/pi-tui";
 import { UmaClient, UmaClientError } from "@uma-agent/client";
 import {
   type AgentEventEnvelope,
@@ -20,10 +29,8 @@ const server = valueAfter("--server") ?? process.env.UMA_SERVER_URL ?? "http://1
 const token = valueAfter("--token") ?? process.env.UMA_TOKEN;
 const client = new UmaClient({ baseUrl: server, ...(token ? { token } : {}) });
 
-function renderTranscript(items: TranscriptItem[], offset = 0): string {
-  const end = Math.max(0, items.length - offset);
+function renderTranscript(items: TranscriptItem[]): string {
   return items
-    .slice(Math.max(0, end - 14), end)
     .map((item) => {
       const label = item.role === "user" ? "You" : item.role === "assistant" ? "Uma" : (item.name ?? "Tool");
       const suffix = item.status === "streaming" ? " [running]" : item.status === "error" ? " [error]" : "";
@@ -49,14 +56,44 @@ async function chat(): Promise<void> {
   let scrollOffset = 0;
   const ui = new TuiMainScreen(new ProcessTerminal());
   const header = new Text("", 1, 0);
-  const transcript = new Text("", 1, 1);
+  const style = (value: string) => value;
+  const transcript = new Markdown("", 1, 1, {
+    heading: style,
+    link: style,
+    linkUrl: style,
+    code: style,
+    codeBlock: style,
+    codeBlockBorder: style,
+    quote: style,
+    quoteBorder: style,
+    hr: style,
+    listBullet: style,
+    bold: style,
+    italic: style,
+    strikethrough: style,
+    underline: style,
+  });
+  const transcriptScroll = new ScrollView(transcript, {
+    follow: "end",
+    primary: true,
+    scrollbar: "auto",
+  });
   const status = new Text("", 1, 0);
   const inputBox = new Box(1, 0);
-  const input = new Input();
+  const input = new Editor(ui, {
+    borderColor: style,
+    selectList: {
+      selectedPrefix: style,
+      selectedText: style,
+      description: style,
+      scrollInfo: style,
+      noMatch: style,
+    },
+  });
   inputBox.addChild(new Text("Message", 0, 0));
   inputBox.addChild(input);
   ui.addChild(header);
-  ui.addChild(transcript);
+  ui.addChild(transcriptScroll);
   ui.addChild(new Spacer(1));
   ui.addChild(status);
   ui.addChild(inputBox);
@@ -70,7 +107,7 @@ async function chat(): Promise<void> {
     const items = [
       ...new Map([...historical, ...snapshot.transcript].map((item) => [item.id, item])).values(),
     ].sort((a, b) => a.sequence - b.sequence);
-    transcript.setText(renderTranscript(items, scrollOffset) || "No messages yet.");
+    transcript.setText(renderTranscript(items) || "No messages yet.");
     const plan = run?.plan.length
       ? `  ${run.plan.map((step) => `${step.status === "completed" ? "[x]" : "[ ]"} ${step.title}`).join("  ")}`
       : "";
@@ -131,7 +168,7 @@ async function chat(): Promise<void> {
   });
   const handle = async (raw: string) => {
     const value = raw.trim();
-    input.setValue("");
+    input.setText("");
     ui.requestRender();
     if (!value) return;
     if (value === "/exit" || value === "/quit") {
@@ -172,11 +209,13 @@ async function chat(): Promise<void> {
         scrollOffset + 14,
         Math.max(0, historical.length + snapshot.transcript.length - 1),
       );
+      transcriptScroll.scrollBy(-14);
       render();
       return;
     }
     if (value === "/newer") {
       scrollOffset = Math.max(0, scrollOffset - 14);
+      transcriptScroll.scrollBy(14);
       render();
       return;
     }
@@ -248,7 +287,11 @@ async function chat(): Promise<void> {
     void handle(value).catch((error: unknown) =>
       render(error instanceof Error ? error.message : String(error)),
     );
-  input.onEscape = () => void client.cancel(active.id).catch(() => {});
+  const removeEscapeListener = ui.addInputListener((data) => {
+    if (data !== "\u001b") return undefined;
+    void client.cancel(active.id).catch(() => {});
+    return { consume: true };
+  });
   const interrupt = () => finish();
   process.once("SIGINT", interrupt);
   render();
@@ -256,6 +299,7 @@ async function chat(): Promise<void> {
   await done;
   if (refreshTimer) clearTimeout(refreshTimer);
   process.removeListener("SIGINT", interrupt);
+  removeEscapeListener();
   unsubscribe();
   client.close();
   ui.stop();
@@ -515,6 +559,14 @@ async function doctorCommand(): Promise<void> {
   if (!result.ok) process.exitCode = 1;
 }
 
+async function channelStatusCommand(): Promise<void> {
+  const channelUrl = valueAfter("--channel-url") ?? process.env.UMA_CHANNEL_URL;
+  if (!channelUrl) throw new Error("Set --channel-url=<url> or UMA_CHANNEL_URL to query an Adapter");
+  const response = await fetch(`${channelUrl.replace(/\/$/, "")}/health`);
+  if (!response.ok) throw new Error(`Channel health request failed: HTTP ${response.status}`);
+  console.log(JSON.stringify(await response.json(), null, 2));
+}
+
 async function main(): Promise<void> {
   if (command === "chat") return chat();
   if (command === "run") await runCommand();
@@ -529,10 +581,10 @@ async function main(): Promise<void> {
   else if (command === "memory") await memoryCommand();
   else if (command === "audit") await auditCommand();
   else if (command === "sync") await syncCommand();
-  else if (command === "channel") await doctorCommand();
+  else if (command === "channel" && positionals[0] === "status") await channelStatusCommand();
   else
     console.log(
-      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa doctor",
+      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa channel status --channel-url=<url>\numa doctor",
     );
   client.close();
 }

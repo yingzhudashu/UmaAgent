@@ -105,7 +105,11 @@ function parseModel(
 
 function parseMcp(value: unknown, index: number): McpServerConfig {
   const item = record(value, `mcpServers[${index}]`);
-  assertKeys(item, ["name", "transport", "command", "args", "url", "env"], `mcpServers[${index}]`);
+  assertKeys(
+    item,
+    ["name", "transport", "command", "args", "url", "authTokenEnv", "env"],
+    `mcpServers[${index}]`,
+  );
   const transport = stringValue(item.transport, `mcpServers[${index}].transport`);
   if (transport !== "stdio" && transport !== "http")
     throw new Error(`Unsupported MCP transport: ${transport}`);
@@ -113,10 +117,19 @@ function parseMcp(value: unknown, index: number): McpServerConfig {
   if (item.command !== undefined) result.command = stringValue(item.command, `mcpServers[${index}].command`);
   if (item.args !== undefined) result.args = stringArray(item.args, `mcpServers[${index}].args`);
   if (item.url !== undefined) result.url = stringValue(item.url, `mcpServers[${index}].url`);
+  if (item.authTokenEnv !== undefined)
+    result.authTokenEnv = stringValue(item.authTokenEnv, `mcpServers[${index}].authTokenEnv`);
   if (item.env !== undefined)
     result.env = record(item.env, `mcpServers[${index}].env`) as Record<string, string>;
   if (transport === "stdio" && !result.command) throw new Error(`mcpServers[${index}].command is required`);
   if (transport === "http" && !result.url) throw new Error(`mcpServers[${index}].url is required`);
+  if (transport === "http" && result.url) {
+    const host = new URL(result.url).hostname;
+    if (!isLoopbackHost(host) && !result.authTokenEnv)
+      throw new Error(`mcpServers[${index}].authTokenEnv is required for non-loopback HTTP MCP`);
+    if (result.authTokenEnv && !process.env[result.authTokenEnv]?.trim())
+      throw new Error(`Missing MCP auth token: ${result.authTokenEnv}`);
+  }
   return result;
 }
 

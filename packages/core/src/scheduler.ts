@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   BackgroundTask,
   CreateScheduledTaskRequest,
@@ -10,8 +11,14 @@ import { Cron } from "croner";
 import type { UmaDatabase } from "./database.js";
 
 export interface ScheduledTaskExecutor {
-  createTask(prompt: string, sessionMode?: "workspace" | "assistant"): Promise<BackgroundTask>;
+  prepareScheduledTask(
+    prompt: string,
+    sessionMode: "workspace" | "assistant",
+    source: NonNullable<BackgroundTask["source"]>,
+  ): BackgroundTask;
+  startTask(id: string): void;
   getTask(id: string): BackgroundTask;
+  cancelTask(id: string): BackgroundTask;
 }
 
 export function nextScheduleTime(schedule: ScheduleDefinition, after = Date.now()): number | undefined {
@@ -30,11 +37,14 @@ export class SchedulerService {
   constructor(
     private readonly database: UmaDatabase,
     private readonly executor: ScheduledTaskExecutor,
+    private readonly changed: () => void = () => undefined,
   ) {}
 
   start(): void {
     if (this.timer) return;
-    this.database.markActiveScheduledTaskRunsInterrupted();
+    for (const run of this.database.recoverScheduledTaskRuns()) {
+      if (run.status === "claimed") this.launch(run);
+    }
     this.timer = setInterval(() => void this.tick(), 5_000);
     void this.tick();
   }
@@ -53,7 +63,7 @@ export class SchedulerService {
     const enabled = input.enabled ?? true;
     const nextRunAt = enabled ? nextScheduleTime(schedule) : undefined;
     if (enabled && nextRunAt === undefined) throw new Error("Schedule has no future execution time");
-    return this.database.createScheduledTask({
+    const result = this.database.createScheduledTask({
       name: input.name,
       prompt: input.prompt,
       sessionMode: input.sessionMode ?? "assistant",
@@ -61,6 +71,8 @@ export class SchedulerService {
       enabled,
       ...(nextRunAt !== undefined ? { nextRunAt } : {}),
     });
+    this.changed();
+    return result;
   }
 
   update(id: string, patch: UpdateScheduledTaskRequest): ScheduledTask {
@@ -69,18 +81,21 @@ export class SchedulerService {
     const enabled = patch.enabled ?? current.enabled;
     const nextRunAt = enabled ? nextScheduleTime(schedule) : undefined;
     if (enabled && nextRunAt === undefined) throw new Error("Schedule has no future execution time");
-    return this.database.updateScheduledTask(id, {
+    const result = this.database.updateScheduledTask(id, {
       ...patch,
       enabled,
       schedule,
       nextRunAt: nextRunAt ?? null,
     });
+    this.changed();
+    return result;
   }
 
   delete(id: string): void {
     if (this.database.hasActiveScheduledTaskRun(id))
       throw new Error("Cannot delete a scheduled task while it is running");
     this.database.deleteScheduledTask(id);
+    this.changed();
   }
 
   runs(id: string): ScheduledTaskRun[] {
@@ -88,26 +103,77 @@ export class SchedulerService {
     return this.database.listScheduledTaskRuns(id);
   }
 
+  getRun(id: string): ScheduledTaskRun {
+    return this.database.getScheduledTaskRun(id);
+  }
+
   runNow(id: string): ScheduledTaskRun {
-    return this.trigger(this.database.getScheduledTask(id), Date.now(), true);
+    return this.trigger(this.database.getScheduledTask(id), Date.now(), "manual");
+  }
+
+  cancelRun(id: string): ScheduledTaskRun {
+    const run = this.database.getScheduledTaskRun(id);
+    if (["completed", "failed", "cancelled"].includes(run.status)) return run;
+    if (run.backgroundTaskId) this.executor.cancelTask(run.backgroundTaskId);
+    const updated = this.database.updateScheduledTaskRun(id, {
+      status: "cancelled",
+      completedAt: Date.now(),
+      error: "Cancelled by user",
+      resume: null,
+    });
+    this.changed();
+    return updated;
+  }
+
+  onRunResumed(runId: string): void {
+    const scheduled = this.database.findScheduledTaskRunByRunId(runId);
+    if (!scheduled || scheduled.status !== "awaiting_resume") return;
+    const updated = this.database.updateScheduledTaskRun(scheduled.id, {
+      status: "running",
+      resume: null,
+      error: null,
+    });
+    void this.monitor(updated);
+    this.changed();
   }
 
   async tick(now = Date.now()): Promise<void> {
     for (const task of this.database.listDueScheduledTasks(now)) {
       if (this.running.has(task.id) || this.database.hasActiveScheduledTaskRun(task.id)) continue;
-      this.trigger(task, task.nextRunAt ?? now, false, now);
+      const scheduledFor = task.nextRunAt ?? now;
+      const trigger = scheduledFor < now - 5_000 ? "catchup" : "scheduled";
+      this.trigger(task, scheduledFor, trigger, now);
     }
   }
 
   private trigger(
     task: ScheduledTask,
     scheduledFor: number,
-    manual: boolean,
+    trigger: ScheduledTaskRun["trigger"],
     now = Date.now(),
   ): ScheduledTaskRun {
     const run = this.database.withTransaction(() => {
-      const created = this.database.createScheduledTaskRun(task.id, scheduledFor);
-      if (!manual) {
+      const occurrenceKey =
+        trigger === "manual" ? `${task.id}:manual:${randomUUID()}` : `${task.id}:${scheduledFor}`;
+      const created = this.database.createScheduledTaskRun({
+        scheduledTaskId: task.id,
+        scheduledFor,
+        occurrenceKey,
+        trigger,
+      });
+      const background = this.executor.prepareScheduledTask(task.prompt, task.sessionMode, {
+        type: "schedule",
+        scheduleId: task.id,
+        scheduleRunId: created.id,
+      });
+      const linked = this.database.updateScheduledTaskRun(created.id, {
+        backgroundTaskId: background.id,
+        ...(background.runId ? { runId: background.runId } : {}),
+        status: "running",
+        startedAt: now,
+        error: null,
+      });
+      if (trigger !== "manual") {
         const nextRunAt = task.schedule.kind === "once" ? undefined : nextScheduleTime(task.schedule, now);
         this.database.updateScheduledTask(task.id, {
           lastRunAt: scheduledFor,
@@ -115,37 +181,71 @@ export class SchedulerService {
           nextRunAt: nextRunAt ?? null,
         });
       }
-      return created;
+      return linked;
     });
-    this.running.add(task.id);
-    void this.execute(task, run).finally(() => this.running.delete(task.id));
+    this.changed();
+    this.launch(run);
     return run;
   }
 
-  private async execute(task: ScheduledTask, run: ScheduledTaskRun): Promise<void> {
+  private launch(run: ScheduledTaskRun): void {
+    this.running.add(run.scheduledTaskId);
+    if (run.backgroundTaskId) this.executor.startTask(run.backgroundTaskId);
+    void this.execute(run).finally(() => this.running.delete(run.scheduledTaskId));
+  }
+
+  private async execute(run: ScheduledTaskRun): Promise<void> {
     try {
-      const background = await this.executor.createTask(task.prompt, task.sessionMode);
-      this.database.updateScheduledTaskRun(run.id, {
-        backgroundTaskId: background.id,
-        status: "running",
-        startedAt: Date.now(),
-      });
-      let current = background;
-      while (["pending", "running"].includes(current.status)) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        current = this.executor.getTask(background.id);
+      if (!run.backgroundTaskId) throw new Error("Claimed schedule occurrence has no background task");
+      const background = this.executor.getTask(run.backgroundTaskId);
+      if (this.database.getScheduledTaskRun(run.id).status === "cancelled") {
+        this.executor.cancelTask(background.id);
+        return;
       }
-      this.database.updateScheduledTaskRun(run.id, {
-        status: current.status,
-        completedAt: Date.now(),
-        error: current.error ?? null,
-      });
+      await this.monitor(run);
     } catch (error) {
       this.database.updateScheduledTaskRun(run.id, {
         status: "failed",
         completedAt: Date.now(),
         error: error instanceof Error ? error.message : String(error),
       });
+      this.changed();
     }
+  }
+
+  private async monitor(run: ScheduledTaskRun): Promise<void> {
+    if (!run.backgroundTaskId) return;
+    let current = this.executor.getTask(run.backgroundTaskId);
+    while (["pending", "running"].includes(current.status)) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      current = this.executor.getTask(run.backgroundTaskId as string);
+      if (current.runId && current.runId !== run.runId) {
+        run = this.database.updateScheduledTaskRun(run.id, { runId: current.runId });
+        this.changed();
+      }
+    }
+    if (current.status === "interrupted" && current.runId) {
+      const interrupted = this.database.getRun(current.runId);
+      this.database.updateScheduledTaskRun(run.id, {
+        runId: current.runId,
+        status: "awaiting_resume",
+        resume: interrupted.resume ?? null,
+        error: current.error ?? "Background run requires explicit resume",
+      });
+    } else {
+      this.database.updateScheduledTaskRun(run.id, {
+        ...(current.runId ? { runId: current.runId } : {}),
+        status:
+          current.status === "completed"
+            ? "completed"
+            : current.status === "cancelled"
+              ? "cancelled"
+              : "failed",
+        completedAt: Date.now(),
+        error: current.error ?? null,
+        resume: null,
+      });
+    }
+    this.changed();
   }
 }
