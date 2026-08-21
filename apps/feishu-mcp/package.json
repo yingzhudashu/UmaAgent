@@ -1,6 +1,6 @@
 {
   "name": "@uma-agent/feishu-mcp",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "main": "dist/main.js",
@@ -11,7 +11,11 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.62.1",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "@uma-agent/client": "1.0.0",
+    "@uma-agent/client": "1.2.0",
+    "markdown-it": "^14.1.0",
     "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2"
   }
 }

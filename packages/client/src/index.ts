@@ -5,15 +5,19 @@ import type {
   Attachment,
   AuditRecord,
   BackgroundTask,
+  CreateEvaluationReport,
   CreateScheduledTaskRequest,
   CreateSessionRequest,
   DiagnosticsReport,
+  EvaluationReport,
   Health,
+  KnowledgeSearchHit,
   KnowledgeSource,
   MemoryFact,
   ModelRef,
   OperationsReport,
   OptimizationProposal,
+  PublicConfig,
   QualityAssessment,
   ReloadResult,
   ResourceInvalidated,
@@ -80,7 +84,7 @@ export class UmaClient {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v9${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v10${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -179,6 +183,9 @@ export class UmaClient {
   reloadConfig(): Promise<ReloadResult> {
     return this.request("/admin/reload", { method: "POST" });
   }
+  publicConfig(): Promise<PublicConfig> {
+    return this.request("/admin/config");
+  }
   searchSkills(query: string): Promise<Array<Record<string, unknown>>> {
     return this.request(`/skills/search?q=${encodeURIComponent(query)}`);
   }
@@ -224,6 +231,14 @@ export class UmaClient {
   deleteKnowledge(id: string): Promise<void> {
     return this.request(`/knowledge/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
+  searchKnowledge(query: string, sourceId?: string, limit = 20): Promise<KnowledgeSearchHit[]> {
+    const params = new URLSearchParams({ q: query, limit: String(limit) });
+    if (sourceId) params.set("sourceId", sourceId);
+    return this.request(`/knowledge/search?${params}`);
+  }
+  reindexKnowledge(id: string): Promise<KnowledgeSource> {
+    return this.request(`/knowledge/${encodeURIComponent(id)}/reindex`, { method: "POST" });
+  }
   listTasks(): Promise<BackgroundTask[]> {
     return this.request("/tasks");
   }
@@ -238,6 +253,9 @@ export class UmaClient {
   }
   cancelTask(id: string): Promise<BackgroundTask> {
     return this.request(`/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  }
+  deleteTask(id: string): Promise<void> {
+    return this.request(`/tasks/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
   listSchedules(): Promise<ScheduledTask[]> {
     return this.request("/schedules");
@@ -277,6 +295,15 @@ export class UmaClient {
     if (from !== undefined) query.set("from", String(from));
     if (to !== undefined) query.set("to", String(to));
     return this.request(`/reports/diagnostics${query.size ? `?${query}` : ""}`);
+  }
+  listEvaluationReports(limit = 100): Promise<EvaluationReport[]> {
+    return this.request(`/evaluations?limit=${limit}`);
+  }
+  getEvaluationReport(id: string): Promise<EvaluationReport> {
+    return this.request(`/evaluations/${encodeURIComponent(id)}`);
+  }
+  createEvaluationReport(input: CreateEvaluationReport): Promise<EvaluationReport> {
+    return this.request("/evaluations", { method: "POST", body: JSON.stringify(input) });
   }
   listOptimizationProposals(): Promise<OptimizationProposal[]> {
     return this.request("/optimization-proposals");
@@ -404,7 +431,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v9/attachments/${encodeURIComponent(id)}/content`,
+      `${this.baseUrl}/api/v10/attachments/${encodeURIComponent(id)}/content`,
       { headers, credentials: "include" },
     );
     if (!response.ok) {
@@ -460,7 +487,7 @@ export class UmaClient {
 
   connectEvents(): void {
     if (this.socket || this.closed) return;
-    const url = new URL("/api/v9/events", this.baseUrl);
+    const url = new URL("/api/v10/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())

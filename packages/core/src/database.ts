@@ -9,7 +9,9 @@ import type {
   Attachment,
   AuditRecord,
   BackgroundTask,
+  CreateEvaluationReport,
   DiagnosticsReport,
+  EvaluationReport,
   KnowledgeSource,
   MemoryFact,
   MemoryRollup,
@@ -36,9 +38,10 @@ import type {
   TranscriptItem,
 } from "@uma-agent/protocol";
 import { type AgentEventEnvelope, type AgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
+import { AuditEvaluationRepository } from "./audit-evaluation-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 type Row = Record<string, unknown>;
 
 function rows(statement: StatementSync, ...params: SQLInputValue[]): Row[] {
@@ -206,6 +209,7 @@ function toRunCheckpoint(value: Row): RunCheckpoint {
 
 export class UmaDatabase {
   readonly db: DatabaseSync;
+  private readonly auditEvaluations: AuditEvaluationRepository;
   private transactionDepth = 0;
 
   constructor(stateDir: string) {
@@ -221,6 +225,9 @@ export class UmaDatabase {
         `Unsupported database schema ${version}; expected ${SCHEMA_VERSION}. Reset state explicitly.`,
       );
     }
+    this.auditEvaluations = new AuditEvaluationRepository(this.db, (operation) =>
+      this.withTransaction(operation),
+    );
     const interrupted = rows(
       this.db.prepare(
         "SELECT id,session_id FROM runs WHERE status IN ('queued','preflight','running','verifying')",
@@ -1311,16 +1318,29 @@ export class UmaDatabase {
     );
   }
 
-  searchKnowledge(query: string, limit = 5): Array<{ filePath: string; content: string }> {
+  searchKnowledge(
+    query: string,
+    limit = 5,
+    sourceId?: string,
+  ): Array<{ sourceId: string; sourceName: string; filePath: string; content: string }> {
     const match = ftsQuery(query);
     if (!match) return [];
-    return rows(
-      this.db.prepare(
-        "SELECT file_path,content FROM knowledge_fts WHERE knowledge_fts MATCH ? ORDER BY bm25(knowledge_fts) LIMIT ?",
-      ),
-      match,
-      limit,
-    ).map((value) => ({ filePath: text(value.file_path), content: text(value.content) }));
+    const statement = sourceId
+      ? this.db.prepare(
+          "SELECT f.source_id,s.name AS source_name,f.file_path,f.content FROM knowledge_fts f JOIN knowledge_sources s ON s.id=f.source_id WHERE knowledge_fts MATCH ? AND f.source_id=? ORDER BY bm25(knowledge_fts) LIMIT ?",
+        )
+      : this.db.prepare(
+          "SELECT f.source_id,s.name AS source_name,f.file_path,f.content FROM knowledge_fts f JOIN knowledge_sources s ON s.id=f.source_id WHERE knowledge_fts MATCH ? ORDER BY bm25(knowledge_fts) LIMIT ?",
+        );
+    const values = sourceId
+      ? rows(statement, match, sourceId, Math.max(1, Math.min(100, limit)))
+      : rows(statement, match, Math.max(1, Math.min(100, limit)));
+    return values.map((value) => ({
+      sourceId: text(value.source_id),
+      sourceName: text(value.source_name),
+      filePath: text(value.file_path),
+      content: text(value.content),
+    }));
   }
 
   putWebSession(hash: string, expiresAt: number): void {
@@ -1416,6 +1436,14 @@ export class UmaDatabase {
     return rows(this.db.prepare("SELECT id FROM background_tasks ORDER BY updated_at DESC")).map((value) =>
       this.getBackgroundTask(text(value.id)),
     );
+  }
+
+  deleteBackgroundTask(id: string): void {
+    const task = this.getBackgroundTask(id);
+    if (["pending", "running"].includes(task.status))
+      throw new Error("Only terminal background tasks can be deleted");
+    const result = this.db.prepare("DELETE FROM background_tasks WHERE id=?").run(id);
+    if (result.changes === 0) throw new Error(`Background task not found: ${id}`);
   }
 
   updateBackgroundTask(
@@ -1814,60 +1842,23 @@ export class UmaDatabase {
     usage?: unknown;
     error?: string;
   }): AuditRecord {
-    const id = randomUUID();
-    this.db
-      .prepare(
-        "INSERT INTO audit_events(id,run_id,kind,name,input_json,output_json,status,duration_ms,usage_json,error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.runId,
-        input.kind,
-        input.name,
-        input.input === undefined ? null : JSON.stringify(redactAudit(input.input)),
-        input.output === undefined ? null : JSON.stringify(redactAudit(input.output)),
-        input.status,
-        input.durationMs ?? null,
-        input.usage === undefined ? null : JSON.stringify(input.usage),
-        input.error ?? null,
-        Date.now(),
-      );
-    return this.getAudit(id);
+    return this.auditEvaluations.addAudit(input);
   }
 
   startModelCall(input: { runId: string; provider: string; model: string; role: string }): string {
-    const id = randomUUID();
-    const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO model_calls(id,run_id,provider,model,role,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-      )
-      .run(id, input.runId, input.provider, input.model, input.role, "started", now, now);
-    return id;
+    return this.auditEvaluations.startModelCall(input);
   }
 
   finishModelCall(
     id: string,
     input: {
-      status: string;
+      status: "completed" | "failed";
       durationMs?: number;
       usage?: unknown;
       error?: string;
     },
   ): void {
-    const result = this.db
-      .prepare(
-        "UPDATE model_calls SET status=?,duration_ms=?,usage_json=?,error=?,updated_at=? WHERE id=? AND status='started'",
-      )
-      .run(
-        input.status,
-        input.durationMs ?? null,
-        input.usage === undefined ? null : JSON.stringify(redactAudit(input.usage)),
-        input.error ?? null,
-        Date.now(),
-        id,
-      );
-    if (result.changes === 0) throw new Error(`Model call is not active: ${id}`);
+    this.auditEvaluations.finishModelCall(id, input);
   }
 
   addModelCall(input: {
@@ -1875,53 +1866,17 @@ export class UmaDatabase {
     provider: string;
     model: string;
     role: string;
-    status: string;
+    status: "completed" | "failed";
     durationMs?: number;
     usage?: unknown;
     error?: string;
   }): void {
-    const id = this.startModelCall(input);
-    this.finishModelCall(id, input);
+    const id = this.auditEvaluations.startModelCall(input);
+    this.auditEvaluations.finishModelCall(id, input);
   }
 
   listAudit(runId: string): AuditRecord[] {
-    return rows(this.db.prepare("SELECT * FROM audit_events WHERE run_id=? ORDER BY created_at"), runId).map(
-      (value) => ({
-        id: text(value.id),
-        runId: text(value.run_id),
-        kind: text(value.kind) as AuditRecord["kind"],
-        name: text(value.name),
-        ...(value.input_json ? { input: parseJson(value.input_json, null) } : {}),
-        ...(value.output_json ? { output: parseJson(value.output_json, null) } : {}),
-        status: text(value.status),
-        ...(value.duration_ms !== null && value.duration_ms !== undefined
-          ? { durationMs: integer(value.duration_ms) }
-          : {}),
-        ...(value.usage_json ? { usage: parseJson(value.usage_json, null) } : {}),
-        ...(value.error ? { error: text(value.error) } : {}),
-        createdAt: integer(value.created_at),
-      }),
-    );
-  }
-
-  private getAudit(id: string): AuditRecord {
-    const value = row(this.db.prepare("SELECT * FROM audit_events WHERE id=?"), id);
-    if (!value) throw new Error(`Audit record not found: ${id}`);
-    return {
-      id: text(value.id),
-      runId: text(value.run_id),
-      kind: text(value.kind) as AuditRecord["kind"],
-      name: text(value.name),
-      ...(value.input_json ? { input: parseJson(value.input_json, null) } : {}),
-      ...(value.output_json ? { output: parseJson(value.output_json, null) } : {}),
-      status: text(value.status),
-      ...(value.duration_ms !== null && value.duration_ms !== undefined
-        ? { durationMs: integer(value.duration_ms) }
-        : {}),
-      ...(value.usage_json ? { usage: parseJson(value.usage_json, null) } : {}),
-      ...(value.error ? { error: text(value.error) } : {}),
-      createdAt: integer(value.created_at),
-    };
+    return this.auditEvaluations.listAudit(runId);
   }
 
   createScheduledTask(input: {
@@ -2102,120 +2057,24 @@ export class UmaDatabase {
     return this.getScheduledTaskRun(id);
   }
 
+  createEvaluationReport(input: CreateEvaluationReport): EvaluationReport {
+    return this.auditEvaluations.createEvaluationReport(input);
+  }
+
+  getEvaluationReport(id: string): EvaluationReport {
+    return this.auditEvaluations.getEvaluationReport(id);
+  }
+
+  listEvaluationReports(limit = 100): EvaluationReport[] {
+    return this.auditEvaluations.listEvaluationReports(limit);
+  }
+
   operationsReport(from: number, to: number): OperationsReport {
-    const runRows = rows(
-      this.db.prepare(
-        "SELECT status,COUNT(*) AS count FROM runs WHERE created_at BETWEEN ? AND ? GROUP BY status",
-      ),
-      from,
-      to,
-    );
-    const runCount = (status: string) =>
-      integer(runRows.find((value) => text(value.status) === status)?.count);
-    const modelRows = rows(
-      this.db.prepare(
-        "SELECT status,duration_ms,usage_json FROM model_calls WHERE created_at BETWEEN ? AND ?",
-      ),
-      from,
-      to,
-    );
-    const durations = modelRows.map((value) => integer(value.duration_ms)).filter((value) => value > 0);
-    const totalTokens = modelRows.reduce((sum, value) => {
-      const usage = parseJson<Record<string, unknown>>(value.usage_json, {});
-      return sum + integer(usage.totalTokens ?? usage.total);
-    }, 0);
-    const tools = row(
-      this.db.prepare(
-        "SELECT COUNT(*) AS calls,SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS failed FROM audit_events WHERE kind='tool' AND created_at BETWEEN ? AND ?",
-      ),
-      from,
-      to,
-    );
-    const approvals = row(
-      this.db.prepare(
-        "SELECT COUNT(*) AS requested,SUM(CASE WHEN status IN ('denied','expired') THEN 1 ELSE 0 END) AS denied FROM approvals WHERE created_at BETWEEN ? AND ?",
-      ),
-      from,
-      to,
-    );
-    return {
-      from,
-      to,
-      runs: {
-        total: runRows.reduce((sum, value) => sum + integer(value.count), 0),
-        completed: runCount("completed"),
-        failed: runCount("failed"),
-        cancelled: runCount("cancelled"),
-        interrupted: runCount("interrupted"),
-      },
-      model: {
-        calls: modelRows.length,
-        failed: modelRows.filter((value) => ["error", "failed", "abandoned"].includes(text(value.status)))
-          .length,
-        totalTokens,
-        averageDurationMs: durations.length
-          ? durations.reduce((sum, value) => sum + value, 0) / durations.length
-          : 0,
-      },
-      tools: { calls: integer(tools?.calls), failed: integer(tools?.failed) },
-      approvals: { requested: integer(approvals?.requested), denied: integer(approvals?.denied) },
-      recoveries: integer(
-        row(
-          this.db.prepare(
-            "SELECT COUNT(*) AS count FROM audit_events WHERE kind='run' AND name='resume' AND created_at BETWEEN ? AND ?",
-          ),
-          from,
-          to,
-        )?.count,
-      ),
-    };
+    return this.auditEvaluations.operationsReport(from, to);
   }
 
   diagnosticsReport(from: number, to: number): DiagnosticsReport {
-    const summary = this.operationsReport(from, to);
-    const slowModels = rows(
-      this.db.prepare(
-        "SELECT provider,model,COUNT(*) AS calls,AVG(COALESCE(duration_ms,0)) AS average_duration FROM model_calls WHERE created_at BETWEEN ? AND ? GROUP BY provider,model ORDER BY average_duration DESC LIMIT 20",
-      ),
-      from,
-      to,
-    ).map((value) => ({
-      provider: text(value.provider),
-      model: text(value.model),
-      calls: integer(value.calls),
-      averageDurationMs: Number(value.average_duration ?? 0),
-    }));
-    const toolFailures = rows(
-      this.db.prepare(
-        "SELECT name,COUNT(*) AS failures,MAX(error) AS latest_error FROM audit_events WHERE kind='tool' AND status IN ('error','failed') AND created_at BETWEEN ? AND ? GROUP BY name ORDER BY failures DESC LIMIT 20",
-      ),
-      from,
-      to,
-    ).map((value) => ({
-      tool: text(value.name),
-      failures: integer(value.failures),
-      ...(value.latest_error ? { latestError: text(value.latest_error) } : {}),
-    }));
-    const approvalBottlenecks = rows(
-      this.db.prepare(
-        "SELECT tool_name,COUNT(*) AS requested,SUM(CASE WHEN status IN ('denied','expired') THEN 1 ELSE 0 END) AS denied FROM approvals WHERE created_at BETWEEN ? AND ? GROUP BY tool_name ORDER BY requested DESC LIMIT 20",
-      ),
-      from,
-      to,
-    ).map((value) => ({
-      tool: text(value.tool_name),
-      requested: integer(value.requested),
-      denied: integer(value.denied),
-    }));
-    return {
-      from,
-      to,
-      summary,
-      slowModels,
-      toolFailures,
-      recoveryFrequency: summary.runs.total ? summary.recoveries / summary.runs.total : 0,
-      approvalBottlenecks,
-    };
+    return this.auditEvaluations.diagnosticsReport(from, to);
   }
 
   recoverScheduledTaskRuns(): ScheduledTaskRun[] {

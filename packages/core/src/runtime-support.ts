@@ -101,6 +101,7 @@ export function isTransientProviderError(error: unknown): boolean {
 
 export type RuntimeFaultPoint =
   | "preflight.completed"
+  | "checkpoint.created"
   | "model.started"
   | "model.completed"
   | "tool.prepared"

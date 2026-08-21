@@ -15,7 +15,7 @@ const allowed = new Set(
 );
 if (!allowed.size) throw new Error("SKILL_WORKER_ALLOWED_HASHES is required");
 const packages = await loadApprovedSkills(root, allowed);
-const mcp = new McpServer({ name: "uma-skill-worker", version: "1.0.0" });
+const mcp = new McpServer({ name: "uma-skill-worker", version: "1.2.0" });
 for (const pkg of packages)
   for (const tool of pkg.manifest.tools) {
     const execute = pkg.module[tool.export];

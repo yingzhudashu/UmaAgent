@@ -1,6 +1,6 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { extname, join, relative, resolve } from "node:path";
-import type { KnowledgeSource } from "@uma-agent/protocol";
+import type { KnowledgeSearchHit, KnowledgeSource } from "@uma-agent/protocol";
 import type { UmaDatabase } from "./database.js";
 import { parseDocument } from "./document-parser.js";
 
@@ -61,8 +61,8 @@ export class KnowledgeService {
     return this.database.listKnowledgeSources();
   }
 
-  search(query: string, limit = 5): Array<{ filePath: string; content: string }> {
-    return this.database.searchKnowledge(query, limit);
+  search(query: string, limit = 5, sourceId?: string): KnowledgeSearchHit[] {
+    return this.database.searchKnowledge(query, limit, sourceId);
   }
 
   async enqueue(name: string, sourcePath: string): Promise<KnowledgeSource> {
@@ -76,6 +76,13 @@ export class KnowledgeService {
   delete(id: string): void {
     this.database.deleteKnowledgeSource(id);
     this.changed();
+  }
+
+  async reindex(id: string): Promise<KnowledgeSource> {
+    const source = this.database.getKnowledgeSource(id);
+    this.database.updateKnowledgeSourceStatus(id, "queued");
+    this.changed();
+    return this.process(id, source.name, source.path);
   }
 
   async index(name: string, sourcePath: string): Promise<KnowledgeSource> {

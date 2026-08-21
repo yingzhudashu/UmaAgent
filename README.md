@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.0.0`，协议版本为 `9`，SQLite schema 为 `10`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.2.0`，协议版本为 `10`，SQLite schema 为 `11`。
 
 ## 当前能力
 
@@ -22,6 +22,8 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 - 技能包 staging、风险扫描、人工启用、热刷新，以及可选的隔离 Skill Worker
 - 独立 Feishu MCP，提供文档、多维表格和云盘工具，不污染消息 Adapter 或 Core
 - 证据化只读优化提案；接受提案只进入人工待办，不存在 apply API
+- 每 Run 工具循环保护：重复调用、无进展结果和 A/B ping-pong 会先产生公开告警，再以 `tool_loop_detected` 安全终止
+- 持久化 Faux/real 评测报告、跨设备评测历史，以及知识搜索、重建索引和终态任务清理
 
 ## 本地启动
 
@@ -91,28 +93,32 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 ## API 摘要
 
-- `GET/POST /api/v9/sessions`
-- `GET /api/v9/sessions/:id/snapshot`
-- `GET /api/v9/sessions/:id/events?after=<sequence>` 增量事件
-- `GET /api/v9/sessions/:id/history?before=<sequence>` 历史分页
-- `POST /api/v9/sessions/:id/messages|cancel|compact`
-- `PATCH /api/v9/sessions/:id` 可更新 `queueMode`
-- `POST /api/v9/messages/:id/review|improve`、`GET /api/v9/runs/:id/quality`
-- `POST /api/v9/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
-- `GET /api/v9/attachments/:id/content`
-- `GET /api/v9/runs/:id/checkpoints|actions`
-- `POST /api/v9/runs/:id/resume|cancel`
-- `POST /api/v9/runs/:id/actions/:actionId/decide`
-- `POST /api/v9/approvals/:id`、`POST /api/v9/uploads`
-- `GET /api/v9/health/live|ready`
-- `GET /api/v9/events` WebSocket
-- `/api/v9/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
-- `/api/v9/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
-- `/api/v9/skills/search|install` 与技能 enable/disable/reject 生命周期
-- `POST /api/v9/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
-- `/api/v9/schedules` 调度 CRUD、立即执行与运行历史
-- `GET /api/v9/reports/operations|diagnostics` 脱敏运行统计
-- `/api/v9/optimization-proposals` 只读证据、建议和人工接受/拒绝状态
+- `GET/POST /api/v10/sessions`
+- `GET /api/v10/sessions/:id/snapshot`
+- `GET /api/v10/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v10/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v10/sessions/:id/messages|cancel|compact`
+- `PATCH /api/v10/sessions/:id` 可更新 `queueMode`
+- `POST /api/v10/messages/:id/review|improve`、`GET /api/v10/runs/:id/quality`
+- `POST /api/v10/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
+- `GET /api/v10/attachments/:id/content`
+- `GET /api/v10/runs/:id/checkpoints|actions`
+- `POST /api/v10/runs/:id/resume|cancel`
+- `POST /api/v10/runs/:id/actions/:actionId/decide`
+- `POST /api/v10/approvals/:id`、`POST /api/v10/uploads`
+- `GET /api/v10/health/live|ready`
+- `GET /api/v10/events` WebSocket
+- `/api/v10/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `GET /api/v10/knowledge/search`、`POST /api/v10/knowledge/:id/reindex`
+- `GET/POST /api/v10/evaluations`、`GET /api/v10/evaluations/:id`
+- `DELETE /api/v10/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
+- `/api/v10/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
+- `/api/v10/skills/search|install` 与技能 enable/disable/reject 生命周期
+- `POST /api/v10/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
+- `GET /api/v10/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
+- `/api/v10/schedules` 调度 CRUD、立即执行与运行历史
+- `GET /api/v10/reports/operations|diagnostics` 脱敏运行统计
+- `/api/v10/optimization-proposals` 只读证据、建议和人工接受/拒绝状态
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
@@ -164,10 +170,11 @@ node apps/eval-runner/dist/main.js eval-suite.json
 ```
 
 评测只读取终态 Run 和公开 transcript，不读取数据库、隐藏思维链，也不修改代码或执行 Git。
+完成的不可变报告会通过 Client SDK 上传到 Core；CLI 的 `uma eval`/`/test` 与 Web Evaluation 区域读取同一份跨设备历史。Diagnostics 与 Optimization 区域只展示公开审计聚合和人工提案状态，不提供补丁应用入口。
 
 ## Feishu MCP 与隔离 Skill Worker
 
-消息 Adapter 只处理通道。飞书业务工具由 `apps/feishu-mcp` 独立提供，使用官方 SDK 暴露云文档、Bitable 与 Drive MCP 工具；文件输入使用 Uma Attachment ID，通过 Client SDK 下载，不挂载 Core state 或 workspace。服务必须设置独立 Bearer Token，并仅部署在内部网络：
+消息 Adapter 只处理通道。飞书业务工具由 `apps/feishu-mcp` 独立提供，使用官方 SDK 暴露云文档、Bitable 与 Drive MCP 工具，包括 Markdown 创建/追加文档、Bitable 分页与批量记录操作、Drive 上传下载/复制/移动/权限管理。文件输入使用 Uma Attachment ID，通过 Client SDK 下载，不挂载 Core state 或 workspace。所有分页工具统一返回 `items + nextPageToken + hasMore`；不支持的 Markdown 结构保留为公开纯文本。服务必须设置独立 Bearer Token，并仅部署在内部网络：
 
 ```powershell
 $env:FEISHU_APP_ID = "..."

@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 9 as const;
+export const PROTOCOL_VERSION = 10 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -314,6 +314,14 @@ export const KnowledgeSourceSchema = Strict({
 });
 export type KnowledgeSource = Static<typeof KnowledgeSourceSchema>;
 
+export const KnowledgeSearchHitSchema = Strict({
+  sourceId: Id,
+  sourceName: Type.String({ minLength: 1 }),
+  filePath: Type.String({ minLength: 1 }),
+  content: Type.String(),
+});
+export type KnowledgeSearchHit = Static<typeof KnowledgeSearchHitSchema>;
+
 export const SearchCitationSchema = Strict({
   title: Type.String({ minLength: 1 }),
   url: Type.String({ minLength: 1 }),
@@ -340,6 +348,7 @@ export const EventTypeSchema = Type.Union([
   Type.Literal("run.resumed"),
   Type.Literal("run.action_prepared"),
   Type.Literal("run.action_decided"),
+  Type.Literal("run.loop_warning"),
   Type.Literal("task.updated"),
   Type.Literal("memory.updated"),
   Type.Literal("schedule.updated"),
@@ -565,6 +574,66 @@ export const DiagnosticsReportSchema = Strict({
 });
 export type DiagnosticsReport = Static<typeof DiagnosticsReportSchema>;
 
+export const EvaluationCaseResultSchema = Strict({
+  name: Type.String({ minLength: 1, maxLength: 500 }),
+  category: Type.Union([
+    Type.Literal("security"),
+    Type.Literal("prompt_injection"),
+    Type.Literal("tool_selection"),
+    Type.Literal("schema"),
+    Type.Literal("regression"),
+    Type.Literal("cost"),
+  ]),
+  passed: Type.Boolean(),
+  durationMs: Type.Integer({ minimum: 0 }),
+  runId: Type.Optional(Id),
+  status: Type.Optional(RunStatusSchema),
+  error: Type.Optional(Type.String({ maxLength: 4_000 })),
+});
+export type EvaluationCaseResult = Static<typeof EvaluationCaseResultSchema>;
+
+export const EvaluationReportSchema = Strict({
+  id: Id,
+  mode: Type.Union([Type.Literal("faux"), Type.Literal("real")]),
+  suiteVersion: Type.String({ minLength: 1, maxLength: 100 }),
+  status: Type.Union([Type.Literal("completed"), Type.Literal("failed")]),
+  totals: Strict({
+    total: Type.Integer({ minimum: 0 }),
+    passed: Type.Integer({ minimum: 0 }),
+    failed: Type.Integer({ minimum: 0 }),
+    skipped: Type.Integer({ minimum: 0 }),
+  }),
+  durationMs: Type.Integer({ minimum: 0 }),
+  cases: Type.Array(EvaluationCaseResultSchema, { maxItems: 10_000 }),
+  createdAt: Timestamp,
+});
+export type EvaluationReport = Static<typeof EvaluationReportSchema>;
+
+export const CreateEvaluationReportSchema = Strict({
+  mode: EvaluationReportSchema.properties.mode,
+  suiteVersion: EvaluationReportSchema.properties.suiteVersion,
+  status: EvaluationReportSchema.properties.status,
+  totals: EvaluationReportSchema.properties.totals,
+  durationMs: EvaluationReportSchema.properties.durationMs,
+  cases: EvaluationReportSchema.properties.cases,
+});
+export type CreateEvaluationReport = Static<typeof CreateEvaluationReportSchema>;
+
+export const PublicConfigSchema = Strict({
+  revision: Type.String({ minLength: 1 }),
+  defaultModel: ModelRefSchema,
+  roles: Strict({
+    default: ModelRefSchema,
+    reasoning: ModelRefSchema,
+    fast: ModelRefSchema,
+    vision: ModelRefSchema,
+  }),
+  models: Type.Array(ModelRefSchema),
+  skills: Type.Array(SkillSummarySchema),
+  mcp: Type.Array(Strict({ name: Id, connected: Type.Boolean(), toolCount: Type.Integer({ minimum: 0 }) })),
+});
+export type PublicConfig = Static<typeof PublicConfigSchema>;
+
 export const ResourceKindSchema = Type.Union([
   Type.Literal("tasks"),
   Type.Literal("schedules"),
@@ -574,6 +643,8 @@ export const ResourceKindSchema = Type.Union([
   Type.Literal("profile"),
   Type.Literal("quality"),
   Type.Literal("config"),
+  Type.Literal("evaluations"),
+  Type.Literal("optimization"),
 ]);
 export type ResourceKind = Static<typeof ResourceKindSchema>;
 

@@ -12,9 +12,22 @@ afterEach(async () => {
 });
 
 describe("real process crash recovery", () => {
-  for (const point of ["preflight", "model", "read", "side-effect", "verify"] as const) {
-    it(`recovers a forced child-process termination at ${point}`, async () => {
-      const stateDir = await mkdtemp(join(tmpdir(), `uma-crash-${point}-`));
+  const matrix = [
+    { point: "preflight.completed" },
+    { point: "checkpoint.created" },
+    { point: "model.started", modelStatus: "abandoned" },
+    { point: "model.completed", modelStatus: "completed" },
+    { point: "tool.prepared:read", actionStatus: "prepared" },
+    { point: "tool.started:read", actionStatus: "prepared" },
+    { point: "tool.completed:read", actionStatus: "completed" },
+    { point: "tool.started:side-effect", actionStatus: "uncertain" },
+    { point: "tool.completed:side-effect", actionStatus: "completed" },
+    { point: "verify.completed" },
+  ] as const;
+
+  for (const scenario of matrix) {
+    it(`recovers a forced child-process termination at ${scenario.point}`, async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), `uma-crash-${scenario.point.replaceAll(/[.:]/g, "-")}-`));
       temporary.push(stateDir);
       const child = spawnSync(
         process.execPath,
@@ -23,7 +36,7 @@ describe("real process crash recovery", () => {
           "tsx",
           fileURLToPath(new URL("./fixtures/crash-harness.ts", import.meta.url)),
           stateDir,
-          point,
+          scenario.point,
         ],
         { timeout: 20_000, windowsHide: true },
       );
@@ -34,14 +47,13 @@ describe("real process crash recovery", () => {
         expect(session).toBeDefined();
         const run = database.getSnapshot(session?.id as string).recentRuns[0];
         expect(run?.status).toBe("interrupted");
-        if (point === "read") expect(database.listRunActions(run?.id as string)[0]?.status).toBe("prepared");
-        if (point === "side-effect")
-          expect(database.listRunActions(run?.id as string)[0]?.status).toBe("uncertain");
-        if (point === "model") {
+        if (scenario.actionStatus)
+          expect(database.listRunActions(run?.id as string)[0]?.status).toBe(scenario.actionStatus);
+        if (scenario.modelStatus) {
           const call = database.db.prepare("SELECT status FROM model_calls WHERE run_id=?").get(run?.id) as {
             status: string;
           };
-          expect(call.status).toBe("abandoned");
+          expect(call.status).toBe(scenario.modelStatus);
         }
       } finally {
         database.close();

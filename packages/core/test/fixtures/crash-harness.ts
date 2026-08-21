@@ -12,18 +12,13 @@ import { UmaRuntime } from "../../src/runtime.js";
 const stateDir = process.argv[2];
 const point = process.argv[3];
 if (!stateDir || !point) throw new Error("state directory and crash point are required");
+const [faultPoint] = point.split(":");
+if (!faultPoint) throw new Error("fault point is required");
 await mkdir(resolve(stateDir, "workspace"), { recursive: true });
 
 process.env.NODE_ENV = "test";
 process.env.UMA_TEST_FAULT_MODE = "abort";
-process.env.UMA_TEST_FAULT_POINT =
-  point === "preflight"
-    ? "preflight.completed"
-    : point === "model"
-      ? "model.started"
-      : point === "read" || point === "side-effect"
-        ? "tool.started"
-        : "verify.completed";
+process.env.UMA_TEST_FAULT_POINT = faultPoint;
 
 const config = {
   server: {
@@ -71,15 +66,15 @@ const faux = fauxProvider({
   tokensPerSecond: 100_000,
 });
 const responses: FauxResponseStep[] =
-  point === "read"
+  point.startsWith("tool.") && point.includes("read")
     ? [fauxAssistantMessage([fauxToolCall("memory_search", { query: "crash" })])]
-    : point === "side-effect"
+    : point.startsWith("tool.") && point.includes("side-effect")
       ? [
           fauxAssistantMessage([
             fauxToolCall("memory_write", { scope: "session", content: "crash recovery fact" }),
           ]),
         ]
-      : point === "verify"
+      : point === "verify.completed"
         ? [
             fauxAssistantMessage(
               JSON.stringify({
@@ -100,15 +95,15 @@ faux.setResponses(responses);
 runtime.models.models.setProvider(faux.provider);
 await runtime.start();
 runtime.subscribe((event) => {
-  if (point === "side-effect" && event.type === "approval.requested") {
+  if (point.includes("side-effect") && event.type === "approval.requested") {
     runtime.resolveApproval((event.payload as Approval).id, true);
   }
 });
-const session = await runtime.createSession({ mode: point === "side-effect" ? "assistant" : "assistant" });
+const session = await runtime.createSession({ mode: "assistant" });
 runtime.sendMessage(session.id, {
-  messageId: `message-${point}`,
+  messageId: `message-${point.replaceAll(".", "-")}`,
   text: `crash at ${point}`,
-  mode: point === "verify" ? "plan" : "direct",
+  mode: point === "verify.completed" ? "plan" : "direct",
 });
 
 await new Promise((_, reject) =>

@@ -1,4 +1,4 @@
-import type { KnowledgeSource, SkillPackage, SkillSummary } from "@uma-agent/protocol";
+import type { KnowledgeSearchHit, KnowledgeSource, SkillPackage, SkillSummary } from "@uma-agent/protocol";
 import { type FormEvent, useState } from "react";
 
 export function ResourceArea({
@@ -13,6 +13,8 @@ export function ResourceArea({
   addKnowledgePath,
   uploadKnowledge,
   deleteKnowledge,
+  reindexKnowledge,
+  searchKnowledge,
 }: {
   skills: SkillSummary[];
   packages: SkillPackage[];
@@ -25,11 +27,15 @@ export function ResourceArea({
   addKnowledgePath: (name: string, path: string) => void;
   uploadKnowledge: (file: File) => void;
   deleteKnowledge: (id: string) => void;
+  reindexKnowledge: (id: string) => void;
+  searchKnowledge: (query: string, sourceId?: string) => Promise<KnowledgeSearchHit[]>;
 }) {
   const [showPathForm, setShowPathForm] = useState(false);
   const [path, setPath] = useState("");
   const [name, setName] = useState("");
   const [skillPath, setSkillPath] = useState("");
+  const [knowledgeQuery, setKnowledgeQuery] = useState("");
+  const [knowledgeHits, setKnowledgeHits] = useState<KnowledgeSearchHit[]>([]);
   const submitPath = (event: FormEvent) => {
     event.preventDefault();
     addKnowledgePath(name.trim(), path.trim());
@@ -109,6 +115,9 @@ export function ResourceArea({
               {item.name} ({item.documentCount}) · {item.status}
             </p>
             {item.error && <small className="error">{item.error}</small>}
+            <button type="button" disabled={disabled} onClick={() => reindexKnowledge(item.id)}>
+              重建索引
+            </button>
             <button type="button" disabled={disabled} onClick={() => deleteKnowledge(item.id)}>
               删除
             </button>
@@ -149,6 +158,29 @@ export function ResourceArea({
             }}
           />
         </label>
+        <form
+          className="resource-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void searchKnowledge(knowledgeQuery.trim()).then(setKnowledgeHits);
+          }}
+        >
+          <label>
+            搜索知识库
+            <input value={knowledgeQuery} onChange={(event) => setKnowledgeQuery(event.target.value)} />
+          </label>
+          <button type="submit" disabled={!knowledgeQuery.trim()}>
+            搜索
+          </button>
+        </form>
+        {knowledgeHits.map((hit, index) => (
+          <div key={`${hit.sourceId}:${hit.filePath}:${index}`} className="action-card">
+            <strong>
+              {hit.sourceName} · {hit.filePath}
+            </strong>
+            <p>{hit.content}</p>
+          </div>
+        ))}
       </div>
     </div>
   );

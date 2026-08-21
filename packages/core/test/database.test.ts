@@ -65,7 +65,7 @@ describe("UmaDatabase", () => {
     const root = await mkdtemp(join(tmpdir(), "uma-schema-"));
     temporary.push(root);
     const db = new UmaDatabase(root);
-    db.db.exec("PRAGMA user_version = 9");
+    db.db.exec("PRAGMA user_version = 10");
     db.close();
     expect(() => new UmaDatabase(root)).toThrow("Unsupported database schema");
   });
@@ -432,6 +432,28 @@ describe("UmaDatabase", () => {
     });
     expect(db.resolveApproval(approval.id, true).status).toBe("approved");
     expect(db.resolveApproval(approval.id, false).status).toBe("approved");
+    db.close();
+  });
+});
+
+describe("evaluation reports", () => {
+  it("persists immutable report summaries and cases", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-evaluation-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const report = db.createEvaluationReport({
+      mode: "faux",
+      suiteVersion: "builtin-1",
+      status: "failed",
+      totals: { total: 2, passed: 1, failed: 1, skipped: 0 },
+      durationMs: 123,
+      cases: [
+        { name: "pass", category: "regression", passed: true, durationMs: 10 },
+        { name: "fail", category: "security", passed: false, durationMs: 20, error: "mismatch" },
+      ],
+    });
+    expect(db.getEvaluationReport(report.id)).toEqual(report);
+    expect(db.listEvaluationReports()).toEqual([report]);
     db.close();
   });
 });

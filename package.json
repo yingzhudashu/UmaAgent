@@ -1,6 +1,6 @@
 {
   "name": "uma-agent",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -11,7 +11,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "npm run build --workspace=@uma-agent/protocol && npm run build --workspace=@uma-agent/channel-adapter && npm run build --workspace=@uma-agent/client && npm run build --workspace=@uma-agent/core && npm run build --workspace=@uma-agent/server && npm run build --workspace=@uma-agent/cli && npm run build --workspace=@uma-agent/web && npm run build --workspace=@uma-agent/feishu-adapter && npm run build --workspace=@uma-agent/browser-worker && npm run build --workspace=@uma-agent/eval-runner && npm run build --workspace=@uma-agent/feishu-mcp && npm run build --workspace=@uma-agent/skill-worker",
+    "build": "npm run build --workspace=@uma-agent/protocol && npm run build --workspace=@uma-agent/channel-adapter && npm run build --workspace=@uma-agent/client && npm run build --workspace=@uma-agent/core && npm run build --workspace=@uma-agent/server && npm run build --workspace=@uma-agent/eval-runner && npm run build --workspace=@uma-agent/cli && npm run build --workspace=@uma-agent/web && npm run build --workspace=@uma-agent/feishu-adapter && npm run build --workspace=@uma-agent/browser-worker && npm run build --workspace=@uma-agent/feishu-mcp && npm run build --workspace=@uma-agent/skill-worker",
     "check": "biome check . && tsc -b",
     "dev": "npm run dev --workspace=@uma-agent/server",
     "dev:faux": "npm run build && node scripts/faux-server.mjs",
@@ -33,6 +33,7 @@
     "@playwright/test": "1.62.1",
     "@types/node": "24.12.4",
     "@vitest/coverage-v8": "4.1.11",
+    "node-pty": "^1.1.0",
     "playwright": "1.62.1",
     "typescript": "5.9.3",
     "vitest": "4.1.11"

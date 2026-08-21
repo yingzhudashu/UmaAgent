@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { Agent, type AgentEvent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -13,10 +13,12 @@ import type {
   Approval,
   Attachment,
   BackgroundTask,
+  CreateEvaluationReport,
   CreateScheduledTaskRequest,
   CreateSessionRequest,
   ModelRef,
   OptimizationProposal,
+  PublicConfig,
   QualityAssessment,
   ReloadResult,
   Run,
@@ -32,6 +34,7 @@ import type {
   TranscriptItem,
   UpdateScheduledTaskRequest,
 } from "@uma-agent/protocol";
+import { PROTOCOL_VERSION } from "@uma-agent/protocol";
 import Value from "typebox/value";
 import { ContextManager } from "./context-manager.js";
 import { UmaDatabase } from "./database.js";
@@ -61,6 +64,7 @@ import { SearchService } from "./search.js";
 import { SkillPackageService } from "./skill-packages.js";
 import { SkillRegistry } from "./skills.js";
 import { StateLock } from "./state-lock.js";
+import { ToolLoopGuard } from "./tool-loop-guard.js";
 import { createBuiltinTools } from "./tools.js";
 import type { PreflightDecision, RuntimeHealth, UmaConfig } from "./types.js";
 import { WorkspacePolicy } from "./workspace.js";
@@ -139,7 +143,7 @@ export class UmaRuntime {
       getReasoningModel: () => this.models.snapshot(this.config.roles.reasoning),
     });
     this.optimization = new RuntimeOptimizationService(this.database, () =>
-      this.invalidateResource("quality"),
+      this.invalidateResource("optimization"),
     );
     this.approvals = new RunApprovals(this.database, this.events, config.runtime.approvalTimeoutMs);
     this.scheduler = new SchedulerService(this.database, this, () => this.invalidateResource("schedules"));
@@ -281,7 +285,17 @@ export class UmaRuntime {
     return this.events.subscribeResources(listener);
   }
   invalidateResource(
-    resource: "tasks" | "schedules" | "memory" | "knowledge" | "skills" | "profile" | "quality" | "config",
+    resource:
+      | "tasks"
+      | "schedules"
+      | "memory"
+      | "knowledge"
+      | "skills"
+      | "profile"
+      | "quality"
+      | "config"
+      | "evaluations"
+      | "optimization",
   ): void {
     this.events.transaction(() => this.events.invalidate(resource));
   }
@@ -296,6 +310,48 @@ export class UmaRuntime {
   }
   listTasks(): BackgroundTask[] {
     return this.database.listBackgroundTasks();
+  }
+  deleteTask(id: string): void {
+    const task = this.database.getBackgroundTask(id);
+    this.events.transaction(() => {
+      this.database.deleteBackgroundTask(id);
+      this.events.invalidate("tasks");
+    });
+    if (task.source?.scheduleRunId) this.invalidateResource("schedules");
+  }
+  listEvaluationReports(limit?: number) {
+    return this.database.listEvaluationReports(limit);
+  }
+  getEvaluationReport(id: string) {
+    return this.database.getEvaluationReport(id);
+  }
+  createEvaluationReport(input: CreateEvaluationReport) {
+    return this.events.transaction(() => {
+      const report = this.database.createEvaluationReport(input);
+      this.events.invalidate("evaluations");
+      return report;
+    });
+  }
+  publicConfig(): PublicConfig {
+    const models = this.listModels();
+    const roles = this.config.roles;
+    const skills = this.listSkills();
+    const mcp = this.mcp.status().map((item) => ({
+      name: item.name,
+      connected: item.connected,
+      toolCount: item.toolCount,
+    }));
+    return {
+      revision: `${PROTOCOL_VERSION}:${createHash("sha256")
+        .update(JSON.stringify({ models, roles, skills, mcp }))
+        .digest("hex")
+        .slice(0, 16)}`,
+      defaultModel: this.config.defaultModel,
+      roles,
+      models,
+      skills,
+      mcp,
+    };
   }
   listScheduledTasks() {
     return this.scheduler.list();
@@ -1158,6 +1214,7 @@ export class UmaRuntime {
         });
         this.events.emit(session.id, runId, "run.updated", routed);
       });
+      injectRuntimeFault("checkpoint.created");
       injectRuntimeFault("preflight.completed");
       if (decision.route === "clarify") {
         const content = decision.questions.map((question, index) => `${index + 1}. ${question}`).join("\n");
@@ -1399,7 +1456,8 @@ export class UmaRuntime {
           { signal, temperature: 0 },
         );
         this.database.finishModelCall(callId, {
-          status: response.stopReason,
+          status:
+            response.stopReason === "error" || response.stopReason === "aborted" ? "failed" : "completed",
           durationMs: Date.now() - startedAt,
           usage: response.usage,
           ...(response.errorMessage ? { error: response.errorMessage } : {}),
@@ -1407,7 +1465,7 @@ export class UmaRuntime {
         return response;
       } catch (error) {
         this.database.finishModelCall(callId, {
-          status: signal.aborted ? "aborted" : "failed",
+          status: "failed",
           durationMs: Date.now() - startedAt,
           error: error instanceof Error ? error.message : String(error),
         });
@@ -1755,6 +1813,8 @@ export class UmaRuntime {
     });
     let stepTurns = 0;
     let turnLimitReached = false;
+    let loopFailure: string | undefined;
+    const loopGuard = new ToolLoopGuard(this.database.listRunActions(runId));
     const turnLimit = decision.route === "plan" ? 48 : 400;
     const agent = new Agent({
       initialState: {
@@ -1770,6 +1830,7 @@ export class UmaRuntime {
         stepTurns++;
         budget.turns++;
         this.database.updateRun(runId, { turnCount: budget.turns });
+        if (loopFailure) return true;
         const reached = stepTurns >= turnLimit || budget.turns >= 400;
         if (reached) turnLimitReached = true;
         return reached;
@@ -1777,6 +1838,27 @@ export class UmaRuntime {
       beforeToolCall: async ({ toolCall, args }, toolSignal) => {
         const permission = this.permissions.decide(session.mode, toolCall.name);
         if (!permission.allowed) return { block: true, reason: permission.reason };
+        const idempotencyKey = `${runId}:${toolCall.id}`;
+        const loop = loopGuard.check(toolCall.name, args, idempotencyKey);
+        if (loop) {
+          this.events.transaction(() => {
+            this.database.addAudit({
+              runId,
+              kind: "run",
+              name: "tool_loop",
+              output: {
+                pattern: loop.pattern,
+                count: loop.count,
+                signature: loop.signature,
+              },
+              status: loop.level,
+              error: loop.message,
+            });
+            this.events.emit(session.id, runId, "run.loop_warning", loop);
+          });
+          if (loop.level === "critical") loopFailure = "tool_loop_detected";
+          return { block: true, reason: loop.message };
+        }
         const action =
           this.database.getRunActionByToolCall(runId, toolCall.id) ??
           this.events.transaction(() => {
@@ -1786,7 +1868,7 @@ export class UmaRuntime {
               toolCallId: toolCall.id,
               toolName: toolCall.name,
               toolClass: this.permissions.classify(toolCall.name),
-              idempotencyKey: `${runId}:${toolCall.id}`,
+              idempotencyKey,
               input: args,
             });
             this.events.emit(session.id, runId, "run.action_prepared", prepared);
@@ -1828,12 +1910,13 @@ export class UmaRuntime {
         return undefined;
       },
     });
-    this.bindAgentEvents(agent, session.id, runId, () => budget.turns);
+    this.bindAgentEvents(agent, session.id, runId, () => budget.turns, loopGuard);
     const abort = () => agent.abort();
     signal.addEventListener("abort", abort, { once: true });
     try {
       await agent.prompt(context.prompt, context.images);
       if (agent.state.errorMessage) throw new Error(agent.state.errorMessage);
+      if (loopFailure) throw new Error(loopFailure);
       if (turnLimitReached)
         throw new Error(
           budget.turns >= 400 ? "Run turn limit exceeded (400)" : "Plan step turn limit exceeded (48)",
@@ -1848,6 +1931,7 @@ export class UmaRuntime {
     sessionId: string,
     runId: string,
     turnCount: () => number = () => 0,
+    loopGuard?: ToolLoopGuard,
   ): void {
     let assistantItem: TranscriptItem | undefined;
     let pendingAssistant: AssistantMessage | undefined;
@@ -1921,7 +2005,8 @@ export class UmaRuntime {
           });
           if (activeModelCall)
             this.database.finishModelCall(activeModelCall.id, {
-              status: message.stopReason,
+              status:
+                message.stopReason === "error" || message.stopReason === "aborted" ? "failed" : "completed",
               durationMs: Date.now() - activeModelCall.startedAt,
               usage: message.usage,
               ...(message.errorMessage ? { error: message.errorMessage } : {}),
@@ -1993,6 +2078,7 @@ export class UmaRuntime {
         toolActions.set(event.toolCallId, created.actionId);
         toolMessages.set(event.toolCallId, created.messageId);
       } else if (event.type === "tool_execution_end") {
+        loopGuard?.recordResult(`${runId}:${event.toolCallId}`, event.result);
         const messageId = toolMessages.get(event.toolCallId);
         if (messageId) {
           const content =

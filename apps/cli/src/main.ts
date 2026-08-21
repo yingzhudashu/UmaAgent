@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 import {
   Box,
-  CombinedAutocompleteProvider,
   Editor,
   Markdown,
   ProcessTerminal,
@@ -21,6 +21,9 @@ import {
   type SessionSnapshot,
   type TranscriptItem,
 } from "@uma-agent/protocol";
+import clipboard from "clipboardy";
+import { BUILTIN_EVALUATIONS, runBuiltInEvaluations } from "./evaluations.js";
+import { createTuiAutocomplete } from "./tui-completion.js";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "chat";
@@ -29,6 +32,26 @@ const positionals = args.slice(1).filter((arg) => !arg.startsWith("--"));
 const server = valueAfter("--server") ?? process.env.UMA_SERVER_URL ?? "http://127.0.0.1:3210";
 const token = valueAfter("--token") ?? process.env.UMA_TOKEN;
 const client = new UmaClient({ baseUrl: server, ...(token ? { token } : {}) });
+const cliStateDir = process.env.UMA_CLI_STATE_DIR?.trim() || join(homedir(), ".uma-agent", "cli");
+const cliHistoryPath = join(cliStateDir, "history.txt");
+
+async function loadCliHistory(): Promise<string[]> {
+  try {
+    return (await readFile(cliHistoryPath, "utf8"))
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(-1_000);
+  } catch {
+    return [];
+  }
+}
+
+async function saveCliHistory(value: string): Promise<void> {
+  const history = [...(await loadCliHistory()), value].slice(-1_000);
+  await mkdir(cliStateDir, { recursive: true });
+  await writeFile(cliHistoryPath, `${history.join("\n")}\n`, "utf8");
+}
 
 function renderTranscript(items: TranscriptItem[]): string {
   return items
@@ -91,30 +114,8 @@ async function chat(): Promise<void> {
       noMatch: style,
     },
   });
-  input.setAutocompleteProvider(
-    new CombinedAutocompleteProvider(
-      [
-        "/help",
-        "/new",
-        "/sessions",
-        "/use",
-        "/older",
-        "/newer",
-        "/review",
-        "/improve",
-        "/queue",
-        "/btw",
-        "/reload-skills",
-        "/reload-config",
-        "/stats",
-        "/actions",
-        "/resume",
-        "/cancel",
-        "/exit",
-      ].map((value) => ({ value, label: value })),
-      process.cwd(),
-    ),
-  );
+  for (const item of await loadCliHistory()) input.addToHistory(item);
+  input.setAutocompleteProvider(createTuiAutocomplete(process.cwd()));
   inputBox.addChild(new Text("Message", 0, 0));
   inputBox.addChild(input);
   ui.addChild(header);
@@ -193,7 +194,10 @@ async function chat(): Promise<void> {
   });
   const handle = async (raw: string) => {
     const value = raw.trim();
-    if (value) input.addToHistory(value);
+    if (value) {
+      input.addToHistory(value);
+      await saveCliHistory(value);
+    }
     input.setText("");
     ui.requestRender();
     if (!value) return;
@@ -203,7 +207,7 @@ async function chat(): Promise<void> {
     }
     if (value === "/help") {
       render(
-        "/new  /sessions  /use <id>  /older  /newer  /review [feedback]  /improve [--force|--reset]  /queue status|set queue|set preemptive|abort  /btw start|status|result|cancel  /reload-skills  /reload-config  /stats  !<shell>  /rename  /model  /attach  /approve  /actions  /decide  /resume  /cancel  /exit",
+        "/new  /sessions  /session delete <id>  /use <id>  /older  /newer  /review  /improve  /queue  /btw  /schedule  /kb  /test  /self-opt  /config  /doctor  /copy  @file:<path>  !<shell>  /exit",
       );
       return;
     }
@@ -214,6 +218,13 @@ async function chat(): Promise<void> {
     if (value === "/sessions") {
       const list = await client.listSessions();
       render(list.map((item) => `${item.id} ${item.title}`).join("  "));
+      return;
+    }
+    if (value.startsWith("/session delete ")) {
+      const id = value.slice(16).trim();
+      if (id === active.id) throw new Error("Switch sessions before deleting the active session");
+      await client.deleteSession(id);
+      render(`Deleted session ${id}`);
       return;
     }
     if (value.startsWith("/use ")) {
@@ -314,6 +325,13 @@ async function chat(): Promise<void> {
       render(tasks.map((task) => `${task.id} ${task.status} ${task.result ?? task.prompt}`).join("  "));
       return;
     }
+    if (value === "/btw clear") {
+      const tasks = await client.listTasks();
+      const terminal = tasks.filter((task) => !["pending", "running"].includes(task.status));
+      await Promise.all(terminal.map((task) => client.deleteTask(task.id)));
+      render(`Deleted ${terminal.length} terminal background task(s)`);
+      return;
+    }
     if (value.startsWith("/btw cancel ")) {
       const task = await client.cancelTask(value.slice(12).trim());
       render(`Background task ${task.id}: ${task.status}`);
@@ -334,6 +352,147 @@ async function chat(): Promise<void> {
     if (value === "/stats") {
       const report = await client.diagnosticsReport();
       render(JSON.stringify(report, null, 2));
+      return;
+    }
+    if (value === "/config") {
+      render(JSON.stringify(await client.publicConfig(), null, 2));
+      return;
+    }
+    if (value === "/doctor") {
+      render(JSON.stringify(await client.health(), null, 2));
+      return;
+    }
+    if (value === "/copy") {
+      const latest = [...snapshot.transcript].reverse().find((item) => item.role === "assistant");
+      if (!latest) throw new Error("No assistant answer is available to copy");
+      await clipboard.write(latest.content);
+      render("Copied the latest assistant answer");
+      return;
+    }
+    if (value === "/schedule list") {
+      render(JSON.stringify(await client.listSchedules(), null, 2));
+      return;
+    }
+    if (value.startsWith("/schedule show ")) {
+      const id = value.slice(15).trim();
+      const item = (await client.listSchedules()).find((schedule) => schedule.id === id);
+      if (!item) throw new Error("Schedule not found");
+      render(JSON.stringify(item, null, 2));
+      return;
+    }
+    if (value.startsWith("/schedule run ")) {
+      render(JSON.stringify(await client.runSchedule(value.slice(14).trim()), null, 2));
+      return;
+    }
+    if (value.startsWith("/schedule remove ")) {
+      await client.deleteSchedule(value.slice(17).trim());
+      render("Schedule removed");
+      return;
+    }
+    if (value.startsWith("/schedule enable ") || value.startsWith("/schedule disable ")) {
+      const enabled = value.startsWith("/schedule enable ");
+      const id = value.slice(enabled ? 17 : 18).trim();
+      render(JSON.stringify(await client.updateSchedule(id, { enabled }), null, 2));
+      return;
+    }
+    if (value.startsWith("/schedule add ")) {
+      const created = await client.createSchedule(JSON.parse(value.slice(14).trim()));
+      render(JSON.stringify(created, null, 2));
+      return;
+    }
+    if (value.startsWith("/schedule update ")) {
+      const remainder = value.slice(17).trim();
+      const separator = remainder.indexOf(" ");
+      if (separator < 1) throw new Error("Use /schedule update <id> <json-patch>");
+      const updated = await client.updateSchedule(
+        remainder.slice(0, separator),
+        JSON.parse(remainder.slice(separator + 1)),
+      );
+      render(JSON.stringify(updated, null, 2));
+      return;
+    }
+    if (value === "/kb list") {
+      const sources = await client.listKnowledge();
+      render(
+        sources.map((item) => `${item.id} ${item.status} ${item.name}`).join("  ") || "No knowledge sources",
+      );
+      return;
+    }
+    if (value.startsWith("/kb search ")) {
+      const hits = await client.searchKnowledge(value.slice(11).trim());
+      render(
+        hits.map((item) => `${item.sourceName}/${item.filePath}\n${item.content}`).join("\n\n") ||
+          "No results",
+      );
+      return;
+    }
+    if (value.startsWith("/kb unmount ")) {
+      await client.deleteKnowledge(value.slice(12).trim());
+      render("Knowledge source removed");
+      return;
+    }
+    if (value.startsWith("/kb reload ")) {
+      const source = await client.reindexKnowledge(value.slice(11).trim());
+      render(`Knowledge source ${source.name}: ${source.status}`);
+      return;
+    }
+    if (value.startsWith("/kb mount ")) {
+      const [path, ...name] = value.slice(10).trim().split(/\s+/);
+      if (!path) throw new Error("Use /kb mount <server-path> [name]");
+      const source = await client.indexKnowledge(name.join(" ") || basename(path), path);
+      render(`Knowledge source ${source.name}: ${source.status}`);
+      return;
+    }
+    if (value === "/test list") {
+      render(BUILTIN_EVALUATIONS.map((item) => `${item.category} ${item.name}`).join("\n"));
+      return;
+    }
+    if (value === "/test status") {
+      const reports = await client.listEvaluationReports(1);
+      render(reports[0] ? JSON.stringify(reports[0], null, 2) : "No evaluation reports");
+      return;
+    }
+    if (value === "/test run" || value.startsWith("/test run ")) {
+      const [, , requestedMode, category, pattern] = value.split(/\s+/);
+      const mode = requestedMode === "real" ? "real" : "faux";
+      const report = await runBuiltInEvaluations(
+        client,
+        mode,
+        requestedMode === "real" || requestedMode === "faux" ? category : requestedMode,
+        requestedMode === "real" || requestedMode === "faux" ? pattern : category,
+      );
+      render(JSON.stringify(report, null, 2));
+      return;
+    }
+    if (value === "/self-opt status" || value === "/self-opt proposals") {
+      render(JSON.stringify(await client.listOptimizationProposals(), null, 2));
+      return;
+    }
+    if (value.startsWith("/self-opt show ")) {
+      const id = value.slice(15).trim();
+      const proposal = (await client.listOptimizationProposals()).find((item) => item.id === id);
+      if (!proposal) throw new Error("Optimization proposal not found");
+      render(JSON.stringify(proposal, null, 2));
+      return;
+    }
+    if (value === "/self-opt analyze") {
+      render(JSON.stringify(await client.generateOptimizationProposals(), null, 2));
+      return;
+    }
+    if (value.startsWith("/self-opt accept ") || value.startsWith("/self-opt reject ")) {
+      const accept = value.startsWith("/self-opt accept ");
+      const id = value.slice(accept ? 17 : 17).trim();
+      render(
+        JSON.stringify(
+          await client.decideOptimizationProposal(id, accept ? "accepted" : "rejected"),
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+    if (value === "/self-opt report") {
+      render(JSON.stringify(await client.diagnosticsReport(), null, 2));
       return;
     }
     if (value.startsWith("/approve ")) {
@@ -373,9 +532,18 @@ async function chat(): Promise<void> {
       refresh("Command awaiting approval");
       return;
     }
+    let outgoing = value;
+    for (const match of value.matchAll(/@file:(?:"([^"]+)"|(\S+))/g)) {
+      const path = match[1] ?? match[2];
+      if (!path) continue;
+      const data = await readFile(path);
+      const uploaded = await client.upload(new Blob([data]), basename(path), active.id);
+      attachmentIds.push(uploaded.id);
+      outgoing = outgoing.replace(match[0], "").trim();
+    }
     await client.sendMessage(
       active.id,
-      value,
+      outgoing || "Please inspect the attached file.",
       attachmentIds.length ? { attachmentIds: [...attachmentIds] } : {},
     );
     attachmentIds.splice(0);
@@ -434,7 +602,8 @@ async function taskCommand(): Promise<void> {
     console.log(JSON.stringify(await client.getTask(positionals[1]), null, 2));
   else if (action === "cancel" && positionals[1])
     console.log(JSON.stringify(await client.cancelTask(positionals[1]), null, 2));
-  else throw new Error("uma task start <prompt>|list|show <id>|cancel <id>");
+  else if (action === "delete" && positionals[1]) await client.deleteTask(positionals[1]);
+  else throw new Error("uma task start <prompt>|list|show <id>|cancel <id>|delete <id>");
 }
 
 async function scheduleCommand(): Promise<void> {
@@ -624,12 +793,53 @@ async function mcpCommand(): Promise<void> {
 }
 
 async function knowledgeCommand(): Promise<void> {
-  if (positionals[0] === "add" && positionals[1] && positionals[2])
+  const action = positionals[0] ?? "list";
+  if ((action === "add" || action === "mount") && positionals[1] && positionals[2])
     await client.indexKnowledge(positionals[1], positionals[2]);
-  else if (positionals[0] !== "list" && positionals.length)
-    throw new Error("uma knowledge list|add <name> <path>");
+  else if (action === "search" && positionals[1]) {
+    console.log(JSON.stringify(await client.searchKnowledge(positionals.slice(1).join(" ")), null, 2));
+    return;
+  } else if ((action === "delete" || action === "unmount") && positionals[1]) {
+    await client.deleteKnowledge(positionals[1]);
+    return;
+  } else if ((action === "reload" || action === "reindex") && positionals[1]) {
+    console.log(JSON.stringify(await client.reindexKnowledge(positionals[1]), null, 2));
+    return;
+  } else if (action !== "list")
+    throw new Error("uma knowledge list|mount <name> <path>|search <query>|unmount <id>|reload <id>");
   for (const item of await client.listKnowledge())
     console.log(`${item.id}\t${item.name}\t${item.documentCount}\t${item.path}`);
+}
+
+async function evalCommand(): Promise<void> {
+  const action = positionals[0] ?? "status";
+  if (action === "list") {
+    for (const item of BUILTIN_EVALUATIONS) console.log(`${item.category}\t${item.name}`);
+    return;
+  }
+  if (action === "status" || action === "history") {
+    console.log(
+      JSON.stringify(await client.listEvaluationReports(Number(valueAfter("--limit") ?? 20)), null, 2),
+    );
+    return;
+  }
+  if (action === "show" && positionals[1]) {
+    console.log(JSON.stringify(await client.getEvaluationReport(positionals[1]), null, 2));
+    return;
+  }
+  if (action === "run") {
+    const mode = positionals[1] === "real" ? "real" : "faux";
+    const offset = positionals[1] === "real" || positionals[1] === "faux" ? 2 : 1;
+    console.log(
+      JSON.stringify(
+        await runBuiltInEvaluations(client, mode, positionals[offset], positionals[offset + 1]),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+  throw new Error("uma eval list|run [faux|real] [category] [pattern]|status|show <id>");
 }
 
 async function doctorCommand(): Promise<void> {
@@ -679,11 +889,12 @@ async function main(): Promise<void> {
   else if (command === "schedule") await scheduleCommand();
   else if (command === "memory") await memoryCommand();
   else if (command === "audit") await auditCommand();
+  else if (command === "eval" || command === "test") await evalCommand();
   else if (command === "sync") await syncCommand();
   else if (command === "channel" && positionals[0] === "status") await channelStatusCommand();
   else
     console.log(
-      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|add\numa channel status --channel-url=<url>\numa doctor",
+      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel|delete\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa eval list|run|status|show\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|mount|search|unmount|reload\numa channel status --channel-url=<url>\numa doctor",
     );
   client.close();
 }

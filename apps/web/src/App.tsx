@@ -17,6 +17,9 @@ import {
 } from "lucide-react";
 import { marked } from "marked";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { DiagnosticsArea } from "./areas/DiagnosticsArea.js";
+import { EvaluationArea } from "./areas/EvaluationArea.js";
+import { OptimizationArea } from "./areas/OptimizationArea.js";
 import { ResourceArea } from "./areas/ResourceArea.js";
 import { ApprovalBar, RunPanel } from "./areas/RunArea.js";
 import { ScheduleArea } from "./areas/ScheduleArea.js";
@@ -92,7 +95,16 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
   const [detailsTab, setDetailsTab] = useState<
-    "run" | "tasks" | "schedules" | "memory" | "resources" | "settings" | "audit"
+    | "run"
+    | "tasks"
+    | "schedules"
+    | "memory"
+    | "resources"
+    | "evaluations"
+    | "diagnostics"
+    | "optimization"
+    | "settings"
+    | "audit"
   >("run");
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
@@ -108,6 +120,16 @@ export function App() {
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: () => client.listTasks() });
   const schedules = useQuery({ queryKey: ["schedules"], queryFn: () => client.listSchedules() });
   const report = useQuery({ queryKey: ["operations-report"], queryFn: () => client.operationsReport() });
+  const diagnostics = useQuery({ queryKey: ["diagnostics"], queryFn: () => client.diagnosticsReport() });
+  const evaluations = useQuery({
+    queryKey: ["evaluations"],
+    queryFn: () => client.listEvaluationReports(),
+  });
+  const optimization = useQuery({
+    queryKey: ["optimization"],
+    queryFn: () => client.listOptimizationProposals(),
+  });
+  const publicConfig = useQuery({ queryKey: ["config"], queryFn: () => client.publicConfig() });
   const memories = useQuery({
     queryKey: ["memory", "candidate"],
     queryFn: () => client.listMemoryFacts("candidate"),
@@ -583,18 +605,29 @@ export function App() {
       {panelOpen && (
         <aside className="details">
           <div className="detail-tabs">
-            {(["run", "tasks", "schedules", "memory", "resources", "settings", "audit"] as const).map(
-              (tab) => (
-                <button
-                  type="button"
-                  className={`detail-tab ${detailsTab === tab ? "active" : ""}`}
-                  onClick={() => setDetailsTab(tab)}
-                  key={tab}
-                >
-                  {tab}
-                </button>
-              ),
-            )}
+            {(
+              [
+                "run",
+                "tasks",
+                "schedules",
+                "memory",
+                "resources",
+                "evaluations",
+                "diagnostics",
+                "optimization",
+                "settings",
+                "audit",
+              ] as const
+            ).map((tab) => (
+              <button
+                type="button"
+                className={`detail-tab ${detailsTab === tab ? "active" : ""}`}
+                onClick={() => setDetailsTab(tab)}
+                key={tab}
+              >
+                {tab}
+              </button>
+            ))}
           </div>
           {detailsTab === "run" && (
             <RunPanel
@@ -656,6 +689,15 @@ export function App() {
                       onClick={() => void client.cancelTask(task.id).then(() => tasks.refetch())}
                     >
                       取消
+                    </button>
+                  )}
+                  {!["pending", "running"].includes(task.status) && (
+                    <button
+                      type="button"
+                      disabled={offline}
+                      onClick={() => void client.deleteTask(task.id).then(() => tasks.refetch())}
+                    >
+                      删除记录
                     </button>
                   )}
                 </div>
@@ -736,6 +778,20 @@ export function App() {
                   .then(() => knowledge.refetch())
               }
               deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
+              reindexKnowledge={(id) => void client.reindexKnowledge(id).then(() => knowledge.refetch())}
+              searchKnowledge={(query, sourceId) => client.searchKnowledge(query, sourceId)}
+            />
+          )}
+          {detailsTab === "evaluations" && <EvaluationArea reports={evaluations.data ?? []} />}
+          {detailsTab === "diagnostics" && <DiagnosticsArea report={diagnostics.data} />}
+          {detailsTab === "optimization" && (
+            <OptimizationArea
+              proposals={optimization.data ?? []}
+              disabled={offline}
+              generate={() => void client.generateOptimizationProposals().then(() => optimization.refetch())}
+              decide={(id, status) =>
+                void client.decideOptimizationProposal(id, status).then(() => optimization.refetch())
+              }
             />
           )}
           {detailsTab === "settings" && (
@@ -748,6 +804,7 @@ export function App() {
               profile={profile.data}
               saveProfile={(content) => void client.updateAgentProfile(content).then(() => profile.refetch())}
               reloadConfig={() => void client.reloadConfig().then(() => queryClient.invalidateQueries())}
+              publicConfig={publicConfig.data}
               disabled={offline}
             />
           )}

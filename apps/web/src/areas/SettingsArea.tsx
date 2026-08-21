@@ -1,4 +1,4 @@
-import type { AgentProfile, Health, OperationsReport, Session } from "@uma-agent/protocol";
+import type { AgentProfile, Health, OperationsReport, PublicConfig, Session } from "@uma-agent/protocol";
 import { type FormEvent, useEffect, useState } from "react";
 
 export function SettingsArea({
@@ -10,6 +10,7 @@ export function SettingsArea({
   profile,
   saveProfile,
   reloadConfig,
+  publicConfig,
   disabled,
 }: {
   session: Session | undefined;
@@ -20,6 +21,7 @@ export function SettingsArea({
   profile: AgentProfile | undefined;
   saveProfile: (content: string) => void;
   reloadConfig: () => void;
+  publicConfig: PublicConfig | undefined;
   disabled: boolean;
 }) {
   const [content, setContent] = useState(profile?.content ?? "");
@@ -48,6 +50,15 @@ export function SettingsArea({
       <div>
         <strong>Session</strong>
         <p>{session ? `${session.mode} · ${session.model.provider}/${session.model.id}` : "-"}</p>
+      </div>
+      <div>
+        <strong>有效配置</strong>
+        <p>
+          {publicConfig
+            ? `${publicConfig.defaultModel.provider}/${publicConfig.defaultModel.id} · ${publicConfig.models.length} models · ${publicConfig.skills.length} skills`
+            : "-"}
+        </p>
+        {publicConfig && <small className="operation-meta">revision {publicConfig.revision}</small>}
       </div>
       <form className="resource-form" onSubmit={submit}>
         <label>

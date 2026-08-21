@@ -68,7 +68,7 @@ describe("UmaClient", () => {
     socket.open();
     await tick();
     socket.message({
-      protocolVersion: 7,
+      protocolVersion: 10,
       sessionId: "session-1",
       sequence: 1,
       timestamp: 2,
@@ -76,7 +76,7 @@ describe("UmaClient", () => {
       payload: {},
     });
     socket.message({
-      protocolVersion: 7,
+      protocolVersion: 10,
       sessionId: "session-1",
       sequence: 3,
       timestamp: 3,
@@ -125,7 +125,7 @@ describe("UmaClient", () => {
     });
     await client.decideRunAction("run-1", "action-1", "acknowledge");
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:3210/api/v9/runs/run-1/actions/action-1/decide",
+      "http://localhost:3210/api/v10/runs/run-1/actions/action-1/decide",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ decision: "acknowledge" }) }),
     );
   });
@@ -160,13 +160,13 @@ describe("UmaClient", () => {
     socket.open();
     socket.message({
       type: "resource.resync_required",
-      protocolVersion: 7,
+      protocolVersion: 10,
       resources: ["tasks", "schedules"],
       timestamp: 1,
     });
     socket.message({
       type: "resource.invalidated",
-      protocolVersion: 7,
+      protocolVersion: 10,
       resource: "tasks",
       timestamp: 2,
     });
@@ -176,7 +176,7 @@ describe("UmaClient", () => {
 
   it("fetches every durable event page when a gap exceeds one thousand events", async () => {
     const event = (sequence: number): AgentEventEnvelope => ({
-      protocolVersion: 7,
+      protocolVersion: 10,
       sessionId: "session-1",
       sequence,
       timestamp: sequence,
@@ -275,17 +275,17 @@ describe("UmaClient", () => {
     await client.diagnosticsReport(10, 20);
     const requests = fetchMock.mock.calls.map(([url, init]) => ({ url: String(url), init }));
     expect(requests.map((item) => item.url)).toEqual([
-      "http://localhost:3210/api/v9/schedules",
-      "http://localhost:3210/api/v9/schedules/schedule%2Fid",
-      "http://localhost:3210/api/v9/schedules/schedule%2Fid/run",
-      "http://localhost:3210/api/v9/schedules/schedule%2Fid/runs",
-      "http://localhost:3210/api/v9/schedule-runs/schedule-run%2Fid",
-      "http://localhost:3210/api/v9/schedule-runs/schedule-run%2Fid/cancel",
-      "http://localhost:3210/api/v9/schedules/schedule%2Fid",
-      "http://localhost:3210/api/v9/knowledge",
-      "http://localhost:3210/api/v9/knowledge/knowledge%2Fid",
-      "http://localhost:3210/api/v9/reports/operations?from=10&to=20",
-      "http://localhost:3210/api/v9/reports/diagnostics?from=10&to=20",
+      "http://localhost:3210/api/v10/schedules",
+      "http://localhost:3210/api/v10/schedules/schedule%2Fid",
+      "http://localhost:3210/api/v10/schedules/schedule%2Fid/run",
+      "http://localhost:3210/api/v10/schedules/schedule%2Fid/runs",
+      "http://localhost:3210/api/v10/schedule-runs/schedule-run%2Fid",
+      "http://localhost:3210/api/v10/schedule-runs/schedule-run%2Fid/cancel",
+      "http://localhost:3210/api/v10/schedules/schedule%2Fid",
+      "http://localhost:3210/api/v10/knowledge",
+      "http://localhost:3210/api/v10/knowledge/knowledge%2Fid",
+      "http://localhost:3210/api/v10/reports/operations?from=10&to=20",
+      "http://localhost:3210/api/v10/reports/diagnostics?from=10&to=20",
     ]);
     expect(requests[7]?.init?.body).toBe(
       JSON.stringify({ name: "notes", attachmentId: "attachment/id", sessionId: "session/id" }),
@@ -323,6 +323,7 @@ describe("UmaClient", () => {
     await client.skillState();
     await client.refreshSkills();
     await client.reloadConfig();
+    await client.publicConfig();
     await client.searchSkills("safe skill");
     await client.installSkill({ source: "local", reference: "skills/demo" });
     await client.setSkillStatus("skill/id", "enable");
@@ -337,13 +338,27 @@ describe("UmaClient", () => {
     await client.mcpStatus();
     await client.listKnowledge();
     await client.indexKnowledge("docs", "docs/readme.md");
+    await client.searchKnowledge("needle");
+    await client.searchKnowledge("needle", "source/id", 5);
+    await client.reindexKnowledge("knowledge/id");
     await client.listTasks();
     await client.createTask("prompt");
     await client.createTask("prompt", "parent/id");
     await client.getTask("task/id");
+    await client.deleteTask("task/id");
     await client.listSchedules();
     await client.operationsReport();
     await client.diagnosticsReport();
+    await client.listEvaluationReports();
+    await client.getEvaluationReport("evaluation/id");
+    await client.createEvaluationReport({
+      mode: "faux",
+      suiteVersion: "test",
+      status: "completed",
+      totals: { total: 1, passed: 1, failed: 0, skipped: 0 },
+      durationMs: 1,
+      cases: [{ name: "case", category: "regression", passed: true, durationMs: 1 }],
+    });
     await client.listOptimizationProposals();
     await client.generateOptimizationProposals();
     await client.generateOptimizationProposals(10, 20);
@@ -448,7 +463,7 @@ describe("UmaClient", () => {
       token: "secret",
       fetch: (() => response(snapshot)) as typeof fetch,
       webSocketFactory: (url) => {
-        expect(url).toBe("wss://core.example/api/v9/events");
+        expect(url).toBe("wss://core.example/api/v10/events");
         return socket as unknown as WebSocket;
       },
     });
@@ -460,7 +475,7 @@ describe("UmaClient", () => {
     await tick();
     expect(socket.sent.map((value) => JSON.parse(value))).toContainEqual({ type: "auth", token: "secret" });
     socket.message({
-      protocolVersion: 7,
+      protocolVersion: 10,
       sessionId: "not-subscribed",
       sequence: 1,
       timestamp: 1,
@@ -468,7 +483,7 @@ describe("UmaClient", () => {
       payload: {},
     });
     socket.message({
-      protocolVersion: 7,
+      protocolVersion: 10,
       sessionId: "session-1",
       sequence: 1,
       timestamp: 1,
@@ -476,7 +491,7 @@ describe("UmaClient", () => {
       payload: {},
     });
     socket.message({
-      protocolVersion: 7,
+      protocolVersion: 10,
       sessionId: "session-1",
       sequence: 1,
       timestamp: 1,
@@ -492,7 +507,7 @@ describe("UmaClient", () => {
 
   it("falls back to a snapshot when event recovery cannot make progress", async () => {
     const event: AgentEventEnvelope = {
-      protocolVersion: 7,
+      protocolVersion: 10,
       sessionId: "session-1",
       sequence: 3,
       timestamp: 3,

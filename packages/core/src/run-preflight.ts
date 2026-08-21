@@ -49,7 +49,8 @@ export class RunPreflight {
           response.stopReason === "error" &&
           /(429|rate.?limit|5\d\d|network|timeout|econn|fetch failed)/i.test(response.errorMessage ?? "");
         this.database.finishModelCall(callId, {
-          status: response.stopReason,
+          status:
+            response.stopReason === "error" || response.stopReason === "aborted" ? "failed" : "completed",
           durationMs: Date.now() - startedAt,
           usage: response.usage,
           ...(response.errorMessage ? { error: response.errorMessage } : {}),
@@ -59,7 +60,7 @@ export class RunPreflight {
         lastError = new Error(response.errorMessage ?? "Provider request failed");
       } catch (error) {
         this.database.finishModelCall(callId, {
-          status: signal.aborted ? "aborted" : "failed",
+          status: "failed",
           durationMs: Date.now() - startedAt,
           error: error instanceof Error ? error.message : String(error),
         });

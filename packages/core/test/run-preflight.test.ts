@@ -231,7 +231,7 @@ describe("RunPreflight.complete", () => {
     expect(completeSimple).toHaveBeenCalledOnce();
     expect(database.finishModelCall).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ status: "aborted", error: "network timeout" }),
+      expect.objectContaining({ status: "failed", error: "network timeout" }),
     );
   });
 });

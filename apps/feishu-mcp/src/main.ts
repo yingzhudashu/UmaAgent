@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import * as lark from "@larksuiteoapi/node-sdk";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { UmaClient } from "@uma-agent/client";
-import { createFeishuMcp, type FeishuBusinessGateway } from "./service.js";
+import { createFeishuMcp, type FeishuBusinessGateway, retryFeishuOperation } from "./service.js";
 
 const required = (name: string) => {
   const value = process.env[name]?.trim();
@@ -13,17 +13,21 @@ const required = (name: string) => {
 const sdk = new lark.Client({ appId: required("FEISHU_APP_ID"), appSecret: required("FEISHU_APP_SECRET") });
 const gateway: FeishuBusinessGateway = {
   request: (method, url, input) =>
-    sdk.request({ method, url, ...(method === "GET" ? { params: input } : { data: input }) }),
+    retryFeishuOperation(() =>
+      sdk.request({ method, url, ...(method === "GET" ? { params: input } : { data: input }) }),
+    ),
   async upload(url, file, input) {
     const form = new FormData();
     form.set("file_name", file.name);
     form.set("file", new Blob([file.bytes.slice().buffer as ArrayBuffer], { type: file.type }), file.name);
     for (const [key, value] of Object.entries((input ?? {}) as Record<string, unknown>))
       form.set(key, String(value));
-    return sdk.request({ method: "POST", url, data: form });
+    return retryFeishuOperation(() => sdk.request({ method: "POST", url, data: form }));
   },
   async download(url) {
-    const response = await sdk.request<ArrayBuffer>({ method: "GET", url, responseType: "arraybuffer" });
+    const response = await retryFeishuOperation(() =>
+      sdk.request<ArrayBuffer>({ method: "GET", url, responseType: "arraybuffer" }),
+    );
     return { name: "feishu-download", type: "application/octet-stream", bytes: new Uint8Array(response) };
   },
 };

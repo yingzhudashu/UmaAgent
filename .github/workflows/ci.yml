@@ -2,6 +2,8 @@ name: ci
 on:
   push:
   pull_request:
+  schedule:
+    - cron: "17 18 * * *"
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -16,6 +18,8 @@ jobs:
       - run: docker build -t uma-agent:ci .
       - run: docker build -f docker/Dockerfile.feishu -t uma-agent-feishu:ci .
       - run: docker build -f docker/Dockerfile.browser -t uma-agent-browser:ci .
+      - run: docker build -f docker/Dockerfile.feishu-mcp -t uma-agent-feishu-mcp:ci .
+      - run: docker build -f docker/Dockerfile.skill-worker -t uma-agent-skill-worker:ci .
       - name: Smoke-test containers, persistence, and the Core state lock
         shell: bash
         run: |
@@ -25,7 +29,7 @@ jobs:
           workspace_volume=uma-ci-workspace
           feishu_volume=uma-ci-feishu
           cleanup() {
-            docker rm -f uma-core-lock uma-feishu uma-core browser-worker >/dev/null 2>&1 || true
+            docker rm -f uma-core-lock uma-feishu uma-feishu-mcp uma-skill-worker uma-core browser-worker >/dev/null 2>&1 || true
             docker volume rm "$state_volume" "$workspace_volume" "$feishu_volume" >/dev/null 2>&1 || true
             docker network rm "$network" >/dev/null 2>&1 || true
           }
@@ -69,12 +73,12 @@ jobs:
             wait_healthy uma-core
           }
           start_core
-          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v7/sessions',{method:'POST',headers:{authorization:'Bearer ci-core-token','content-type':'application/json'},body:JSON.stringify({mode:'assistant',title:'CI persistence'})}).then(async r=>{if(!r.ok)throw new Error(await r.text())})"
+          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v10/sessions',{method:'POST',headers:{authorization:'Bearer ci-core-token','content-type':'application/json'},body:JSON.stringify({mode:'assistant',title:'CI persistence'})}).then(async r=>{if(!r.ok)throw new Error(await r.text())})"
 
           docker stop uma-core >/dev/null
           docker rm uma-core >/dev/null
           start_core
-          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v7/sessions',{headers:{authorization:'Bearer ci-core-token'}}).then(r=>r.json()).then(items=>{if(!items.some(item=>item.title==='CI persistence'))process.exit(1)})"
+          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v10/sessions',{headers:{authorization:'Bearer ci-core-token'}}).then(r=>r.json()).then(items=>{if(!items.some(item=>item.title==='CI persistence'))process.exit(1)})"
 
           docker create --name uma-core-lock --network "$network" \
             -e UMA_AUTH_TOKEN=ci-core-token \
@@ -106,9 +110,50 @@ jobs:
           wait_healthy uma-feishu
           docker restart uma-feishu >/dev/null
           wait_healthy uma-feishu
+
+          docker run -d --name uma-feishu-mcp --network "$network" \
+            -e FEISHU_APP_ID=ci-app-id \
+            -e FEISHU_APP_SECRET=ci-app-secret \
+            -e FEISHU_MCP_HOST=0.0.0.0 \
+            -e FEISHU_MCP_AUTH_TOKEN=ci-feishu-mcp-token \
+            -e UMA_SERVER_URL=http://uma-core:3210 \
+            -e UMA_TOKEN=ci-core-token \
+            uma-agent-feishu-mcp:ci >/dev/null
+          wait_healthy uma-feishu-mcp
+
+          skill_root=/tmp/uma-ci-skills
+          mkdir -p "$skill_root/example"
+          printf 'export const ping = async () => ({ ok: true });\n' > "$skill_root/example/index.mjs"
+          skill_hash=$(node -e "const c=require('node:crypto'),f=require('node:fs');const h=c.createHash('sha256');h.update('index.mjs');h.update(f.readFileSync(process.argv[1]));process.stdout.write(h.digest('hex'))" "$skill_root/example/index.mjs")
+          printf '{"name":"example","contentHash":"%s","entry":"index.mjs","tools":[{"name":"ping","description":"health fixture","export":"ping"}]}' "$skill_hash" > "$skill_root/example/skill-worker.json"
+          docker run -d --name uma-skill-worker --network "$network" \
+            -e SKILL_WORKER_HOST=0.0.0.0 \
+            -e SKILL_WORKER_AUTH_TOKEN=ci-skill-token \
+            -e SKILL_WORKER_PACKAGES_DIR=/skills \
+            -e SKILL_WORKER_ALLOWED_HASHES="$skill_hash" \
+            -v "$skill_root:/skills:ro" \
+            uma-agent-skill-worker:ci >/dev/null
+          wait_healthy uma-skill-worker
       - run: npm run check
       - run: npm test
       - run: npm run test:coverage
       - run: npm run test:eval:faux
       - run: npx playwright install --with-deps chromium
       - run: npm run test:web:e2e
+      - name: Short reliability soak
+        if: github.event_name != 'schedule'
+        run: UMA_SOAK_HOURS=0.167 UMA_SOAK_MESSAGE_INTERVAL_MS=1000 npm run test:soak:faux
+
+  nightly-soak:
+    if: github.event_name == 'schedule'
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: UMA_SOAK_HOURS=4 UMA_SOAK_MESSAGE_INTERVAL_MS=5000 npm run test:soak:faux

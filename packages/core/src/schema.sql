@@ -188,6 +188,34 @@ CREATE TABLE optimization_proposals (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE evaluation_reports (
+  id TEXT PRIMARY KEY,
+  mode TEXT NOT NULL CHECK (mode IN ('faux','real')),
+  suite_version TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('completed','failed')),
+  total INTEGER NOT NULL,
+  passed INTEGER NOT NULL,
+  failed INTEGER NOT NULL,
+  skipped INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX evaluation_reports_created ON evaluation_reports(created_at DESC);
+
+CREATE TABLE evaluation_cases (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES evaluation_reports(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  passed INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  status TEXT,
+  error TEXT,
+  UNIQUE(report_id, position)
+);
+
 CREATE TABLE background_tasks (
   id TEXT PRIMARY KEY,
   parent_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
@@ -342,4 +370,4 @@ CREATE TABLE web_sessions (
   created_at INTEGER NOT NULL
 );
 
-PRAGMA user_version = 10;
+PRAGMA user_version = 11;

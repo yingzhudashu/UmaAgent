@@ -322,8 +322,8 @@ describe("UmaRuntime preflight", () => {
   });
 
   it("fails a plan step that reaches forty-eight Agent turns", async () => {
-    const toolTurns = Array.from({ length: 48 }, () =>
-      fauxAssistantMessage([fauxToolCall("list", { path: "." })]),
+    const toolTurns = Array.from({ length: 48 }, (_, index) =>
+      fauxAssistantMessage([fauxToolCall("list", { path: String(index) })]),
     );
     const runtime = await runtimeWith([classification("complex"), decision("plan"), ...toolTurns]);
     const { run } = await runOnce(runtime);
@@ -333,8 +333,8 @@ describe("UmaRuntime preflight", () => {
   });
 
   it("fails a direct Run at the global four-hundred-turn limit", async () => {
-    const toolTurns = Array.from({ length: 400 }, () =>
-      fauxAssistantMessage([fauxToolCall("list", { path: "." })]),
+    const toolTurns = Array.from({ length: 400 }, (_, index) =>
+      fauxAssistantMessage([fauxToolCall("list", { path: String(index) })]),
     );
     const runtime = await runtimeWith(toolTurns);
     const session = await runtime.createSession();
@@ -349,6 +349,29 @@ describe("UmaRuntime preflight", () => {
     expect(run.turnCount).toBe(400);
     expect(run.error).toContain("Run turn limit exceeded (400)");
   }, 20_000);
+
+  it("persists a warning and fails a Run after six repeated tool calls", async () => {
+    const runtime = await runtimeWith(
+      Array.from({ length: 6 }, () => fauxAssistantMessage([fauxToolCall("list", { path: "." })])),
+    );
+    const session = await runtime.createSession();
+    const terminal = waitForTerminal(runtime, session.id);
+    runtime.sendMessage(session.id, {
+      messageId: "repeated-tool-loop",
+      text: "keep polling the same directory",
+      mode: "direct",
+    });
+    const result = await terminal;
+    expect(result.status).toBe("failed");
+    expect(result.error).toBe("tool_loop_detected");
+    const warnings = runtime
+      .listSessionEvents(session.id, 0, 1_000)
+      .events.filter((event) => event.type === "run.loop_warning");
+    expect(warnings).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ level: "warning" }) }),
+      expect.objectContaining({ payload: expect.objectContaining({ level: "critical" }) }),
+    ]);
+  });
 
   it("corrects a rejected verification once without creating a new Run", async () => {
     const runtime = await runtimeWith([
@@ -906,6 +929,8 @@ describe("UmaRuntime preflight", () => {
         }),
       ),
       fauxAssistantMessage(JSON.stringify({ improvedAnswer: "Answer with the missing detail" })),
+      fauxAssistantMessage(JSON.stringify({ improvedAnswer: "Reset improvement from original" })),
+      fauxAssistantMessage(JSON.stringify({ passed: true, issues: [], suggestions: [] })),
     ]);
     const session = await runtime.createSession({ mode: "assistant" });
     const source = runtime.database.createRun(
@@ -948,6 +973,19 @@ describe("UmaRuntime preflight", () => {
       revisionOfMessageId: "quality-answer",
     });
     expect(runtime.database.getMessage("quality-answer").content).toBe("Original answer");
+    expect(() => runtime.reviewMessage("quality-question")).toThrow("assistant message");
+    const reset = runtime.improveMessage(revision?.id as string, { reset: true });
+    expect((await waitForRunTerminal(runtime, reset.id)).status).toBe("completed");
+    expect(
+      runtime
+        .getSnapshot(session.id)
+        .transcript.find((item) => item.runId === reset.id && item.role === "assistant"),
+    ).toMatchObject({
+      content: "Reset improvement from original",
+      revisionOfMessageId: "quality-answer",
+    });
+    const noFeedbackReview = runtime.reviewMessage("quality-answer");
+    expect((await waitForRunTerminal(runtime, noFeedbackReview.id)).status).toBe("completed");
   });
 
   it("reloads validated dynamic configuration atomically and defers unsafe active changes", async () => {
@@ -1002,6 +1040,13 @@ describe("UmaRuntime preflight", () => {
       "accepted",
     );
     expect(runtime.listOptimizationProposals()).toHaveLength(3);
+    database.diagnosticsReport = () =>
+      ({
+        slowModels: [{ provider: "faux", model: "fast", calls: 1, averageDurationMs: 4_999 }],
+        toolFailures: [],
+        recoveryFrequency: 0.05,
+      }) as ReturnType<typeof runtime.database.diagnosticsReport>;
+    expect(runtime.generateOptimizationProposals()).toEqual([]);
   });
 
   it("enforces command, attachment, profile, message-id, and memory safety edges", async () => {
