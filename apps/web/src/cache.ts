@@ -1,6 +1,6 @@
 import type { Session, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
 
-const DB_NAME = "uma-agent-v6";
+const DB_NAME = "uma-agent-v7";
 const SNAPSHOTS = "session-snapshots";
 const CURSORS = "session-cursors";
 const HISTORY = "session-history";
@@ -41,7 +41,7 @@ function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1);
     request.onupgradeneeded = () => {
-      for (const store of [SNAPSHOTS, CURSORS, HISTORY])
+      for (const store of [SNAPSHOTS, CURSORS, HISTORY, SESSIONS])
         if (!request.result.objectStoreNames.contains(store)) request.result.createObjectStore(store);
     };
     request.onsuccess = () => resolve(request.result);
