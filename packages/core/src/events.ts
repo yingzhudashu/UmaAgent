@@ -14,7 +14,7 @@ export class EventHub {
   private listeners = new Set<EventListener>();
   private resourceListeners = new Set<ResourceListener>();
   private pending: AgentEventEnvelope[] | undefined;
-  private pendingResources: Set<ResourceKind> | undefined;
+  private pendingResources: Map<ResourceKind, string | undefined> | undefined;
 
   constructor(private readonly database: UmaDatabase) {}
 
@@ -28,10 +28,10 @@ export class EventHub {
     return () => this.resourceListeners.delete(listener);
   }
 
-  invalidate(resource: ResourceKind): void {
+  invalidate(resource: ResourceKind, ownerId?: string): void {
     if (!this.pendingResources)
       throw new Error("Resource invalidations must be emitted inside an EventHub transaction");
-    this.pendingResources.add(resource);
+    this.pendingResources.set(resource, ownerId);
   }
 
   emit(
@@ -49,7 +49,7 @@ export class EventHub {
   transaction<T>(operation: () => T): T {
     if (this.pending) return operation();
     const events: AgentEventEnvelope[] = [];
-    const resources = new Set<ResourceKind>();
+    const resources = new Map<ResourceKind, string | undefined>();
     this.pending = events;
     this.pendingResources = resources;
     try {
@@ -57,7 +57,7 @@ export class EventHub {
       this.pending = undefined;
       this.pendingResources = undefined;
       for (const event of events) this.broadcast(event);
-      for (const resource of resources) this.broadcastResource(resource);
+      for (const [resource, ownerId] of resources) this.broadcastResource(resource, ownerId);
       return result;
     } catch (error) {
       this.pending = undefined;
@@ -76,11 +76,12 @@ export class EventHub {
     }
   }
 
-  private broadcastResource(resource: ResourceKind): void {
+  private broadcastResource(resource: ResourceKind, ownerId?: string): void {
     const event: ResourceInvalidated = {
       type: "resource.invalidated",
       protocolVersion: PROTOCOL_VERSION,
       resource,
+      ...(ownerId ? { ownerId } : {}),
       timestamp: Date.now(),
     };
     for (const listener of this.resourceListeners) {

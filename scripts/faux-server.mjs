@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
@@ -5,12 +6,12 @@ import { UmaRuntime } from "@uma-agent/core";
 import { createServer } from "../apps/server/dist/app.js";
 
 const port = Number(process.env.UMA_FAUX_PORT ?? 3210);
-const token = process.env.UMA_FAUX_TOKEN ?? "uma-dev-token";
+const tokenSecret = process.env.UMA_FAUX_TOKEN ?? "faux-local-token-012345678901234567890123";
+const tokenId = "00000000-0000-4000-8000-000000000001";
 const webOrigins = (process.env.UMA_FAUX_WEB_ORIGINS ?? `http://127.0.0.1:${port},http://127.0.0.1:3211`)
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
-process.env.UMA_FAUX_TOKEN = token;
 const stateDir = resolve(process.env.UMA_FAUX_STATE ?? ".uma-faux");
 if (process.env.UMA_FAUX_RESET_STATE === "1") {
   await rm(stateDir, { recursive: true, force: true });
@@ -25,7 +26,7 @@ const config = {
     webOrigins,
     maxUploadBytes: 20 * 1024 * 1024,
   },
-  auth: { tokenEnv: "UMA_FAUX_TOKEN", webSessionHours: 24 },
+  auth: { webSessionHours: 24 },
   models: [
     {
       provider: "faux",
@@ -115,6 +116,16 @@ const response = (context) => {
 faux.setResponses(Array.from({ length: 500 }, () => response));
 runtime.models.models.setProvider(faux.provider);
 await runtime.start();
+const fauxUser = runtime.database.createUser("admin");
+const token = `uma_pat_${tokenId}_${tokenSecret}`;
+runtime.database.putAuthToken({
+  id: tokenId,
+  userId: fauxUser.id,
+  tokenHash: createHash("sha256").update(tokenSecret).digest("hex"),
+  label: "faux-e2e",
+  scopes: ["user"],
+  expiresAt: Date.now() + 86_400_000,
+});
 const app = await createServer(runtime);
 await app.listen({ host: config.server.host, port });
 console.log(`UmaAgent faux server: http://127.0.0.1:${port} (token: ${token})`);

@@ -6,7 +6,6 @@ import { loadConfig } from "../src/config.js";
 
 const temporary: string[] = [];
 afterEach(async () => {
-  delete process.env.UMA_CONFIG_TOKEN;
   delete process.env.UMA_CONFIG_KEY;
   delete process.env.UMA_CONFIG_MCP_TOKEN;
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
@@ -26,7 +25,7 @@ async function configFile(server: { host: string; webOrigins: string[] }): Promi
         workspaceRoots: ["workspace"],
         maxUploadBytes: 1024,
       },
-      auth: { tokenEnv: "UMA_CONFIG_TOKEN", webSessionHours: 1 },
+      auth: { webSessionHours: 1 },
       providers: {
         test: { driver: "test", baseUrl: "https://model.example/v1", apiKeyEnv: "UMA_CONFIG_KEY" },
       },
@@ -68,7 +67,6 @@ async function mutateConfig(
 
 describe("loadConfig", () => {
   it("rejects public listeners without an explicit web origin", async () => {
-    process.env.UMA_CONFIG_TOKEN = "secret";
     process.env.UMA_CONFIG_KEY = "key";
     process.env.UMA_CONFIG_MCP_TOKEN = "mcp-secret";
     await expect(loadConfig(await configFile({ host: "0.0.0.0", webOrigins: [] }))).rejects.toThrow(
@@ -77,7 +75,6 @@ describe("loadConfig", () => {
   });
 
   it("requires model credentials and exact web origins", async () => {
-    process.env.UMA_CONFIG_TOKEN = "secret";
     const missingKey = await configFile({ host: "127.0.0.1", webOrigins: [] });
     await expect(loadConfig(missingKey)).rejects.toThrow("Missing model API key");
     process.env.UMA_CONFIG_KEY = "key";
@@ -89,13 +86,7 @@ describe("loadConfig", () => {
   });
 
   it("rejects whitespace-only secrets", async () => {
-    process.env.UMA_CONFIG_TOKEN = "   ";
     process.env.UMA_CONFIG_KEY = "key";
-    await expect(loadConfig(await configFile({ host: "127.0.0.1", webOrigins: [] }))).rejects.toThrow(
-      "Missing server token",
-    );
-
-    process.env.UMA_CONFIG_TOKEN = "secret";
     process.env.UMA_CONFIG_KEY = "\t";
     await expect(loadConfig(await configFile({ host: "127.0.0.1", webOrigins: [] }))).rejects.toThrow(
       "Missing model API key",
@@ -103,7 +94,6 @@ describe("loadConfig", () => {
   });
 
   it("loads defaults, resolves relative paths, removes duplicate origins, and parses MCP transports", async () => {
-    process.env.UMA_CONFIG_TOKEN = "secret";
     process.env.UMA_CONFIG_KEY = "key";
     process.env.UMA_CONFIG_MCP_TOKEN = "mcp-secret";
     const path = await mutateConfig((value) => {
@@ -136,7 +126,6 @@ describe("loadConfig", () => {
   });
 
   it("rejects malformed primitive, URL, model, role, MCP, and unknown-field configuration", async () => {
-    process.env.UMA_CONFIG_TOKEN = "secret";
     process.env.UMA_CONFIG_KEY = "key";
     const cases: Array<[(value: Record<string, unknown>) => void, RegExp]> = [
       [(value) => Object.assign(value, { extra: true }), /unknown fields/],

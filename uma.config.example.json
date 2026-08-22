@@ -7,10 +7,7 @@
     "webOrigins": ["http://127.0.0.1:3210", "http://127.0.0.1:3211"],
     "maxUploadBytes": 20971520
   },
-  "auth": {
-    "tokenEnv": "UMA_AUTH_TOKEN",
-    "webSessionHours": 168
-  },
+  "auth": { "webSessionHours": 168 },
   "providers": {
     "openai": { "driver": "openai", "baseUrl": "https://www.fastaitoken.com", "apiKeyEnv": "OPENAI_API_KEY" }
   },

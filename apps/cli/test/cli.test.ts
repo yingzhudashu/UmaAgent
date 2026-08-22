@@ -8,6 +8,7 @@ import { type UmaConfig, UmaRuntime } from "@uma-agent/core";
 import { spawn as spawnPty } from "node-pty";
 import { afterEach, describe, expect, it } from "vitest";
 import { createServer } from "../../server/src/app.js";
+import { AuthService } from "../../server/src/auth.js";
 import { createTuiAutocomplete } from "../src/tui-completion.js";
 
 const execute = promisify(execFile);
@@ -16,7 +17,7 @@ afterEach(async () => {
   for (const action of cleanup.splice(0).reverse()) await action();
 });
 
-function testConfig(root: string, tokenEnv: string): UmaConfig {
+function testConfig(root: string): UmaConfig {
   const model = { provider: "faux", id: "model" };
   return {
     server: {
@@ -27,7 +28,7 @@ function testConfig(root: string, tokenEnv: string): UmaConfig {
       webOrigins: [],
       maxUploadBytes: 1_024,
     },
-    auth: { tokenEnv, webSessionHours: 1 },
+    auth: { webSessionHours: 1 },
     models: [
       {
         ...model,
@@ -75,8 +76,7 @@ describe("Uma CLI JSON mode", () => {
 
   it("writes ordered protocol JSON to stdout and one terminal record", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-cli-"));
-    process.env.UMA_CLI_TEST_TOKEN = "secret";
-    const config = testConfig(root, "UMA_CLI_TEST_TOKEN");
+    const config = testConfig(root);
     const runtime = new UmaRuntime(config);
     const faux = fauxProvider({
       provider: "faux",
@@ -90,6 +90,10 @@ describe("Uma CLI JSON mode", () => {
     ]);
     runtime.models.models.setProvider(faux.provider);
     await runtime.start();
+    const testToken = new AuthService(runtime).issueToken(
+      runtime.database.createUser("admin").id,
+      "cli-test",
+    ).token;
     const app = await createServer(runtime, { webRoot: false });
     await app.listen({ host: "127.0.0.1", port: 0 });
     const address = app.server.address();
@@ -98,7 +102,6 @@ describe("Uma CLI JSON mode", () => {
       await app.close();
       await runtime.stop();
       await rm(root, { recursive: true, force: true });
-      delete process.env.UMA_CLI_TEST_TOKEN;
     });
 
     const result = await execute(
@@ -111,7 +114,7 @@ describe("Uma CLI JSON mode", () => {
         "--json",
         "hello from script",
         `--server=http://127.0.0.1:${address.port}`,
-        "--token=secret",
+        `--token=${testToken}`,
       ],
       { cwd: resolve("."), timeout: 15_000 },
     );
@@ -132,10 +135,11 @@ describe("Uma CLI JSON mode", () => {
   it("runs the Pi TUI in a real pseudoterminal with persistent history and completion", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-cli-pty-"));
     const cliState = join(root, "cli-state");
-    process.env.UMA_CLI_PTY_TOKEN = "secret";
-    const runtime = new UmaRuntime(testConfig(root, "UMA_CLI_PTY_TOKEN"));
+    const runtime = new UmaRuntime(testConfig(root));
     await runtime.start();
-    const session = await runtime.createSession({ title: "PTY session" });
+    const user = runtime.database.createUser("admin");
+    const testToken = new AuthService(runtime).issueToken(user.id, "cli-pty").token;
+    const session = await runtime.createSession({ title: "PTY session" }, user.id);
     const app = await createServer(runtime, { webRoot: false });
     await app.listen({ host: "127.0.0.1", port: 0 });
     const address = app.server.address();
@@ -144,7 +148,6 @@ describe("Uma CLI JSON mode", () => {
       await app.close();
       await runtime.stop();
       await rm(root, { recursive: true, force: true });
-      delete process.env.UMA_CLI_PTY_TOKEN;
     });
 
     const environment = Object.fromEntries(
@@ -159,7 +162,7 @@ describe("Uma CLI JSON mode", () => {
         "apps/cli/src/main.ts",
         "chat",
         `--server=http://127.0.0.1:${address.port}`,
-        "--token=secret",
+        `--token=${testToken}`,
         `--session=${session.id}`,
       ],
       { cwd: resolve("."), env: environment, cols: 100, rows: 30 },

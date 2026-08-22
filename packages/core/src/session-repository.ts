@@ -34,7 +34,7 @@ export class SessionRepository {
       )
       .run(
         id,
-        input.userId ?? null,
+        input.userId ?? "system",
         input.mode,
         input.title,
         input.workspace ?? null,

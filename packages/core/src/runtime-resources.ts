@@ -115,12 +115,12 @@ export class RuntimeResourceService {
     };
   }
 
-  listScheduledTasks() {
-    return this.deps.scheduler.list();
+  listScheduledTasks(ownerId?: string) {
+    return this.deps.scheduler.list(ownerId);
   }
 
-  createScheduledTask(input: CreateScheduledTaskRequest) {
-    return this.deps.scheduler.create(input);
+  createScheduledTask(input: CreateScheduledTaskRequest, ownerId?: string) {
+    return this.deps.scheduler.create(input, ownerId);
   }
 
   updateScheduledTask(id: string, input: UpdateScheduledTaskRequest) {
@@ -168,8 +168,8 @@ export class RuntimeResourceService {
     return this.deps.database.listRunCheckpoints(runId);
   }
 
-  listMemoryFacts(status?: "active" | "candidate" | "superseded" | "rejected") {
-    return this.deps.database.listMemoryFacts(status);
+  listMemoryFacts(status?: "active" | "candidate" | "superseded" | "rejected", ownerId?: string) {
+    return this.deps.database.listMemoryFacts(status, ownerId);
   }
 
   audit(runId: string) {
@@ -200,15 +200,15 @@ export class RuntimeResourceService {
     return this.deps.skillPackages.setStatus(id, status);
   }
 
-  getAgentProfile(): AgentProfile {
-    return this.deps.database.getAgentProfile();
+  getAgentProfile(userId = "system"): AgentProfile {
+    return this.deps.database.getAgentProfile(userId);
   }
 
-  updateAgentProfile(content: string): AgentProfile {
+  updateAgentProfile(content: string, userId = "system"): AgentProfile {
     if (content.length > 50_000) throw new Error("Agent profile is too large");
     return this.deps.events.transaction(() => {
-      const profile = this.deps.database.putAgentProfile(content);
-      this.deps.events.invalidate("profile");
+      const profile = this.deps.database.putAgentProfile(content, userId);
+      this.deps.events.invalidate("profile", userId);
       return profile;
     });
   }

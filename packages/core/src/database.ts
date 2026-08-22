@@ -59,7 +59,7 @@ import { MessageRepository } from "./message-repository.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   private readonly auditEvaluations: AuditEvaluationRepository;
@@ -1202,11 +1202,16 @@ export class UmaDatabase {
   }
 
   replaceKnowledgeSource(input: {
+    ownerId?: string;
     name: string;
     path: string;
     chunks: Array<{ filePath: string; content: string }>;
   }): KnowledgeSource {
-    const existing = row(this.db.prepare("SELECT id FROM knowledge_sources WHERE path=?"), input.path);
+    const existing = row(
+      this.db.prepare("SELECT id FROM knowledge_sources WHERE path=? AND owner_id=?"),
+      input.path,
+      input.ownerId ?? "system",
+    );
     const id = existing ? text(existing.id) : randomUUID();
     const now = Date.now();
     if (existing) {
@@ -1223,10 +1228,11 @@ export class UmaDatabase {
     } else {
       this.db
         .prepare(
-          "INSERT INTO knowledge_sources(id,name,path,document_count,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+          "INSERT INTO knowledge_sources(id,owner_id,name,path,document_count,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
         )
         .run(
           id,
+          input.ownerId ?? "system",
           input.name,
           input.path,
           new Set(input.chunks.map((chunk) => chunk.filePath)).size,
@@ -1249,8 +1255,12 @@ export class UmaDatabase {
     return this.getKnowledgeSource(id);
   }
 
-  createKnowledgeSource(input: { name: string; path: string }): KnowledgeSource {
-    const existing = row(this.db.prepare("SELECT id FROM knowledge_sources WHERE path=?"), input.path);
+  createKnowledgeSource(input: { name: string; path: string; ownerId?: string }): KnowledgeSource {
+    const existing = row(
+      this.db.prepare("SELECT id FROM knowledge_sources WHERE path=? AND owner_id=?"),
+      input.path,
+      input.ownerId ?? "system",
+    );
     const now = Date.now();
     const id = existing ? text(existing.id) : randomUUID();
     if (existing) {
@@ -1265,9 +1275,9 @@ export class UmaDatabase {
     } else
       this.db
         .prepare(
-          "INSERT INTO knowledge_sources(id,name,path,document_count,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+          "INSERT INTO knowledge_sources(id,owner_id,name,path,document_count,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
         )
-        .run(id, input.name, input.path, 0, "queued", now, now);
+        .run(id, input.ownerId ?? "system", input.name, input.path, 0, "queued", now, now);
     return this.getKnowledgeSource(id);
   }
 
@@ -1307,29 +1317,38 @@ export class UmaDatabase {
     };
   }
 
-  listKnowledgeSources(): KnowledgeSource[] {
-    return rows(this.db.prepare("SELECT id FROM knowledge_sources ORDER BY created_at DESC")).map((value) =>
-      this.getKnowledgeSource(text(value.id)),
-    );
+  listKnowledgeSources(ownerId?: string): KnowledgeSource[] {
+    return rows(
+      ownerId
+        ? this.db.prepare("SELECT id FROM knowledge_sources WHERE owner_id=? ORDER BY created_at DESC")
+        : this.db.prepare("SELECT id FROM knowledge_sources ORDER BY created_at DESC"),
+      ...(ownerId ? [ownerId] : []),
+    ).map((value) => this.getKnowledgeSource(text(value.id)));
+  }
+
+  knowledgeOwner(id: string): string | undefined {
+    const value = row(this.db.prepare("SELECT owner_id FROM knowledge_sources WHERE id=?"), id);
+    return value ? text(value.owner_id) : undefined;
   }
 
   searchKnowledge(
     query: string,
     limit = 5,
     sourceId?: string,
+    ownerId?: string,
   ): Array<{ sourceId: string; sourceName: string; filePath: string; content: string }> {
     const match = ftsQuery(query);
     if (!match) return [];
     const statement = sourceId
       ? this.db.prepare(
-          "SELECT f.source_id,s.name AS source_name,f.file_path,f.content FROM knowledge_fts f JOIN knowledge_sources s ON s.id=f.source_id WHERE knowledge_fts MATCH ? AND f.source_id=? ORDER BY bm25(knowledge_fts) LIMIT ?",
+          "SELECT f.source_id,s.name AS source_name,f.file_path,f.content FROM knowledge_fts f JOIN knowledge_sources s ON s.id=f.source_id WHERE knowledge_fts MATCH ? AND f.source_id=? AND (? IS NULL OR s.owner_id=?) ORDER BY bm25(knowledge_fts) LIMIT ?",
         )
       : this.db.prepare(
-          "SELECT f.source_id,s.name AS source_name,f.file_path,f.content FROM knowledge_fts f JOIN knowledge_sources s ON s.id=f.source_id WHERE knowledge_fts MATCH ? ORDER BY bm25(knowledge_fts) LIMIT ?",
+          "SELECT f.source_id,s.name AS source_name,f.file_path,f.content FROM knowledge_fts f JOIN knowledge_sources s ON s.id=f.source_id WHERE knowledge_fts MATCH ? AND (? IS NULL OR s.owner_id=?) ORDER BY bm25(knowledge_fts) LIMIT ?",
         );
     const values = sourceId
-      ? rows(statement, match, sourceId, Math.max(1, Math.min(100, limit)))
-      : rows(statement, match, Math.max(1, Math.min(100, limit)));
+      ? rows(statement, match, sourceId, ownerId ?? null, ownerId ?? null, Math.max(1, Math.min(100, limit)))
+      : rows(statement, match, ownerId ?? null, ownerId ?? null, Math.max(1, Math.min(100, limit)));
     return values.map((value) => ({
       sourceId: text(value.source_id),
       sourceName: text(value.source_name),
@@ -1487,6 +1506,7 @@ export class UmaDatabase {
   }
 
   addMemoryFact(input: {
+    ownerId?: string;
     sessionId?: string;
     scope: MemoryFact["scope"];
     key: string;
@@ -1504,8 +1524,9 @@ export class UmaDatabase {
         input.status === "active"
           ? row(
               this.db.prepare(
-                "SELECT id,value FROM memory_facts WHERE scope=? AND COALESCE(session_id,'')=COALESCE(?,'') AND key=? AND status='active' ORDER BY updated_at DESC LIMIT 1",
+                "SELECT id,value FROM memory_facts WHERE owner_id=? AND scope=? AND COALESCE(session_id,'')=COALESCE(?,'') AND key=? AND status='active' ORDER BY updated_at DESC LIMIT 1",
               ),
+              input.ownerId ?? "system",
               input.scope,
               input.sessionId ?? null,
               input.key,
@@ -1517,10 +1538,11 @@ export class UmaDatabase {
           .run(now, text(previous.id));
       this.db
         .prepare(
-          "INSERT INTO memory_facts(id,session_id,scope,key,value,category,confidence,evidence,source_run_id,status,supersedes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO memory_facts(id,owner_id,session_id,scope,key,value,category,confidence,evidence,source_run_id,status,supersedes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
         .run(
           id,
+          input.ownerId ?? "system",
           input.sessionId ?? null,
           input.scope,
           input.key,
@@ -1561,13 +1583,31 @@ export class UmaDatabase {
     };
   }
 
-  listMemoryFacts(status?: MemoryFact["status"]): MemoryFact[] {
+  memoryOwner(id: string): string | undefined {
+    const value = row(this.db.prepare("SELECT owner_id FROM memory_facts WHERE id=?"), id);
+    return value ? text(value.owner_id) : undefined;
+  }
+
+  listMemoryFacts(status?: MemoryFact["status"], ownerId?: string): MemoryFact[] {
     const values = status
       ? rows(
-          this.db.prepare("SELECT id FROM memory_facts WHERE status=? ORDER BY updated_at DESC,rowid DESC"),
-          status,
+          ownerId
+            ? this.db.prepare(
+                "SELECT id FROM memory_facts WHERE status=? AND owner_id=? ORDER BY updated_at DESC,rowid DESC",
+              )
+            : this.db.prepare(
+                "SELECT id FROM memory_facts WHERE status=? ORDER BY updated_at DESC,rowid DESC",
+              ),
+          ...(ownerId ? [status, ownerId] : [status]),
         )
-      : rows(this.db.prepare("SELECT id FROM memory_facts ORDER BY updated_at DESC,rowid DESC"));
+      : rows(
+          ownerId
+            ? this.db.prepare(
+                "SELECT id FROM memory_facts WHERE owner_id=? ORDER BY updated_at DESC,rowid DESC",
+              )
+            : this.db.prepare("SELECT id FROM memory_facts ORDER BY updated_at DESC,rowid DESC"),
+          ...(ownerId ? [ownerId] : []),
+        );
     return values.map((value) => this.getMemoryFact(text(value.id)));
   }
 
@@ -1652,16 +1692,24 @@ export class UmaDatabase {
       .run(sessionId);
   }
 
-  getAgentProfile(): AgentProfile {
-    const value = row(this.db.prepare("SELECT content,updated_at FROM agent_profile WHERE singleton=1"));
+  getAgentProfile(userId = "system"): AgentProfile {
+    this.db
+      .prepare("INSERT OR IGNORE INTO agent_profiles(user_id,content,updated_at) VALUES(?,?,?)")
+      .run(userId, "", 0);
+    const value = row(
+      this.db.prepare("SELECT content,updated_at FROM agent_profiles WHERE user_id=?"),
+      userId,
+    );
     return { content: text(value?.content), updatedAt: integer(value?.updated_at) };
   }
 
-  putAgentProfile(content: string): AgentProfile {
+  putAgentProfile(content: string, userId = "system"): AgentProfile {
     this.db
-      .prepare("UPDATE agent_profile SET content=?,updated_at=? WHERE singleton=1")
-      .run(content, Date.now());
-    return this.getAgentProfile();
+      .prepare(
+        "INSERT INTO agent_profiles(user_id,content,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at",
+      )
+      .run(userId, content, Date.now());
+    return this.getAgentProfile(userId);
   }
 
   addQualityAssessment(input: Omit<QualityAssessment, "id" | "createdAt">): QualityAssessment {
@@ -1897,6 +1945,7 @@ export class UmaDatabase {
   }
 
   createScheduledTask(input: {
+    ownerId?: string;
     name: string;
     prompt: string;
     sessionMode: SessionMode;
@@ -1908,10 +1957,11 @@ export class UmaDatabase {
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO scheduled_tasks(id,name,prompt,session_mode,schedule_json,enabled,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO scheduled_tasks(id,owner_id,name,prompt,session_mode,schedule_json,enabled,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
+        input.ownerId ?? "system",
         input.name,
         input.prompt,
         input.sessionMode,
@@ -1930,10 +1980,18 @@ export class UmaDatabase {
     return toScheduledTask(value);
   }
 
-  listScheduledTasks(): ScheduledTask[] {
-    return rows(this.db.prepare("SELECT * FROM scheduled_tasks ORDER BY created_at DESC")).map(
-      toScheduledTask,
-    );
+  listScheduledTasks(ownerId?: string): ScheduledTask[] {
+    return rows(
+      ownerId
+        ? this.db.prepare("SELECT * FROM scheduled_tasks WHERE owner_id=? ORDER BY created_at DESC")
+        : this.db.prepare("SELECT * FROM scheduled_tasks ORDER BY created_at DESC"),
+      ...(ownerId ? [ownerId] : []),
+    ).map(toScheduledTask);
+  }
+
+  scheduledTaskOwner(id: string): string | undefined {
+    const value = row(this.db.prepare("SELECT owner_id FROM scheduled_tasks WHERE id=?"), id);
+    return value ? text(value.owner_id) : undefined;
   }
 
   listDueScheduledTasks(now: number): ScheduledTask[] {

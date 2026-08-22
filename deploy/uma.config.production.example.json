@@ -7,7 +7,7 @@
     "webOrigins": ["https://agent.example.com"],
     "maxUploadBytes": 20971520
   },
-  "auth": { "tokenEnv": "UMA_AUTH_TOKEN", "webSessionHours": 168 },
+  "auth": { "webSessionHours": 168 },
   "providers": {
     "openai": {
       "driver": "openai",

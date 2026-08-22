@@ -1,6 +1,6 @@
 # UmaAgent 服务器部署与验收
 
-本文档面向 UmaAgent `1.2.0`、Protocol v10、SQLite schema 13。推荐使用 Docker Compose 部署；Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
+本文档面向 UmaAgent `1.2.0`、Protocol v11、SQLite schema 14。Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
 
 ## 1. 部署前确认
 
@@ -21,7 +21,6 @@ chmod 600 .env
 编辑 `.env`，至少设置三个互不相同的高熵值：
 
 ```bash
-openssl rand -hex 32 # UMA_AUTH_TOKEN
 openssl rand -hex 32 # BROWSER_WORKER_TOKEN
 ```
 
@@ -33,7 +32,7 @@ openssl rand -hex 32 # BROWSER_WORKER_TOKEN
 
 - 将 `server.webOrigins` 改为 Web 实际使用的精确 Origin，例如 `https://agent.example.com`。不接受通配符、路径或结尾 `/`。
 - 核对 Provider `baseUrl`、模型 ID、API 类型、上下文窗口、输出上限和 capabilities。示例值不是对任意 Provider 的兼容承诺。
-- 密钥只通过 `apiKeyEnv`、`tokenEnv` 和 `authTokenEnv` 引用环境变量，不能写进 JSON。
+- 密钥只通过 `apiKeyEnv` 和 `authTokenEnv` 引用环境变量，不能写进 JSON。
 - 多用户 Web/移动端认证使用用户个人令牌；个人令牌只保存哈希，Web Cookie 绑定用户。原生 App 的 PKCE redirect 必须通过 `UMA_OAUTH_REDIRECTS` 显式配置为 `clientId|redirectUri`，禁止通配符。
 - `workspaceRoots` 保持为容器内路径 `/data/workspace`。远程客户端路径不是服务器工作区路径。
 - 只在对应服务确实启动时加入 MCP；readiness 会要求配置中的所有 MCP 已连接。
@@ -168,18 +167,18 @@ Browser Worker 和 Feishu 服务应使用各自的 systemd unit 与环境文件�
 Liveness 只表示进程事件循环可响应；readiness 还检查数据库、工作区、模型目录和 MCP：
 
 ```bash
-curl --fail http://127.0.0.1:3210/api/v10/health/live
-curl --fail http://127.0.0.1:3210/api/v10/health/ready
+curl --fail http://127.0.0.1:3210/api/v11/health/live
+curl --fail http://127.0.0.1:3210/api/v11/health/ready
 curl --fail \
-  -H "Authorization: Bearer ${UMA_AUTH_TOKEN}" \
-  http://127.0.0.1:3210/api/v10/sessions
+  -H "Authorization: Bearer ${UMA_TOKEN}" \
+  http://127.0.0.1:3210/api/v11/sessions
 ```
 
 再从另一台设备验证 SDK/CLI，而不是只在服务器本机测试：
 
 ```bash
 export UMA_SERVER_URL=https://agent.example.com
-export UMA_TOKEN='与服务器 UMA_AUTH_TOKEN 相同的值'
+export UMA_TOKEN='当前用户个人访问令牌'
 npm run cli -- doctor
 npm run cli -- chat
 ```
@@ -318,7 +317,7 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 | readiness 503 | workspace 不可访问、模型目录为空或某个已配置 MCP 未连接 |
 | Web 403 Origin | `server.webOrigins` 未包含浏览器地址的精确 Origin |
 | Web 可打开但无法登录 | Token 错误、跨站 Cookie 未使用 HTTPS、反向代理未传递 Host/协议 |
-| CLI 401 | `UMA_TOKEN` 与服务器 `UMA_AUTH_TOKEN` 不一致 |
+| CLI 401 | `UMA_TOKEN` 无效、已撤销或已过期 |
 | 模型运行失败 | Provider URL、模型 ID、API 类型、Key 或模型 capabilities 不匹配 |
 | Feishu 无入站 | 应用未发布、事件未启用、Open ID 不在白名单或长连接无法出站 |
 | Core readiness 等待 MCP | profile 未启动、Token 不一致、网络名/URL 错误或循环依赖配置未按本文启动 |
@@ -334,4 +333,4 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] Feishu 白名单、消息去重、重启恢复和可选卡片回调通过。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v10 和 schema 11，保留可回滚镜像与同版本备份。
+- [ ] 确认当前应用版本、Protocol v11 和 schema 14，保留可回滚 release 与同版本备份。

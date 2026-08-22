@@ -28,9 +28,13 @@ import {
   cacheCursor,
   cachedCursor,
   cachedHistory,
+  cachedSessions,
   cachedSnapshot,
   cacheHistory,
+  cacheSessions,
   cacheSnapshot,
+  clearCacheNamespace,
+  setCacheNamespace,
 } from "./cache.js";
 import { Login } from "./Login.js";
 
@@ -82,7 +86,22 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [historyHasMore, setHistoryHasMore] = useState<boolean>();
   const endRef = useRef<HTMLDivElement>(null);
 
-  const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => client.listSessions() });
+  const sessions = useQuery({
+    queryKey: ["sessions"],
+    queryFn: async () => {
+      try {
+        const bootstrap = await client.syncBootstrap();
+        setCacheNamespace(bootstrap.user.id, client.serverOrigin);
+        const values = bootstrap.sessions.map((item) => item.session);
+        await cacheSessions(values);
+        return values;
+      } catch (error) {
+        const cached = await cachedSessions();
+        if (cached) return cached;
+        throw error;
+      }
+    },
+  });
   const authenticated = loginRequired === false;
   const models = useQuery({
     queryKey: ["models"],
@@ -193,10 +212,14 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     };
   }, []);
   useEffect(() => {
-    if (sessions.error instanceof UmaClientError && sessions.error.status === 401) setLoginRequired(true);
+    if (sessions.error instanceof UmaClientError && sessions.error.status === 401) {
+      setLoginRequired(true);
+      void clearCacheNamespace();
+      client.close();
+    }
     if (sessions.isSuccess) setLoginRequired(false);
     if (!selected && sessions.data?.[0]) setSelected(sessions.data[0].id);
-  }, [sessions.error, sessions.data, sessions.isSuccess, selected]);
+  }, [sessions.error, sessions.data, sessions.isSuccess, selected, client]);
   useEffect(() => {
     if (authenticated) client.connectEvents();
   }, [authenticated, client]);

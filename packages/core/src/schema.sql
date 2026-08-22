@@ -10,6 +10,7 @@ CREATE TABLE users (
   last_login_at INTEGER
 );
 CREATE INDEX users_status_created ON users(status, created_at);
+INSERT INTO users(id,role,status,created_at,updated_at) VALUES('system','admin','active',0,0);
 
 CREATE TABLE auth_tokens (
   id TEXT PRIMARY KEY,
@@ -26,7 +27,7 @@ CREATE INDEX auth_tokens_user_active ON auth_tokens(user_id, revoked_at, expires
 
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
-  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL DEFAULT 'system' REFERENCES users(id) ON DELETE CASCADE,
   mode TEXT NOT NULL CHECK (mode IN ('workspace','assistant')),
   title TEXT NOT NULL,
   workspace TEXT,
@@ -130,6 +131,7 @@ CREATE INDEX approvals_pending ON approvals(status, created_at);
 
 CREATE TABLE memory_facts (
   id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL DEFAULT 'system' REFERENCES users(id) ON DELETE CASCADE,
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
   scope TEXT NOT NULL CHECK (scope IN ('global','session')),
   key TEXT NOT NULL,
@@ -166,12 +168,11 @@ CREATE VIRTUAL TABLE history_fts USING fts5(
   tokenize='trigram'
 );
 
-CREATE TABLE agent_profile (
-  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+CREATE TABLE agent_profiles (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
-INSERT INTO agent_profile(singleton,content,updated_at) VALUES(1,'',0);
 
 CREATE TABLE quality_assessments (
   id TEXT PRIMARY KEY,
@@ -341,6 +342,7 @@ CREATE TABLE context_summaries (
 
 CREATE TABLE knowledge_sources (
   id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL DEFAULT 'system' REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   path TEXT NOT NULL UNIQUE,
   document_count INTEGER NOT NULL DEFAULT 0,
@@ -360,6 +362,7 @@ CREATE VIRTUAL TABLE knowledge_fts USING fts5(id UNINDEXED, source_id UNINDEXED,
 
 CREATE TABLE scheduled_tasks (
   id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL DEFAULT 'system' REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   prompt TEXT NOT NULL,
   session_mode TEXT NOT NULL CHECK (session_mode IN ('workspace','assistant')),
@@ -406,4 +409,30 @@ CREATE TABLE oauth_authorization_codes (
 );
 CREATE INDEX oauth_codes_expiry ON oauth_authorization_codes(expires_at);
 
-PRAGMA user_version = 13;
+CREATE TABLE team_spaces (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE team_space_members (
+  space_id TEXT NOT NULL REFERENCES team_spaces(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK(role IN ('owner','member')),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(space_id,user_id)
+);
+CREATE TABLE external_identities (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  space_id TEXT REFERENCES team_spaces(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  UNIQUE(provider,tenant_id,subject_id),
+  CHECK((user_id IS NOT NULL) <> (space_id IS NOT NULL))
+);
+
+PRAGMA user_version = 14;

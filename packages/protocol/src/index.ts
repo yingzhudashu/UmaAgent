@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 10 as const;
+export const PROTOCOL_VERSION = 11 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -190,6 +190,22 @@ export const SessionSchema = Strict({
   updatedAt: Timestamp,
 });
 export type Session = Static<typeof SessionSchema>;
+
+export const SyncSessionSchema = Strict({
+  session: SessionSchema,
+  lastSequence: Type.Integer({ minimum: 0 }),
+});
+export type SyncSession = Static<typeof SyncSessionSchema>;
+
+export const SyncBootstrapSchema = Strict({
+  user: Strict({
+    id: Id,
+    role: Type.Union([Type.Literal("admin"), Type.Literal("user")]),
+  }),
+  sessions: Type.Array(SyncSessionSchema),
+  serverTime: Timestamp,
+});
+export type SyncBootstrap = Static<typeof SyncBootstrapSchema>;
 
 export const ApprovalSchema = Strict({
   id: Id,
@@ -652,9 +668,22 @@ export const ResourceInvalidatedSchema = Strict({
   type: Type.Literal("resource.invalidated"),
   protocolVersion: Type.Literal(PROTOCOL_VERSION),
   resource: ResourceKindSchema,
+  ownerId: Type.Optional(Id),
   timestamp: Timestamp,
 });
 export type ResourceInvalidated = Static<typeof ResourceInvalidatedSchema>;
+
+export const ResourceChangedSchema = Strict({
+  type: Type.Literal("resource.changed"),
+  protocolVersion: Type.Literal(PROTOCOL_VERSION),
+  resource: ResourceKindSchema,
+  resourceId: Id,
+  ownerId: Id,
+  revision: Type.Integer({ minimum: 1 }),
+  deleted: Type.Boolean(),
+  timestamp: Timestamp,
+});
+export type ResourceChanged = Static<typeof ResourceChangedSchema>;
 
 export const ResourceResyncRequiredSchema = Strict({
   type: Type.Literal("resource.resync_required"),

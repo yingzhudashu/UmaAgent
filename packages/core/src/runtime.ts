@@ -313,8 +313,9 @@ export class UmaRuntime {
       | "config"
       | "evaluations"
       | "optimization",
+    ownerId?: string,
   ): void {
-    this.events.transaction(() => this.events.invalidate(resource));
+    this.events.transaction(() => this.events.invalidate(resource, ownerId));
   }
   listSessions(userId?: string): Session[] {
     return userId ? this.database.listUserSessions(userId) : this.resources.listSessions();
@@ -343,11 +344,11 @@ export class UmaRuntime {
   publicConfig(): PublicConfig {
     return this.resources.publicConfig();
   }
-  listScheduledTasks() {
-    return this.resources.listScheduledTasks();
+  listScheduledTasks(ownerId?: string) {
+    return this.resources.listScheduledTasks(ownerId);
   }
-  createScheduledTask(input: CreateScheduledTaskRequest) {
-    return this.resources.createScheduledTask(input);
+  createScheduledTask(input: CreateScheduledTaskRequest, ownerId?: string) {
+    return this.resources.createScheduledTask(input, ownerId);
   }
   updateScheduledTask(id: string, input: UpdateScheduledTaskRequest) {
     return this.resources.updateScheduledTask(id, input);
@@ -556,16 +557,18 @@ export class UmaRuntime {
     }
     return task;
   }
-  listMemoryFacts(status?: "active" | "candidate" | "superseded" | "rejected") {
-    return this.resources.listMemoryFacts(status);
+  listMemoryFacts(status?: "active" | "candidate" | "superseded" | "rejected", ownerId?: string) {
+    return this.resources.listMemoryFacts(status, ownerId);
   }
-  createMemoryFact(sessionId: string, scope: "global" | "session", content: string) {
+  createMemoryFact(sessionId: string, scope: "global" | "session", content: string, ownerId?: string) {
     this.database.getSession(sessionId);
+    const owner = ownerId ?? this.database.sessionOwner(sessionId) ?? "system";
     const normalized = content.trim();
     if (!normalized) throw new Error("Memory content is required");
     if (isSecretLike(normalized)) throw new Error("Memory content appears to contain a secret");
     return this.events.transaction(() => {
       const fact = this.database.addMemoryFact({
+        ownerId: owner,
         sessionId,
         scope,
         key: `explicit.${normalized
@@ -580,7 +583,7 @@ export class UmaRuntime {
         status: "active",
       });
       this.events.emit(sessionId, undefined, "memory.updated", fact);
-      this.events.invalidate("memory");
+      this.events.invalidate("memory", owner);
       return fact;
     });
   }
@@ -593,15 +596,16 @@ export class UmaRuntime {
         const run = this.database.getRun(fact.sourceRunId);
         this.events.emit(run.sessionId, run.id, "memory.updated", fact);
       }
-      this.events.invalidate("memory");
+      this.events.invalidate("memory", this.database.memoryOwner(id));
       return fact;
     });
   }
   deleteMemoryFact(id: string): void {
     const fact = this.database.getMemoryFact(id);
+    const owner = this.database.memoryOwner(id);
     if (!fact.sessionId) {
       this.database.deleteMemoryFact(id);
-      this.invalidateResource("memory");
+      this.invalidateResource("memory", owner);
       return;
     }
     this.events.transaction(() => {
@@ -610,7 +614,7 @@ export class UmaRuntime {
         ...fact,
         deleted: true,
       });
-      this.events.invalidate("memory");
+      this.events.invalidate("memory", owner);
     });
   }
   audit(runId: string) {
@@ -639,12 +643,12 @@ export class UmaRuntime {
     return this.resources.setSkillStatus(id, status);
   }
 
-  getAgentProfile(): AgentProfile {
-    return this.resources.getAgentProfile();
+  getAgentProfile(userId = "system"): AgentProfile {
+    return this.resources.getAgentProfile(userId);
   }
 
-  updateAgentProfile(content: string): AgentProfile {
-    return this.resources.updateAgentProfile(content);
+  updateAgentProfile(content: string, userId = "system"): AgentProfile {
+    return this.resources.updateAgentProfile(content, userId);
   }
 
   searchHistory(sessionId: string, query: string, limit?: number): TranscriptItem[] {

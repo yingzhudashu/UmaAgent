@@ -36,7 +36,7 @@ try {
     cases: results,
   };
   const stored = await client.createEvaluationReport(input);
-  const report = { protocolVersion: 10, timestamp: Date.now(), categories, ...stored };
+  const report = { protocolVersion: 11, timestamp: Date.now(), categories, ...stored };
   process.stdout.write(`${JSON.stringify(report)}\n`);
   const junitPath = process.env.EVAL_JUNIT_PATH?.trim();
   const historyPath = process.env.EVAL_HISTORY_PATH?.trim();

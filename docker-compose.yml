@@ -6,7 +6,6 @@ services:
     ports:
       - "127.0.0.1:3210:3210"
     environment:
-      UMA_AUTH_TOKEN: ${UMA_AUTH_TOKEN:?set UMA_AUTH_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
       BROWSER_WORKER_TOKEN: ${BROWSER_WORKER_TOKEN:?set BROWSER_WORKER_TOKEN}
       FEISHU_MCP_TOKEN: ${FEISHU_MCP_TOKEN:-}
@@ -52,7 +51,7 @@ services:
       FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
       FEISHU_ALLOWED_OPEN_IDS: ${FEISHU_ALLOWED_OPEN_IDS:-}
       UMA_SERVER_URL: http://uma:3210
-      UMA_TOKEN: ${UMA_AUTH_TOKEN}
+      UMA_TOKEN: ${UMA_TOKEN:?set UMA_TOKEN}
       FEISHU_STATE_DIR: /data/feishu
       FEISHU_HOST: 0.0.0.0
       FEISHU_PORT: 3220
@@ -76,7 +75,7 @@ services:
       FEISHU_MCP_PORT: 3240
       FEISHU_MCP_AUTH_TOKEN: ${FEISHU_MCP_TOKEN:-}
       UMA_SERVER_URL: http://uma:3210
-      UMA_TOKEN: ${UMA_AUTH_TOKEN}
+      UMA_TOKEN: ${UMA_TOKEN:?set UMA_TOKEN}
     expose:
       - "3240"
     depends_on:

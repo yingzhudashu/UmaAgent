@@ -41,7 +41,7 @@ export interface UmaConfig {
     webOrigins: string[];
     maxUploadBytes: number;
   };
-  auth: { tokenEnv: string; webSessionHours: number };
+  auth: { webSessionHours: number };
   models: UmaModelConfig[];
   defaultModel: ModelRef;
   defaultThinkingLevel: ThinkingLevel;

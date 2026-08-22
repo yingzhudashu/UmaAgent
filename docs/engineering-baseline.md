@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本保持 UmaAgent 1.2.0、Protocol v10 和 SQLite schema 11。内部工程治理不改变公共协议；数据库 schema 只有在表或索引实际变化时才升级，旧 schema 仍直接拒绝启动，不提供 migration 或兼容路径。
+当前版本保持 UmaAgent 1.2.0、Protocol v11 和 SQLite schema 14。数据库只接受 schema 14，旧 schema 直接拒绝启动，不提供 migration 或兼容路径。
 
 ## 已落地的边界
 

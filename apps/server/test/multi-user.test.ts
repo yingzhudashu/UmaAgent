@@ -15,7 +15,7 @@ describe("multi-user authentication", () => {
     roots.push(root);
     const database = new (await import("@uma-agent/core")).UmaDatabase(root);
     const runtime = { database, config: { auth: { webSessionHours: 1 } } } as unknown as UmaRuntime;
-    const auth = new AuthService(runtime, "break-glass-secret");
+    const auth = new AuthService(runtime);
     const first = auth.register("phone");
     const second = auth.register("browser");
     expect(first.token).not.toBe(second.token);

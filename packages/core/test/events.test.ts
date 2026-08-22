@@ -88,7 +88,7 @@ describe("EventHub", () => {
       1,
       expect.objectContaining({
         type: "resource.invalidated",
-        protocolVersion: 10,
+        protocolVersion: 11,
         resource: "tasks",
       }),
     );

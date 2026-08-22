@@ -7,7 +7,8 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 const baseline = JSON.parse(await readFile(resolve("scripts/perf-baseline.json"), "utf8"));
 const port = Number(process.env.UMA_PERF_PORT ?? 33321);
-const token = process.env.UMA_PERF_TOKEN ?? "uma-perf-token";
+const tokenSecret = process.env.UMA_PERF_TOKEN ?? "faux-perf-token-012345678901234567890123";
+const token = `uma_pat_00000000-0000-4000-8000-000000000001_${tokenSecret}`;
 const stateDir = resolve(process.env.UMA_PERF_STATE ?? `.uma-perf-${process.pid}`);
 const requireBudget = process.env.UMA_PERF_REQUIRE === "1";
 const messages = Number(process.env.UMA_PERF_MESSAGES ?? baseline.smokeMessages);
@@ -23,7 +24,7 @@ const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
   env: {
     ...process.env,
     UMA_FAUX_PORT: String(port),
-    UMA_FAUX_TOKEN: token,
+    UMA_FAUX_TOKEN: tokenSecret,
     UMA_FAUX_STATE: stateDir,
     UMA_FAUX_RESET_STATE: "1",
   },
@@ -37,7 +38,7 @@ server.stderr.on("data", (chunk) => {
   output = `${output}${chunk}`.slice(-10_000);
 });
 
-const base = `http://127.0.0.1:${port}/api/v10`;
+const base = `http://127.0.0.1:${port}/api/v11`;
 async function api(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
     ...options,

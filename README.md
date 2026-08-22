@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.2.0`，协议版本为 `10`，SQLite schema 为 `13`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.2.0`，协议版本为 `11`，SQLite schema 为 `14`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -34,7 +34,6 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 ```powershell
 npm install --ignore-scripts
 Copy-Item uma.config.example.json uma.config.json
-$env:UMA_AUTH_TOKEN = "生成一个高熵 Break-glass 运维令牌"
 $env:UMA_OAUTH_REDIRECTS = "uma-mobile|com.example.uma:/oauth/callback"
 $env:OPENAI_API_KEY = "你的模型密钥"
 npm run build
@@ -44,7 +43,7 @@ npm start
 打开 `http://127.0.0.1:3210`。CLI 使用：
 
 ```powershell
-$env:UMA_TOKEN = $env:UMA_AUTH_TOKEN
+$env:UMA_TOKEN = "个人访问令牌"
 node apps/cli/dist/main.js chat
 ```
 
@@ -120,38 +119,38 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 ## API 摘要
 
-服务器支持多用户隔离：`POST /api/v10/auth/register` 创建用户并一次性返回个人令牌，
+服务器支持多用户隔离：`POST /api/v11/auth/register` 创建用户并一次性返回个人令牌，
 `/auth/login` 将令牌交换为绑定用户的 HttpOnly Cookie，`/auth/me`、`/auth/tokens` 提供令牌
 查询和撤销。Session、Run、Task、Approval、Message、Attachment 和工作区请求均按用户所有权
 校验。移动端或其他网页可使用 `/auth/authorize` + `/auth/token` 的 S256 PKCE 流程；服务器只
 接受环境变量 `UMA_OAUTH_REDIRECTS` 中的精确 `clientId|redirectUri` 配对。
 
-- `GET/POST /api/v10/sessions`
-- `GET /api/v10/sessions/:id/snapshot`
-- `GET /api/v10/sessions/:id/events?after=<sequence>` 增量事件
-- `GET /api/v10/sessions/:id/history?before=<sequence>` 历史分页
-- `POST /api/v10/sessions/:id/messages|cancel|compact`
-- `PATCH /api/v10/sessions/:id` 可更新 `queueMode`
-- `POST /api/v10/messages/:id/review|improve`、`GET /api/v10/runs/:id/quality`
-- `POST /api/v10/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
-- `GET /api/v10/attachments/:id/content`
-- `GET /api/v10/runs/:id/checkpoints|actions`
-- `POST /api/v10/runs/:id/resume|cancel`
-- `POST /api/v10/runs/:id/actions/:actionId/decide`
-- `POST /api/v10/approvals/:id`、`POST /api/v10/uploads`
-- `GET /api/v10/health/live|ready`
-- `GET /api/v10/events` WebSocket
-- `/api/v10/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
-- `GET /api/v10/knowledge/search`、`POST /api/v10/knowledge/:id/reindex`
-- `GET/POST /api/v10/evaluations`、`GET /api/v10/evaluations/:id`
-- `DELETE /api/v10/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
-- `/api/v10/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
-- `/api/v10/skills/search|install` 与技能 enable/disable/reject 生命周期
-- `POST /api/v10/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
-- `GET /api/v10/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
-- `/api/v10/schedules` 调度 CRUD、立即执行与运行历史
-- `GET /api/v10/reports/operations|diagnostics` 脱敏运行统计
-- `/api/v10/optimization-proposals` 只读证据、建议和人工接受/拒绝状态
+- `GET/POST /api/v11/sessions`
+- `GET /api/v11/sessions/:id/snapshot`
+- `GET /api/v11/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v11/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v11/sessions/:id/messages|cancel|compact`
+- `PATCH /api/v11/sessions/:id` 可更新 `queueMode`
+- `POST /api/v11/messages/:id/review|improve`、`GET /api/v11/runs/:id/quality`
+- `POST /api/v11/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
+- `GET /api/v11/attachments/:id/content`
+- `GET /api/v11/runs/:id/checkpoints|actions`
+- `POST /api/v11/runs/:id/resume|cancel`
+- `POST /api/v11/runs/:id/actions/:actionId/decide`
+- `POST /api/v11/approvals/:id`、`POST /api/v11/uploads`
+- `GET /api/v11/health/live|ready`
+- `GET /api/v11/events` WebSocket
+- `/api/v11/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `GET /api/v11/knowledge/search`、`POST /api/v11/knowledge/:id/reindex`
+- `GET/POST /api/v11/evaluations`、`GET /api/v11/evaluations/:id`
+- `DELETE /api/v11/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
+- `/api/v11/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
+- `/api/v11/skills/search|install` 与技能 enable/disable/reject 生命周期
+- `POST /api/v11/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
+- `GET /api/v11/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
+- `/api/v11/schedules` 调度 CRUD、立即执行与运行历史
+- `GET /api/v11/reports/operations|diagnostics` 脱敏运行统计
+- `/api/v11/optimization-proposals` 只读证据、建议和人工接受/拒绝状态
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
@@ -166,7 +165,7 @@ $env:FEISHU_VERIFICATION_TOKEN = "..."
 $env:FEISHU_ENCRYPT_KEY = "..."
 $env:FEISHU_ALLOWED_OPEN_IDS = "ou_owner_open_id"
 $env:UMA_SERVER_URL = "http://127.0.0.1:3210"
-$env:UMA_TOKEN = $env:UMA_AUTH_TOKEN
+$env:UMA_TOKEN = "个人访问令牌"
 $env:FEISHU_HOST = "127.0.0.1"
 npm run build --workspace=@uma-agent/feishu-adapter
 npm run start --workspace=@uma-agent/feishu-adapter
@@ -198,7 +197,7 @@ npm run start --workspace=@uma-agent/browser-worker
 
 ```powershell
 $env:UMA_SERVER_URL = "http://127.0.0.1:3210"
-$env:UMA_TOKEN = $env:UMA_AUTH_TOKEN
+$env:UMA_TOKEN = "个人访问令牌"
 node apps/eval-runner/dist/main.js eval-suite.json
 ```
 

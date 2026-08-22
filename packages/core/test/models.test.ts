@@ -11,7 +11,7 @@ const config = (): UmaConfig => ({
     webOrigins: [],
     maxUploadBytes: 1024,
   },
-  auth: { tokenEnv: "UMA_TOKEN", webSessionHours: 1 },
+  auth: { webSessionHours: 1 },
   models: [
     {
       provider: "openai",

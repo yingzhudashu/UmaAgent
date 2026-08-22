@@ -12,7 +12,8 @@ if (!Number.isFinite(messageIntervalMs) || messageIntervalMs < 500)
   throw new Error("UMA_SOAK_MESSAGE_INTERVAL_MS must be at least 500");
 
 const port = Number(process.env.UMA_SOAK_PORT ?? 33212);
-const token = "uma-soak-token";
+const tokenSecret = "faux-soak-token-012345678901234567890123";
+const token = `uma_pat_00000000-0000-4000-8000-000000000001_${tokenSecret}`;
 const stateDir = resolve(process.env.UMA_SOAK_STATE ?? ".uma-faux-soak");
 await mkdir(stateDir, { recursive: true });
 const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
@@ -20,7 +21,7 @@ const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
   env: {
     ...process.env,
     UMA_FAUX_PORT: String(port),
-    UMA_FAUX_TOKEN: token,
+    UMA_FAUX_TOKEN: tokenSecret,
     UMA_FAUX_STATE: stateDir,
     UMA_FAUX_RESET_STATE: "1",
   },
@@ -34,7 +35,7 @@ server.stderr.on("data", (chunk) => {
   serverOutput = `${serverOutput}${chunk}`.slice(-20_000);
 });
 
-const baseUrl = `http://127.0.0.1:${port}/api/v10`;
+const baseUrl = `http://127.0.0.1:${port}/api/v11`;
 async function api(path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,

@@ -184,7 +184,6 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
       maxUploadBytes: numberValue(server.maxUploadBytes, "server.maxUploadBytes", 20 * 1024 * 1024),
     },
     auth: {
-      tokenEnv: typeof auth.tokenEnv === "string" ? auth.tokenEnv : "UMA_AUTH_TOKEN",
       webSessionHours: numberValue(auth.webSessionHours, "auth.webSessionHours", 168),
     },
     models,
@@ -217,8 +216,6 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
     if (!models.some((entry) => entry.provider === model.provider && entry.id === model.id))
       throw new Error(`Role ${role} references an unknown model`);
   }
-  if (!process.env[result.auth.tokenEnv]?.trim())
-    throw new Error(`Missing server token: ${result.auth.tokenEnv}`);
   for (const model of result.models) {
     if (!process.env[model.apiKeyEnv]?.trim()) throw new Error(`Missing model API key: ${model.apiKeyEnv}`);
   }

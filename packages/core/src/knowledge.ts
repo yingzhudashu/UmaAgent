@@ -57,19 +57,23 @@ export class KnowledgeService {
     this.allowedRoots = [...roots, join(stateDir, "uploads")].map((root) => resolve(root));
   }
 
-  list(): KnowledgeSource[] {
-    return this.database.listKnowledgeSources();
+  list(ownerId?: string): KnowledgeSource[] {
+    return this.database.listKnowledgeSources(ownerId);
   }
 
-  search(query: string, limit = 5, sourceId?: string): KnowledgeSearchHit[] {
-    return this.database.searchKnowledge(query, limit, sourceId);
+  search(query: string, limit = 5, sourceId?: string, ownerId?: string): KnowledgeSearchHit[] {
+    return this.database.searchKnowledge(query, limit, sourceId, ownerId);
   }
 
-  async enqueue(name: string, sourcePath: string): Promise<KnowledgeSource> {
+  async enqueue(name: string, sourcePath: string, ownerId?: string): Promise<KnowledgeSource> {
     const canonical = await this.validateSource(sourcePath);
-    const source = this.database.createKnowledgeSource({ name, path: canonical });
+    const source = this.database.createKnowledgeSource({
+      name,
+      path: canonical,
+      ...(ownerId ? { ownerId } : {}),
+    });
     this.changed();
-    void this.process(source.id, name, canonical).catch(() => undefined);
+    void this.process(source.id, name, canonical, ownerId).catch(() => undefined);
     return source;
   }
 
@@ -78,18 +82,22 @@ export class KnowledgeService {
     this.changed();
   }
 
-  async reindex(id: string): Promise<KnowledgeSource> {
+  async reindex(id: string, ownerId?: string): Promise<KnowledgeSource> {
     const source = this.database.getKnowledgeSource(id);
     this.database.updateKnowledgeSourceStatus(id, "queued");
     this.changed();
-    return this.process(id, source.name, source.path);
+    return this.process(id, source.name, source.path, ownerId);
   }
 
-  async index(name: string, sourcePath: string): Promise<KnowledgeSource> {
+  async index(name: string, sourcePath: string, ownerId?: string): Promise<KnowledgeSource> {
     const canonical = await this.validateSource(sourcePath);
-    const source = this.database.createKnowledgeSource({ name, path: canonical });
+    const source = this.database.createKnowledgeSource({
+      name,
+      path: canonical,
+      ...(ownerId ? { ownerId } : {}),
+    });
     this.changed();
-    return this.process(source.id, name, canonical);
+    return this.process(source.id, name, canonical, ownerId);
   }
 
   private async validateSource(sourcePath: string): Promise<string> {
@@ -102,7 +110,12 @@ export class KnowledgeService {
     return canonical;
   }
 
-  private async process(id: string, name: string, canonical: string): Promise<KnowledgeSource> {
+  private async process(
+    id: string,
+    name: string,
+    canonical: string,
+    ownerId?: string,
+  ): Promise<KnowledgeSource> {
     this.database.updateKnowledgeSourceStatus(id, "parsing");
     this.changed();
     try {
@@ -122,7 +135,12 @@ export class KnowledgeService {
           indexed.push({ filePath: info.isFile() ? path : relative(canonical, path), content: chunk });
         });
       }
-      const source = this.database.replaceKnowledgeSource({ name, path: canonical, chunks: indexed });
+      const source = this.database.replaceKnowledgeSource({
+        name,
+        path: canonical,
+        chunks: indexed,
+        ...(ownerId ? { ownerId } : {}),
+      });
       this.changed();
       return source;
     } catch (error) {

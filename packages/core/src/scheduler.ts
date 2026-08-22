@@ -59,16 +59,17 @@ export class SchedulerService {
     while (this.executions.size) await Promise.allSettled([...this.executions]);
   }
 
-  list(): ScheduledTask[] {
-    return this.database.listScheduledTasks();
+  list(ownerId?: string): ScheduledTask[] {
+    return this.database.listScheduledTasks(ownerId);
   }
 
-  create(input: CreateScheduledTaskRequest): ScheduledTask {
+  create(input: CreateScheduledTaskRequest, ownerId?: string): ScheduledTask {
     const schedule = input.schedule;
     const enabled = input.enabled ?? true;
     const nextRunAt = enabled ? nextScheduleTime(schedule) : undefined;
     if (enabled && nextRunAt === undefined) throw new Error("Schedule has no future execution time");
     const result = this.database.createScheduledTask({
+      ...(ownerId ? { ownerId } : {}),
       name: input.name,
       prompt: input.prompt,
       sessionMode: input.sessionMode ?? "assistant",

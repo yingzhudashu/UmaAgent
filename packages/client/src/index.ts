@@ -33,6 +33,7 @@ import type {
   SkillInstallRequest,
   SkillPackage,
   SkillSummary,
+  SyncBootstrap,
   UpdateScheduledTaskRequest,
   UpdateSessionRequest,
 } from "@uma-agent/protocol";
@@ -68,7 +69,7 @@ export interface UmaRegistration {
 export interface UmaAuthMe {
   userId: string;
   role: "admin" | "user";
-  method: "web" | "access_token" | "break_glass";
+  method: "web" | "access_token";
   scopes: string[];
   tokens: Array<{
     id: string;
@@ -103,11 +104,15 @@ export class UmaClient {
     this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
+  get serverOrigin(): string {
+    return new URL(this.baseUrl).origin;
+  }
+
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v10${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v11${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -134,6 +139,7 @@ export class UmaClient {
     return this.request("/health/ready");
   }
   async login(token: string): Promise<{ ok: boolean }> {
+    this.closed = false;
     const result = await this.request<{ ok: boolean }>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ token }),
@@ -143,11 +149,16 @@ export class UmaClient {
   }
 
   register(label = "primary"): Promise<UmaRegistration> {
+    this.closed = false;
     return this.request("/auth/register", { method: "POST", body: JSON.stringify({ label }) });
   }
 
   authMe(): Promise<UmaAuthMe> {
     return this.request("/auth/me");
+  }
+
+  syncBootstrap(): Promise<SyncBootstrap> {
+    return this.request("/sync/bootstrap", { method: "POST" });
   }
 
   createToken(
@@ -500,7 +511,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v10/attachments/${encodeURIComponent(id)}/content`,
+      `${this.baseUrl}/api/v11/attachments/${encodeURIComponent(id)}/content`,
       { headers, credentials: "include" },
     );
     if (!response.ok) {
@@ -556,7 +567,7 @@ export class UmaClient {
 
   connectEvents(): void {
     if (this.socket || this.closed) return;
-    const url = new URL("/api/v10/events", this.baseUrl);
+    const url = new URL("/api/v11/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())

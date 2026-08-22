@@ -28,7 +28,7 @@ async function runtimeWith(responses: FauxResponseStep[]): Promise<UmaRuntime> {
       webOrigins: [],
       maxUploadBytes: 1024,
     },
-    auth: { tokenEnv: "UMA_FAUX_TOKEN", webSessionHours: 1 },
+    auth: { webSessionHours: 1 },
     models: [
       {
         provider: "faux",

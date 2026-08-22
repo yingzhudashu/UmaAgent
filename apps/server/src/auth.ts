@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { UmaRuntime } from "@uma-agent/core";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
@@ -8,7 +8,7 @@ const hash = (value: string) => createHash("sha256").update(value).digest("hex")
 export type AuthPrincipal = {
   userId: string;
   role: "admin" | "user";
-  method: "web" | "access_token" | "break_glass";
+  method: "web" | "access_token";
   scopes: string[];
 };
 
@@ -22,18 +22,7 @@ function parsePersonalToken(value: string): { id: string; secret: string } | und
 export class AuthService {
   private failures = new Map<string, { count: number; resetAt: number }>();
   private registrations = new Map<string, { count: number; resetAt: number }>();
-  private testPrincipal?: AuthPrincipal;
-  constructor(
-    private readonly runtime: UmaRuntime,
-    private readonly sharedToken: string | undefined,
-  ) {}
-
-  tokenMatches(token: string | undefined): boolean {
-    if (!this.sharedToken || !token) return false;
-    const actual = Buffer.from(hash(token));
-    const expected = Buffer.from(hash(this.sharedToken));
-    return actual.length === expected.length && timingSafeEqual(actual, expected);
-  }
+  constructor(private readonly runtime: UmaRuntime) {}
 
   private personalPrincipal(token: string | undefined): AuthPrincipal | undefined {
     if (!token) return undefined;
@@ -49,8 +38,6 @@ export class AuthService {
     const bearer = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
     const personal = this.personalPrincipal(bearer);
     if (personal) return personal;
-    if (this.tokenMatches(bearer))
-      return { userId: "break-glass", role: "admin", method: "break_glass", scopes: ["break_glass"] };
     const cookie = request.cookies[COOKIE_NAME];
     const session = cookie ? this.runtime.database.webSessionUser(hash(cookie)) : undefined;
     return session
@@ -60,7 +47,7 @@ export class AuthService {
 
   bearerAuthenticated(request: FastifyRequest): boolean {
     const bearer = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-    return Boolean(this.personalPrincipal(bearer) || this.tokenMatches(bearer));
+    return Boolean(this.personalPrincipal(bearer));
   }
 
   webSessionAuthenticated(request: FastifyRequest): boolean {
@@ -173,20 +160,6 @@ export class AuthService {
     const challenge = createHash("sha256").update(input.codeVerifier).digest("base64url");
     if (challenge !== record.codeChallenge) throw new Error("Invalid PKCE verifier");
     return this.issueToken(record.userId, `oauth:${input.clientId}`, 30);
-  }
-
-  testBreakGlassPrincipal(): AuthPrincipal | undefined {
-    if (process.env.NODE_ENV !== "test" || !this.sharedToken) return undefined;
-    if (this.testPrincipal) return this.testPrincipal;
-    const created = this.runtime.database.createUser("admin");
-    this.runtime.database.claimUnownedSessions(created.id);
-    this.testPrincipal = {
-      userId: created.id,
-      role: "admin",
-      method: "break_glass",
-      scopes: ["break_glass"],
-    };
-    return this.testPrincipal;
   }
 
   createWebSession(

@@ -29,7 +29,7 @@ const config = {
     webOrigins: [],
     maxUploadBytes: 1024 * 1024,
   },
-  auth: { tokenEnv: "UMA_TEST_TOKEN", webSessionHours: 1 },
+  auth: { webSessionHours: 1 },
   models: [
     {
       provider: "faux",
