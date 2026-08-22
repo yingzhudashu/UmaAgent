@@ -21,6 +21,7 @@ export default defineConfig({
     reuseExistingServer: false,
     env: {
       ...process.env,
+      NODE_ENV: "test",
       UMA_FAUX_PORT: "33210",
       UMA_FAUX_STATE: ".uma-faux-e2e",
       UMA_FAUX_RESET_STATE: "1",

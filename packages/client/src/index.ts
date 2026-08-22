@@ -58,6 +58,29 @@ export interface UmaClientOptions {
   webSocketFactory?: (url: string) => WebSocket;
 }
 
+export interface UmaRegistration {
+  userId: string;
+  token: string;
+  tokenId: string;
+  expiresAt: number;
+}
+
+export interface UmaAuthMe {
+  userId: string;
+  role: "admin" | "user";
+  method: "web" | "access_token" | "break_glass";
+  scopes: string[];
+  tokens: Array<{
+    id: string;
+    label: string;
+    scopes: string[];
+    expiresAt: number;
+    revokedAt?: number;
+    createdAt: number;
+    lastUsedAt?: number;
+  }>;
+}
+
 type Listener = (event: AgentEventEnvelope) => void;
 type ResourceListener = (event: ResourceInvalidated | ResourceResyncRequired) => void;
 export type SessionSubscription = { id: string; lastSequence?: number };
@@ -117,6 +140,52 @@ export class UmaClient {
     });
     this.restartEvents();
     return result;
+  }
+
+  register(label = "primary"): Promise<UmaRegistration> {
+    return this.request("/auth/register", { method: "POST", body: JSON.stringify({ label }) });
+  }
+
+  authMe(): Promise<UmaAuthMe> {
+    return this.request("/auth/me");
+  }
+
+  createToken(
+    label = "token",
+    expiresInDays = 90,
+  ): Promise<{ token: string; tokenId: string; expiresAt: number }> {
+    return this.request("/auth/tokens", {
+      method: "POST",
+      body: JSON.stringify({ label, expiresInDays }),
+    });
+  }
+
+  revokeToken(id: string): Promise<void> {
+    return this.request(`/auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  authorizeWithToken(
+    token: string,
+    clientId: string,
+    redirectUri: string,
+    codeChallenge: string,
+  ): Promise<{ code: string; expiresAt: number }> {
+    return this.request("/auth/authorize", {
+      method: "POST",
+      body: JSON.stringify({ token, clientId, redirectUri, codeChallenge }),
+    });
+  }
+
+  exchangeAuthorizationCode(
+    code: string,
+    clientId: string,
+    redirectUri: string,
+    codeVerifier: string,
+  ): Promise<{ token: string; id: string; expiresAt: number }> {
+    return this.request("/auth/token", {
+      method: "POST",
+      body: JSON.stringify({ code, clientId, redirectUri, codeVerifier }),
+    });
   }
   logout(): Promise<void> {
     return this.request("/auth/logout", { method: "POST" });

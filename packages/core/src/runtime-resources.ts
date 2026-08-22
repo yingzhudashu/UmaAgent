@@ -63,8 +63,8 @@ export class RuntimeResourceService {
     return this.deps.models.list();
   }
 
-  listTasks(): BackgroundTask[] {
-    return this.deps.database.listBackgroundTasks();
+  listTasks(userId?: string): BackgroundTask[] {
+    return this.deps.database.listBackgroundTasks(userId);
   }
 
   deleteTask(id: string): void {

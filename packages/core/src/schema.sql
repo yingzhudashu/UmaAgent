@@ -1,8 +1,32 @@
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  role TEXT NOT NULL CHECK (role IN ('admin','user')),
+  status TEXT NOT NULL CHECK (status IN ('active','disabled')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_login_at INTEGER
+);
+CREATE INDEX users_status_created ON users(status, created_at);
+
+CREATE TABLE auth_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL,
+  scopes_json TEXT NOT NULL DEFAULT '["user"]',
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER
+);
+CREATE INDEX auth_tokens_user_active ON auth_tokens(user_id, revoked_at, expires_at);
+
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
   mode TEXT NOT NULL CHECK (mode IN ('workspace','assistant')),
   title TEXT NOT NULL,
   workspace TEXT,
@@ -366,8 +390,20 @@ CREATE INDEX scheduled_task_runs_task_time ON scheduled_task_runs(scheduled_task
 
 CREATE TABLE web_sessions (
   id_hash TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
 
-PRAGMA user_version = 11;
+CREATE TABLE oauth_authorization_codes (
+  code TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX oauth_codes_expiry ON oauth_authorization_codes(expires_at);
+
+PRAGMA user_version = 13;

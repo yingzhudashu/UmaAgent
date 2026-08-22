@@ -6,7 +6,6 @@ import {
   Bot,
   CircleStop,
   FilePlus2,
-  LogIn,
   Menu,
   PanelRight,
   Pencil,
@@ -33,6 +32,7 @@ import {
   cacheHistory,
   cacheSnapshot,
 } from "./cache.js";
+import { Login } from "./Login.js";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -46,41 +46,6 @@ function Markdown({ content }: { content: string }) {
   );
   // biome-ignore lint/security/noDangerouslySetInnerHtml: DOMPurify sanitizes the generated Markdown HTML.
   return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
-function Login({ client, embedded, onDone }: { client: UmaClient; embedded: boolean; onDone: () => void }) {
-  const [token, setToken] = useState("");
-  const [error, setError] = useState("");
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    try {
-      await client.login(token);
-      onDone();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "登录失败");
-    }
-  };
-  const Shell = embedded ? "div" : "main";
-  return (
-    <Shell className="login-shell">
-      <form className="login" onSubmit={submit}>
-        <div className="brand-mark">
-          <Bot size={24} />
-        </div>
-        <h1>UmaAgent</h1>
-        <p>连接到你的 Agent Core</p>
-        <label>
-          访问令牌
-          <input type="password" value={token} onChange={(event) => setToken(event.target.value)} />
-        </label>
-        {error && <div className="error">{error}</div>}
-        <button className="primary" type="submit">
-          <LogIn size={17} />
-          登录
-        </button>
-      </form>
-    </Shell>
-  );
 }
 
 export interface AppProps {

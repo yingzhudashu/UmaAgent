@@ -8,11 +8,17 @@ import { row, rows, toSession } from "./database-utils.js";
 export class SessionRepository {
   constructor(private readonly db: DatabaseSync) {}
 
-  list(): Session[] {
-    return rows(this.db.prepare("SELECT * FROM sessions ORDER BY updated_at DESC")).map(toSession);
+  list(userId?: string): Session[] {
+    return rows(
+      userId
+        ? this.db.prepare("SELECT * FROM sessions WHERE user_id=? ORDER BY updated_at DESC")
+        : this.db.prepare("SELECT * FROM sessions ORDER BY updated_at DESC"),
+      ...(userId ? [userId] : []),
+    ).map(toSession);
   }
 
   create(input: {
+    userId?: string;
     mode: SessionMode;
     title: string;
     workspace?: string;
@@ -24,10 +30,11 @@ export class SessionRepository {
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO sessions(id,mode,title,workspace,model_provider,model_id,thinking_level,queue_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO sessions(id,user_id,mode,title,workspace,model_provider,model_id,thinking_level,queue_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
+        input.userId ?? null,
         input.mode,
         input.title,
         input.workspace ?? null,

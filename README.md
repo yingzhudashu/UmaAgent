@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.2.0`，协议版本为 `10`，SQLite schema 为 `11`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.2.0`，协议版本为 `10`，SQLite schema 为 `13`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -34,7 +34,8 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 ```powershell
 npm install --ignore-scripts
 Copy-Item uma.config.example.json uma.config.json
-$env:UMA_AUTH_TOKEN = "生成一个高熵令牌"
+$env:UMA_AUTH_TOKEN = "生成一个高熵 Break-glass 运维令牌"
+$env:UMA_OAUTH_REDIRECTS = "uma-mobile|com.example.uma:/oauth/callback"
 $env:OPENAI_API_KEY = "你的模型密钥"
 npm run build
 npm start
@@ -118,6 +119,12 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 数据库只接受当前 `PRAGMA user_version`。版本不匹配会拒绝启动；本项目不提供旧格式迁移或兼容层。
 
 ## API 摘要
+
+服务器支持多用户隔离：`POST /api/v10/auth/register` 创建用户并一次性返回个人令牌，
+`/auth/login` 将令牌交换为绑定用户的 HttpOnly Cookie，`/auth/me`、`/auth/tokens` 提供令牌
+查询和撤销。Session、Run、Task、Approval、Message、Attachment 和工作区请求均按用户所有权
+校验。移动端或其他网页可使用 `/auth/authorize` + `/auth/token` 的 S256 PKCE 流程；服务器只
+接受环境变量 `UMA_OAUTH_REDIRECTS` 中的精确 `clientId|redirectUri` 配对。
 
 - `GET/POST /api/v10/sessions`
 - `GET /api/v10/sessions/:id/snapshot`

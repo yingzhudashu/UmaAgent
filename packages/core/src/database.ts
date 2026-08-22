@@ -59,7 +59,7 @@ import { MessageRepository } from "./message-repository.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 13;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   private readonly auditEvaluations: AuditEvaluationRepository;
@@ -152,7 +152,220 @@ export class UmaDatabase {
     return this.sessions.list();
   }
 
+  listUserSessions(userId: string): Session[] {
+    return this.sessions.list(userId);
+  }
+
+  sessionOwner(id: string): string | undefined {
+    const value = row(this.db.prepare("SELECT user_id FROM sessions WHERE id=?"), id);
+    return value?.user_id ? text(value.user_id) : undefined;
+  }
+
+  claimUnownedSessions(userId: string): void {
+    this.db.prepare("UPDATE sessions SET user_id=? WHERE user_id IS NULL").run(userId);
+  }
+
+  runOwner(id: string): string | undefined {
+    const value = row(
+      this.db.prepare("SELECT s.user_id FROM runs r JOIN sessions s ON s.id=r.session_id WHERE r.id=?"),
+      id,
+    );
+    return value?.user_id ? text(value.user_id) : undefined;
+  }
+
+  messageOwner(id: string): string | undefined {
+    const value = row(
+      this.db.prepare("SELECT s.user_id FROM messages m JOIN sessions s ON s.id=m.session_id WHERE m.id=?"),
+      id,
+    );
+    return value?.user_id ? text(value.user_id) : undefined;
+  }
+
+  taskOwner(id: string): string | undefined {
+    const value = row(
+      this.db.prepare(
+        "SELECT s.user_id FROM background_tasks t JOIN sessions s ON s.id=t.session_id WHERE t.id=?",
+      ),
+      id,
+    );
+    return value?.user_id ? text(value.user_id) : undefined;
+  }
+
+  attachmentOwner(id: string): string | undefined {
+    const value = row(
+      this.db.prepare(
+        "SELECT s.user_id FROM attachments a JOIN sessions s ON s.id=a.session_id WHERE a.id=?",
+      ),
+      id,
+    );
+    return value?.user_id ? text(value.user_id) : undefined;
+  }
+
+  approvalOwner(id: string): string | undefined {
+    const value = row(
+      this.db.prepare("SELECT s.user_id FROM approvals a JOIN sessions s ON s.id=a.session_id WHERE a.id=?"),
+      id,
+    );
+    return value?.user_id ? text(value.user_id) : undefined;
+  }
+
+  createUser(role: "admin" | "user" = "user"): { id: string; role: "admin" | "user"; status: "active" } {
+    const id = randomUUID();
+    const now = Date.now();
+    this.db
+      .prepare("INSERT INTO users(id,role,status,created_at,updated_at) VALUES(?,?,?,?,?)")
+      .run(id, role, "active", now, now);
+    return { id, role, status: "active" };
+  }
+
+  countUsers(): number {
+    return integer(row(this.db.prepare("SELECT COUNT(*) AS count FROM users"))?.count);
+  }
+
+  getUser(id: string): { id: string; role: "admin" | "user"; status: "active" | "disabled" } | undefined {
+    const value = row(this.db.prepare("SELECT id,role,status FROM users WHERE id=?"), id);
+    if (!value) return undefined;
+    return {
+      id: text(value.id),
+      role: text(value.role) as "admin" | "user",
+      status: text(value.status) as "active" | "disabled",
+    };
+  }
+
+  touchUserLogin(id: string): void {
+    const now = Date.now();
+    this.db.prepare("UPDATE users SET last_login_at=?,updated_at=? WHERE id=?").run(now, now, id);
+  }
+
+  putAuthToken(input: {
+    id: string;
+    userId: string;
+    tokenHash: string;
+    label: string;
+    scopes: string[];
+    expiresAt: number;
+  }): void {
+    this.db
+      .prepare(
+        "INSERT INTO auth_tokens(id,user_id,token_hash,label,scopes_json,expires_at,created_at) VALUES(?,?,?,?,?,?,?)",
+      )
+      .run(
+        input.id,
+        input.userId,
+        input.tokenHash,
+        input.label,
+        JSON.stringify(input.scopes),
+        input.expiresAt,
+        Date.now(),
+      );
+  }
+
+  findAuthToken(
+    id: string,
+    tokenHash: string,
+  ): { id: string; userId: string; role: "admin" | "user"; scopes: string[] } | undefined {
+    const value = row(
+      this.db.prepare(
+        "SELECT t.id,t.user_id,u.role,u.status,t.scopes_json,t.expires_at,t.revoked_at FROM auth_tokens t JOIN users u ON u.id=t.user_id WHERE t.id=? AND t.token_hash=?",
+      ),
+      id,
+      tokenHash,
+    );
+    if (
+      !value ||
+      text(value.status) !== "active" ||
+      (value.revoked_at !== null && value.revoked_at !== undefined) ||
+      integer(value.expires_at) <= Date.now()
+    )
+      return undefined;
+    this.db.prepare("UPDATE auth_tokens SET last_used_at=? WHERE id=?").run(Date.now(), id);
+    return {
+      id: text(value.id),
+      userId: text(value.user_id),
+      role: text(value.role) as "admin" | "user",
+      scopes: parseJson<string[]>(value.scopes_json, ["user"]),
+    };
+  }
+
+  listAuthTokens(userId: string): Array<{
+    id: string;
+    label: string;
+    scopes: string[];
+    expiresAt: number;
+    revokedAt?: number;
+    createdAt: number;
+    lastUsedAt?: number;
+  }> {
+    return rows(
+      this.db.prepare(
+        "SELECT id,label,scopes_json,expires_at,revoked_at,created_at,last_used_at FROM auth_tokens WHERE user_id=? ORDER BY created_at DESC",
+      ),
+      userId,
+    ).map((value) => ({
+      id: text(value.id),
+      label: text(value.label),
+      scopes: parseJson<string[]>(value.scopes_json, ["user"]),
+      expiresAt: integer(value.expires_at),
+      ...(value.revoked_at ? { revokedAt: integer(value.revoked_at) } : {}),
+      createdAt: integer(value.created_at),
+      ...(value.last_used_at ? { lastUsedAt: integer(value.last_used_at) } : {}),
+    }));
+  }
+
+  revokeAuthToken(userId: string, id: string): boolean {
+    return (
+      this.db
+        .prepare("UPDATE auth_tokens SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL")
+        .run(Date.now(), id, userId).changes > 0
+    );
+  }
+
+  putAuthorizationCode(input: {
+    code: string;
+    userId: string;
+    clientId: string;
+    redirectUri: string;
+    codeChallenge: string;
+    expiresAt: number;
+  }): void {
+    this.db
+      .prepare(
+        "INSERT INTO oauth_authorization_codes(code,user_id,client_id,redirect_uri,code_challenge,expires_at,created_at) VALUES(?,?,?,?,?,?,?)",
+      )
+      .run(
+        input.code,
+        input.userId,
+        input.clientId,
+        input.redirectUri,
+        input.codeChallenge,
+        input.expiresAt,
+        Date.now(),
+      );
+  }
+
+  consumeAuthorizationCode(code: string):
+    | {
+        userId: string;
+        clientId: string;
+        redirectUri: string;
+        codeChallenge: string;
+        expiresAt: number;
+      }
+    | undefined {
+    const value = row(this.db.prepare("SELECT * FROM oauth_authorization_codes WHERE code=?"), code);
+    this.db.prepare("DELETE FROM oauth_authorization_codes WHERE code=?").run(code);
+    if (!value) return undefined;
+    return {
+      userId: text(value.user_id),
+      clientId: text(value.client_id),
+      redirectUri: text(value.redirect_uri),
+      codeChallenge: text(value.code_challenge),
+      expiresAt: integer(value.expires_at),
+    };
+  }
+
   createSession(input: {
+    userId?: string;
     mode: SessionMode;
     title: string;
     workspace?: string;
@@ -1125,10 +1338,10 @@ export class UmaDatabase {
     }));
   }
 
-  putWebSession(hash: string, expiresAt: number): void {
+  putWebSession(hash: string, expiresAt: number, userId?: string): void {
     this.db
-      .prepare("INSERT OR REPLACE INTO web_sessions(id_hash,expires_at,created_at) VALUES(?,?,?)")
-      .run(hash, expiresAt, Date.now());
+      .prepare("INSERT OR REPLACE INTO web_sessions(id_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
+      .run(hash, userId ?? null, expiresAt, Date.now());
   }
 
   hasWebSession(hash: string): boolean {
@@ -1140,6 +1353,23 @@ export class UmaDatabase {
         Date.now(),
       ),
     );
+  }
+
+  webSessionUser(hash: string): { userId: string; role: "admin" | "user" } | undefined {
+    const value = row(
+      this.db.prepare(
+        "SELECT s.user_id,u.role,u.status,s.expires_at FROM web_sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=?",
+      ),
+      hash,
+    );
+    if (
+      !value ||
+      !value.user_id ||
+      text(value.status) !== "active" ||
+      integer(value.expires_at) <= Date.now()
+    )
+      return undefined;
+    return { userId: text(value.user_id), role: text(value.role) as "admin" | "user" };
   }
 
   deleteWebSession(hash: string): void {
@@ -1214,8 +1444,13 @@ export class UmaDatabase {
     return value ? this.getBackgroundTask(text(value.id)) : undefined;
   }
 
-  listBackgroundTasks(): BackgroundTask[] {
-    return rows(this.db.prepare("SELECT id FROM background_tasks ORDER BY updated_at DESC")).map((value) =>
+  listBackgroundTasks(userId?: string): BackgroundTask[] {
+    const statement = userId
+      ? this.db.prepare(
+          "SELECT t.id FROM background_tasks t JOIN sessions s ON s.id=t.session_id WHERE s.user_id=? ORDER BY t.updated_at DESC",
+        )
+      : this.db.prepare("SELECT id FROM background_tasks ORDER BY updated_at DESC");
+    return rows(statement, ...(userId ? [userId] : [])).map((value) =>
       this.getBackgroundTask(text(value.id)),
     );
   }

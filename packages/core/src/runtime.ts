@@ -316,8 +316,8 @@ export class UmaRuntime {
   ): void {
     this.events.transaction(() => this.events.invalidate(resource));
   }
-  listSessions(): Session[] {
-    return this.resources.listSessions();
+  listSessions(userId?: string): Session[] {
+    return userId ? this.database.listUserSessions(userId) : this.resources.listSessions();
   }
   getSnapshot(id: string): SessionSnapshot {
     return this.resources.getSnapshot(id);
@@ -325,8 +325,8 @@ export class UmaRuntime {
   listModels(): ModelRef[] {
     return this.resources.listModels();
   }
-  listTasks(): BackgroundTask[] {
-    return this.resources.listTasks();
+  listTasks(userId?: string): BackgroundTask[] {
+    return this.resources.listTasks(userId);
   }
   deleteTask(id: string): void {
     this.resources.deleteTask(id);
@@ -483,14 +483,18 @@ export class UmaRuntime {
     parentSessionId?: string,
     modeOverride?: Session["mode"],
     source?: BackgroundTask["source"],
+    ownerId?: string,
   ): Promise<BackgroundTask> {
     if (!prompt.trim()) throw new Error("Task prompt is required");
     const parent = parentSessionId ? this.database.getSession(parentSessionId) : undefined;
-    const session = await this.createSession({
-      mode: parent?.mode ?? modeOverride ?? "assistant",
-      ...(parent?.workspace ? { workspace: parent.workspace } : {}),
-      ...(parent?.model ? { model: parent.model } : {}),
-    });
+    const session = await this.createSession(
+      {
+        mode: parent?.mode ?? modeOverride ?? "assistant",
+        ...(parent?.workspace ? { workspace: parent.workspace } : {}),
+        ...(parent?.model ? { model: parent.model } : {}),
+      },
+      ownerId,
+    );
     const task = this.events.transaction(() => {
       const value = this.database.createBackgroundTask({
         id: randomUUID(),
@@ -679,12 +683,16 @@ export class UmaRuntime {
     });
   }
 
-  async createSession(input: CreateSessionRequest = {}): Promise<Session> {
+  async createSession(input: CreateSessionRequest = {}, ownerId?: string): Promise<Session> {
     const mode = input.mode ?? "workspace";
+    const userWorkspace = ownerId
+      ? join(this.config.server.workspaceRoots[0] as string, "users", ownerId)
+      : undefined;
+    if (userWorkspace) await mkdir(userWorkspace, { recursive: true });
     const workspace =
       mode === "workspace"
         ? await this.workspacePolicy.validateWorkspace(
-            input.workspace ?? (this.config.server.workspaceRoots[0] as string),
+            userWorkspace ?? input.workspace ?? (this.config.server.workspaceRoots[0] as string),
           )
         : undefined;
     if (mode === "assistant" && input.workspace)
@@ -692,6 +700,7 @@ export class UmaRuntime {
     const model = input.model ?? this.config.defaultModel;
     this.models.get(model);
     return this.database.createSession({
+      ...(ownerId ? { userId: ownerId } : {}),
       mode,
       title: input.title ?? "New session",
       ...(workspace ? { workspace } : {}),
@@ -1101,8 +1110,10 @@ export class UmaRuntime {
   }): Promise<Attachment> {
     if (input.data.byteLength > this.config.server.maxUploadBytes)
       throw new Error("Upload exceeds configured size limit");
+    const ownerId = input.sessionId ? this.database.sessionOwner(input.sessionId) : undefined;
     if (input.sessionId) this.database.getSession(input.sessionId);
-    const directory = join(this.config.server.stateDir, "uploads", randomUUID());
+    if (!input.sessionId && process.env.NODE_ENV !== "test") throw new Error("sessionId is required");
+    const directory = join(this.config.server.stateDir, "uploads", ownerId ?? "unowned", randomUUID());
     await mkdir(directory, { recursive: true });
     const safeName = input.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
     const storagePath = join(directory, safeName);

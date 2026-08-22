@@ -1,6 +1,6 @@
 # UmaAgent 服务器部署与验收
 
-本文档面向 UmaAgent `1.2.0`、Protocol v10、SQLite schema 11。推荐使用 Docker Compose 部署；Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
+本文档面向 UmaAgent `1.2.0`、Protocol v10、SQLite schema 13。推荐使用 Docker Compose 部署；Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
 
 ## 1. 部署前确认
 
@@ -34,6 +34,7 @@ openssl rand -hex 32 # BROWSER_WORKER_TOKEN
 - 将 `server.webOrigins` 改为 Web 实际使用的精确 Origin，例如 `https://agent.example.com`。不接受通配符、路径或结尾 `/`。
 - 核对 Provider `baseUrl`、模型 ID、API 类型、上下文窗口、输出上限和 capabilities。示例值不是对任意 Provider 的兼容承诺。
 - 密钥只通过 `apiKeyEnv`、`tokenEnv` 和 `authTokenEnv` 引用环境变量，不能写进 JSON。
+- 多用户 Web/移动端认证使用用户个人令牌；个人令牌只保存哈希，Web Cookie 绑定用户。原生 App 的 PKCE redirect 必须通过 `UMA_OAUTH_REDIRECTS` 显式配置为 `clientId|redirectUri`，禁止通配符。
 - `workspaceRoots` 保持为容器内路径 `/data/workspace`。远程客户端路径不是服务器工作区路径。
 - 只在对应服务确实启动时加入 MCP；readiness 会要求配置中的所有 MCP 已连接。
 
