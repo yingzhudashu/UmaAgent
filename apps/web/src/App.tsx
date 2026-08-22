@@ -212,11 +212,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     };
   }, []);
   useEffect(() => {
-    const authError =
-      sessions.error &&
-      typeof sessions.error === "object" &&
-      "status" in sessions.error &&
-      sessions.error.status === 401;
+    const authError = Number((sessions.error as { status?: unknown } | null)?.status) === 401;
     if (authError) {
       setLoginRequired(true);
       void clearCacheNamespace();
