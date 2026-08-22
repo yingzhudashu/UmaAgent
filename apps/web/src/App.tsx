@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type UmaClient, UmaClientError } from "@uma-agent/client";
+import type { UmaClient } from "@uma-agent/client";
 import type { Approval, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
 import DOMPurify from "dompurify";
 import {
@@ -212,7 +212,12 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     };
   }, []);
   useEffect(() => {
-    if (sessions.error instanceof UmaClientError && sessions.error.status === 401) {
+    const authError =
+      sessions.error &&
+      typeof sessions.error === "object" &&
+      "status" in sessions.error &&
+      sessions.error.status === 401;
+    if (authError) {
       setLoginRequired(true);
       void clearCacheNamespace();
       client.close();
