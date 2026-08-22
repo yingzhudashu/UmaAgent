@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type UmaConfig, UmaRuntime } from "@uma-agent/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { createServer } from "../src/app.js";
+import { createServer, crossOrigin, secureOrigin, shouldCloseForBufferedAmount } from "../src/app.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -11,6 +11,15 @@ afterEach(async () => {
 });
 
 describe("server", () => {
+  it("closes an overloaded WebSocket instead of growing an unbounded queue", () => {
+    expect(shouldCloseForBufferedAmount(4 * 1024 * 1024, 4 * 1024 * 1024)).toBe(false);
+    expect(shouldCloseForBufferedAmount(4 * 1024 * 1024 + 1, 4 * 1024 * 1024)).toBe(true);
+    expect(crossOrigin(undefined, "localhost")).toBe(false);
+    expect(crossOrigin("not a url", "localhost")).toBe(true);
+    expect(secureOrigin(undefined)).toBe(false);
+    expect(secureOrigin("not a url")).toBe(false);
+  });
+
   it("requires auth and serves authoritative snapshots", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-server-"));
     const state = join(root, "state");

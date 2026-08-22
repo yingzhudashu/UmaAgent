@@ -112,6 +112,7 @@ try {
   const startedAt = Date.now();
   const deadline = startedAt + hours * 60 * 60_000;
   const baselineRss = await residentBytes(server.pid);
+  if (baselineRss > 256 * 1024 * 1024) throw new Error(`Idle Core RSS exceeded 256 MiB (${baselineRss})`);
   let maxRss = baselineRss;
   let maxWalBytes = 0;
   let cursor = 0;
@@ -147,8 +148,8 @@ try {
       const occurrences = runs.map((item) => item.scheduledFor);
       if (new Set(occurrences).size !== occurrences.length)
         throw new Error("Duplicate schedule occurrence detected");
-      if (maxRss - baselineRss > 512 * 1024 * 1024)
-        throw new Error(`Resident memory grew by more than 512 MiB (${baselineRss} -> ${maxRss})`);
+      if (maxRss > baselineRss * 1.1)
+        throw new Error(`Resident memory grew by more than 10% (${baselineRss} -> ${maxRss})`);
       if (maxWalBytes > 256 * 1024 * 1024) throw new Error(`SQLite WAL exceeded 256 MiB (${maxWalBytes})`);
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, messageIntervalMs));

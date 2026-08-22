@@ -1,0 +1,16 @@
+{
+  "dataset": {
+    "sessions": 100,
+    "messages": 100000,
+    "events": 1000000,
+    "knowledgeChunks": 10000,
+    "clients": 5
+  },
+  "budgets": {
+    "apiP95Ms": 150,
+    "eventP95Ms": 500,
+    "rssBytes": 268435456,
+    "walBytes": 268435456
+  },
+  "smokeMessages": 20
+}

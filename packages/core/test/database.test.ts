@@ -169,6 +169,36 @@ describe("UmaDatabase", () => {
     db.close();
   });
 
+  it("loads message attachments in one projection without dropping metadata", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-message-repository-"));
+    temporary.push(root);
+    const db = new UmaDatabase(root);
+    const session = db.createSession({
+      mode: "assistant",
+      title: "attachments",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const attachment = db.addAttachment({
+      sessionId: session.id,
+      name: "notes.txt",
+      mimeType: "text/plain",
+      size: 5,
+      storagePath: join(root, "notes.txt"),
+    });
+    const message = db.insertMessage({
+      sessionId: session.id,
+      role: "user",
+      status: "complete",
+      content: "attached",
+      attachmentIds: [attachment.id],
+    });
+    expect(db.getMessage(message.id).attachments).toEqual([attachment]);
+    expect(db.listHistory(session.id).items[0]?.attachments).toEqual([attachment]);
+    expect(db.getSnapshot(session.id).transcript[0]?.attachments).toEqual([attachment]);
+    db.close();
+  });
+
   it("paginates durable events beyond one thousand entries", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-events-"));
     temporary.push(root);

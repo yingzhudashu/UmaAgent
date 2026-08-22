@@ -1,0 +1,4 @@
+services:
+  uma:
+    volumes:
+      - ./deploy/uma.config.production.json:/app/uma.config.json:ro

@@ -6,6 +6,7 @@ playwright-report/
 test-results/
 *.tsbuildinfo
 dist-types/
+dist-embed/
 .uma/
 /.uma-faux-e2e/
 *.db
@@ -13,3 +14,7 @@ dist-types/
 *.db-wal
 /uma.config.json
 .env
+/workspace/
+/approved-skills/
+/backups/
+/deploy/uma.config.production.json

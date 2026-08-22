@@ -5,6 +5,7 @@
       "**",
       "!!**/dist",
       "!!**/dist-types",
+      "!!**/dist-embed",
       "!!**/coverage",
       "!!**/node_modules",
       "!!**/test-results"

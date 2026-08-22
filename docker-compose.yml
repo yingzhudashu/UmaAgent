@@ -9,6 +9,10 @@ services:
       UMA_AUTH_TOKEN: ${UMA_AUTH_TOKEN:?set UMA_AUTH_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
       BROWSER_WORKER_TOKEN: ${BROWSER_WORKER_TOKEN:?set BROWSER_WORKER_TOKEN}
+      FEISHU_MCP_TOKEN: ${FEISHU_MCP_TOKEN:-}
+      SKILL_WORKER_TOKEN: ${SKILL_WORKER_TOKEN:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      UMA_LOG_LEVEL: ${UMA_LOG_LEVEL:-info}
     volumes:
       - uma-state:/data/state
       - ./workspace:/data/workspace
@@ -42,11 +46,11 @@ services:
     ports:
       - "127.0.0.1:3220:3220"
     environment:
-      FEISHU_APP_ID: ${FEISHU_APP_ID}
-      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
       FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:-}
       FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
-      FEISHU_ALLOWED_OPEN_IDS: ${FEISHU_ALLOWED_OPEN_IDS:?set FEISHU_ALLOWED_OPEN_IDS}
+      FEISHU_ALLOWED_OPEN_IDS: ${FEISHU_ALLOWED_OPEN_IDS:-}
       UMA_SERVER_URL: http://uma:3210
       UMA_TOKEN: ${UMA_AUTH_TOKEN}
       FEISHU_STATE_DIR: /data/feishu
@@ -66,18 +70,18 @@ services:
     init: true
     restart: unless-stopped
     environment:
-      FEISHU_APP_ID: ${FEISHU_APP_ID:?set FEISHU_APP_ID}
-      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:?set FEISHU_APP_SECRET}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
       FEISHU_MCP_HOST: 0.0.0.0
       FEISHU_MCP_PORT: 3240
-      FEISHU_MCP_AUTH_TOKEN: ${FEISHU_MCP_TOKEN:?set FEISHU_MCP_TOKEN}
+      FEISHU_MCP_AUTH_TOKEN: ${FEISHU_MCP_TOKEN:-}
       UMA_SERVER_URL: http://uma:3210
       UMA_TOKEN: ${UMA_AUTH_TOKEN}
     expose:
       - "3240"
     depends_on:
       uma:
-        condition: service_healthy
+        condition: service_started
 
   skill-worker:
     profiles: ["skills"]
@@ -93,9 +97,9 @@ services:
     environment:
       SKILL_WORKER_HOST: 0.0.0.0
       SKILL_WORKER_PORT: 3250
-      SKILL_WORKER_AUTH_TOKEN: ${SKILL_WORKER_TOKEN:?set SKILL_WORKER_TOKEN}
+      SKILL_WORKER_AUTH_TOKEN: ${SKILL_WORKER_TOKEN:-}
       SKILL_WORKER_PACKAGES_DIR: /skills
-      SKILL_WORKER_ALLOWED_HASHES: ${SKILL_WORKER_ALLOWED_HASHES:?set approved hashes}
+      SKILL_WORKER_ALLOWED_HASHES: ${SKILL_WORKER_ALLOWED_HASHES:-}
     volumes:
       - ./approved-skills:/skills:ro
       - skill-scratch:/scratch

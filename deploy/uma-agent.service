@@ -1,0 +1,29 @@
+[Unit]
+Description=UmaAgent Core Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=umaagent
+Group=umaagent
+WorkingDirectory=/opt/uma-agent/current
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/uma-agent/uma.env
+ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent/current/apps/server/dist/main.js --config=/etc/uma-agent/uma.config.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/uma-agent/state /srv/uma-workspace
+UMask=0027
+LimitNOFILE=65536
+MemoryMax=1536M
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

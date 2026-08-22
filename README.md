@@ -2,6 +2,8 @@
 
 UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.2.0`，协议版本为 `10`，SQLite schema 为 `11`。
 
+生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
+
 ## 当前能力
 
 - Pi `0.84.2` 的多模型流式 Agent loop，支持 OpenAI Responses 与兼容 Chat Completions 端点
@@ -68,6 +70,30 @@ npm run build:web
 ```
 
 将 `apps/web/dist` 作为普通静态站点发布，并把该站点的精确 Origin（例如 `https://uma.example.com`）加入 Core 配置的 `server.webOrigins`。跨站 Cookie 仅在 HTTPS 下使用 `SameSite=None; Secure`；生产环境必须由反向代理终止 TLS。
+
+## 嵌入现有站点
+
+RobotClaw 等宿主站点使用独立的库构建，不注册 Service Worker，也不修改宿主的 `body`：
+
+```powershell
+npm run build:web:embed
+```
+
+产物位于 `apps/web/dist-embed`，固定为 `uma-embed.js`、`uma-embed.css` 和包含 SHA-256 的
+`embed-manifest.json`。宿主加载 CSS 后调用：
+
+```ts
+const mounted = mountUmaAgent(target, {
+  coreUrl: window.location.origin,
+  embedded: true,
+  theme: "light",
+})
+mounted.setTheme("dark")
+mounted.unmount()
+```
+
+所有样式均限定在 `.uma-embed`，宿主可通过 `--primary`、`--primary-dark`、`--text`、`--bg`、
+`--bg-card`、`--bg-hover`、`--border` 和 `--shadow` 传入现有设计系统变量。
 
 无需模型密钥的端到端开发服务器使用 Pi faux provider：
 
@@ -154,7 +180,7 @@ Core 仅向上下文注入 Profile、active 事实和相关历史 rollup。事�
 
 ## 浏览器 Worker 与评测
 
-Browser Worker 是独立 MCP Streamable HTTP 服务，只监听 `127.0.0.1:3230`，不挂载 Core state 或 workspace。所有页面请求和重定向都执行公网地址校验；Core 端仍把其工具视为 MCP 副作用并要求审批。启动后在 `mcpServers` 中配置 `http://127.0.0.1:3230/mcp`：
+Browser Worker 是独立 MCP Streamable HTTP 服务，原生启动默认只监听 `127.0.0.1:3230`；Compose 中监听容器网络但不发布宿主机端口。它不挂载 Core state 或 workspace。所有页面请求和重定向都执行公网地址校验；Core 端仍把其工具视为 MCP 副作用并要求审批。原生启动后在 `mcpServers` 中配置 `http://127.0.0.1:3230/mcp`：
 
 ```powershell
 npm run build --workspace=@uma-agent/browser-worker
@@ -190,31 +216,25 @@ npm run start --workspace=@uma-agent/feishu-mcp
 
 ## 部署
 
-```bash
-export UMA_AUTH_TOKEN="$(openssl rand -hex 32)"
-export OPENAI_API_KEY="..."
-docker compose up --build
-```
-
-飞书服务使用独立 profile 启动：
+生产部署不要直接复用开发 `.env` 或修改受版本控制的配置。先创建本地密钥文件和生产配置：
 
 ```bash
-docker compose --profile feishu up --build
+cp .env.example .env
+cp deploy/uma.config.production.example.json deploy/uma.config.production.json
+# 编辑两个文件，设置独立高熵令牌、模型密钥、Provider/模型信息和精确 webOrigins
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config --quiet
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml up -d --build
 ```
 
-飞书 MCP 与 Skill Worker 使用独立 profile：
+飞书消息、飞书业务 MCP 和隔离技能 Worker 使用独立 profile：
 
 ```bash
-docker compose --profile feishu-tools --profile skills up --build
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml --profile feishu up -d
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml --profile feishu-tools up -d
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml --profile skills up -d
 ```
 
-Compose 默认只发布到 `127.0.0.1`，镜像包含健康检查并使用 `/data/state`、`/data/workspace` 独立卷。公网部署应通过 Caddy/Nginx 终止 TLS，并在配置中列出允许的 `webOrigins`。Core Server 使用状态目录锁和单进程 SQLite，不能横向启动多个副本共享同一状态卷。
-
-### 停机备份与恢复
-
-先停止 Core，确认进程已经退出，再备份状态目录中的 `state.db`、存在时的 `state.db-wal`、`uploads/`，以及正在使用的配置模板。不要备份 `.env`、API Key、Bearer Token 或渠道 Secret。恢复时使用同一 UmaAgent 版本，把这些文件放回新的状态目录并保持原有相对结构；schema 版本不匹配时必须显式重置，不能用旧数据库启动或自动升级。飞书 Adapter 的 `feishu.db` 应在停止 Adapter 后单独备份，它不属于 Core 状态卷。
-
-非回环地址（例如 `0.0.0.0`）必须配置至少一个 `server.webOrigins`。服务令牌和每个模型的 API Key 都必须通过声明的环境变量提供，否则 Server 拒绝启动。
+Compose 默认只向宿主机回环地址发布 Core 和 Adapter；公网入口必须由 Caddy/Nginx 终止 TLS。完整的端口、MCP 注册、飞书长连接、健康检查、状态锁、停机备份、恢复、回滚和验收命令以 [部署文档](docs/deployment.md) 为准。Core 使用单进程 SQLite WAL，同一状态卷不能由多个 Core 共享。
 
 ## 架构边界
 

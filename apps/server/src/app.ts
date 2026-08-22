@@ -37,7 +37,7 @@ function allowedOrigin(origin: string, configured: string[]): boolean {
   return configured.includes(origin);
 }
 
-function crossOrigin(origin: string | undefined, host: string | undefined): boolean {
+export function crossOrigin(origin: string | undefined, host: string | undefined): boolean {
   if (!origin || !host) return false;
   try {
     return new URL(origin).host !== host;
@@ -46,7 +46,7 @@ function crossOrigin(origin: string | undefined, host: string | undefined): bool
   }
 }
 
-function secureOrigin(origin: string | undefined): boolean {
+export function secureOrigin(origin: string | undefined): boolean {
   if (!origin) return false;
   try {
     return new URL(origin).protocol === "https:";
@@ -57,6 +57,10 @@ function secureOrigin(origin: string | undefined): boolean {
 
 function errorBody(requestId: string, code: string, message: string, retryable = false) {
   return { error: { code, message, retryable, requestId } };
+}
+
+export function shouldCloseForBufferedAmount(bufferedAmount: number, maxBufferedBytes: number): boolean {
+  return bufferedAmount > maxBufferedBytes;
 }
 
 export async function createServer(
@@ -132,12 +136,7 @@ export async function createServer(
   });
   app.get("/api/v10/health/live", async () => health(true));
   app.get("/api/v10/health/ready", async (_request, reply) => {
-    let databaseReady = true;
-    try {
-      runtime.database.db.prepare("SELECT 1").get();
-    } catch {
-      databaseReady = false;
-    }
+    const runtimeHealth = runtime.health();
     const workspacesReady = (
       await Promise.all(
         runtime.config.server.workspaceRoots.map((root) =>
@@ -151,7 +150,7 @@ export async function createServer(
     const modelsReady = runtime.listModels().length > 0;
     const mcpReady = runtime.mcp.status().every((server) => server.connected);
     const value = health(
-      runtime.health().started && databaseReady && workspacesReady && modelsReady && mcpReady,
+      runtimeHealth.started && runtimeHealth.databaseReady && workspacesReady && modelsReady && mcpReady,
     );
     return reply.code(value.status === "ok" ? 200 : 503).send(value);
   });
@@ -496,9 +495,9 @@ export async function createServer(
     return runtime.addAttachment({ ...(sessionId ? { sessionId } : {}), ...upload });
   });
   app.get<{ Params: { id: string } }>("/api/v10/attachments/:id/content", async (request, reply) => {
-    const attachment = runtime.database.getAttachment(request.params.id);
+    const attachment = runtime.getAttachment(request.params.id);
     if (!attachment) throw new Error(`Attachment not found: ${request.params.id}`);
-    const data = await readFile(runtime.database.getAttachmentPath(request.params.id));
+    const data = await readFile(runtime.getAttachmentPath(request.params.id));
     return reply
       .type(attachment.mimeType)
       .header("content-disposition", `inline; filename*=UTF-8''${encodeURIComponent(attachment.name)}`)
@@ -514,24 +513,42 @@ export async function createServer(
     let authenticated = auth.requestAuthenticated(request);
     let resourceResyncSent = false;
     const sessions = new Set<string>();
+    const maxBufferedBytes = 4 * 1024 * 1024;
+    const send = (payload: unknown): boolean => {
+      if (socket.readyState !== socket.OPEN) return false;
+      if (shouldCloseForBufferedAmount(socket.bufferedAmount, maxBufferedBytes)) {
+        socket.close(1013, "WebSocket send buffer exceeded limit; resync required");
+        return false;
+      }
+      socket.send(JSON.stringify(payload));
+      return true;
+    };
     const unsubscribe = runtime.subscribe((event) => {
-      if (authenticated && sessions.has(event.sessionId) && socket.readyState === socket.OPEN)
-        socket.send(JSON.stringify(event));
+      if (authenticated && sessions.has(event.sessionId)) send(event);
     });
     const unsubscribeResources = runtime.subscribeResources((event) => {
-      if (authenticated && socket.readyState === socket.OPEN) socket.send(JSON.stringify(event));
+      if (authenticated) send(event);
     });
     const sendResourceResync = () => {
       if (!authenticated || resourceResyncSent || socket.readyState !== socket.OPEN) return;
       resourceResyncSent = true;
-      socket.send(
-        JSON.stringify({
-          type: "resource.resync_required",
-          protocolVersion: PROTOCOL_VERSION,
-          resources: ["tasks", "schedules", "memory", "knowledge"],
-          timestamp: Date.now(),
-        }),
-      );
+      send({
+        type: "resource.resync_required",
+        protocolVersion: PROTOCOL_VERSION,
+        resources: [
+          "tasks",
+          "schedules",
+          "memory",
+          "knowledge",
+          "skills",
+          "profile",
+          "quality",
+          "config",
+          "evaluations",
+          "optimization",
+        ],
+        timestamp: Date.now(),
+      });
     };
     sendResourceResync();
     const timer = setTimeout(() => {
@@ -557,18 +574,18 @@ export async function createServer(
           const id = subscription.id;
           if (!id) continue;
           sessions.add(id);
-          socket.send(JSON.stringify({ type: "sync.started", sessionId: id }));
+          send({ type: "sync.started", sessionId: id });
           let after = Math.max(0, subscription.lastSequence ?? 0);
           let page = runtime.listSessionEvents(id, after, 1000);
           while (true) {
-            for (const event of page.events) socket.send(JSON.stringify(event));
+            for (const event of page.events) {
+              if (!send(event)) return;
+            }
             after = page.nextSequence;
             if (!page.hasMore) break;
             page = runtime.listSessionEvents(id, after, 1000);
           }
-          socket.send(
-            JSON.stringify({ type: "sync.completed", sessionId: id, sequence: page.snapshotSequence }),
-          );
+          send({ type: "sync.completed", sessionId: id, sequence: page.snapshotSequence });
         }
       }
     });

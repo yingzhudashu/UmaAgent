@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build",
+    "build:embed": "tsc -p tsconfig.json && vite build --config vite.embed.config.ts && node ../../scripts/write-embed-manifest.mjs",
     "dev": "vite",
     "test": "vitest run"
   },

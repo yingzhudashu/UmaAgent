@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { Agent, type AgentEvent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -34,7 +34,6 @@ import type {
   TranscriptItem,
   UpdateScheduledTaskRequest,
 } from "@uma-agent/protocol";
-import { PROTOCOL_VERSION } from "@uma-agent/protocol";
 import Value from "typebox/value";
 import { ContextManager } from "./context-manager.js";
 import { UmaDatabase } from "./database.js";
@@ -50,6 +49,7 @@ import { RunPreflight } from "./run-preflight.js";
 import { RunQualityService } from "./run-quality.js";
 import { RuntimeOptimizationService } from "./runtime-optimization.js";
 import { RuntimeQualityOperations } from "./runtime-quality-operations.js";
+import { RuntimeResourceService } from "./runtime-resources.js";
 import {
   extractJson,
   injectRuntimeFault,
@@ -87,6 +87,7 @@ export class UmaRuntime {
   private quality: RunQualityService;
   private readonly qualityOperations: RuntimeQualityOperations;
   private readonly optimization: RuntimeOptimizationService;
+  private readonly resources: RuntimeResourceService;
   private readonly controllers = new Map<string, AbortController>();
   private readonly preemptedRuns = new Set<string>();
   private readonly approvals: RunApprovals;
@@ -148,6 +149,18 @@ export class UmaRuntime {
     this.approvals = new RunApprovals(this.database, this.events, config.runtime.approvalTimeoutMs);
     this.scheduler = new SchedulerService(this.database, this, () => this.invalidateResource("schedules"));
     this.workspacePolicy = new WorkspacePolicy(config.server.workspaceRoots);
+    this.resources = new RuntimeResourceService({
+      database: this.database,
+      events: this.events,
+      models: this.models,
+      mcp: this.mcp,
+      scheduler: this.scheduler,
+      skills: this.skills,
+      skillPackages: this.skillPackages,
+      optimization: this.optimization,
+      config: () => this.config,
+      invalidate: (resource) => this.invalidateResource(resource),
+    });
   }
 
   async start(): Promise<void> {
@@ -182,7 +195,11 @@ export class UmaRuntime {
   }
 
   health(): RuntimeHealth {
-    return { activeRuns: this.orchestrator.activeCount(), started: this.started };
+    return {
+      activeRuns: this.orchestrator.activeCount(),
+      started: this.started,
+      databaseReady: this.database.isReady(),
+    };
   }
 
   async reloadConfig(next: UmaConfig): Promise<ReloadResult> {
@@ -300,98 +317,70 @@ export class UmaRuntime {
     this.events.transaction(() => this.events.invalidate(resource));
   }
   listSessions(): Session[] {
-    return this.database.listSessions();
+    return this.resources.listSessions();
   }
   getSnapshot(id: string): SessionSnapshot {
-    return this.database.getSnapshot(id);
+    return this.resources.getSnapshot(id);
   }
   listModels(): ModelRef[] {
-    return this.models.list();
+    return this.resources.listModels();
   }
   listTasks(): BackgroundTask[] {
-    return this.database.listBackgroundTasks();
+    return this.resources.listTasks();
   }
   deleteTask(id: string): void {
-    const task = this.database.getBackgroundTask(id);
-    this.events.transaction(() => {
-      this.database.deleteBackgroundTask(id);
-      this.events.invalidate("tasks");
-    });
-    if (task.source?.scheduleRunId) this.invalidateResource("schedules");
+    this.resources.deleteTask(id);
   }
   listEvaluationReports(limit?: number) {
-    return this.database.listEvaluationReports(limit);
+    return this.resources.listEvaluationReports(limit);
   }
   getEvaluationReport(id: string) {
-    return this.database.getEvaluationReport(id);
+    return this.resources.getEvaluationReport(id);
   }
   createEvaluationReport(input: CreateEvaluationReport) {
-    return this.events.transaction(() => {
-      const report = this.database.createEvaluationReport(input);
-      this.events.invalidate("evaluations");
-      return report;
-    });
+    return this.resources.createEvaluationReport(input);
   }
   publicConfig(): PublicConfig {
-    const models = this.listModels();
-    const roles = this.config.roles;
-    const skills = this.listSkills();
-    const mcp = this.mcp.status().map((item) => ({
-      name: item.name,
-      connected: item.connected,
-      toolCount: item.toolCount,
-    }));
-    return {
-      revision: `${PROTOCOL_VERSION}:${createHash("sha256")
-        .update(JSON.stringify({ models, roles, skills, mcp }))
-        .digest("hex")
-        .slice(0, 16)}`,
-      defaultModel: this.config.defaultModel,
-      roles,
-      models,
-      skills,
-      mcp,
-    };
+    return this.resources.publicConfig();
   }
   listScheduledTasks() {
-    return this.scheduler.list();
+    return this.resources.listScheduledTasks();
   }
   createScheduledTask(input: CreateScheduledTaskRequest) {
-    return this.scheduler.create(input);
+    return this.resources.createScheduledTask(input);
   }
   updateScheduledTask(id: string, input: UpdateScheduledTaskRequest) {
-    return this.scheduler.update(id, input);
+    return this.resources.updateScheduledTask(id, input);
   }
   deleteScheduledTask(id: string): void {
-    this.scheduler.delete(id);
+    this.resources.deleteScheduledTask(id);
   }
   runScheduledTask(id: string) {
-    return this.scheduler.runNow(id);
+    return this.resources.runScheduledTask(id);
   }
   listScheduledTaskRuns(id: string) {
-    return this.scheduler.runs(id);
+    return this.resources.listScheduledTaskRuns(id);
   }
   getScheduledTaskRun(id: string) {
-    return this.scheduler.getRun(id);
+    return this.resources.getScheduledTaskRun(id);
   }
   cancelScheduledTaskRun(id: string) {
-    return this.scheduler.cancelRun(id);
+    return this.resources.cancelScheduledTaskRun(id);
   }
   listSessionEvents(sessionId: string, afterSequence: number, limit?: number) {
-    return this.database.listEvents(sessionId, afterSequence, limit);
+    return this.resources.listSessionEvents(sessionId, afterSequence, limit);
   }
   listSessionHistory(sessionId: string, beforeSequence?: number, limit?: number) {
-    return this.database.listHistory(sessionId, beforeSequence, limit);
+    return this.resources.listSessionHistory(sessionId, beforeSequence, limit);
   }
   getRun(runId: string): Run {
-    return this.database.getRun(runId);
+    return this.resources.getRun(runId);
   }
   listRunActions(runId: string): RunAction[] {
-    this.database.getRun(runId);
-    return this.database.listRunActions(runId);
+    return this.resources.listRunActions(runId);
   }
   listRunCheckpoints(runId: string): RunCheckpoint[] {
-    return this.database.listRunCheckpoints(runId);
+    return this.resources.listRunCheckpoints(runId);
   }
   resumeRun(runId: string): Run {
     const run = this.database.getRun(runId);
@@ -564,7 +553,7 @@ export class UmaRuntime {
     return task;
   }
   listMemoryFacts(status?: "active" | "candidate" | "superseded" | "rejected") {
-    return this.database.listMemoryFacts(status);
+    return this.resources.listMemoryFacts(status);
   }
   createMemoryFact(sessionId: string, scope: "global" | "session", content: string) {
     this.database.getSession(sessionId);
@@ -621,65 +610,61 @@ export class UmaRuntime {
     });
   }
   audit(runId: string) {
-    return this.database.listAudit(runId);
+    return this.resources.audit(runId);
   }
   listSkills(): SkillSummary[] {
-    return this.skills.list();
+    return this.resources.listSkills();
   }
   refreshSkills(): Promise<SkillSummary[]> {
-    return this.skills.refresh();
+    return this.resources.refreshSkills();
   }
 
   listSkillPackages(): SkillPackage[] {
-    return this.skillPackages.list();
+    return this.resources.listSkillPackages();
   }
 
   searchSkills(query: string): Promise<Array<Record<string, unknown>>> {
-    return this.skillPackages.search(query);
+    return this.resources.searchSkills(query);
   }
 
   installSkill(input: SkillInstallRequest): Promise<SkillPackage> {
-    return this.skillPackages.install(input);
+    return this.resources.installSkill(input);
   }
 
   setSkillStatus(id: string, status: "enabled" | "disabled" | "rejected"): Promise<SkillPackage> {
-    return this.skillPackages.setStatus(id, status);
+    return this.resources.setSkillStatus(id, status);
   }
 
   getAgentProfile(): AgentProfile {
-    return this.database.getAgentProfile();
+    return this.resources.getAgentProfile();
   }
 
   updateAgentProfile(content: string): AgentProfile {
-    if (content.length > 50_000) throw new Error("Agent profile is too large");
-    const profile = this.database.putAgentProfile(content);
-    this.invalidateResource("profile");
-    return profile;
+    return this.resources.updateAgentProfile(content);
   }
 
   searchHistory(sessionId: string, query: string, limit?: number): TranscriptItem[] {
-    return this.database.searchHistory(sessionId, query, limit);
+    return this.resources.searchHistory(sessionId, query, limit);
   }
 
   listActivity(sessionId: string, limit?: number): Array<Record<string, unknown>> {
-    return this.database.listActivity(sessionId, limit);
+    return this.resources.listActivity(sessionId, limit);
   }
 
   listOptimizationProposals(): OptimizationProposal[] {
-    return this.optimization.list();
+    return this.resources.listOptimizationProposals();
   }
 
   generateOptimizationProposals(from = 0, to = Date.now()): OptimizationProposal[] {
-    return this.optimization.generate(from, to);
+    return this.resources.generateOptimizationProposals(from, to);
   }
 
   decideOptimizationProposal(id: string, status: "accepted" | "rejected"): OptimizationProposal {
-    return this.optimization.decide(id, status);
+    return this.resources.decideOptimizationProposal(id, status);
   }
 
   listQualityAssessments(runId: string): QualityAssessment[] {
-    this.database.getRun(runId);
-    return this.database.listQualityAssessments(runId);
+    return this.resources.listQualityAssessments(runId);
   }
 
   private transitionRun(
@@ -1129,6 +1114,14 @@ export class UmaRuntime {
       size: input.data.byteLength,
       storagePath,
     });
+  }
+
+  getAttachment(id: string): Attachment | undefined {
+    return this.database.getAttachment(id);
+  }
+
+  getAttachmentPath(id: string): string {
+    return this.database.getAttachmentPath(id);
   }
 
   private async executeRun(

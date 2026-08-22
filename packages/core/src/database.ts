@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type {
   AgentProfile,
@@ -39,182 +39,39 @@ import type {
 } from "@uma-agent/protocol";
 import { type AgentEventEnvelope, type AgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
 import { AuditEvaluationRepository } from "./audit-evaluation-repository.js";
+import {
+  ftsQuery,
+  integer,
+  parseJson,
+  type Row,
+  redactAudit,
+  row,
+  rows,
+  text,
+  toAttachment,
+  toPlanStep,
+  toRunAction,
+  toRunCheckpoint,
+  toScheduledTask,
+  toScheduledTaskRun,
+} from "./database-utils.js";
+import { MessageRepository } from "./message-repository.js";
+import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
 const SCHEMA_VERSION = 11;
-type Row = Record<string, unknown>;
-
-function rows(statement: StatementSync, ...params: SQLInputValue[]): Row[] {
-  return statement.all(...params) as Row[];
-}
-
-function row(statement: StatementSync, ...params: SQLInputValue[]): Row | undefined {
-  return statement.get(...params) as Row | undefined;
-}
-
-function text(value: unknown): string {
-  return String(value ?? "");
-}
-
-function integer(value: unknown): number {
-  return Number(value ?? 0);
-}
-
-function parseJson<T>(value: unknown, fallback: T): T {
-  if (typeof value !== "string") return fallback;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-function ftsQuery(value: string): string | undefined {
-  const terms =
-    value
-      .normalize("NFKC")
-      .match(/[\p{L}\p{N}_]{3,}/gu)
-      ?.slice(0, 12) ?? [];
-  if (terms.length === 0) return undefined;
-  return terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" OR ");
-}
-
-function redactAudit(value: unknown): unknown {
-  if (typeof value === "string") {
-    return value
-      .replace(/(Bearer\s+)[^\s]+/gi, "$1[REDACTED]")
-      .replace(/(api[_-]?key|password|secret|token)(\s*[:=]\s*)[^\s,}]+/gi, "$1$2[REDACTED]");
-  }
-  if (Array.isArray(value)) return value.map(redactAudit);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) =>
-        /(authorization|cookie|api[_-]?key|password|secret|token)/i.test(key)
-          ? [key, "[REDACTED]"]
-          : [key, redactAudit(item)],
-      ),
-    );
-  }
-  return value;
-}
-
-function toSession(value: Row): Session {
-  return {
-    id: text(value.id),
-    mode: text(value.mode) as SessionMode,
-    title: text(value.title),
-    ...(value.workspace ? { workspace: text(value.workspace) } : {}),
-    model: { provider: text(value.model_provider), id: text(value.model_id) },
-    thinkingLevel: text(value.thinking_level) as ThinkingLevel,
-    queueMode: text(value.queue_mode || "queue") as Session["queueMode"],
-    createdAt: integer(value.created_at),
-    updatedAt: integer(value.updated_at),
-  };
-}
-
-function toAttachment(value: Row): Attachment {
-  return {
-    id: text(value.id),
-    name: text(value.name),
-    mimeType: text(value.mime_type),
-    size: integer(value.size),
-    createdAt: integer(value.created_at),
-  };
-}
-
-function toScheduledTask(value: Row): ScheduledTask {
-  return {
-    id: text(value.id),
-    name: text(value.name),
-    prompt: text(value.prompt),
-    sessionMode: text(value.session_mode) as SessionMode,
-    schedule: parseJson(value.schedule_json, { kind: "once", at: 0 }) as ScheduleDefinition,
-    enabled: integer(value.enabled) === 1,
-    ...(value.next_run_at !== null && value.next_run_at !== undefined
-      ? { nextRunAt: integer(value.next_run_at) }
-      : {}),
-    ...(value.last_run_at !== null && value.last_run_at !== undefined
-      ? { lastRunAt: integer(value.last_run_at) }
-      : {}),
-    createdAt: integer(value.created_at),
-    updatedAt: integer(value.updated_at),
-  };
-}
-
-function toScheduledTaskRun(value: Row): ScheduledTaskRun {
-  const resume = value.resume_json
-    ? parseJson<ScheduledTaskRun["resume"] | undefined>(value.resume_json, undefined)
-    : undefined;
-  return {
-    id: text(value.id),
-    scheduledTaskId: text(value.scheduled_task_id),
-    trigger: text(value.trigger) as ScheduledTaskRun["trigger"],
-    ...(value.background_task_id ? { backgroundTaskId: text(value.background_task_id) } : {}),
-    ...(value.run_id ? { runId: text(value.run_id) } : {}),
-    status: text(value.status) as ScheduledTaskRun["status"],
-    ...(resume ? { resume } : {}),
-    scheduledFor: integer(value.scheduled_for),
-    ...(value.started_at ? { startedAt: integer(value.started_at) } : {}),
-    ...(value.completed_at ? { completedAt: integer(value.completed_at) } : {}),
-    ...(value.error ? { error: text(value.error) } : {}),
-  };
-}
-
-function toPlanStep(value: Row): PlanStep {
-  return {
-    id: text(value.id),
-    position: integer(value.position),
-    title: text(value.title),
-    status: text(value.status) as PlanStep["status"],
-    ...(value.started_at ? { startedAt: integer(value.started_at) } : {}),
-    ...(value.completed_at ? { completedAt: integer(value.completed_at) } : {}),
-    ...(value.error ? { error: text(value.error) } : {}),
-  };
-}
-
-function toRunAction(value: Row): RunAction {
-  return {
-    id: text(value.id),
-    runId: text(value.run_id),
-    ...(value.checkpoint_id ? { checkpointId: text(value.checkpoint_id) } : {}),
-    toolCallId: text(value.tool_call_id),
-    toolName: text(value.tool_name),
-    toolClass: text(value.tool_class),
-    idempotencyKey: text(value.idempotency_key),
-    ...(value.input_json ? { input: redactAudit(parseJson(value.input_json, null)) } : {}),
-    ...(value.result_json ? { result: redactAudit(parseJson(value.result_json, null)) } : {}),
-    status: text(value.status) as RunAction["status"],
-    ...(value.started_at ? { startedAt: integer(value.started_at) } : {}),
-    ...(value.completed_at ? { completedAt: integer(value.completed_at) } : {}),
-    ...(value.error ? { error: text(value.error) } : {}),
-  };
-}
-
-function toRunCheckpoint(value: Row): RunCheckpoint {
-  return {
-    id: text(value.id),
-    runId: text(value.run_id),
-    checkpointNo: integer(value.checkpoint_no),
-    phase: text(value.phase) as RunCheckpoint["phase"],
-    ...(value.plan_step_id ? { planStepId: text(value.plan_step_id) } : {}),
-    turnCount: integer(value.turn_count),
-    lastMessageSequence: integer(value.last_message_sequence),
-    ...(value.context_summary_sequence
-      ? { contextSummarySequence: integer(value.context_summary_sequence) }
-      : {}),
-    safeToResume: integer(value.safe_to_resume) === 1,
-    createdAt: integer(value.created_at),
-  };
-}
-
 export class UmaDatabase {
   readonly db: DatabaseSync;
   private readonly auditEvaluations: AuditEvaluationRepository;
+  private readonly messages: MessageRepository;
+  private readonly sessions: SessionRepository;
   private transactionDepth = 0;
 
   constructor(stateDir: string) {
     mkdirSync(stateDir, { recursive: true });
     this.db = new DatabaseSync(join(stateDir, "state.db"));
+    this.messages = new MessageRepository(this.db);
+    this.sessions = new SessionRepository(this.db);
     this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     const version = integer(row(this.db.prepare("PRAGMA user_version"))?.user_version);
     if (version === 0) {
@@ -261,6 +118,20 @@ export class UmaDatabase {
     this.db.close();
   }
 
+  /**
+   * Cheap readiness probe used by the server health endpoint. Keeping this
+   * behind the database facade prevents transport code from reaching into the
+   * SQLite connection or depending on a storage implementation detail.
+   */
+  isReady(): boolean {
+    try {
+      this.db.prepare("SELECT 1").get();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   withTransaction<T>(operation: () => T): T {
     if (this.transactionDepth > 0) return operation();
     this.db.exec("BEGIN IMMEDIATE");
@@ -278,7 +149,7 @@ export class UmaDatabase {
   }
 
   listSessions(): Session[] {
-    return rows(this.db.prepare("SELECT * FROM sessions ORDER BY updated_at DESC")).map(toSession);
+    return this.sessions.list();
   }
 
   createSession(input: {
@@ -289,31 +160,11 @@ export class UmaDatabase {
     thinkingLevel: ThinkingLevel;
     queueMode?: Session["queueMode"];
   }): Session {
-    const id = randomUUID();
-    const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO sessions(id,mode,title,workspace,model_provider,model_id,thinking_level,queue_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.mode,
-        input.title,
-        input.workspace ?? null,
-        input.model.provider,
-        input.model.id,
-        input.thinkingLevel,
-        input.queueMode ?? "queue",
-        now,
-        now,
-      );
-    return this.getSession(id);
+    return this.sessions.create(input);
   }
 
   getSession(id: string): Session {
-    const result = row(this.db.prepare("SELECT * FROM sessions WHERE id = ?"), id);
-    if (!result) throw new Error(`Session not found: ${id}`);
-    return toSession(result);
+    return this.sessions.get(id);
   }
 
   updateSession(
@@ -326,28 +177,11 @@ export class UmaDatabase {
       queueMode?: Session["queueMode"];
     },
   ): Session {
-    const current = this.getSession(id);
-    const now = Date.now();
-    this.db
-      .prepare(
-        "UPDATE sessions SET title=?, mode=?, model_provider=?, model_id=?, thinking_level=?, queue_mode=?, updated_at=? WHERE id=?",
-      )
-      .run(
-        patch.title ?? current.title,
-        patch.mode ?? current.mode,
-        patch.model?.provider ?? current.model.provider,
-        patch.model?.id ?? current.model.id,
-        patch.thinkingLevel ?? current.thinkingLevel,
-        patch.queueMode ?? current.queueMode,
-        now,
-        id,
-      );
-    return this.getSession(id);
+    return this.sessions.update(id, patch);
   }
 
   deleteSession(id: string): void {
-    const result = this.db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
-    if (result.changes === 0) throw new Error(`Session not found: ${id}`);
+    this.sessions.delete(id);
   }
 
   private allocateMessageSequence(sessionId: string): number {
@@ -412,7 +246,7 @@ export class UmaDatabase {
     this.db
       .prepare("INSERT INTO history_fts(message_id,session_id,sequence,content) VALUES(?,?,?,?)")
       .run(id, input.sessionId, sequence, input.content);
-    return this.getMessage(id);
+    return this.messages.getMessage(id);
   }
 
   updateMessage(
@@ -440,89 +274,32 @@ export class UmaDatabase {
         .prepare("INSERT INTO history_fts(message_id,session_id,sequence,content) VALUES(?,?,?,?)")
         .run(id, text(current.session_id), integer(current.sequence), patch.content);
     }
-    return this.getMessage(id);
-  }
-
-  getMessage(id: string): TranscriptItem {
-    const value = row(this.db.prepare("SELECT * FROM messages WHERE id=?"), id);
-    if (!value) throw new Error(`Message not found: ${id}`);
-    const attachmentIds = parseJson<string[]>(value.attachment_ids_json, []);
-    const source = value.source_json
-      ? parseJson<MessageSource | undefined>(value.source_json, undefined)
-      : undefined;
-    return {
-      id: text(value.id),
-      sequence: integer(value.sequence),
-      role: text(value.role) as TranscriptItem["role"],
-      status: text(value.status) as TranscriptItem["status"],
-      content: text(value.content),
-      ...(value.name ? { name: text(value.name) } : {}),
-      ...(value.run_id ? { runId: text(value.run_id) } : {}),
-      ...(value.revision_of_message_id ? { revisionOfMessageId: text(value.revision_of_message_id) } : {}),
-      attachments: attachmentIds
-        .map((attachmentId) => this.getAttachment(attachmentId))
-        .filter((item): item is Attachment => item !== undefined),
-      ...(source ? { source } : {}),
-      createdAt: integer(value.created_at),
-      updatedAt: integer(value.updated_at),
-    };
+    return this.messages.getMessage(id);
   }
 
   findMessageOwner(id: string): { sessionId: string; runId?: string } | undefined {
-    const value = row(this.db.prepare("SELECT session_id,run_id FROM messages WHERE id=?"), id);
-    if (!value) return undefined;
-    return {
-      sessionId: text(value.session_id),
-      ...(value.run_id ? { runId: text(value.run_id) } : {}),
-    };
+    return this.messages.findMessageOwner(id);
   }
 
   listMessages(sessionId: string): TranscriptItem[] {
-    return rows(
-      this.db.prepare("SELECT id FROM messages WHERE session_id=? ORDER BY sequence"),
-      sessionId,
-    ).map((value) => this.getMessage(text(value.id)));
+    return this.messages.listMessages(sessionId);
   }
 
   listHistory(sessionId: string, beforeSequence?: number, limit = 100): SessionHistoryPage {
     this.getSession(sessionId);
-    const bounded = Math.max(1, Math.min(500, limit));
-    const values = rows(
-      beforeSequence === undefined
-        ? this.db.prepare(
-            "SELECT id,sequence FROM messages WHERE session_id=? ORDER BY sequence DESC LIMIT ?",
-          )
-        : this.db.prepare(
-            "SELECT id,sequence FROM messages WHERE session_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?",
-          ),
-      ...(beforeSequence === undefined ? [sessionId, bounded + 1] : [sessionId, beforeSequence, bounded + 1]),
-    );
-    const hasMore = values.length > bounded;
-    const page = values.slice(0, bounded).reverse();
-    return {
-      sessionId,
-      items: page.map((value) => this.getMessage(text(value.id))),
-      oldestSequence: page.length ? integer(page[0]?.sequence) : 0,
-      hasMore,
-    };
+    return this.messages.listHistory(sessionId, beforeSequence, limit);
   }
 
   listAgentMessages(sessionId: string, beforeSequence?: number): StoredAgentMessage[] {
-    const statement =
-      beforeSequence === undefined
-        ? this.db.prepare(
-            "SELECT id,sequence,payload_json FROM messages WHERE session_id=? AND payload_json IS NOT NULL AND status='complete' ORDER BY sequence",
-          )
-        : this.db.prepare(
-            "SELECT id,sequence,payload_json FROM messages WHERE session_id=? AND sequence<? AND payload_json IS NOT NULL AND status='complete' ORDER BY sequence",
-          );
-    return rows(
-      statement,
-      ...(beforeSequence === undefined ? [sessionId] : [sessionId, beforeSequence]),
-    ).flatMap((value) => {
-      const message = parseJson<AgentMessage | null>(value.payload_json, null);
-      return message ? [{ id: text(value.id), sequence: integer(value.sequence), message }] : [];
-    });
+    return this.messages.listAgentMessages(sessionId, beforeSequence);
+  }
+
+  getMessage(id: string): TranscriptItem {
+    return this.messages.getMessage(id);
+  }
+
+  private listMessagesByIds(ids: string[]): TranscriptItem[] {
+    return this.messages.listByIds(ids);
   }
 
   getContextSummary(sessionId: string): ContextSummary | undefined {
@@ -962,20 +739,21 @@ export class UmaDatabase {
   }
 
   getSnapshot(sessionId: string): SessionSnapshot {
+    const session = this.getSession(sessionId);
     const sessionState = row(
       this.db.prepare("SELECT next_event_sequence FROM sessions WHERE id=?"),
       sessionId,
     );
-    this.getSession(sessionId);
     const tail = rows(
       this.db.prepare("SELECT id,sequence FROM messages WHERE session_id=? ORDER BY sequence DESC LIMIT 101"),
       sessionId,
     );
     const hasMoreBefore = tail.length > 100;
     const visible = tail.slice(0, 100).reverse();
+    const transcript = this.listMessagesByIds(visible.map((value) => text(value.id)));
     return {
-      session: this.getSession(sessionId),
-      transcript: visible.map((value) => this.getMessage(text(value.id))),
+      session,
+      transcript,
       recentRuns: this.listRecentRuns(sessionId),
       pendingApprovals: this.listPendingApprovals(sessionId),
       snapshotSequence: Math.max(0, integer(sessionState?.next_event_sequence) - 1),
@@ -1023,6 +801,10 @@ export class UmaDatabase {
 
   listEvents(sessionId: string, afterSequence: number, limit = 500): SessionEventPage {
     this.getSession(sessionId);
+    const sessionState = row(
+      this.db.prepare("SELECT next_event_sequence FROM sessions WHERE id=?"),
+      sessionId,
+    );
     const bounded = Math.max(1, Math.min(1000, limit));
     const values = rows(
       this.db.prepare(
@@ -1045,7 +827,7 @@ export class UmaDatabase {
         payload: parseJson(value.payload_json, null),
       }),
     );
-    const snapshotSequence = this.getSnapshot(sessionId).snapshotSequence;
+    const snapshotSequence = Math.max(0, integer(sessionState?.next_event_sequence) - 1);
     return {
       sessionId,
       fromSequence: events[0]?.sequence ?? afterSequence,

@@ -1,0 +1,54 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 3210,
+    "stateDir": "/data/state",
+    "workspaceRoots": ["/data/workspace"],
+    "webOrigins": ["https://agent.example.com"],
+    "maxUploadBytes": 20971520
+  },
+  "auth": { "tokenEnv": "UMA_AUTH_TOKEN", "webSessionHours": 168 },
+  "providers": {
+    "openai": {
+      "driver": "openai",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY"
+    }
+  },
+  "models": {
+    "gpt-5.6-sol": {
+      "provider": "openai",
+      "name": "GPT-5.6 Sol",
+      "api": "openai-responses",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "capabilities": {
+        "tools": true,
+        "vision": false,
+        "reasoning": true,
+        "structuredOutput": true
+      }
+    }
+  },
+  "roles": {
+    "default": { "provider": "openai", "id": "gpt-5.6-sol" },
+    "reasoning": { "provider": "openai", "id": "gpt-5.6-sol" },
+    "fast": { "provider": "openai", "id": "gpt-5.6-sol" },
+    "vision": { "provider": "openai", "id": "gpt-5.6-sol" }
+  },
+  "defaultThinkingLevel": "medium",
+  "skillsDirs": ["/data/state/skills"],
+  "mcpServers": [
+    {
+      "name": "browser",
+      "transport": "http",
+      "url": "http://browser-worker:3230/mcp",
+      "authTokenEnv": "BROWSER_WORKER_TOKEN"
+    }
+  ],
+  "runtime": {
+    "maxParallelSessions": 4,
+    "approvalTimeoutMs": 120000,
+    "toolTimeoutMs": 60000
+  }
+}

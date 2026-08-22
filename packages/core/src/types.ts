@@ -77,4 +77,5 @@ export interface ContextSummary {
 export interface RuntimeHealth {
   activeRuns: number;
   started: boolean;
+  databaseReady: boolean;
 }

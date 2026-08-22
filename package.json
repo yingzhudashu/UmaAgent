@@ -12,13 +12,15 @@
   },
   "scripts": {
     "build": "npm run build --workspace=@uma-agent/protocol && npm run build --workspace=@uma-agent/channel-adapter && npm run build --workspace=@uma-agent/client && npm run build --workspace=@uma-agent/core && npm run build --workspace=@uma-agent/server && npm run build --workspace=@uma-agent/eval-runner && npm run build --workspace=@uma-agent/cli && npm run build --workspace=@uma-agent/web && npm run build --workspace=@uma-agent/feishu-adapter && npm run build --workspace=@uma-agent/browser-worker && npm run build --workspace=@uma-agent/feishu-mcp && npm run build --workspace=@uma-agent/skill-worker",
-    "check": "biome check . && tsc -b",
+    "check": "npm run check:architecture && biome check . && tsc -b",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "dev": "npm run dev --workspace=@uma-agent/server",
     "dev:faux": "npm run build && node scripts/faux-server.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:web:e2e": "playwright test",
     "test:eval:faux": "node scripts/eval-faux.mjs",
+    "test:perf": "node scripts/perf-baseline.mjs",
     "test:soak:faux": "node scripts/soak-faux.mjs",
     "test:watch": "vitest",
     "start": "npm run start --workspace=@uma-agent/server",
@@ -26,7 +28,8 @@
     "cli": "node apps/cli/dist/main.js",
     "cli:configured": "node --env-file=.env apps/cli/dist/main.js",
     "dev:web": "npm run dev --workspace=@uma-agent/web",
-    "build:web": "npm run build --workspace=@uma-agent/web"
+    "build:web": "npm run build --workspace=@uma-agent/web",
+    "build:web:embed": "npm run build:embed --workspace=@uma-agent/web"
   },
   "devDependencies": {
     "@biomejs/biome": "2.3.5",
