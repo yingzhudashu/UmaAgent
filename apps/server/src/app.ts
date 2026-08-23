@@ -741,6 +741,7 @@ export async function createServer(
       .send(data);
   });
 
+  app.head("/api/v11/events", async (_request, reply) => reply.code(405).send());
   app.get("/api/v11/events", { websocket: true }, (socket, request) => {
     if (request.method !== "GET") {
       socket.close(1003, "WebSocket requires GET");
