@@ -16,6 +16,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/markdown-it": "^14.1.2"
   }
 }

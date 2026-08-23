@@ -1,7 +1,8 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage } from "node:http";
+import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { Request, Response } from "express";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
 import { z } from "zod";
 import { assertPublicUrl, createValidatingProxy } from "./network.js";
@@ -126,48 +127,18 @@ const authenticated = (authorization: string | undefined): boolean => {
   const expected = Buffer.from(`Bearer ${authToken}`);
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 };
-const readJsonBody = (request: IncomingMessage): Promise<unknown> =>
-  new Promise((resolve, reject) => {
-    if (request.method !== "POST") return resolve(undefined);
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 2_000_000) reject(new Error("MCP request body is too large"));
-    });
-    request.on("end", () => {
-      if (!body) return resolve(undefined);
-      try {
-        resolve(JSON.parse(body));
-      } catch {
-        reject(new Error("Invalid MCP JSON body"));
-      }
-    });
-    request.on("error", reject);
-  });
-const server = createServer((request, response) => {
-  if (request.url === "/health" && request.method === "GET") {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ status: "ok", service: "browser-worker" }));
-    return;
-  }
-  if (request.url === "/mcp") {
-    if (!authenticated(request.headers.authorization)) {
-      response.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" });
-      response.end(JSON.stringify({ error: "authentication required" }));
-      return;
-    }
-    void readJsonBody(request)
-      .then((body) => transport.handleRequest(request, response, body))
-      .catch(() => {
-        if (!response.headersSent) response.writeHead(400, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: "invalid MCP request" }));
-      });
-    return;
-  }
-  response.writeHead(404).end();
+const app = createMcpExpressApp({ host });
+app.get("/health", (_request: Request, response: Response) => {
+  response.json({ status: "ok", service: "browser-worker" });
 });
-server.listen(port, host);
+app.all("/mcp", async (request: Request, response: Response) => {
+  if (!authenticated(request.headers.authorization)) {
+    response.status(401).set("www-authenticate", "Bearer").json({ error: "authentication required" });
+    return;
+  }
+  await transport.handleRequest(request, response, request.body);
+});
+const server = app.listen(port, host);
 
 const expiry = setInterval(() => {
   for (const [id, handle] of handles) if (handle.expiresAt <= Date.now()) void closeHandle(id);

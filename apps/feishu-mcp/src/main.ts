@@ -1,8 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
-import { createServer } from "node:http";
 import * as lark from "@larksuiteoapi/node-sdk";
+import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { UmaClient } from "@uma-agent/client";
+import type { Request, Response } from "express";
 import { createFeishuMcp, type FeishuBusinessGateway, retryFeishuOperation } from "./service.js";
 
 const required = (name: string) => {
@@ -47,48 +48,18 @@ const authenticated = (header?: string) => {
   const expected = Buffer.from(`Bearer ${token}`);
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 };
-const readJsonBody = (request: import("node:http").IncomingMessage): Promise<unknown> =>
-  new Promise((resolve, reject) => {
-    if (request.method !== "POST") return resolve(undefined);
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 2_000_000) reject(new Error("MCP request body is too large"));
-    });
-    request.on("end", () => {
-      if (!body) return resolve(undefined);
-      try {
-        resolve(JSON.parse(body));
-      } catch {
-        reject(new Error("Invalid MCP JSON body"));
-      }
-    });
-    request.on("error", reject);
-  });
-const server = createServer((request, response) => {
-  if (request.url === "/health" && request.method === "GET") {
-    response
-      .writeHead(200, { "content-type": "application/json" })
-      .end(JSON.stringify({ status: "ok", service: "feishu-mcp" }));
-    return;
-  }
-  if (request.url === "/mcp") {
-    if (!authenticated(request.headers.authorization)) {
-      response.writeHead(401).end();
-      return;
-    }
-    void readJsonBody(request)
-      .then((body) => transport.handleRequest(request, response, body))
-      .catch(() => {
-        if (!response.headersSent) response.writeHead(400, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: "invalid MCP request" }));
-      });
-    return;
-  }
-  response.writeHead(request.url === "/mcp" ? 401 : 404).end();
+const app = createMcpExpressApp({ host });
+app.get("/health", (_request: Request, response: Response) => {
+  response.json({ status: "ok", service: "feishu-mcp" });
 });
-server.listen(port, host);
+app.all("/mcp", async (request: Request, response: Response) => {
+  if (!authenticated(request.headers.authorization)) {
+    response.status(401).end();
+    return;
+  }
+  await transport.handleRequest(request, response, request.body);
+});
+const server = app.listen(port, host);
 const stop = async () => {
   core.close();
   await transport.close();
