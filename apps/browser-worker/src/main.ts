@@ -112,7 +112,7 @@ mcp.registerTool(
 );
 
 const transport = new StreamableHTTPServerTransport({
-  sessionIdGenerator: undefined,
+  sessionIdGenerator: randomUUID,
 } as unknown as ConstructorParameters<typeof StreamableHTTPServerTransport>[0]);
 transport.onerror = (error) => console.error("MCP transport error", error);
 await mcp.connect(transport as Parameters<McpServer["connect"]>[0]);

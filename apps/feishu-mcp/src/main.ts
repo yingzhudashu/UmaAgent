@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import * as lark from "@larksuiteoapi/node-sdk";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -34,7 +34,7 @@ const gateway: FeishuBusinessGateway = {
 };
 const core = new UmaClient({ baseUrl: required("UMA_SERVER_URL"), token: required("UMA_TOKEN") });
 const mcp = createFeishuMcp({ gateway, core });
-const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined } as never);
+const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID } as never);
 transport.onerror = (error) => console.error("MCP transport error", error);
 await mcp.connect(transport as Parameters<typeof mcp.connect>[0]);
 const host = process.env.FEISHU_MCP_HOST?.trim() || "127.0.0.1";
