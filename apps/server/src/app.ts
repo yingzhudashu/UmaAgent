@@ -742,6 +742,10 @@ export async function createServer(
   });
 
   app.get("/api/v11/events", { websocket: true }, (socket, request) => {
+    if (request.method !== "GET") {
+      socket.close(1003, "WebSocket requires GET");
+      return;
+    }
     const origin = request.headers.origin;
     if (origin && !allowedOrigin(origin, runtime.config.server.webOrigins)) {
       socket.close(1008, "Origin is not allowed");
