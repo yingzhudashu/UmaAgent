@@ -113,6 +113,7 @@ mcp.registerTool(
 const transport = new StreamableHTTPServerTransport({
   sessionIdGenerator: undefined,
 } as unknown as ConstructorParameters<typeof StreamableHTTPServerTransport>[0]);
+transport.onerror = (error) => console.error("MCP transport error", error);
 await mcp.connect(transport as Parameters<McpServer["connect"]>[0]);
 const port = Number(process.env.BROWSER_WORKER_PORT ?? 3230);
 const host = process.env.BROWSER_WORKER_HOST?.trim() || "127.0.0.1";

@@ -34,6 +34,7 @@ const gateway: FeishuBusinessGateway = {
 const core = new UmaClient({ baseUrl: required("UMA_SERVER_URL"), token: required("UMA_TOKEN") });
 const mcp = createFeishuMcp({ gateway, core });
 const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined } as never);
+transport.onerror = (error) => console.error("MCP transport error", error);
 await mcp.connect(transport as Parameters<typeof mcp.connect>[0]);
 const host = process.env.FEISHU_MCP_HOST?.trim() || "127.0.0.1";
 const port = Number(process.env.FEISHU_MCP_PORT ?? 3240);
