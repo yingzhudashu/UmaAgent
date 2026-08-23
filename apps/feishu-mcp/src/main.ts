@@ -57,7 +57,12 @@ app.all("/mcp", async (request: Request, response: Response) => {
     response.status(401).end();
     return;
   }
-  await transport.handleRequest(request, response, request.body);
+  try {
+    await transport.handleRequest(request, response, request.body);
+  } catch (error) {
+    console.error("MCP request failed", error);
+    if (!response.headersSent) response.status(500).end();
+  }
 });
 const server = app.listen(port, host);
 const stop = async () => {
