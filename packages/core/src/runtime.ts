@@ -1832,7 +1832,11 @@ export class UmaRuntime {
         tools: context.tools,
         messages: context.messages,
       },
-      streamFn: this.models.models.streamSimple.bind(this.models.models),
+      streamFn: (model, modelContext, options) =>
+        this.models.models.streamSimple(model, modelContext, {
+          ...options,
+          headers: { ...(options?.headers ?? {}), "user-agent": "UmaAgent/1.0", accept: "application/json" },
+        }),
       toolExecution: "parallel",
       shouldStopAfterTurn: () => {
         stepTurns++;
