@@ -16,7 +16,7 @@ const db = new DatabaseSync(path, { readOnly: true });
 const integrity = db.prepare("PRAGMA integrity_check").get();
 if (integrity.integrity_check !== "ok") throw new Error(`integrity_check: ${integrity.integrity_check}`);
 const version = db.prepare("PRAGMA user_version").get().user_version;
-if (version !== 14) throw new Error(`unexpected schema: ${version}`);
+if (version !== 15) throw new Error(`unexpected schema: ${version}`);
 const sessionColumns = db.prepare("PRAGMA table_info(sessions)").all();
 if (sessionColumns.some((column) => column.name === "mode")) throw new Error("legacy sessions.mode column present");
 const owner = sessionColumns.find((column) => column.name === "user_id");
