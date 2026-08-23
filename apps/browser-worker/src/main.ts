@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
@@ -125,6 +125,25 @@ const authenticated = (authorization: string | undefined): boolean => {
   const expected = Buffer.from(`Bearer ${authToken}`);
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 };
+const readJsonBody = (request: IncomingMessage): Promise<unknown> =>
+  new Promise((resolve, reject) => {
+    if (request.method !== "POST") return resolve(undefined);
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 2_000_000) reject(new Error("MCP request body is too large"));
+    });
+    request.on("end", () => {
+      if (!body) return resolve(undefined);
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new Error("Invalid MCP JSON body"));
+      }
+    });
+    request.on("error", reject);
+  });
 const server = createServer((request, response) => {
   if (request.url === "/health" && request.method === "GET") {
     response.writeHead(200, { "content-type": "application/json" });
@@ -137,7 +156,13 @@ const server = createServer((request, response) => {
       response.end(JSON.stringify({ error: "authentication required" }));
       return;
     }
-    return void transport.handleRequest(request, response);
+    void readJsonBody(request)
+      .then((body) => transport.handleRequest(request, response, body))
+      .catch(() => {
+        if (!response.headersSent) response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "invalid MCP request" }));
+      });
+    return;
   }
   response.writeHead(404).end();
 });

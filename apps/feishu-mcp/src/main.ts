@@ -46,6 +46,25 @@ const authenticated = (header?: string) => {
   const expected = Buffer.from(`Bearer ${token}`);
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 };
+const readJsonBody = (request: import("node:http").IncomingMessage): Promise<unknown> =>
+  new Promise((resolve, reject) => {
+    if (request.method !== "POST") return resolve(undefined);
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 2_000_000) reject(new Error("MCP request body is too large"));
+    });
+    request.on("end", () => {
+      if (!body) return resolve(undefined);
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new Error("Invalid MCP JSON body"));
+      }
+    });
+    request.on("error", reject);
+  });
 const server = createServer((request, response) => {
   if (request.url === "/health" && request.method === "GET") {
     response
@@ -53,8 +72,19 @@ const server = createServer((request, response) => {
       .end(JSON.stringify({ status: "ok", service: "feishu-mcp" }));
     return;
   }
-  if (request.url === "/mcp" && authenticated(request.headers.authorization))
-    return void transport.handleRequest(request, response);
+  if (request.url === "/mcp") {
+    if (!authenticated(request.headers.authorization)) {
+      response.writeHead(401).end();
+      return;
+    }
+    void readJsonBody(request)
+      .then((body) => transport.handleRequest(request, response, body))
+      .catch(() => {
+        if (!response.headersSent) response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "invalid MCP request" }));
+      });
+    return;
+  }
   response.writeHead(request.url === "/mcp" ? 401 : 404).end();
 });
 server.listen(port, host);
