@@ -26,6 +26,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import Value from "typebox/value";
 import type { RawData } from "ws";
 import { type AuthPrincipal, AuthService } from "./auth.js";
+import { mapServerError } from "./error-mapping.js";
 
 type SocketMessage = {
   type?: string;
@@ -860,48 +861,12 @@ export async function createServer(
 
   app.setErrorHandler((cause, request, reply) => {
     const error = cause instanceof Error ? cause : new Error(String(cause));
-    let message = error.message.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]");
     const secrets = runtime.config.models
       .map((model) => process.env[model.apiKeyEnv])
       .filter((value): value is string => Boolean(value));
-    for (const secret of secrets) message = message.split(secret).join("[REDACTED]");
-    app.log.error({ err: { name: error.name, message } }, "request failed");
-    const notFound = /not found/i.test(error.message);
-    const conflict =
-      /(already|not pending|not cancellable|active run|only interrupted|requiring confirmation)/i.test(
-        error.message,
-      );
-    const providerContract = /provider contract/i.test(error.message);
-    const provider =
-      !providerContract && /(provider|preflight|classification|verification|model)/i.test(error.message);
-    const cancelled = /cancel/i.test(error.message);
-    const validation =
-      /(invalid|required|must |unsupported|outside|escapes|exceeds|unavailable|does not support|belongs to another session)/i.test(
-        error.message,
-      );
-    const code = notFound
-      ? "not_found"
-      : conflict
-        ? "conflict"
-        : providerContract
-          ? "provider_contract_error"
-          : cancelled
-            ? "cancelled"
-            : provider
-              ? "provider_error"
-              : validation
-                ? "validation_failed"
-                : "internal_error";
-    const status = notFound
-      ? 404
-      : conflict || cancelled
-        ? 409
-        : providerContract || provider
-          ? 502
-          : validation
-            ? 400
-            : 500;
-    reply.code(status).send(errorBody(request.id, code, message, provider || code === "internal_error"));
+    const mapped = mapServerError(error, secrets);
+    app.log.error({ err: { name: error.name, message: mapped.message } }, "request failed");
+    reply.code(mapped.status).send(errorBody(request.id, mapped.code, mapped.message, mapped.retryable));
   });
 
   const webRoot =

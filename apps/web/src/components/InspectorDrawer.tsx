@@ -21,9 +21,17 @@ export function InspectorDrawer({
   children: ReactNode;
 }) {
   const drawerRef = useRef<HTMLElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      returnFocusRef.current?.focus({ preventScroll: true });
+      returnFocusRef.current = null;
+    };
+  }, []);
   useEffect(() => {
     if (!section) return;
-    drawerRef.current?.focus();
+    drawerRef.current?.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };

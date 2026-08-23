@@ -2,12 +2,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { UmaDatabase } from "../src/database.js";
 import { KnowledgeService } from "../src/knowledge.js";
 import { PermissionPolicy } from "../src/permissions.js";
 import { SkillRegistry } from "../src/skills.js";
 import { createBuiltinTools } from "../src/tools.js";
 import { WorkspacePolicy } from "../src/workspace.js";
+import { testDatabase } from "./test-database.js";
 
 const temporary: string[] = [];
 afterEach(async () =>
@@ -18,7 +18,7 @@ describe("session capabilities", () => {
   it("applies tool isolation by interaction mode", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-capabilities-"));
     temporary.push(root);
-    const db = new UmaDatabase(join(root, "state"));
+    const db = testDatabase(join(root, "state"));
     const workspacePolicy = new WorkspacePolicy([root]);
     await workspacePolicy.initialize();
     const skills = new SkillRegistry([]);
@@ -100,7 +100,7 @@ describe("session capabilities", () => {
     const outside = await mkdtemp(join(tmpdir(), "uma-knowledge-outside-"));
     temporary.push(root, outside);
     const state = join(root, "state");
-    const db = new UmaDatabase(state);
+    const db = testDatabase(state);
     const service = new KnowledgeService(db, [join(root, "workspace")], state);
     await mkdir(join(root, "workspace"));
     const path = join(outside, "private.txt");

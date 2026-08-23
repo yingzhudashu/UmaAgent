@@ -84,6 +84,7 @@ export interface UmaAuthMe {
 
 type Listener = (event: AgentEventEnvelope) => void;
 type ResourceListener = (event: ResourceInvalidated | ResourceResyncRequired) => void;
+export type EventConnectionState = "disconnected" | "connecting" | "connected";
 export type SessionSubscription = { id: string; lastSequence?: number };
 
 export class UmaClient {
@@ -98,6 +99,7 @@ export class UmaClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private reconnectAttempt = 0;
   private closed = false;
+  private eventConnectionState: EventConnectionState = "disconnected";
 
   constructor(private readonly options: UmaClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -106,6 +108,10 @@ export class UmaClient {
 
   get serverOrigin(): string {
     return new URL(this.baseUrl).origin;
+  }
+
+  eventState(): EventConnectionState {
+    return this.eventConnectionState;
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -567,6 +573,7 @@ export class UmaClient {
 
   connectEvents(): void {
     if (this.socket || this.closed) return;
+    this.eventConnectionState = "connecting";
     const url = new URL("/api/v11/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
@@ -574,6 +581,7 @@ export class UmaClient {
       : new WebSocket(url);
     this.socket = socket;
     socket.addEventListener("open", () => {
+      this.eventConnectionState = "connected";
       this.reconnectAttempt = 0;
       if (this.options.token) socket.send(JSON.stringify({ type: "auth", token: this.options.token }));
       this.sendSubscriptions();
@@ -596,6 +604,7 @@ export class UmaClient {
       }
     });
     socket.addEventListener("close", () => {
+      this.eventConnectionState = "disconnected";
       if (this.socket === socket) this.socket = undefined;
       if (!this.closed) this.scheduleReconnect();
     });
@@ -607,6 +616,7 @@ export class UmaClient {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.socket?.close();
     this.socket = undefined;
+    this.eventConnectionState = "disconnected";
   }
 
   private dispatch(event: AgentEventEnvelope): void {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { UmaDatabase } from "../src/database.js";
 import { safeFetch } from "../src/tools.js";
 import { WorkspacePolicy } from "../src/workspace.js";
+import { testDatabase } from "./test-database.js";
 
 const modelSnapshot = {
   ref: { provider: "test", id: "model" },
@@ -24,7 +25,7 @@ describe("UmaDatabase", () => {
   it("persists sessions and enforces message idempotency", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-db-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "test",
       workspace: root,
@@ -56,7 +57,7 @@ describe("UmaDatabase", () => {
     });
     expect(db.searchMemory(session.id, "TypeScript 编写")).toContain("用户偏好使用 TypeScript 编写工具");
     db.close();
-    const reopened = new UmaDatabase(root);
+    const reopened = testDatabase(root);
     expect(reopened.getSession(session.id).title).toBe("test");
     reopened.close();
   });
@@ -64,7 +65,7 @@ describe("UmaDatabase", () => {
   it("rejects an unsupported schema version", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-schema-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     db.db.exec("PRAGMA user_version = 10");
     db.close();
     expect(() => new UmaDatabase(root)).toThrow("Unsupported database schema");
@@ -73,7 +74,7 @@ describe("UmaDatabase", () => {
   it("marks active runs interrupted after restart", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-restart-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "restart",
       workspace: root,
@@ -122,7 +123,7 @@ describe("UmaDatabase", () => {
       input: { command: "echo later" },
     });
     db.close();
-    const reopened = new UmaDatabase(root);
+    const reopened = testDatabase(root);
     expect(reopened.getRun(run.id).status).toBe("interrupted");
     expect(reopened.getRunAction(runningAction.id).status).toBe("uncertain");
     expect(reopened.getRunAction(runningRead.id).status).toBe("prepared");
@@ -142,7 +143,7 @@ describe("UmaDatabase", () => {
   it("bounds snapshots while retaining every non-terminal run", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-snapshot-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "bounded",
       workspace: root,
@@ -171,7 +172,7 @@ describe("UmaDatabase", () => {
   it("loads message attachments in one projection without dropping metadata", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-message-repository-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "attachments",
       model: { provider: "test", id: "model" },
@@ -200,7 +201,7 @@ describe("UmaDatabase", () => {
   it("paginates durable events beyond one thousand entries", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-events-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "events",
       model: { provider: "test", id: "model" },
@@ -221,7 +222,7 @@ describe("UmaDatabase", () => {
   it("retrieves only active global and current-session memory facts", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-memory-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "memory",
       model: { provider: "test", id: "model" },
@@ -278,7 +279,7 @@ describe("UmaDatabase", () => {
   it("keeps fixed Chinese and English memory Recall@8 above the 85% embedding gate", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-memory-recall-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "recall",
       model: { provider: "test", id: "model" },
@@ -319,7 +320,7 @@ describe("UmaDatabase", () => {
   it("rejects attachments that are not owned by the current session", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-attachment-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const first = db.createSession({
       title: "first",
       model: { provider: "test", id: "model" },
@@ -354,7 +355,7 @@ describe("UmaDatabase", () => {
   it("redacts credentials from durable audit input and output", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-audit-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "audit",
       model: { provider: "test", id: "model" },
@@ -379,7 +380,7 @@ describe("UmaDatabase", () => {
   it("rolls back state and durable events together", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-atomic-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "before",
       workspace: root,
@@ -401,7 +402,7 @@ describe("UmaDatabase", () => {
   it("paginates transcript history before a stable message sequence", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-history-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "history",
       workspace: root,
@@ -420,7 +421,7 @@ describe("UmaDatabase", () => {
   it("claims an Action transition only once", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-action-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const session = db.createSession({
       title: "action",
       workspace: root,
@@ -458,7 +459,7 @@ describe("evaluation reports", () => {
   it("persists immutable report summaries and cases", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-evaluation-"));
     temporary.push(root);
-    const db = new UmaDatabase(root);
+    const db = testDatabase(root);
     const report = db.createEvaluationReport({
       mode: "faux",
       suiteVersion: "builtin-1",

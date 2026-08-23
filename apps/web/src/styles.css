@@ -1141,6 +1141,23 @@
 .uma-embed .status-error {
   color: var(--danger);
 }
+.uma-embed .status-warning {
+  color: var(--warning);
+}
+.uma-embed .panel-error {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  border-radius: 9px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-0));
+}
+.uma-embed .panel-error p {
+  margin: 0;
+  font-size: 12px;
+}
 .uma-embed .inspector-header {
   display: flex;
   align-items: flex-start;
@@ -1191,6 +1208,150 @@
   letter-spacing: 0.08em;
   margin: 0 0 10px;
   text-transform: uppercase;
+}
+.uma-embed .settings-panel {
+  display: grid;
+  gap: 18px;
+}
+.uma-embed .settings-section {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.uma-embed .settings-section:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.uma-embed .settings-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.uma-embed .settings-section-heading h3 {
+  margin: 0;
+  color: var(--ink-strong);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.uma-embed .settings-section-heading p {
+  margin: 4px 0 0;
+  color: var(--ink-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.uma-embed .settings-status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+.uma-embed .settings-status-dot.ok {
+  background: var(--success);
+}
+.uma-embed .settings-list {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-1);
+}
+.uma-embed .settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+.uma-embed .settings-row:last-child {
+  border-bottom: 0;
+}
+.uma-embed .settings-row strong,
+.uma-embed .settings-row span:last-child {
+  max-width: 68%;
+  overflow: hidden;
+  color: var(--ink-strong);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.uma-embed .settings-form {
+  display: grid;
+  gap: 8px;
+}
+.uma-embed .settings-form label {
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.uma-embed .settings-form textarea {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 10px;
+  color: var(--ink-strong);
+  background: var(--surface-1);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.uma-embed .settings-form textarea:focus {
+  border-color: var(--accent);
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.uma-embed .settings-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.uma-embed .settings-help,
+.uma-embed .settings-note {
+  color: var(--ink-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.uma-embed .settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.uma-embed .settings-actions button,
+.uma-embed .settings-danger > button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 11px;
+  color: var(--ink-strong);
+  background: var(--surface-1);
+  font-size: 12px;
+}
+.uma-embed .settings-actions button:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent);
+}
+.uma-embed .settings-danger {
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 24%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--danger) 4%, var(--surface-0));
+}
+.uma-embed .settings-danger > button {
+  justify-self: start;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: transparent;
 }
 .uma-embed .detail-tabs {
   display: flex;

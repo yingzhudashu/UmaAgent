@@ -2,9 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { UmaDatabase } from "../src/database.js";
+import type { UmaDatabase } from "../src/database.js";
 import { EventHub } from "../src/events.js";
 import { RunApprovals } from "../src/run-approvals.js";
+import { testDatabase } from "./test-database.js";
 
 const temporary: string[] = [];
 afterEach(async () => {
@@ -39,7 +40,7 @@ describe("run approvals", () => {
   it("resolves a pending request once and returns the durable final decision on retry", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-approvals-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     try {
       const { session, run } = setup(database);
       const approvals = new RunApprovals(database, new EventHub(database), 10_000);
@@ -63,7 +64,7 @@ describe("run approvals", () => {
   it("expires an already-aborted request and rejects all remaining requests on shutdown", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-approvals-abort-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     try {
       const { session, run } = setup(database);
       const approvals = new RunApprovals(database, new EventHub(database), 10_000);

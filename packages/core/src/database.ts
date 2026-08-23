@@ -55,6 +55,7 @@ import {
   toScheduledTaskRun,
 } from "./database-utils.js";
 import { MessageRepository } from "./message-repository.js";
+import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
@@ -81,6 +82,7 @@ export class UmaDatabase {
         `Unsupported database schema ${version}; expected ${SCHEMA_VERSION}. Reset state explicitly.`,
       );
     }
+    validateSchema(this.db);
     this.auditEvaluations = new AuditEvaluationRepository(this.db, (operation) =>
       this.withTransaction(operation),
     );
@@ -360,7 +362,7 @@ export class UmaDatabase {
   }
 
   createSession(input: {
-    userId?: string;
+    userId: string;
     title: string;
     workspace?: string;
     model: ModelRef;

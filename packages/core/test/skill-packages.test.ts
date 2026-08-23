@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { UmaDatabase } from "../src/database.js";
 import { SkillPackageService } from "../src/skill-packages.js";
 import { SkillRegistry } from "../src/skills.js";
+import { testDatabase } from "./test-database.js";
 
 const temporary: string[] = [];
 afterEach(async () => {
@@ -24,7 +24,7 @@ async function fixture(content: string, extra?: { name: string; content: string 
     "utf8",
   );
   if (extra) await writeFile(join(source, extra.name), extra.content, "utf8");
-  const database = new UmaDatabase(state);
+  const database = testDatabase(state);
   const registry = new SkillRegistry([]);
   const invalidated = vi.fn();
   const service = new SkillPackageService(state, database, registry, invalidated);

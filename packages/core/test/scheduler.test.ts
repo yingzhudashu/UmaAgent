@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BackgroundTask } from "@uma-agent/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { UmaDatabase } from "../src/database.js";
 import { nextScheduleTime, SchedulerService } from "../src/scheduler.js";
+import { testDatabase } from "./test-database.js";
 
 const temporary: string[] = [];
 afterEach(async () => {
@@ -21,7 +21,7 @@ describe("scheduler", () => {
   it("persists one execution and disables a once schedule", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     const session = database.createSession({
       title: "scheduled",
       model: { provider: "test", id: "model" },
@@ -75,7 +75,7 @@ describe("scheduler", () => {
   it("rejects deletion while a scheduled execution is active", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-active-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     const scheduler = new SchedulerService(database, {
       prepareScheduledTask() {
         throw new Error("not used");
@@ -111,7 +111,7 @@ describe("scheduler", () => {
   it("supports disabled creation and recomputes schedules on update", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-update-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     const scheduler = new SchedulerService(database, {
       prepareScheduledTask() {
         throw new Error("not used");
@@ -152,7 +152,7 @@ describe("scheduler", () => {
   it("runs a task manually without changing its recurring schedule", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-manual-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     const session = database.createSession({
       title: "manual",
       model: { provider: "test", id: "model" },
@@ -194,7 +194,7 @@ describe("scheduler", () => {
   it("records executor failures and avoids overlapping persisted runs", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-failure-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     let executionError: unknown = "provider unavailable";
     let prepared = 0;
     const executor = {
@@ -262,7 +262,7 @@ describe("scheduler", () => {
     vi.useFakeTimers();
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-lifecycle-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     const scheduler = new SchedulerService(database, {
       prepareScheduledTask() {
         throw new Error("not used");
@@ -286,7 +286,7 @@ describe("scheduler", () => {
   it("gets runs and cancels active executions idempotently", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-cancel-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     const session = database.createSession({
       title: "cancel",
       model: { provider: "test", id: "model" },
@@ -346,7 +346,7 @@ describe("scheduler", () => {
   it("resumes only awaiting schedule runs and monitors their existing background task", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-resume-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     const session = database.createSession({
       title: "resume",
       model: { provider: "test", id: "model" },
@@ -424,7 +424,7 @@ describe("scheduler", () => {
   it("recovers a claimed occurrence with an existing background task", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-claimed-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     const session = database.createSession({
       title: "claimed",
       model: { provider: "test", id: "model" },
@@ -479,7 +479,7 @@ describe("scheduler", () => {
   it("propagates an interrupted background run into awaiting resume", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-scheduler-interrupted-"));
     temporary.push(root);
-    const database = new UmaDatabase(root);
+    const database = testDatabase(root);
     const session = database.createSession({
       title: "interrupted",
       model: { provider: "test", id: "model" },

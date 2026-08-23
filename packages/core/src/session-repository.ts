@@ -18,7 +18,7 @@ export class SessionRepository {
   }
 
   create(input: {
-    userId?: string;
+    userId: string;
     title: string;
     workspace?: string;
     model: ModelRef;
@@ -33,7 +33,7 @@ export class SessionRepository {
       )
       .run(
         id,
-        input.userId ?? "system",
+        input.userId,
         input.title,
         input.workspace ?? null,
         input.model.provider,

@@ -2,8 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { UmaDatabase } from "../src/database.js";
 import { EventHub } from "../src/events.js";
+import { testDatabase } from "./test-database.js";
 
 const temporary: string[] = [];
 afterEach(async () => {
@@ -13,7 +13,7 @@ afterEach(async () => {
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "uma-event-hub-"));
   temporary.push(root);
-  const database = new UmaDatabase(root);
+  const database = testDatabase(root);
   const session = database.createSession({
     title: "events",
     model: { provider: "test", id: "model" },

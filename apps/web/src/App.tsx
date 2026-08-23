@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type UmaClient, UmaClientError } from "@uma-agent/client";
+import { type EventConnectionState, type UmaClient, UmaClientError } from "@uma-agent/client";
 import type { Approval, InteractionMode, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
 import {
   Bot,
@@ -21,7 +21,6 @@ import { ResourceArea } from "./areas/ResourceArea.js";
 import { ApprovalBar, RunPanel } from "./areas/RunArea.js";
 import { ScheduleArea } from "./areas/ScheduleArea.js";
 import { SessionArea } from "./areas/SessionArea.js";
-import { SettingsArea } from "./areas/SettingsArea.js";
 import {
   cacheCursor,
   cachedCursor,
@@ -36,9 +35,10 @@ import {
 } from "./cache.js";
 import { InspectorContent } from "./components/InspectorContent.js";
 import { InspectorDrawer } from "./components/InspectorDrawer.js";
-import { ApprovalPanel, ConnectionPanel } from "./components/InspectorStatusPanels.js";
+import { ApprovalPanel, ConnectionPanel, SyncPanel } from "./components/InspectorStatusPanels.js";
 import { MessageBubble } from "./components/MessageBubble.js";
 import { ModeSelector } from "./components/ModeSelector.js";
+import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
 import { Login } from "./Login.js";
 
@@ -63,7 +63,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [loginRequired, setLoginRequired] = useState<boolean>();
   const [userRole, setUserRole] = useState<"admin" | "user">("user");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(false);
   const [inspectorSection, setInspectorSection] = useState<InspectorSection>();
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
@@ -71,6 +70,9 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent>();
   const [historical, setHistorical] = useState<TranscriptItem[]>([]);
   const [historyHasMore, setHistoryHasMore] = useState<boolean>();
+  const [eventState, setEventState] = useState<EventConnectionState>(() => client.eventState());
+  const [lastSyncAt, setLastSyncAt] = useState<number>();
+  const [syncCursor, setSyncCursor] = useState<number>();
   const endRef = useRef<HTMLDivElement>(null);
 
   const sessions = useQuery({
@@ -176,7 +178,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
         throw error;
       }
     },
-    enabled: Boolean(selected) && authenticated,
+    enabled: Boolean(selected && selected !== "undefined") && authenticated,
     refetchInterval: false,
   });
   useEffect(() => {
@@ -216,13 +218,24 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       client.close();
     }
     if (sessions.isSuccess) setLoginRequired(false);
-    if (!selected && sessions.data?.[0]) setSelected(sessions.data[0].id);
+    if (sessions.isSuccess) {
+      const available = sessions.data ?? [];
+      if (selected && !available.some((session) => session.id === selected)) setSelected(undefined);
+      if (!selected && available[0]) setSelected(available[0].id);
+    }
   }, [sessions.error, sessions.data, sessions.isSuccess, selected, client]);
   useEffect(() => {
     if (authenticated) client.connectEvents();
   }, [authenticated, client]);
   useEffect(() => {
-    if (!selected) return;
+    if (!authenticated) return;
+    const update = () => setEventState(client.eventState());
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [authenticated, client]);
+  useEffect(() => {
+    if (!selected || selected === "undefined") return;
     let unsubscribe: (() => void) | undefined;
     let cancelled = false;
     void Promise.all([cachedCursor(selected), cachedHistory(selected)])
@@ -239,6 +252,8 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 ? (event.payload as SessionSnapshot).snapshotSequence
                 : event.sequence;
             void cacheCursor(selected, durableSequence);
+            setSyncCursor(durableSequence);
+            setLastSyncAt(Date.now());
             if (event.type === "approval.requested")
               setApprovals((items) => [
                 ...items.filter((item) => item.id !== (event.payload as Approval).id),
@@ -288,6 +303,8 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       await cacheSnapshot(value);
       await cacheHistory(session.id, []);
       await cacheCursor(session.id, value.snapshotSequence);
+      setSyncCursor(value.snapshotSequence);
+      setLastSyncAt(Date.now());
       requestAnimationFrame(() => promptRef.current?.focus());
     },
     onError: (error) => {
@@ -529,11 +546,8 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               </button>
               <button
                 type="button"
-                className={`icon ${panelOpen ? "active" : ""}`}
-                onClick={() => {
-                  setPanelOpen((value) => !value);
-                  setInspectorSection((value) => (value ? undefined : "run"));
-                }}
+                className={`icon ${inspectorSection ? "active" : ""}`}
+                onClick={() => setInspectorSection((value) => (value ? undefined : "run"))}
                 title="打开详情"
               >
                 <PanelRight />
@@ -696,28 +710,28 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
           online={!offline}
           busy={Boolean(busy)}
           approvals={approvals.filter((approval) => approval.sessionId === selected).length}
-          open={panelOpen ? inspectorSection : undefined}
-          onOpen={(section) => {
-            if (panelOpen && inspectorSection === section) {
-              setPanelOpen(false);
-              setInspectorSection(undefined);
-              return;
-            }
-            setPanelOpen(true);
-            setInspectorSection(section);
-          }}
+          open={inspectorSection}
+          onOpen={(section) => setInspectorSection((current) => (current === section ? undefined : section))}
         />
-        {panelOpen && inspectorSection && (
+        {inspectorSection && (
           <InspectorDrawer
             section={inspectorSection}
             onClose={() => {
-              setPanelOpen(false);
               setInspectorSection(undefined);
             }}
           >
             <InspectorContent>
-              {(inspectorSection === "connection" || inspectorSection === "sync") && (
-                <ConnectionPanel health={health.data} />
+              {inspectorSection === "connection" && <ConnectionPanel health={health.data} />}
+              {inspectorSection === "sync" && (
+                <SyncPanel
+                  browserOnline={browserOnline}
+                  coreAvailable={!health.isError}
+                  selected={selected}
+                  eventState={eventState}
+                  lastSyncAt={lastSyncAt}
+                  cursor={syncCursor}
+                  retry={() => client.connectEvents()}
+                />
               )}
               {inspectorSection === "approvals" && (
                 <ApprovalPanel
@@ -746,7 +760,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   disabled={offline}
                 />
               )}
-              {inspectorSection === "settings" && (
+              {false && inspectorSection === "settings" && (
                 <section className="inspector-group">
                   <h3>后台任务</h3>
                   <div className="operation-list">
@@ -810,7 +824,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   </div>
                 </section>
               )}
-              {inspectorSection === "settings" && (
+              {false && inspectorSection === "settings" && (
                 <section className="inspector-group">
                   <h3>记忆</h3>
                   <div className="operation-list">
@@ -846,7 +860,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   </div>
                 </section>
               )}
-              {inspectorSection === "settings" && (
+              {false && inspectorSection === "settings" && (
                 <section className="inspector-group">
                   <h3>调度</h3>
                   <ScheduleArea
@@ -863,7 +877,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   />
                 </section>
               )}
-              {inspectorSection === "settings" && (
+              {false && inspectorSection === "settings" && (
                 <section className="inspector-group">
                   <h3>资源</h3>
                   <ResourceArea
@@ -900,7 +914,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   />
                 </section>
               )}
-              {inspectorSection === "settings" && userRole === "admin" && (
+              {false && inspectorSection === "settings" && userRole === "admin" && (
                 <section className="inspector-group">
                   <h3>管理</h3>
                   <EvaluationArea reports={evaluations.data ?? []} />
@@ -931,7 +945,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               {inspectorSection === "settings" && (
                 <section className="inspector-group">
                   <h3>会话设置</h3>
-                  <SettingsArea
+                  <SessionSettingsPanel
                     session={snapshot.data?.session}
                     health={health.data}
                     installAvailable={Boolean(installPrompt)}

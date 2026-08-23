@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { UmaDatabase } from "../src/database.js";
 import { KnowledgeService } from "../src/knowledge.js";
+import { testDatabase } from "./test-database.js";
 
 const temporary: string[] = [];
 afterEach(async () => {
@@ -16,7 +16,7 @@ async function fixture() {
   const state = join(root, "state");
   const workspace = join(root, "workspace");
   await mkdir(workspace);
-  const database = new UmaDatabase(state);
+  const database = testDatabase(state);
   const knowledge = new KnowledgeService(database, [workspace], state);
   return { root, state, workspace, database, knowledge };
 }

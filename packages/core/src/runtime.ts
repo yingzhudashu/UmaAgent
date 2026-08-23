@@ -487,6 +487,7 @@ export class UmaRuntime {
     ownerId?: string,
   ): Promise<BackgroundTask> {
     if (!prompt.trim()) throw new Error("Task prompt is required");
+    if (!ownerId || ownerId === "system") throw new Error("Task owner is required");
     const parent = parentSessionId ? this.database.getSession(parentSessionId) : undefined;
     const session = await this.createSession(
       {
@@ -684,18 +685,15 @@ export class UmaRuntime {
     });
   }
 
-  async createSession(input: CreateSessionRequest = {}, ownerId?: string): Promise<Session> {
-    const userWorkspace = ownerId
-      ? join(this.config.server.workspaceRoots[0] as string, "users", ownerId)
-      : undefined;
-    if (userWorkspace) await mkdir(userWorkspace, { recursive: true });
-    const workspace = await this.workspacePolicy.validateWorkspace(
-      userWorkspace ?? input.workspace ?? (this.config.server.workspaceRoots[0] as string),
-    );
+  async createSession(input: CreateSessionRequest = {}, ownerId: string): Promise<Session> {
+    if (!ownerId || ownerId === "system") throw new Error("Session owner is required");
+    const userWorkspace = join(this.config.server.workspaceRoots[0] as string, "users", ownerId);
+    await mkdir(userWorkspace, { recursive: true });
+    const workspace = await this.workspacePolicy.validateWorkspace(input.workspace ?? userWorkspace);
     const model = input.model ?? this.config.defaultModel;
     this.models.get(model);
     return this.database.createSession({
-      userId: ownerId ?? "system",
+      userId: ownerId,
       title: input.title ?? "New session",
       ...(workspace ? { workspace } : {}),
       model,

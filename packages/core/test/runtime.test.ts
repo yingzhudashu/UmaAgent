@@ -83,6 +83,12 @@ async function runtimeWith(responses: FauxResponseStep[]): Promise<UmaRuntime> {
   faux.setResponses(responses);
   runtime.models.models.setProvider(faux.provider);
   await runtime.start();
+  const now = Date.now();
+  runtime.database.db
+    .prepare("INSERT OR IGNORE INTO users(id,role,status,created_at,updated_at) VALUES(?,?,?,?,?)")
+    .run("test-user", "user", "active", now, now);
+  const createSession = runtime.createSession.bind(runtime);
+  runtime.createSession = ((input = {}) => createSession(input, "test-user")) as UmaRuntime["createSession"];
   cleanup.push(async () => {
     await runtime.stop();
     await rm(root, { recursive: true, force: true });
@@ -481,12 +487,17 @@ describe("UmaRuntime preflight", () => {
     const session = await runtime.createSession();
     const workspace = await runtime.createSession();
     expect(runtime.health()).toMatchObject({ started: true, activeRuns: 0 });
-    await expect(runtime.createTask("   ")).rejects.toThrow("prompt");
-    const task = await runtime.createTask("background work", workspace.id, {
-      type: "schedule",
-      scheduleId: crypto.randomUUID(),
-      scheduleRunId: crypto.randomUUID(),
-    });
+    await expect(runtime.createTask("   ", undefined, undefined, "test-user")).rejects.toThrow("prompt");
+    const task = await runtime.createTask(
+      "background work",
+      workspace.id,
+      {
+        type: "schedule",
+        scheduleId: crypto.randomUUID(),
+        scheduleRunId: crypto.randomUUID(),
+      },
+      "test-user",
+    );
     expect(task).toMatchObject({
       parentSessionId: workspace.id,
       source: { type: "schedule" },
@@ -876,8 +887,10 @@ describe("UmaRuntime preflight", () => {
     const runtime = await runtimeWith([]);
     const manage = (params: Record<string, unknown>) =>
       (
-        runtime as unknown as { manageScheduleTool(value: Record<string, unknown>): unknown }
-      ).manageScheduleTool(params);
+        runtime as unknown as {
+          manageScheduleTool(value: Record<string, unknown>, ownerId: string): unknown;
+        }
+      ).manageScheduleTool(params, "test-user");
     expect(manage({ operation: "list" })).toEqual([]);
     for (const input of [
       { kind: "once", at: Date.now() + 60_000 },
