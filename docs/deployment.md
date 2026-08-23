@@ -122,6 +122,12 @@ npm ci --ignore-scripts
 npm run build
 ```
 
+For an immutable release layout, do not symlink the whole release `node_modules`
+directory to an older release. That makes `@uma-agent/*` resolve to stale Core
+code. Link third-party dependencies from a shared directory, then link each
+`@uma-agent/*` package to the matching `packages/` or `apps/` directory in the
+same release with `deploy/link-native-dependencies.sh`.
+
 把配置中的 `stateDir` 改为 `/var/lib/uma-agent/state`、`workspaceRoots` 改为 `/srv/uma-workspace`，并按服务器的真实路径调整 `skillsDirs`。若原生启动 Browser Worker，把 MCP URL 改为 `http://127.0.0.1:3230/mcp`；若暂不部署则从 `mcpServers` 删除该项，否则 readiness 会保持 503。创建 `/etc/systemd/system/uma-agent.service`：
 
 ```ini
