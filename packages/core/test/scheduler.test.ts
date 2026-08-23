@@ -23,7 +23,6 @@ describe("scheduler", () => {
     temporary.push(root);
     const database = new UmaDatabase(root);
     const session = database.createSession({
-      mode: "assistant",
       title: "scheduled",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -130,9 +129,9 @@ describe("scheduler", () => {
       prompt: "later",
       enabled: false,
       schedule: { kind: "interval", everyMs: 60_000 },
-      sessionMode: "workspace",
+      messageMode: "agent",
     });
-    expect(task).toMatchObject({ enabled: false, sessionMode: "workspace" });
+    expect(task).toMatchObject({ enabled: false, messageMode: "agent" });
     expect(task.nextRunAt).toBeUndefined();
     expect(scheduler.list()).toHaveLength(1);
 
@@ -155,7 +154,6 @@ describe("scheduler", () => {
     temporary.push(root);
     const database = new UmaDatabase(root);
     const session = database.createSession({
-      mode: "assistant",
       title: "manual",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -205,7 +203,6 @@ describe("scheduler", () => {
         database.createBackgroundTask({
           id,
           sessionId: database.createSession({
-            mode: "assistant",
             title: "failed",
             model: { provider: "test", id: "model" },
             thinkingLevel: "off",
@@ -291,7 +288,6 @@ describe("scheduler", () => {
     temporary.push(root);
     const database = new UmaDatabase(root);
     const session = database.createSession({
-      mode: "assistant",
       title: "cancel",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -352,7 +348,6 @@ describe("scheduler", () => {
     temporary.push(root);
     const database = new UmaDatabase(root);
     const session = database.createSession({
-      mode: "assistant",
       title: "resume",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -374,6 +369,8 @@ describe("scheduler", () => {
         capabilities: { tools: true, vision: false, reasoning: false, structuredOutput: true },
       },
       "off",
+      "agent",
+      "agent",
     ).run;
     database.updateBackgroundTask(background.id, {
       status: "completed",
@@ -429,7 +426,6 @@ describe("scheduler", () => {
     temporary.push(root);
     const database = new UmaDatabase(root);
     const session = database.createSession({
-      mode: "assistant",
       title: "claimed",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -443,7 +439,7 @@ describe("scheduler", () => {
     const task = database.createScheduledTask({
       name: "claimed",
       prompt: "recover",
-      sessionMode: "assistant",
+      messageMode: "agent",
       schedule: { kind: "interval", everyMs: 60_000 },
       enabled: true,
       nextRunAt: Date.now() + 60_000,
@@ -485,7 +481,6 @@ describe("scheduler", () => {
     temporary.push(root);
     const database = new UmaDatabase(root);
     const session = database.createSession({
-      mode: "assistant",
       title: "interrupted",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -502,6 +497,8 @@ describe("scheduler", () => {
         capabilities: { tools: true, vision: false, reasoning: false, structuredOutput: true },
       },
       "off",
+      "agent",
+      "agent",
     ).run;
     database.updateRun(coreRun.id, {
       status: "interrupted",

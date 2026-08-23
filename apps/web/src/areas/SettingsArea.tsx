@@ -9,6 +9,7 @@ export function SettingsArea({
   report,
   profile,
   saveProfile,
+  logout,
   reloadConfig,
   publicConfig,
   disabled,
@@ -20,6 +21,7 @@ export function SettingsArea({
   report: OperationsReport | undefined;
   profile: AgentProfile | undefined;
   saveProfile: (content: string) => void;
+  logout: () => void;
   reloadConfig: () => void;
   publicConfig: PublicConfig | undefined;
   disabled: boolean;
@@ -49,7 +51,7 @@ export function SettingsArea({
       </div>
       <div>
         <strong>Session</strong>
-        <p>{session ? `${session.mode} · ${session.model.provider}/${session.model.id}` : "-"}</p>
+        <p>{session ? `${session.model.provider}/${session.model.id}` : "-"}</p>
       </div>
       <div>
         <strong>有效配置</strong>
@@ -71,6 +73,9 @@ export function SettingsArea({
       </form>
       <button type="button" disabled={disabled} onClick={reloadConfig}>
         重新加载配置
+      </button>
+      <button type="button" className="danger" onClick={logout}>
+        退出登录
       </button>
       {installAvailable && (
         <button type="button" className="run-action" onClick={install}>

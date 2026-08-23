@@ -13,7 +13,6 @@ import {
 const snapshot = (id: string, sequence: number): SessionSnapshot => ({
   session: {
     id,
-    mode: "assistant",
     title: "Cached",
     model: { provider: "test", id: "model" },
     thinkingLevel: "off",

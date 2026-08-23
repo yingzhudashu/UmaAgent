@@ -541,11 +541,10 @@ async function chat(): Promise<void> {
       attachmentIds.push(uploaded.id);
       outgoing = outgoing.replace(match[0], "").trim();
     }
-    await client.sendMessage(
-      active.id,
-      outgoing || "Please inspect the attached file.",
-      attachmentIds.length ? { attachmentIds: [...attachmentIds] } : {},
-    );
+    await client.sendMessage(active.id, outgoing || "Please inspect the attached file.", {
+      mode: "agent",
+      ...(attachmentIds.length ? { attachmentIds: [...attachmentIds] } : {}),
+    });
     attachmentIds.splice(0);
     scrollOffset = 0;
     refresh();
@@ -577,13 +576,10 @@ async function sessionCommand(): Promise<void> {
   if (action === "list") {
     for (const session of await client.listSessions())
       console.log(
-        `${session.id}\t${session.mode}\t${session.title}\t${session.model.provider}/${session.model.id}\t${session.workspace ?? "-"}`,
+        `${session.id}\t${session.title}\t${session.model.provider}/${session.model.id}\t${session.workspace ?? "-"}`,
       );
   } else if (action === "create") {
-    const mode = valueAfter("--mode") === "assistant" ? "assistant" : "workspace";
-    console.log(
-      (await client.createSession({ mode, ...(positionals[1] ? { title: positionals[1] } : {}) })).id,
-    );
+    console.log((await client.createSession({ ...(positionals[1] ? { title: positionals[1] } : {}) })).id);
   } else if (action === "delete" && positionals[1]) await client.deleteSession(positionals[1]);
   else if (action === "rename" && positionals[1] && positionals[2])
     await client.updateSession(positionals[1], { title: positionals.slice(2).join(" ") });
@@ -724,7 +720,7 @@ async function runCommand(): Promise<void> {
       }
     },
   );
-  const accepted = await client.sendMessage(session.id, prompt);
+  const accepted = await client.sendMessage(session.id, prompt, { mode: "agent" });
   acceptedRunId = accepted.runId;
   console.log(
     JSON.stringify({

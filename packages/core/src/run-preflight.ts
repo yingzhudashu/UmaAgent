@@ -80,7 +80,7 @@ export class RunPreflight {
     runId: string,
   ): Promise<PreflightDecision> {
     let taskClass: PreflightDecision["taskClass"];
-    if (mode === "direct") taskClass = "simple";
+    if (mode === "ask") taskClass = "simple";
     else if (mode === "plan") taskClass = "complex";
     else {
       const classify = async (repair?: string) =>

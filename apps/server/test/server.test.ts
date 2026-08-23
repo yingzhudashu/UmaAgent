@@ -217,6 +217,8 @@ describe("server", () => {
       "checkpoint-message",
       runtime.models.snapshot(storedSession.model),
       storedSession.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.createCheckpoint({
       runId: run.id,

@@ -16,6 +16,7 @@ import type {
   CreateEvaluationReport,
   CreateScheduledTaskRequest,
   CreateSessionRequest,
+  InteractionMode,
   ModelRef,
   OptimizationProposal,
   PublicConfig,
@@ -412,7 +413,7 @@ export class UmaRuntime {
       await this.executeRun(
         session,
         runId,
-        { messageId: message.id, text: message.content },
+        { messageId: message.id, text: message.content, mode: run.interactionMode },
         undefined,
         true,
       );
@@ -482,7 +483,6 @@ export class UmaRuntime {
   async createTask(
     prompt: string,
     parentSessionId?: string,
-    modeOverride?: Session["mode"],
     source?: BackgroundTask["source"],
     ownerId?: string,
   ): Promise<BackgroundTask> {
@@ -490,7 +490,6 @@ export class UmaRuntime {
     const parent = parentSessionId ? this.database.getSession(parentSessionId) : undefined;
     const session = await this.createSession(
       {
-        mode: parent?.mode ?? modeOverride ?? "assistant",
         ...(parent?.workspace ? { workspace: parent.workspace } : {}),
         ...(parent?.model ? { model: parent.model } : {}),
       },
@@ -511,16 +510,11 @@ export class UmaRuntime {
     void this.executeTask(task.id);
     return task;
   }
-  prepareScheduledTask(
-    prompt: string,
-    sessionMode: "workspace" | "assistant",
-    source: NonNullable<BackgroundTask["source"]>,
-  ): BackgroundTask {
+  prepareScheduledTask(prompt: string, source: NonNullable<BackgroundTask["source"]>): BackgroundTask {
     if (!prompt.trim()) throw new Error("Task prompt is required");
     const session = this.database.createSession({
-      mode: sessionMode,
       title: "Scheduled task",
-      ...(sessionMode === "workspace" ? { workspace: this.config.server.workspaceRoots[0] as string } : {}),
+      workspace: this.config.server.workspaceRoots[0] as string,
       model: this.config.defaultModel,
       thinkingLevel: this.config.defaultThinkingLevel,
     });
@@ -688,24 +682,17 @@ export class UmaRuntime {
   }
 
   async createSession(input: CreateSessionRequest = {}, ownerId?: string): Promise<Session> {
-    const mode = input.mode ?? "workspace";
     const userWorkspace = ownerId
       ? join(this.config.server.workspaceRoots[0] as string, "users", ownerId)
       : undefined;
     if (userWorkspace) await mkdir(userWorkspace, { recursive: true });
-    const workspace =
-      mode === "workspace"
-        ? await this.workspacePolicy.validateWorkspace(
-            userWorkspace ?? input.workspace ?? (this.config.server.workspaceRoots[0] as string),
-          )
-        : undefined;
-    if (mode === "assistant" && input.workspace)
-      throw new Error("Assistant sessions cannot bind a workspace");
+    const workspace = await this.workspacePolicy.validateWorkspace(
+      userWorkspace ?? input.workspace ?? (this.config.server.workspaceRoots[0] as string),
+    );
     const model = input.model ?? this.config.defaultModel;
     this.models.get(model);
     return this.database.createSession({
       ...(ownerId ? { userId: ownerId } : {}),
-      mode,
       title: input.title ?? "New session",
       ...(workspace ? { workspace } : {}),
       model,
@@ -730,7 +717,11 @@ export class UmaRuntime {
         this.events.invalidate("tasks");
         return value;
       });
-      const run = this.sendMessage(task.sessionId, { messageId: randomUUID(), text: task.prompt });
+      const run = this.sendMessage(task.sessionId, {
+        messageId: randomUUID(),
+        text: task.prompt,
+        mode: "agent",
+      });
       this.events.transaction(() => {
         const updated = this.database.updateBackgroundTask(id, { runId: run.id });
         this.events.emit(task.sessionId, undefined, "task.updated", updated);
@@ -898,7 +889,14 @@ export class UmaRuntime {
     const { run, created } = this.events.transaction(() => {
       const result = continuation
         ? { run: continuation, created: true }
-        : this.database.createRun(sessionId, input.messageId, runModel, session.thinkingLevel);
+        : this.database.createRun(
+            sessionId,
+            input.messageId,
+            runModel,
+            session.thinkingLevel,
+            "agent",
+            input.mode,
+          );
       if (!result.created) return result;
       this.database.insertMessage({
         id: input.messageId,
@@ -957,7 +955,6 @@ export class UmaRuntime {
     if (!normalized) throw new Error("Command is required");
     if (!this.started || this.stopping) throw new Error("UmaRuntime is not accepting new runs");
     const session = this.database.getSession(sessionId);
-    if (session.mode !== "workspace") throw new Error("Commands require a workspace session");
     const existing = this.database.findMessageOwner(messageId);
     if (existing) {
       if (existing.sessionId !== sessionId || !existing.runId)
@@ -972,6 +969,7 @@ export class UmaRuntime {
         this.models.snapshot(session.model),
         session.thinkingLevel,
         "command",
+        "agent",
       ).run;
       const message = this.database.insertMessage({
         id: messageId,
@@ -1200,7 +1198,7 @@ export class UmaRuntime {
           : await this.preflight.decide(
               session,
               promptOverride ?? input.text,
-              input.mode ?? "auto",
+              input.mode,
               controller.signal,
               runId,
             );
@@ -1281,7 +1279,18 @@ export class UmaRuntime {
       }
       this.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
       const budget = { turns: this.database.getRun(runId).turnCount };
-      if (decision.route === "plan") {
+      if (input.mode === "plan") {
+        await this.runAgent(
+          session,
+          runId,
+          input,
+          { ...decision, route: "direct" },
+          controller.signal,
+          "Return the requested plan only. Do not execute tools or describe completed work.",
+          budget,
+          true,
+        );
+      } else if (decision.route === "plan") {
         for (const step of this.database.listPlan(runId)) {
           if (step.status === "completed") continue;
           this.events.transaction(() => {
@@ -1325,7 +1334,7 @@ export class UmaRuntime {
         await this.runAgent(session, runId, input, decision, controller.signal, promptOverride, budget);
       }
       if (controller.signal.aborted) throw new DOMException("Run cancelled", "AbortError");
-      if (decision.route === "plan") {
+      if (input.mode === "agent" && decision.route === "plan") {
         this.transitionRun(session.id, runId, { status: "verifying", phase: "verify" });
         await this.verifyAndCorrect(session, runId, decision, controller.signal);
         this.events.transaction(() => {
@@ -1341,8 +1350,10 @@ export class UmaRuntime {
         });
         injectRuntimeFault("verify.completed");
       }
-      this.persistTurnRollup(session.id, runId);
-      await this.extractMemories(session, runId, controller.signal);
+      if (input.mode === "agent") {
+        this.persistTurnRollup(session.id, runId);
+        await this.extractMemories(session, runId, controller.signal);
+      }
       this.events.transaction(() => {
         const completed = this.database.updateRun(runId, { status: "completed", error: null });
         this.database.addAudit({
@@ -1529,7 +1540,8 @@ export class UmaRuntime {
     }
   }
 
-  private toolsForSession(session: Session): AgentTool[] {
+  private toolsForSession(session: Session, mode: InteractionMode): AgentTool[] {
+    if (mode !== "agent") return [];
     return [
       ...createBuiltinTools({
         session,
@@ -1555,7 +1567,7 @@ export class UmaRuntime {
           return this.addAttachment({ sessionId: session.id, name: basename(path), mimeType, data });
         },
       }),
-      ...(session.mode === "workspace" ? this.mcp.tools() : []),
+      ...this.mcp.tools(),
     ];
   }
 
@@ -1632,7 +1644,7 @@ export class UmaRuntime {
     await this.runAgent(
       session,
       run.id,
-      { messageId: run.messageId, text: prompt, mode: "direct" },
+      { messageId: run.messageId, text: prompt, mode: "ask" },
       {
         taskClass: "simple",
         route: "direct",
@@ -1676,7 +1688,9 @@ export class UmaRuntime {
     signal?: AbortSignal,
   ): Promise<RunAction> {
     const session = this.database.getSession(run.sessionId);
-    const tool = this.toolsForSession(session).find((candidate) => candidate.name === action.toolName);
+    const tool = this.toolsForSession(session, run.interactionMode).find(
+      (candidate) => candidate.name === action.toolName,
+    );
     if (!tool) throw new Error(`Tool is unavailable: ${action.toolName}`);
     const running = this.events.transaction(() => {
       const transition = this.database.transitionRunAction(action.id, ["prepared"], {
@@ -1815,7 +1829,7 @@ export class UmaRuntime {
       request: input,
       decision,
       signal,
-      tools: this.toolsForSession(session),
+      tools: this.toolsForSession(session, input.mode),
       ...(promptOverride ? { promptOverride } : {}),
       readOnly,
     });
@@ -1848,7 +1862,7 @@ export class UmaRuntime {
         return reached;
       },
       beforeToolCall: async ({ toolCall, args }, toolSignal) => {
-        const permission = this.permissions.decide(session.mode, toolCall.name);
+        const permission = this.permissions.decide(input.mode, toolCall.name);
         if (!permission.allowed) return { block: true, reason: permission.reason };
         const idempotencyKey = `${runId}:${toolCall.id}`;
         const loop = loopGuard.check(toolCall.name, args, idempotencyKey);
@@ -2238,7 +2252,7 @@ export class UmaRuntime {
     await this.runAgent(
       session,
       runId,
-      { messageId: correctionMessage.id, text: String(internal.content) },
+      { messageId: correctionMessage.id, text: String(internal.content), mode: current.interactionMode },
       { ...decision, route: "direct" },
       signal,
       String(internal.content),

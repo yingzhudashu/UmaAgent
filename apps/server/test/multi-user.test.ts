@@ -38,14 +38,12 @@ describe("multi-user authentication", () => {
 
     const sessionA = database.createSession({
       userId: first.userId,
-      mode: "assistant",
       title: "A",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
     const sessionB = database.createSession({
       userId: second.userId,
-      mode: "assistant",
       title: "B",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",

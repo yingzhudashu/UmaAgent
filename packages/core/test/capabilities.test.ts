@@ -15,7 +15,7 @@ afterEach(async () =>
 );
 
 describe("session capabilities", () => {
-  it("keeps assistant tools isolated from workspace files and shell", async () => {
+  it("applies tool isolation by interaction mode", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-capabilities-"));
     temporary.push(root);
     const db = new UmaDatabase(join(root, "state"));
@@ -23,22 +23,15 @@ describe("session capabilities", () => {
     await workspacePolicy.initialize();
     const skills = new SkillRegistry([]);
     const knowledge = new KnowledgeService(db, [root], join(root, "state"));
-    const assistant = db.createSession({
-      mode: "assistant",
-      title: "assistant",
-      model: { provider: "test", id: "model" },
-      thinkingLevel: "off",
-    });
-    const workspace = db.createSession({
-      mode: "workspace",
+    const session = db.createSession({
       title: "workspace",
       workspace: root,
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
-    const tools = (session: typeof assistant) =>
+    const tools = (sessionInput: typeof session) =>
       createBuiltinTools({
-        session,
+        session: sessionInput,
         database: db,
         knowledge,
         skills,
@@ -46,7 +39,7 @@ describe("session capabilities", () => {
         toolTimeoutMs: 1_000,
         memoryWrite: (scope, content) =>
           db.addMemoryFact({
-            sessionId: session.id,
+            sessionId: sessionInput.id,
             scope,
             key: `explicit.${crypto.randomUUID()}`,
             value: content,
@@ -55,39 +48,25 @@ describe("session capabilities", () => {
             status: "active",
           }),
       });
-    const assistantTools = tools(assistant);
-    const assistantNames = assistantTools.map((tool) => tool.name);
-    expect(assistantNames).toEqual(
-      expect.arrayContaining([
-        "http_get",
-        "attachment_read",
-        "memory_search",
-        "memory_write",
-        "knowledge_search",
-        "skill_read",
-        "history_search",
-        "history_read",
-      ]),
-    );
-    expect(assistantNames).not.toEqual(
-      expect.arrayContaining(["read", "write", "edit", "list", "search", "shell"]),
-    );
-    expect(tools(workspace).map((tool) => tool.name)).toEqual(
-      expect.arrayContaining(["read", "write", "edit", "list", "search", "shell"]),
+    const sessionTools = tools(session);
+    const toolNames = sessionTools.map((tool) => tool.name);
+    expect(toolNames).toEqual(
+      expect.arrayContaining(["memory_search", "knowledge_search", "attachment_read"]),
     );
     const policy = new PermissionPolicy();
-    expect(policy.decide("assistant", "shell").allowed).toBe(false);
-    expect(policy.decide("assistant", "memory_write").requiresApproval).toBe(true);
+    expect(policy.decide("ask", "shell").allowed).toBe(false);
+    expect(policy.decide("plan", "write").allowed).toBe(false);
+    expect(policy.decide("agent", "memory_write").requiresApproval).toBe(true);
     const utf16Path = join(root, "utf16.txt");
     await writeFile(utf16Path, Buffer.from("\ufeffencoded attachment", "utf16le"));
     const attachment = db.addAttachment({
-      sessionId: assistant.id,
+      sessionId: session.id,
       name: "utf16.txt",
       mimeType: "text/plain",
       size: 38,
       storagePath: utf16Path,
     });
-    const attachmentRead = assistantTools.find((tool) => tool.name === "attachment_read");
+    const attachmentRead = sessionTools.find((tool) => tool.name === "attachment_read");
     const attachmentResult = await attachmentRead?.execute(
       "read-attachment",
       { attachmentId: attachment.id },

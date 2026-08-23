@@ -2,6 +2,7 @@ import type { KnowledgeSearchHit, KnowledgeSource, SkillPackage, SkillSummary } 
 import { type FormEvent, useState } from "react";
 
 export function ResourceArea({
+  admin,
   skills,
   packages,
   mcp,
@@ -16,6 +17,7 @@ export function ResourceArea({
   reindexKnowledge,
   searchKnowledge,
 }: {
+  admin: boolean;
   skills: SkillSummary[];
   packages: SkillPackage[];
   mcp: Array<{ name: string; connected: boolean }>;
@@ -45,68 +47,82 @@ export function ResourceArea({
   };
   return (
     <div className="operation-list">
-      <div>
-        <strong>Skills</strong>
-        <p>{skills.map((item) => item.name).join(", ") || "-"}</p>
-        <button type="button" disabled={disabled} onClick={refreshSkills}>
-          刷新
-        </button>
-        <form
-          className="resource-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!skillPath.trim()) return;
-            installSkill(skillPath.trim());
-            setSkillPath("");
-          }}
-        >
-          <label>
-            本地技能目录
-            <input value={skillPath} onChange={(event) => setSkillPath(event.target.value)} />
-          </label>
-          <button type="submit" disabled={disabled || !skillPath.trim()}>
-            暂存并扫描
-          </button>
-        </form>
-        {packages.map((pkg) => (
-          <div key={pkg.id} className="action-card">
-            <strong>
-              {pkg.name}@{pkg.version}
-            </strong>
-            <small className="operation-meta">
-              {pkg.status} · {pkg.risk}
-            </small>
-            {pkg.diagnostics.map((item) => (
-              <p key={item}>{item}</p>
+      {admin && (
+        <>
+          <div>
+            <strong>Skills</strong>
+            <p>{skills.map((item) => item.name).join(", ") || "-"}</p>
+            <button type="button" disabled={disabled} onClick={refreshSkills}>
+              刷新
+            </button>
+            <form
+              className="resource-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!skillPath.trim()) return;
+                installSkill(skillPath.trim());
+                setSkillPath("");
+              }}
+            >
+              <label>
+                本地技能目录
+                <input value={skillPath} onChange={(event) => setSkillPath(event.target.value)} />
+              </label>
+              <button type="submit" disabled={disabled || !skillPath.trim()}>
+                暂存并扫描
+              </button>
+            </form>
+            {packages.map((pkg) => (
+              <div key={pkg.id} className="action-card">
+                <strong>
+                  {pkg.name}@{pkg.version}
+                </strong>
+                <small className="operation-meta">
+                  {pkg.status} · {pkg.risk}
+                </small>
+                {pkg.diagnostics.map((item) => (
+                  <p key={item}>{item}</p>
+                ))}
+                <div className="approval-actions">
+                  {pkg.status !== "rejected" && (
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => setSkillStatus(pkg.id, "reject")}
+                    >
+                      拒绝
+                    </button>
+                  )}
+                  {pkg.status === "enabled" ? (
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => setSkillStatus(pkg.id, "disable")}
+                    >
+                      停用
+                    </button>
+                  ) : pkg.status !== "rejected" ? (
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={disabled}
+                      onClick={() => setSkillStatus(pkg.id, "enable")}
+                    >
+                      启用
+                    </button>
+                  ) : null}
+                </div>
+              </div>
             ))}
-            <div className="approval-actions">
-              {pkg.status !== "rejected" && (
-                <button type="button" disabled={disabled} onClick={() => setSkillStatus(pkg.id, "reject")}>
-                  拒绝
-                </button>
-              )}
-              {pkg.status === "enabled" ? (
-                <button type="button" disabled={disabled} onClick={() => setSkillStatus(pkg.id, "disable")}>
-                  停用
-                </button>
-              ) : pkg.status !== "rejected" ? (
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={disabled}
-                  onClick={() => setSkillStatus(pkg.id, "enable")}
-                >
-                  启用
-                </button>
-              ) : null}
-            </div>
           </div>
-        ))}
-      </div>
-      <div>
-        <strong>MCP</strong>
-        <p>{mcp.map((item) => `${item.name}:${item.connected ? "online" : "offline"}`).join(", ") || "-"}</p>
-      </div>
+          <div>
+            <strong>MCP</strong>
+            <p>
+              {mcp.map((item) => `${item.name}:${item.connected ? "online" : "offline"}`).join(", ") || "-"}
+            </p>
+          </div>
+        </>
+      )}
       <div>
         <strong>Knowledge</strong>
         {knowledge.map((item) => (

@@ -26,14 +26,13 @@ async function execute(tools: AgentTool[], name: string, params: Record<string, 
   );
 }
 
-async function fixture(workspace: boolean) {
+async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "uma-tools-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const session: Session = {
     id: "session-1",
-    mode: workspace ? "workspace" : "assistant",
+    workspace: root,
     title: "tools",
-    ...(workspace ? { workspace: root } : {}),
     model: { provider: "test", id: "model" },
     thinkingLevel: "off",
     createdAt: 1,
@@ -77,17 +76,23 @@ async function fixture(workspace: boolean) {
 }
 
 describe("builtin tools", () => {
-  it("keeps assistant capabilities useful without exposing workspace tools", async () => {
-    const value = await fixture(false);
+  it("exposes the complete Agent toolset for a workspace session", async () => {
+    const value = await fixture();
     expect(value.tools.map((tool) => tool.name)).toEqual([
       "history_search",
       "history_read",
+      "read",
+      "write",
+      "edit",
+      "list",
+      "search",
+      "shell",
+      "http_get",
       "memory_write",
       "memory_search",
       "knowledge_search",
       "skill_read",
       "attachment_read",
-      "http_get",
       "web_search",
       "schedule_manage",
     ]);
@@ -127,7 +132,7 @@ describe("builtin tools", () => {
   });
 
   it("reads owned text attachments and rejects missing or binary attachments", async () => {
-    const value = await fixture(false);
+    const value = await fixture();
     const utf8 = join(value.root, "utf8.txt");
     const utf16 = join(value.root, "utf16.txt");
     await writeFile(utf8, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("hello")]));
@@ -146,7 +151,7 @@ describe("builtin tools", () => {
   });
 
   it("executes workspace file, search, shell, memory, knowledge, skill and adapter tools", async () => {
-    const value = await fixture(true);
+    const value = await fixture();
     await mkdir(join(value.root, "src"));
     await writeFile(join(value.root, "src", "file.txt"), "first\nneedle\nthird");
     await mkdir(join(value.root, "node_modules"));

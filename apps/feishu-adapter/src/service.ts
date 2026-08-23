@@ -399,7 +399,7 @@ export async function startFeishuService() {
     };
     let conversation = store.getConversation(key);
     if (!conversation) {
-      const session = await uma.createSession({ mode: "assistant", title: `Feishu ${message.chat_id}` });
+      const session = await uma.createSession({ title: `Feishu ${message.chat_id}` });
       conversation = store.createConversation(key, session.id);
     }
     store.attachInboundConversation(message.message_id, conversation.id);
@@ -423,6 +423,7 @@ export async function startFeishuService() {
         text = `请处理这个飞书${message.message_type === "image" ? "图片" : "文件"}附件。`;
       await uma.sendMessage(conversation.sessionId, text, {
         messageId: umaMessageId,
+        mode: "agent",
         ...(attachmentIds.length ? { attachmentIds } : {}),
         source: {
           adapter: "feishu",

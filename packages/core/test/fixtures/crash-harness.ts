@@ -66,31 +66,51 @@ const faux = fauxProvider({
   tokensPerSecond: 100_000,
 });
 const responses: FauxResponseStep[] =
-  point.startsWith("tool.") && point.includes("read")
-    ? [fauxAssistantMessage([fauxToolCall("memory_search", { query: "crash" })])]
-    : point.startsWith("tool.") && point.includes("side-effect")
+  point === "verify.completed"
+    ? [
+        fauxAssistantMessage(JSON.stringify({ taskClass: "complex" })),
+        fauxAssistantMessage(
+          JSON.stringify({
+            taskClass: "complex",
+            route: "plan",
+            goal: "exercise verification recovery",
+            reasoningSummary: "A deterministic recovery plan is required.",
+            successCriteria: ["complete the step"],
+            questions: [],
+            steps: ["complete the deterministic step"],
+          }),
+        ),
+        fauxAssistantMessage("step completed"),
+        fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" })),
+      ]
+    : point === "checkpoint.created"
       ? [
-          fauxAssistantMessage([
-            fauxToolCall("memory_write", { scope: "session", content: "crash recovery fact" }),
-          ]),
+          fauxAssistantMessage(JSON.stringify({ taskClass: "complex" })),
+          fauxAssistantMessage(
+            JSON.stringify({
+              taskClass: "complex",
+              route: "plan",
+              goal: "exercise checkpoint recovery",
+              reasoningSummary: "A deterministic recovery plan is required.",
+              successCriteria: ["complete the step"],
+              questions: [],
+              steps: ["complete the deterministic step"],
+            }),
+          ),
+          fauxAssistantMessage("step completed"),
         ]
-      : point === "verify.completed"
-        ? [
-            fauxAssistantMessage(
-              JSON.stringify({
-                taskClass: "complex",
-                route: "plan",
-                goal: "exercise verification recovery",
-                reasoningSummary: "A deterministic recovery plan is required.",
-                successCriteria: ["complete the step"],
-                questions: [],
-                steps: ["complete the deterministic step"],
-              }),
-            ),
-            fauxAssistantMessage("step completed"),
-            fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" })),
-          ]
-        : [fauxAssistantMessage("runtime crash boundary")];
+      : [
+          fauxAssistantMessage(JSON.stringify({ taskClass: "simple" })),
+          ...(point.startsWith("tool.") && point.includes("read")
+            ? [fauxAssistantMessage([fauxToolCall("memory_search", { query: "crash" })])]
+            : point.startsWith("tool.") && point.includes("side-effect")
+              ? [
+                  fauxAssistantMessage([
+                    fauxToolCall("memory_write", { scope: "session", content: "crash recovery fact" }),
+                  ]),
+                ]
+              : [fauxAssistantMessage("runtime crash boundary")]),
+        ];
 faux.setResponses(responses);
 runtime.models.models.setProvider(faux.provider);
 await runtime.start();
@@ -99,11 +119,11 @@ runtime.subscribe((event) => {
     runtime.resolveApproval((event.payload as Approval).id, true);
   }
 });
-const session = await runtime.createSession({ mode: "assistant" });
+const session = await runtime.createSession();
 runtime.sendMessage(session.id, {
   messageId: `message-${point.replaceAll(".", "-")}`,
   text: `crash at ${point}`,
-  mode: point === "verify.completed" ? "plan" : "direct",
+  mode: "agent",
 });
 
 await new Promise((_, reject) =>

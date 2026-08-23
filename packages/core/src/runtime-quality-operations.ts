@@ -46,6 +46,7 @@ export class RuntimeQualityOperations {
         model,
         session.thinkingLevel,
         kind,
+        "ask",
       ).run;
       const command = database.insertMessage({
         id: commandMessageId,

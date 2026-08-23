@@ -32,7 +32,6 @@ class FakeSocket {
 const snapshot: SessionSnapshot = {
   session: {
     id: "session-1",
-    mode: "workspace",
     title: "Test",
     workspace: "C:/workspace",
     model: { provider: "test", id: "model" },
@@ -314,8 +313,8 @@ describe("UmaClient", () => {
     await client.getSessionEvents("session/id", 2, 3);
     await client.updateSession("session/id", { title: "renamed" });
     await client.deleteSession("session/id");
-    await client.sendMessage("session/id", "hello");
-    await client.sendMessage("session/id", "hello", { messageId: "stable" });
+    await client.sendMessage("session/id", "hello", { mode: "ask" });
+    await client.sendMessage("session/id", "hello", { mode: "ask", messageId: "stable" });
     await client.cancel("session/id");
     await client.resolveApproval("approval/id", true);
     await client.listModels();

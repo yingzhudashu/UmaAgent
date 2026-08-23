@@ -137,7 +137,7 @@ const classification = (taskClass: "simple" | "standard" | "complex") =>
 async function runOnce(runtime: UmaRuntime): Promise<{ run: Run; snapshot: SessionSnapshot }> {
   const session = await runtime.createSession({ title: "Runtime test" });
   const terminal = waitForTerminal(runtime, session.id);
-  runtime.sendMessage(session.id, { messageId: crypto.randomUUID(), text: "do it" });
+  runtime.sendMessage(session.id, { messageId: crypto.randomUUID(), text: "do it", mode: "agent" });
   return { run: await terminal, snapshot: runtime.getSnapshot(session.id) };
 }
 
@@ -165,10 +165,14 @@ describe("UmaRuntime preflight", () => {
     ]);
     const session = await runtime.createSession({ title: "Clarification retry" });
     const firstTerminal = waitForTerminal(runtime, session.id);
-    const original = runtime.sendMessage(session.id, { messageId: "question", text: "do it" });
+    const original = runtime.sendMessage(session.id, { messageId: "question", text: "do it", mode: "agent" });
     await firstTerminal;
-    const continued = runtime.sendMessage(session.id, { messageId: "answer", text: "target A" });
-    const retried = runtime.sendMessage(session.id, { messageId: "answer", text: "target A" });
+    const continued = runtime.sendMessage(session.id, {
+      messageId: "answer",
+      text: "target A",
+      mode: "agent",
+    });
+    const retried = runtime.sendMessage(session.id, { messageId: "answer", text: "target A", mode: "agent" });
     expect(continued.id).toBe(original.id);
     expect(retried.id).toBe(original.id);
     expect(runtime.getSnapshot(session.id).transcript.filter((item) => item.id === "answer")).toHaveLength(1);
@@ -203,7 +207,7 @@ describe("UmaRuntime preflight", () => {
       });
     });
     const terminal = waitForTerminal(runtime, session.id);
-    runtime.sendMessage(session.id, { messageId: crypto.randomUUID(), text: "run shell" });
+    runtime.sendMessage(session.id, { messageId: crypto.randomUUID(), text: "run shell", mode: "agent" });
     await approval;
     expect((await terminal).status).toBe("completed");
     expect(runtime.getSnapshot(session.id).transcript.at(-1)?.content).toBe("approved result");
@@ -221,7 +225,11 @@ describe("UmaRuntime preflight", () => {
       if (event.sessionId === session.id && event.type === "approval.requested")
         runtime.resolveApproval((event.payload as { id: string }).id, false);
     });
-    const run = runtime.sendMessage(session.id, { messageId: "deny-action", text: "run shell" });
+    const run = runtime.sendMessage(session.id, {
+      messageId: "deny-action",
+      text: "run shell",
+      mode: "agent",
+    });
     expect((await terminal).status).toBe("completed");
     expect(runtime.database.listRunActions(run.id)).toEqual([
       expect.objectContaining({ toolName: "shell", status: "rejected" }),
@@ -243,7 +251,7 @@ describe("UmaRuntime preflight", () => {
       });
     });
     const terminal = waitForTerminal(runtime, session.id);
-    runtime.sendMessage(session.id, { messageId: crypto.randomUUID(), text: "run shell" });
+    runtime.sendMessage(session.id, { messageId: crypto.randomUUID(), text: "run shell", mode: "agent" });
     await requested;
     await runtime.stop();
     expect((await terminal).status).toBe("cancelled");
@@ -260,6 +268,8 @@ describe("UmaRuntime preflight", () => {
       messageId,
       runtime.models.snapshot(session.model),
       session.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.insertMessage({
       id: messageId,
@@ -304,7 +314,11 @@ describe("UmaRuntime preflight", () => {
     const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("frozen")]);
     const session = await runtime.createSession({ model: { provider: "faux", id: "model" } });
     const terminal = waitForTerminal(runtime, session.id);
-    const accepted = runtime.sendMessage(session.id, { messageId: "frozen-model", text: "do it" });
+    const accepted = runtime.sendMessage(session.id, {
+      messageId: "frozen-model",
+      text: "do it",
+      mode: "agent",
+    });
     runtime.updateSession(session.id, { model: { provider: "faux", id: "model-2" } });
     expect(accepted.model.ref.id).toBe("model");
     expect((await terminal).model.ref.id).toBe("model");
@@ -336,13 +350,13 @@ describe("UmaRuntime preflight", () => {
     const toolTurns = Array.from({ length: 400 }, (_, index) =>
       fauxAssistantMessage([fauxToolCall("list", { path: String(index) })]),
     );
-    const runtime = await runtimeWith(toolTurns);
+    const runtime = await runtimeWith([classification("simple"), ...toolTurns]);
     const session = await runtime.createSession();
     const terminal = waitForTerminal(runtime, session.id, 15_000);
     runtime.sendMessage(session.id, {
       messageId: "global-turn-limit",
       text: "keep listing",
-      mode: "direct",
+      mode: "agent",
     });
     const run = await terminal;
     expect(run.status).toBe("failed");
@@ -351,15 +365,16 @@ describe("UmaRuntime preflight", () => {
   }, 20_000);
 
   it("persists a warning and fails a Run after six repeated tool calls", async () => {
-    const runtime = await runtimeWith(
-      Array.from({ length: 6 }, () => fauxAssistantMessage([fauxToolCall("list", { path: "." })])),
-    );
+    const runtime = await runtimeWith([
+      classification("simple"),
+      ...Array.from({ length: 6 }, () => fauxAssistantMessage([fauxToolCall("list", { path: "." })])),
+    ]);
     const session = await runtime.createSession();
     const terminal = waitForTerminal(runtime, session.id);
     runtime.sendMessage(session.id, {
       messageId: "repeated-tool-loop",
       text: "keep polling the same directory",
-      mode: "direct",
+      mode: "agent",
     });
     const result = await terminal;
     expect(result.status).toBe("failed");
@@ -403,10 +418,10 @@ describe("UmaRuntime preflight", () => {
         resolve((event.payload as { id: string }).id);
       });
     });
-    const active = runtime.sendMessage(session.id, { messageId: "active", text: "run shell" });
+    const active = runtime.sendMessage(session.id, { messageId: "active", text: "run shell", mode: "agent" });
     const activeTerminal = waitForRunTerminal(runtime, active.id);
     const approval = await approvalId;
-    const queued = runtime.sendMessage(session.id, { messageId: "queued", text: "later" });
+    const queued = runtime.sendMessage(session.id, { messageId: "queued", text: "later", mode: "agent" });
     expect(runtime.cancelRun(queued.id).status).toBe("cancelled");
     runtime.resolveApproval(approval, true);
     expect(await activeTerminal).toMatchObject({ id: active.id, status: "completed" });
@@ -422,6 +437,8 @@ describe("UmaRuntime preflight", () => {
       messageId,
       runtime.models.snapshot(session.model),
       session.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.insertMessage({
       id: messageId,
@@ -458,14 +475,14 @@ describe("UmaRuntime preflight", () => {
     const runtime = await runtimeWith([]);
     await expect(runtime.start()).rejects.toThrow("already started");
     await expect(
-      runtime.createSession({ mode: "assistant", workspace: runtime.config.server.workspaceRoots[0] }),
-    ).rejects.toThrow("cannot bind");
+      runtime.createSession({ workspace: runtime.config.server.workspaceRoots[0] }),
+    ).resolves.toBeDefined();
     await expect(runtime.createSession({ model: { provider: "missing", id: "missing" } })).rejects.toThrow();
-    const session = await runtime.createSession({ mode: "assistant" });
-    const workspace = await runtime.createSession({ mode: "workspace" });
+    const session = await runtime.createSession();
+    const workspace = await runtime.createSession();
     expect(runtime.health()).toMatchObject({ started: true, activeRuns: 0 });
     await expect(runtime.createTask("   ")).rejects.toThrow("prompt");
-    const task = await runtime.createTask("background work", workspace.id, undefined, {
+    const task = await runtime.createTask("background work", workspace.id, {
       type: "schedule",
       scheduleId: crypto.randomUUID(),
       scheduleRunId: crypto.randomUUID(),
@@ -475,15 +492,14 @@ describe("UmaRuntime preflight", () => {
       source: { type: "schedule" },
     });
     expect(runtime.database.getSession(task.sessionId)).toMatchObject({
-      mode: "workspace",
       workspace: workspace.workspace,
       model: workspace.model,
     });
     expect(() => runtime.cancel(session.id)).toThrow("no active run");
     await runtime.stop();
-    expect(() => runtime.sendMessage(session.id, { messageId: "stopped", text: "no" })).toThrow(
-      "not accepting",
-    );
+    expect(() =>
+      runtime.sendMessage(session.id, { messageId: "stopped", text: "no", mode: "agent" }),
+    ).toThrow("not accepting");
     expect(() => runtime.sendCommand(workspace.id, "pwd")).toThrow("not accepting");
     expect(() => runtime.reviewMessage("missing")).toThrow("not accepting");
     await expect(runtime.start()).rejects.toThrow("cannot restart");
@@ -491,7 +507,7 @@ describe("UmaRuntime preflight", () => {
 
   it("validates attachments, sanitizes names, and selects the vision role", async () => {
     const runtime = await runtimeWith([]);
-    const session = await runtime.createSession({ mode: "assistant" });
+    const session = await runtime.createSession();
     await expect(
       runtime.addAttachment({ name: "large.txt", mimeType: "text/plain", data: new Uint8Array(1_025) }),
     ).rejects.toThrow("size limit");
@@ -514,6 +530,7 @@ describe("UmaRuntime preflight", () => {
       runtime.sendMessage(session.id, {
         messageId: "image",
         text: "inspect",
+        mode: "agent",
         attachmentIds: [attachment.id],
       }),
     ).toThrow("does not support image");
@@ -530,14 +547,16 @@ describe("UmaRuntime preflight", () => {
       status: "complete",
       content: "standalone",
     });
-    expect(() => runtime.sendMessage(first.id, { messageId: "standalone", text: "again" })).toThrow(
-      "non-run",
-    );
+    expect(() =>
+      runtime.sendMessage(first.id, { messageId: "standalone", text: "again", mode: "agent" }),
+    ).toThrow("non-run");
     const created = runtime.database.createRun(
       first.id,
       "owned",
       runtime.models.snapshot(first.model),
       first.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.insertMessage({
       id: "owned",
@@ -547,13 +566,13 @@ describe("UmaRuntime preflight", () => {
       status: "complete",
       content: "owned",
     });
-    expect(() => runtime.sendMessage(second.id, { messageId: "owned", text: "again" })).toThrow(
-      "another session",
-    );
+    expect(() =>
+      runtime.sendMessage(second.id, { messageId: "owned", text: "again", mode: "agent" }),
+    ).toThrow("another session");
     runtime.database.updateRun(created.id, { status: "awaiting_input", clarificationCount: 3 });
-    expect(() => runtime.sendMessage(first.id, { messageId: "fourth", text: "answer" })).toThrow(
-      "Clarification limit",
-    );
+    expect(() =>
+      runtime.sendMessage(first.id, { messageId: "fourth", text: "answer", mode: "agent" }),
+    ).toThrow("Clarification limit");
     expect(runtime.database.getRun(created.id)).toMatchObject({ status: "failed" });
   });
 
@@ -588,6 +607,8 @@ describe("UmaRuntime preflight", () => {
         messageId,
         runtime.models.snapshot(owner.model),
         owner.thinkingLevel,
+        "agent",
+        "agent",
       ).run;
       runtime.database.insertMessage({
         id: messageId,
@@ -645,6 +666,8 @@ describe("UmaRuntime preflight", () => {
       "resource-run",
       runtime.models.snapshot(session.model),
       session.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.insertMessage({
       id: "resource-run",
@@ -771,7 +794,7 @@ describe("UmaRuntime preflight", () => {
     const direct = await runtimeWith([fauxAssistantMessage("direct result"), fauxAssistantMessage("[]")]);
     const directSession = await direct.createSession();
     const directTerminal = waitForTerminal(direct, directSession.id);
-    direct.sendMessage(directSession.id, { messageId: "direct-mode", text: "answer", mode: "direct" });
+    direct.sendMessage(directSession.id, { messageId: "direct-mode", text: "answer", mode: "ask" });
     expect((await directTerminal).status).toBe("completed");
 
     const complexDirect = await runtimeWith([
@@ -818,6 +841,7 @@ describe("UmaRuntime preflight", () => {
     clarifyWithoutQuestions.sendMessage(clarifySession.id, {
       messageId: "bad-clarify",
       text: "question",
+      mode: "agent",
     });
     expect(await clarifyTerminal).toMatchObject({
       status: "failed",
@@ -932,12 +956,14 @@ describe("UmaRuntime preflight", () => {
       fauxAssistantMessage(JSON.stringify({ improvedAnswer: "Reset improvement from original" })),
       fauxAssistantMessage(JSON.stringify({ passed: true, issues: [], suggestions: [] })),
     ]);
-    const session = await runtime.createSession({ mode: "assistant" });
+    const session = await runtime.createSession();
     const source = runtime.database.createRun(
       session.id,
       "quality-question",
       runtime.models.snapshot(session.model),
       session.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.insertMessage({
       id: "quality-question",
@@ -1005,6 +1031,8 @@ describe("UmaRuntime preflight", () => {
       "reload-active",
       runtime.models.snapshot(session.model),
       session.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.insertMessage({
       id: "reload-active",
@@ -1052,10 +1080,8 @@ describe("UmaRuntime preflight", () => {
   it("enforces command, attachment, profile, message-id, and memory safety edges", async () => {
     const runtime = await runtimeWith([]);
     const workspace = await runtime.createSession({ title: "Edges" });
-    const assistant = await runtime.createSession({ mode: "assistant" });
-    await expect(
-      runtime.createSession({ mode: "assistant", workspace: workspace.workspace }),
-    ).rejects.toThrow("cannot bind");
+    const assistant = await runtime.createSession();
+    await expect(runtime.createSession({ workspace: workspace.workspace })).resolves.toBeDefined();
 
     expect(
       runtime.updateSession(workspace.id, {
@@ -1099,7 +1125,10 @@ describe("UmaRuntime preflight", () => {
     ).toBe("upload");
 
     expect(() => runtime.sendCommand(workspace.id, "   ")).toThrow("required");
-    expect(() => runtime.sendCommand(assistant.id, "pwd")).toThrow("workspace session");
+    expect(runtime.sendCommand(assistant.id, "pwd")).toMatchObject({
+      sessionId: assistant.id,
+      interactionMode: "agent",
+    });
     runtime.database.insertMessage({
       id: "non-run-message",
       sessionId: workspace.id,
@@ -1109,13 +1138,15 @@ describe("UmaRuntime preflight", () => {
     });
     expect(() => runtime.sendCommand(workspace.id, "pwd", "non-run-message")).toThrow("already used");
     expect(() =>
-      runtime.sendMessage(assistant.id, { messageId: "non-run-message", text: "duplicate" }),
+      runtime.sendMessage(assistant.id, { messageId: "non-run-message", text: "duplicate", mode: "agent" }),
     ).toThrow("another session");
     const existingRun = runtime.database.createRun(
       workspace.id,
       "existing-run-message",
       runtime.models.snapshot(workspace.model),
       workspace.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.insertMessage({
       id: "existing-run-message",
@@ -1125,9 +1156,10 @@ describe("UmaRuntime preflight", () => {
       status: "complete",
       content: "existing",
     });
-    expect(runtime.sendMessage(workspace.id, { messageId: "existing-run-message", text: "retry" }).id).toBe(
-      existingRun.id,
-    );
+    expect(
+      runtime.sendMessage(workspace.id, { messageId: "existing-run-message", text: "retry", mode: "agent" })
+        .id,
+    ).toBe(existingRun.id);
     const image = await runtime.addAttachment({
       sessionId: workspace.id,
       name: "image.png",
@@ -1138,6 +1170,7 @@ describe("UmaRuntime preflight", () => {
       runtime.sendMessage(workspace.id, {
         messageId: "unsupported-image",
         text: "inspect",
+        mode: "agent",
         attachmentIds: [image.id],
       }),
     ).toThrow("does not support image");
@@ -1147,6 +1180,8 @@ describe("UmaRuntime preflight", () => {
       "clarification-original",
       runtime.models.snapshot(assistant.model),
       assistant.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.insertMessage({
       id: "clarification-original",
@@ -1158,14 +1193,14 @@ describe("UmaRuntime preflight", () => {
     });
     runtime.database.updateRun(clarification.id, { status: "awaiting_input", clarificationCount: 3 });
     expect(() =>
-      runtime.sendMessage(assistant.id, { messageId: "fourth-clarification", text: "more" }),
+      runtime.sendMessage(assistant.id, { messageId: "fourth-clarification", text: "more", mode: "agent" }),
     ).toThrow("Clarification limit exceeded");
     expect(runtime.database.getRun(clarification.id).status).toBe("failed");
 
     const global = runtime.createMemoryFact(workspace.id, "global", "Global preference");
     expect(() => runtime.createMemoryFact(workspace.id, "session", "   ")).toThrow("required");
     expect(() =>
-      runtime.createMemoryFact(workspace.id, "session", "api_key = '1234567890abcdefghijklmnop'"),
+      runtime.createMemoryFact(workspace.id, "session", "service_token = 'test-value-1234567890'"),
     ).toThrow("secret");
     runtime.deleteMemoryFact(global.id);
     const sessionFact = runtime.createMemoryFact(workspace.id, "session", "Session preference");
@@ -1181,6 +1216,8 @@ describe("UmaRuntime preflight", () => {
       "active-message",
       runtime.models.snapshot(session.model),
       session.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.insertMessage({
       id: "active-message",
@@ -1214,6 +1251,8 @@ describe("UmaRuntime preflight", () => {
       "old-queued",
       runtime.models.snapshot(session.model),
       session.thinkingLevel,
+      "agent",
+      "agent",
     ).run;
     runtime.database.insertMessage({
       id: "old-queued",
@@ -1227,6 +1266,7 @@ describe("UmaRuntime preflight", () => {
     const replacement = runtime.sendMessage(session.id, {
       messageId: "replacement",
       text: "new work",
+      mode: "agent",
     });
     expect(runtime.database.getRunAction(read.id).status).toBe("prepared");
     expect(runtime.database.getRunAction(shell.id).status).toBe("uncertain");

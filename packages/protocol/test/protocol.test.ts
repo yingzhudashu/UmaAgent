@@ -10,7 +10,7 @@ import {
 
 describe("protocol schemas", () => {
   it("accepts strict message requests", () => {
-    expect(Value.Check(SendMessageRequestSchema, { messageId: "m1", text: "hello" })).toBe(true);
+    expect(Value.Check(SendMessageRequestSchema, { messageId: "m1", text: "hello", mode: "ask" })).toBe(true);
     expect(Value.Check(SendMessageRequestSchema, { messageId: "m1", text: "hello", unknown: true })).toBe(
       false,
     );

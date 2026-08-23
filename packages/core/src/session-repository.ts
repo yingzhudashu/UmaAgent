@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { ModelRef, Session, SessionMode } from "@uma-agent/protocol";
+import type { ModelRef, Session } from "@uma-agent/protocol";
 import { row, rows, toSession } from "./database-utils.js";
 
 /** Session CRUD only. Transaction ownership stays with UmaDatabase. */
@@ -19,7 +19,6 @@ export class SessionRepository {
 
   create(input: {
     userId?: string;
-    mode: SessionMode;
     title: string;
     workspace?: string;
     model: ModelRef;
@@ -30,12 +29,11 @@ export class SessionRepository {
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO sessions(id,user_id,mode,title,workspace,model_provider,model_id,thinking_level,queue_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO sessions(id,user_id,title,workspace,model_provider,model_id,thinking_level,queue_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
         input.userId ?? "system",
-        input.mode,
         input.title,
         input.workspace ?? null,
         input.model.provider,
@@ -58,7 +56,6 @@ export class SessionRepository {
     id: string,
     patch: {
       title?: string;
-      mode?: SessionMode;
       model?: ModelRef;
       thinkingLevel?: ThinkingLevel;
       queueMode?: Session["queueMode"];
@@ -67,11 +64,10 @@ export class SessionRepository {
     const current = this.get(id);
     this.db
       .prepare(
-        "UPDATE sessions SET title=?, mode=?, model_provider=?, model_id=?, thinking_level=?, queue_mode=?, updated_at=? WHERE id=?",
+        "UPDATE sessions SET title=?, model_provider=?, model_id=?, thinking_level=?, queue_mode=?, updated_at=? WHERE id=?",
       )
       .run(
         patch.title ?? current.title,
-        patch.mode ?? current.mode,
         patch.model?.provider ?? current.model.provider,
         patch.model?.id ?? current.model.id,
         patch.thinkingLevel ?? current.thinkingLevel,

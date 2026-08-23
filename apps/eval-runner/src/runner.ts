@@ -1,10 +1,17 @@
-import type { AuditRecord, Run, RunAction, SessionEventPage, SessionSnapshot } from "@uma-agent/protocol";
+import type {
+  AuditRecord,
+  InteractionMode,
+  Run,
+  RunAction,
+  SessionEventPage,
+  SessionSnapshot,
+} from "@uma-agent/protocol";
 
 export interface EvalCase {
   name: string;
   category?: "security" | "prompt_injection" | "tool_selection" | "schema" | "regression" | "cost";
   prompt: string;
-  mode?: "auto" | "direct" | "plan";
+  mode: InteractionMode;
   expectedStatus: Run["status"];
   expectedIncludes?: string;
   expectedRoute?: Run["route"];
@@ -14,11 +21,11 @@ export interface EvalCase {
 }
 
 export interface EvalClient {
-  createSession(input: { mode: "assistant"; title: string }): Promise<{ id: string }>;
+  createSession(input: { title: string }): Promise<{ id: string }>;
   sendMessage(
     sessionId: string,
     text: string,
-    input: { mode?: NonNullable<EvalCase["mode"]> },
+    input: { mode: NonNullable<EvalCase["mode"]> },
   ): Promise<{ runId: string }>;
   waitForRun(runId: string, options: { pollMs: number }): Promise<Run>;
   getSession(id: string): Promise<SessionSnapshot>;
@@ -43,9 +50,9 @@ export async function evaluateSuite(client: EvalClient, cases: EvalCase[]): Prom
     const startedAt = Date.now();
     const category = item.category ?? "regression";
     try {
-      const session = await client.createSession({ mode: "assistant", title: `Eval: ${item.name}` });
+      const session = await client.createSession({ title: `Eval: ${item.name}` });
       const accepted = await client.sendMessage(session.id, item.prompt, {
-        ...(item.mode ? { mode: item.mode } : {}),
+        mode: item.mode,
       });
       const run = await client.waitForRun(accepted.runId, { pollMs: 50 });
       const snapshot = await client.getSession(session.id);

@@ -35,6 +35,7 @@ describe("evaluation runner", () => {
         {
           name: "direct",
           prompt: "answer",
+          mode: "ask",
           expectedStatus: "completed",
           expectedIncludes: "expected",
         },
@@ -111,8 +112,8 @@ describe("evaluation runner", () => {
     } as unknown as EvalClient;
     await expect(
       evaluateSuite(client, [
-        { name: "error", prompt: "one", expectedStatus: "completed" },
-        { name: "string", prompt: "two", expectedStatus: "completed" },
+        { name: "error", prompt: "one", mode: "ask", expectedStatus: "completed" },
+        { name: "string", prompt: "two", mode: "ask", expectedStatus: "completed" },
       ]),
     ).resolves.toEqual([
       expect.objectContaining({

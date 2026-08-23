@@ -9,7 +9,6 @@ import type {
   ScheduledTask,
   ScheduledTaskRun,
   Session,
-  SessionMode,
 } from "@uma-agent/protocol";
 
 export type Row = Record<string, unknown>;
@@ -71,7 +70,6 @@ export function redactAudit(value: unknown): unknown {
 export function toSession(value: Row): Session {
   return {
     id: text(value.id),
-    mode: text(value.mode) as SessionMode,
     title: text(value.title),
     ...(value.workspace ? { workspace: text(value.workspace) } : {}),
     model: { provider: text(value.model_provider), id: text(value.model_id) },
@@ -101,7 +99,7 @@ export function toScheduledTask(value: Row): ScheduledTask {
     id: text(value.id),
     name: text(value.name),
     prompt: text(value.prompt),
-    sessionMode: text(value.session_mode) as SessionMode,
+    messageMode: "agent",
     schedule: parseJson(value.schedule_json, { kind: "once", at: 0 }) as ScheduleDefinition,
     enabled: integer(value.enabled) === 1,
     ...(value.next_run_at !== null && value.next_run_at !== undefined

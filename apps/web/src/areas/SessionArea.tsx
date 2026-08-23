@@ -1,4 +1,4 @@
-import type { Health, Session, SessionMode } from "@uma-agent/protocol";
+import type { Health, Session } from "@uma-agent/protocol";
 import { Bot, ChevronLeft, MessageSquarePlus } from "lucide-react";
 
 export function SessionArea({
@@ -19,7 +19,7 @@ export function SessionArea({
   disabled: boolean;
   health: Health | undefined;
   installable: boolean;
-  create: (mode: SessionMode) => void;
+  create: () => void;
   select: (id: string) => void;
   close: () => void;
   install: () => void;
@@ -36,13 +36,9 @@ export function SessionArea({
           <ChevronLeft />
         </button>
       </div>
-      <button type="button" className="new-session" disabled={disabled} onClick={() => create("workspace")}>
+      <button type="button" className="new-session" disabled={disabled} onClick={create}>
         <MessageSquarePlus size={17} />
         新会话
-      </button>
-      <button type="button" className="new-session" disabled={disabled} onClick={() => create("assistant")}>
-        <MessageSquarePlus size={17} />
-        助手会话
       </button>
       <nav>
         {sessions.map((session) => (
@@ -52,10 +48,7 @@ export function SessionArea({
             className={selected === session.id ? "active" : ""}
             onClick={() => select(session.id)}
           >
-            <span>
-              {session.mode === "assistant" ? "助手 · " : ""}
-              {session.title}
-            </span>
+            <span>{session.title}</span>
             <small>{session.model.id}</small>
           </button>
         ))}

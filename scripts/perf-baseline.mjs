@@ -109,7 +109,7 @@ try {
   await waitReady();
   session = await api("/sessions", {
     method: "POST",
-    body: JSON.stringify({ mode: "assistant", title: "Performance baseline" }),
+    body: JSON.stringify({ title: "Performance baseline" }),
   });
   for (let index = 0; index < messages; index++) {
     const requestStart = performance.now();
@@ -118,7 +118,7 @@ try {
       body: JSON.stringify({
         messageId: `perf-${index}-${process.pid}`,
         text: "Reply with FAUX_DIRECT.",
-        mode: "direct",
+        mode: "ask",
       }),
     });
     apiSamples.push(performance.now() - requestStart);

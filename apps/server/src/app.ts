@@ -392,10 +392,12 @@ export async function createServer(
       ),
   );
   app.get("/api/v11/models", async () => runtime.listModels());
-  app.get("/api/v11/skills", async () => ({
-    available: runtime.listSkills(),
-    packages: runtime.listSkillPackages(),
-  }));
+  app.get("/api/v11/skills", async (request) =>
+    adminResult(request, () => ({
+      available: runtime.listSkills(),
+      packages: runtime.listSkillPackages(),
+    })),
+  );
   app.post("/api/v11/skills/refresh", async (request) => adminResult(request, () => runtime.refreshSkills()));
   app.post("/api/v11/admin/reload", async (request) => {
     requireAdmin(request);
@@ -404,7 +406,7 @@ export async function createServer(
   });
   app.get("/api/v11/admin/config", async (request) => adminResult(request, () => runtime.publicConfig()));
   app.get<{ Querystring: { q?: string } }>("/api/v11/skills/search", async (request) =>
-    runtime.searchSkills(request.query.q ?? ""),
+    adminResult(request, () => runtime.searchSkills(request.query.q ?? "")),
   );
   app.post("/api/v11/skills/install", async (request) => {
     requireAdmin(request);
@@ -487,13 +489,7 @@ export async function createServer(
       throw new Error("prompt is required");
     if (request.body.parentSessionId) requireSessionOwner(request, request.body.parentSessionId);
     const principal = userPrincipal(auth, request);
-    return runtime.createTask(
-      request.body.prompt,
-      request.body.parentSessionId,
-      undefined,
-      undefined,
-      principal.userId,
-    );
+    return runtime.createTask(request.body.prompt, request.body.parentSessionId, undefined, principal.userId);
   });
   app.get<{ Params: { id: string } }>("/api/v11/tasks/:id", async (request) =>
     ownedResult(request, runtime.database.taskOwner(request.params.id), () =>
@@ -601,9 +597,13 @@ export async function createServer(
     runtime.deleteMemoryFact(request.params.id);
     return reply.code(204).send();
   });
-  app.get<{ Params: { runId: string } }>("/api/v11/audit/runs/:runId", async (request) =>
-    runtime.audit(request.params.runId),
-  );
+  app.get<{ Params: { runId: string } }>("/api/v11/audit/runs/:runId", async (request) => {
+    const principal = userPrincipal(auth, request);
+    if (principal.role === "admin") return runtime.audit(request.params.runId);
+    return ownedResult(request, runtime.database.runOwner(request.params.runId), () =>
+      runtime.audit(request.params.runId),
+    );
+  });
   app.get<{ Querystring: { from?: string; to?: string } }>("/api/v11/reports/operations", async (request) => {
     requireAdmin(request);
     const to = request.query.to ? Number(request.query.to) : Date.now();

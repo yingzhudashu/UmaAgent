@@ -17,7 +17,6 @@ import { ContextManager } from "../src/context-manager.js";
 
 const session: Session = {
   id: "session-1",
-  mode: "assistant",
   title: "context",
   model: { provider: "test", id: "model" },
   thinkingLevel: "off",

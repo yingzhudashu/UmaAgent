@@ -32,7 +32,6 @@ import type {
   Session,
   SessionEventPage,
   SessionHistoryPage,
-  SessionMode,
   SessionSnapshot,
   SkillPackage,
   TranscriptItem,
@@ -366,7 +365,6 @@ export class UmaDatabase {
 
   createSession(input: {
     userId?: string;
-    mode: SessionMode;
     title: string;
     workspace?: string;
     model: ModelRef;
@@ -384,7 +382,6 @@ export class UmaDatabase {
     id: string,
     patch: {
       title?: string;
-      mode?: SessionMode;
       model?: ModelRef;
       thinkingLevel?: ThinkingLevel;
       queueMode?: Session["queueMode"];
@@ -540,7 +537,8 @@ export class UmaDatabase {
     messageId: string,
     model: ModelSnapshot,
     thinkingLevel: Run["thinkingLevel"],
-    kind: Run["kind"] = "agent",
+    kind: Run["kind"],
+    interactionMode: Run["interactionMode"],
   ): { run: Run; created: boolean } {
     const existing = row(this.db.prepare("SELECT id,session_id FROM runs WHERE message_id=?"), messageId);
     if (existing) {
@@ -552,12 +550,13 @@ export class UmaDatabase {
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO runs(id,session_id,message_id,kind,status,phase,model_snapshot_json,thinking_level,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO runs(id,session_id,message_id,interaction_mode,kind,status,phase,model_snapshot_json,thinking_level,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
         sessionId,
         messageId,
+        interactionMode,
         kind,
         "queued",
         "queued",
@@ -650,6 +649,7 @@ export class UmaDatabase {
       id: text(value.id),
       sessionId: text(value.session_id),
       messageId: text(value.message_id),
+      interactionMode: text(value.interaction_mode) as Run["interactionMode"],
       kind: text(value.kind || "agent") as Run["kind"],
       status: text(value.status) as RunStatus,
       phase: text(value.phase) as Run["phase"],
@@ -1948,7 +1948,7 @@ export class UmaDatabase {
     ownerId?: string;
     name: string;
     prompt: string;
-    sessionMode: SessionMode;
+    messageMode: "agent";
     schedule: ScheduleDefinition;
     enabled: boolean;
     nextRunAt?: number;
@@ -1957,14 +1957,14 @@ export class UmaDatabase {
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO scheduled_tasks(id,owner_id,name,prompt,session_mode,schedule_json,enabled,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO scheduled_tasks(id,owner_id,name,prompt,message_mode,schedule_json,enabled,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
         input.ownerId ?? "system",
         input.name,
         input.prompt,
-        input.sessionMode,
+        input.messageMode,
         JSON.stringify(input.schedule),
         input.enabled ? 1 : 0,
         input.nextRunAt ?? null,
@@ -2008,7 +2008,7 @@ export class UmaDatabase {
     patch: Partial<{
       name: string;
       prompt: string;
-      sessionMode: SessionMode;
+      messageMode: "agent";
       schedule: ScheduleDefinition;
       enabled: boolean;
       nextRunAt: number | null;
@@ -2019,7 +2019,7 @@ export class UmaDatabase {
     const next = {
       name: patch.name ?? current.name,
       prompt: patch.prompt ?? current.prompt,
-      sessionMode: patch.sessionMode ?? current.sessionMode,
+      messageMode: "agent",
       schedule: patch.schedule ?? current.schedule,
       enabled: patch.enabled ?? current.enabled,
       nextRunAt: patch.nextRunAt === undefined ? current.nextRunAt : (patch.nextRunAt ?? undefined),
@@ -2027,12 +2027,12 @@ export class UmaDatabase {
     };
     this.db
       .prepare(
-        "UPDATE scheduled_tasks SET name=?,prompt=?,session_mode=?,schedule_json=?,enabled=?,next_run_at=?,last_run_at=?,updated_at=? WHERE id=?",
+        "UPDATE scheduled_tasks SET name=?,prompt=?,message_mode=?,schedule_json=?,enabled=?,next_run_at=?,last_run_at=?,updated_at=? WHERE id=?",
       )
       .run(
         next.name,
         next.prompt,
-        next.sessionMode,
+        next.messageMode,
         JSON.stringify(next.schedule),
         next.enabled ? 1 : 0,
         next.nextRunAt ?? null,

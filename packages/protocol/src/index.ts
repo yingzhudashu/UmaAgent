@@ -26,8 +26,12 @@ export const ModelSnapshotSchema = Strict({
 });
 export type ModelSnapshot = Static<typeof ModelSnapshotSchema>;
 
-export const SessionModeSchema = Type.Union([Type.Literal("workspace"), Type.Literal("assistant")]);
-export type SessionMode = Static<typeof SessionModeSchema>;
+export const InteractionModeSchema = Type.Union([
+  Type.Literal("ask"),
+  Type.Literal("plan"),
+  Type.Literal("agent"),
+]);
+export type InteractionMode = Static<typeof InteractionModeSchema>;
 
 export const QueueModeSchema = Type.Union([Type.Literal("queue"), Type.Literal("preemptive")]);
 export type QueueMode = Static<typeof QueueModeSchema>;
@@ -136,6 +140,7 @@ export const RunSchema = Strict({
   id: Id,
   sessionId: Id,
   messageId: Id,
+  interactionMode: InteractionModeSchema,
   kind: RunKindSchema,
   status: RunStatusSchema,
   phase: RunPhaseSchema,
@@ -180,7 +185,6 @@ export type Run = Static<typeof RunSchema>;
 
 export const SessionSchema = Strict({
   id: Id,
-  mode: SessionModeSchema,
   title: Type.String({ minLength: 1, maxLength: 200 }),
   workspace: Type.Optional(Type.String({ minLength: 1 })),
   model: ModelRefSchema,
@@ -408,7 +412,6 @@ export const ErrorResponseSchema = Strict({
 export type ErrorResponse = Static<typeof ErrorResponseSchema>;
 
 export const CreateSessionRequestSchema = Strict({
-  mode: Type.Optional(SessionModeSchema),
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
   workspace: Type.Optional(Type.String({ minLength: 1 })),
   model: Type.Optional(ModelRefSchema),
@@ -428,7 +431,7 @@ export const SendMessageRequestSchema = Strict({
   messageId: Id,
   text: Type.String({ minLength: 1, maxLength: 1_000_000 }),
   attachmentIds: Type.Optional(Type.Array(Id, { maxItems: 20 })),
-  mode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("direct"), Type.Literal("plan")])),
+  mode: InteractionModeSchema,
   source: Type.Optional(MessageSourceSchema),
 });
 export type SendMessageRequest = Static<typeof SendMessageRequestSchema>;
@@ -490,7 +493,7 @@ export const ScheduledTaskSchema = Strict({
   id: Id,
   name: Type.String({ minLength: 1, maxLength: 200 }),
   prompt: Type.String({ minLength: 1, maxLength: 1_000_000 }),
-  sessionMode: SessionModeSchema,
+  messageMode: Type.Literal("agent"),
   schedule: ScheduleDefinitionSchema,
   enabled: Type.Boolean(),
   nextRunAt: Type.Optional(Timestamp),
@@ -503,7 +506,7 @@ export type ScheduledTask = Static<typeof ScheduledTaskSchema>;
 export const CreateScheduledTaskRequestSchema = Strict({
   name: Type.String({ minLength: 1, maxLength: 200 }),
   prompt: Type.String({ minLength: 1, maxLength: 1_000_000 }),
-  sessionMode: Type.Optional(SessionModeSchema),
+  messageMode: Type.Optional(Type.Literal("agent")),
   schedule: ScheduleDefinitionSchema,
   enabled: Type.Optional(Type.Boolean()),
 });
@@ -512,7 +515,7 @@ export type CreateScheduledTaskRequest = Static<typeof CreateScheduledTaskReques
 export const UpdateScheduledTaskRequestSchema = Strict({
   name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
   prompt: Type.Optional(Type.String({ minLength: 1, maxLength: 1_000_000 })),
-  sessionMode: Type.Optional(SessionModeSchema),
+  messageMode: Type.Optional(Type.Literal("agent")),
   schedule: Type.Optional(ScheduleDefinitionSchema),
   enabled: Type.Optional(Type.Boolean()),
 });

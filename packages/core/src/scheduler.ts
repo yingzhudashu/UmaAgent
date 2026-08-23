@@ -11,11 +11,7 @@ import { Cron } from "croner";
 import type { UmaDatabase } from "./database.js";
 
 export interface ScheduledTaskExecutor {
-  prepareScheduledTask(
-    prompt: string,
-    sessionMode: "workspace" | "assistant",
-    source: NonNullable<BackgroundTask["source"]>,
-  ): BackgroundTask;
+  prepareScheduledTask(prompt: string, source: NonNullable<BackgroundTask["source"]>): BackgroundTask;
   startTask(id: string): void;
   getTask(id: string): BackgroundTask;
   cancelTask(id: string): BackgroundTask;
@@ -72,7 +68,7 @@ export class SchedulerService {
       ...(ownerId ? { ownerId } : {}),
       name: input.name,
       prompt: input.prompt,
-      sessionMode: input.sessionMode ?? "assistant",
+      messageMode: "agent",
       schedule,
       enabled,
       ...(nextRunAt !== undefined ? { nextRunAt } : {}),
@@ -167,7 +163,7 @@ export class SchedulerService {
         occurrenceKey,
         trigger,
       });
-      const background = this.executor.prepareScheduledTask(task.prompt, task.sessionMode, {
+      const background = this.executor.prepareScheduledTask(task.prompt, {
         type: "schedule",
         scheduleId: task.id,
         scheduleRunId: created.id,

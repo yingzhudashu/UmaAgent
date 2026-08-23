@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { UmaClient } from "@uma-agent/client";
-import type { Approval, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
-import DOMPurify from "dompurify";
+import { type UmaClient, UmaClientError } from "@uma-agent/client";
+import type { Approval, InteractionMode, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
 import {
   Bot,
   CircleStop,
@@ -14,7 +13,6 @@ import {
   Send,
   Trash2,
 } from "lucide-react";
-import { marked } from "marked";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { DiagnosticsArea } from "./areas/DiagnosticsArea.js";
 import { EvaluationArea } from "./areas/EvaluationArea.js";
@@ -36,20 +34,15 @@ import {
   clearCacheNamespace,
   setCacheNamespace,
 } from "./cache.js";
+import { InspectorDrawer } from "./components/InspectorDrawer.js";
+import { MessageBubble } from "./components/MessageBubble.js";
+import { ModeSelector } from "./components/ModeSelector.js";
+import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
 import { Login } from "./Login.js";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-}
-
-function Markdown({ content }: { content: string }) {
-  const html = useMemo(
-    () => DOMPurify.sanitize(marked.parse(content, { async: false }) as string),
-    [content],
-  );
-  // biome-ignore lint/security/noDangerouslySetInnerHtml: DOMPurify sanitizes the generated Markdown HTML.
-  return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 export interface AppProps {
@@ -63,9 +56,12 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [selected, setSelected] = useState<string>();
   const [prompt, setPrompt] = useState("");
   const [taskPrompt, setTaskPrompt] = useState("");
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>("ask");
   const [loginRequired, setLoginRequired] = useState<boolean>();
+  const [userRole, setUserRole] = useState<"admin" | "user">("user");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [inspectorSection, setInspectorSection] = useState<InspectorSection>();
   const [detailsTab, setDetailsTab] = useState<
     | "run"
     | "tasks"
@@ -91,6 +87,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     queryFn: async () => {
       try {
         const bootstrap = await client.syncBootstrap();
+        setUserRole(bootstrap.user.role);
         setCacheNamespace(bootstrap.user.id, client.serverOrigin);
         const values = bootstrap.sessions.map((item) => item.session);
         await cacheSessions(values);
@@ -122,27 +119,27 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const report = useQuery({
     queryKey: ["operations-report"],
     queryFn: () => client.operationsReport(),
-    enabled: authenticated,
+    enabled: authenticated && userRole === "admin",
   });
   const diagnostics = useQuery({
     queryKey: ["diagnostics"],
     queryFn: () => client.diagnosticsReport(),
-    enabled: authenticated,
+    enabled: authenticated && userRole === "admin",
   });
   const evaluations = useQuery({
     queryKey: ["evaluations"],
     queryFn: () => client.listEvaluationReports(),
-    enabled: authenticated,
+    enabled: authenticated && userRole === "admin",
   });
   const optimization = useQuery({
     queryKey: ["optimization"],
     queryFn: () => client.listOptimizationProposals(),
-    enabled: authenticated,
+    enabled: authenticated && userRole === "admin",
   });
   const publicConfig = useQuery({
     queryKey: ["config"],
     queryFn: () => client.publicConfig(),
-    enabled: authenticated,
+    enabled: authenticated && userRole === "admin",
   });
   const memories = useQuery({
     queryKey: ["memory", "candidate"],
@@ -152,14 +149,18 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const skills = useQuery({
     queryKey: ["skills"],
     queryFn: () => client.skillState(),
-    enabled: authenticated,
+    enabled: authenticated && userRole === "admin",
   });
   const profile = useQuery({
     queryKey: ["profile"],
     queryFn: () => client.getAgentProfile(),
     enabled: authenticated,
   });
-  const mcp = useQuery({ queryKey: ["mcp"], queryFn: () => client.mcpStatus(), enabled: authenticated });
+  const mcp = useQuery({
+    queryKey: ["mcp"],
+    queryFn: () => client.mcpStatus(),
+    enabled: authenticated && userRole === "admin",
+  });
   const knowledge = useQuery({
     queryKey: ["knowledge"],
     queryFn: () => client.listKnowledge(),
@@ -275,7 +276,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   }, [transcriptLength]);
 
   const createSession = useMutation({
-    mutationFn: (mode: "workspace" | "assistant") => client.createSession({ mode }),
+    mutationFn: () => client.createSession(),
     onSuccess: (session) => {
       setSelected(session.id);
       void queryClient.invalidateQueries({ queryKey: ["sessions"] });
@@ -283,7 +284,10 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   });
   const sendMessage = useMutation({
     mutationFn: (text: string) =>
-      client.sendMessage(selected as string, text, attachmentIds.length ? { attachmentIds } : {}),
+      client.sendMessage(selected as string, text, {
+        mode: interactionMode,
+        ...(attachmentIds.length ? { attachmentIds } : {}),
+      }),
     onSuccess: () => {
       setPrompt("");
       setAttachmentIds([]);
@@ -328,6 +332,19 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     enabled: Boolean(currentRun) && detailsTab === "audit" && authenticated,
   });
   const offline = !browserOnline || health.isError;
+  const connectionMessage = !browserOnline
+    ? "当前设备处于离线状态，已缓存内容仍可阅读。"
+    : health.isError
+      ? "无法连接 UmaAgent Core，请检查服务状态后重试。"
+      : undefined;
+  const requestErrorMessage = (error: unknown): string => {
+    if (!(error instanceof UmaClientError)) return "请求未完成，请稍后重试。";
+    if (error.code === "provider_error" || error.code === "provider_contract_error")
+      return `模型服务暂时不可用${error.requestId ? `（请求 ${error.requestId}）` : ""}。`;
+    if (error.code === "forbidden") return "当前账号没有执行此操作的权限。";
+    if (error.code === "rate_limited") return "请求过于频繁，请稍后重试。";
+    return `${error.message}${error.requestId ? `（请求 ${error.requestId}）` : ""}`;
+  };
   const Workspace = embedded ? "div" : "main";
 
   const upload = async (file: File) => {
@@ -355,9 +372,23 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const retryLast = () => {
     const lastUser = [...transcript].reverse().find((item) => item.role === "user");
     if (!lastUser || !selected) return;
+    const mode = snapshot.data?.recentRuns.find((run) => run.id === lastUser.runId)?.interactionMode;
+    if (!mode) return;
     const ids = lastUser.attachments.map((attachment) => attachment.id);
     void client
-      .sendMessage(selected, lastUser.content, ids.length ? { attachmentIds: ids } : {})
+      .sendMessage(selected, lastUser.content, {
+        mode,
+        ...(ids.length ? { attachmentIds: ids } : {}),
+      })
+      .then(() => queryClient.invalidateQueries({ queryKey: ["snapshot", selected] }));
+  };
+  const retryMessage = (item: TranscriptItem) => {
+    if (item.role !== "user" || !selected) return;
+    const mode = snapshot.data?.recentRuns.find((run) => run.id === item.runId)?.interactionMode;
+    if (!mode) return;
+    const ids = item.attachments.map((attachment) => attachment.id);
+    void client
+      .sendMessage(selected, item.content, { mode, ...(ids.length ? { attachmentIds: ids } : {}) })
       .then(() => queryClient.invalidateQueries({ queryKey: ["snapshot", selected] }));
   };
 
@@ -390,7 +421,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
           disabled={offline}
           health={health.data}
           installable={Boolean(installPrompt)}
-          create={(mode) => createSession.mutate(mode)}
+          create={() => createSession.mutate()}
           select={(id) => {
             setSelected(id);
             setSidebarOpen(false);
@@ -483,8 +514,11 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               <button
                 type="button"
                 className={`icon ${panelOpen ? "active" : ""}`}
-                onClick={() => setPanelOpen((value) => !value)}
-                title="运行面板"
+                onClick={() => {
+                  setPanelOpen((value) => !value);
+                  setInspectorSection((value) => (value ? undefined : "run"));
+                }}
+                title="打开详情"
               >
                 <PanelRight />
               </button>
@@ -522,65 +556,48 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               </div>
             )}
             {transcript.map((item) => (
-              <article key={item.id} className={`message ${item.role}`}>
-                <div className="message-meta">
-                  <span>
-                    {item.role === "user" ? "你" : item.role === "assistant" ? "Uma" : (item.name ?? "工具")}
-                  </span>
-                  <time>
-                    {new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </time>
-                  {item.status === "streaming" && <span className="streaming">运行中</span>}
-                </div>
-                {item.role === "assistant" ? (
-                  <>
-                    {item.revisionOfMessageId && (
-                      <small className="operation-meta">修订自 {item.revisionOfMessageId}</small>
-                    )}
-                    <Markdown content={item.content} />
-                    <div className="approval-actions">
-                      <button
-                        type="button"
-                        disabled={offline}
-                        onClick={() => void client.reviewMessage(item.id).then(() => snapshot.refetch())}
-                      >
-                        审查
-                      </button>
-                      <button
-                        type="button"
-                        disabled={offline}
-                        onClick={() => void client.improveMessage(item.id).then(() => snapshot.refetch())}
-                      >
-                        改进
-                      </button>
-                    </div>
-                  </>
-                ) : item.role === "tool" ? (
-                  <pre>{item.content}</pre>
-                ) : (
-                  <p>{item.content}</p>
-                )}
-                {item.attachments.map((attachment) => (
-                  <button
-                    type="button"
-                    className="run-action"
-                    key={attachment.id}
-                    onClick={() =>
-                      void client.attachmentContent(attachment.id).then((blob) => {
-                        const url = URL.createObjectURL(blob);
-                        window.open(url, "_blank", "noopener,noreferrer");
-                        setTimeout(() => URL.revokeObjectURL(url), 60_000);
-                      })
-                    }
-                  >
-                    {attachment.name}
-                  </button>
-                ))}
-              </article>
+              <MessageBubble
+                key={item.id}
+                item={item}
+                onRetry={item.role === "user" ? () => retryMessage(item) : undefined}
+                onReview={
+                  item.role === "assistant"
+                    ? () => void client.reviewMessage(item.id).then(() => snapshot.refetch())
+                    : undefined
+                }
+                onImprove={
+                  item.role === "assistant"
+                    ? () => void client.improveMessage(item.id).then(() => snapshot.refetch())
+                    : undefined
+                }
+                onAttachment={(id) =>
+                  void client.attachmentContent(id).then((blob) => {
+                    const url = URL.createObjectURL(blob);
+                    window.open(url, "_blank", "noopener,noreferrer");
+                    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                  })
+                }
+              />
             ))}
             <div ref={endRef} />
           </section>
           <div className="composer-wrap">
+            {connectionMessage && <p className="connection-notice">{connectionMessage}</p>}
+            {sendMessage.isError && (
+              <div className="composer-error" role="alert">
+                <span>{requestErrorMessage(sendMessage.error)}</span>
+                <button
+                  type="button"
+                  className="text-action"
+                  onClick={() => {
+                    sendMessage.reset();
+                    retryLast();
+                  }}
+                >
+                  重试
+                </button>
+              </div>
+            )}
             {approvals
               .filter((approval) => approval.sessionId === selected)
               .map((approval) => (
@@ -599,6 +616,11 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 </button>
               </div>
             )}
+            <ModeSelector
+              value={interactionMode}
+              onChange={setInteractionMode}
+              disabled={!selected || offline}
+            />
             <form className="composer" onSubmit={submit}>
               <label
                 className="icon file-button"
@@ -653,232 +675,274 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             </form>
           </div>
         </Workspace>
-        {panelOpen && (
-          <aside className="details">
-            <div className="detail-tabs">
-              {(
-                [
-                  "run",
-                  "tasks",
-                  "schedules",
-                  "memory",
-                  "resources",
-                  "evaluations",
-                  "diagnostics",
-                  "optimization",
-                  "settings",
-                  "audit",
-                ] as const
-              ).map((tab) => (
-                <button
-                  type="button"
-                  className={`detail-tab ${detailsTab === tab ? "active" : ""}`}
-                  onClick={() => setDetailsTab(tab)}
-                  key={tab}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-            {detailsTab === "run" && (
-              <RunPanel
-                run={currentRun}
-                checkpoints={checkpoints.data ?? []}
-                actions={actions.data ?? []}
-                retry={retryLast}
-                resume={() =>
-                  currentRun && void client.resumeRun(currentRun.id).then(() => snapshot.refetch())
-                }
-                decide={(action, decision) =>
-                  currentRun &&
-                  void client.decideRunAction(currentRun.id, action.id, decision).then(() => {
-                    void actions.refetch();
-                    void snapshot.refetch();
-                  })
-                }
-                disabled={offline}
-              />
-            )}
-            {detailsTab === "tasks" && (
-              <div className="operation-list">
-                <form
-                  className="resource-form"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (!taskPrompt.trim()) return;
-                    void client.createTask(taskPrompt.trim(), selected).then(() => {
-                      setTaskPrompt("");
-                      void tasks.refetch();
+        <StatusRail
+          online={!offline}
+          busy={Boolean(busy)}
+          approvals={approvals.filter((approval) => approval.sessionId === selected).length}
+          open={panelOpen ? inspectorSection : undefined}
+          onOpen={(section) => {
+            setPanelOpen(true);
+            setInspectorSection(section);
+            if (section === "run") setDetailsTab("run");
+            if (section === "settings") setDetailsTab("settings");
+            if (section === "resources") setDetailsTab("resources");
+          }}
+        />
+        {panelOpen && inspectorSection && (
+          <InspectorDrawer
+            section={inspectorSection}
+            onClose={() => {
+              setPanelOpen(false);
+              setInspectorSection(undefined);
+            }}
+          >
+            <div className="details">
+              <div className="detail-tabs">
+                {(
+                  [
+                    "run",
+                    "tasks",
+                    "schedules",
+                    "memory",
+                    "resources",
+                    ...(userRole === "admin" ? ["evaluations", "diagnostics", "optimization"] : []),
+                    "settings",
+                    ...(userRole === "admin" ? ["audit"] : []),
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    type="button"
+                    className={`detail-tab ${detailsTab === tab ? "active" : ""}`}
+                    onClick={() => setDetailsTab(tab as typeof detailsTab)}
+                    key={tab}
+                  >
+                    {
+                      {
+                        run: "运行",
+                        tasks: "后台任务",
+                        schedules: "调度",
+                        memory: "记忆",
+                        resources: "资源",
+                        evaluations: "评测",
+                        diagnostics: "诊断",
+                        optimization: "优化",
+                        settings: "设置",
+                        audit: "审计",
+                      }[tab]
+                    }
+                  </button>
+                ))}
+              </div>
+              {detailsTab === "run" && (
+                <RunPanel
+                  run={currentRun}
+                  checkpoints={checkpoints.data ?? []}
+                  actions={actions.data ?? []}
+                  retry={retryLast}
+                  resume={() =>
+                    currentRun && void client.resumeRun(currentRun.id).then(() => snapshot.refetch())
+                  }
+                  decide={(action, decision) =>
+                    currentRun &&
+                    void client.decideRunAction(currentRun.id, action.id, decision).then(() => {
+                      void actions.refetch();
+                      void snapshot.refetch();
+                    })
+                  }
+                  disabled={offline}
+                />
+              )}
+              {detailsTab === "tasks" && (
+                <div className="operation-list">
+                  <form
+                    className="resource-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (!taskPrompt.trim()) return;
+                      void client.createTask(taskPrompt.trim(), selected).then(() => {
+                        setTaskPrompt("");
+                        void tasks.refetch();
+                      });
+                    }}
+                  >
+                    <label>
+                      后台任务
+                      <textarea value={taskPrompt} onChange={(event) => setTaskPrompt(event.target.value)} />
+                    </label>
+                    <button type="submit" className="run-action" disabled={offline || !taskPrompt.trim()}>
+                      新建后台任务
+                    </button>
+                  </form>
+                  {tasks.data?.map((task) => (
+                    <div key={task.id}>
+                      <strong>{task.status}</strong>
+                      <p>{task.prompt}</p>
+                      {task.runId && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelected(task.sessionId);
+                            setDetailsTab("run");
+                          }}
+                        >
+                          打开运行
+                        </button>
+                      )}
+                      {["pending", "running"].includes(task.status) && (
+                        <button
+                          type="button"
+                          disabled={offline}
+                          onClick={() => void client.cancelTask(task.id).then(() => tasks.refetch())}
+                        >
+                          取消
+                        </button>
+                      )}
+                      {!["pending", "running"].includes(task.status) && (
+                        <button
+                          type="button"
+                          disabled={offline}
+                          onClick={() => void client.deleteTask(task.id).then(() => tasks.refetch())}
+                        >
+                          删除记录
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {detailsTab === "memory" && (
+                <div className="operation-list">
+                  {memories.data?.map((fact) => (
+                    <div key={fact.id}>
+                      <p>
+                        {fact.key} = {fact.value}
+                      </p>
+                      <small className="operation-meta">{fact.confidence.toFixed(2)}</small>
+                      <div className="approval-actions">
+                        <button
+                          type="button"
+                          disabled={offline}
+                          onClick={() =>
+                            void client.reviewMemoryFact(fact.id, "rejected").then(() => memories.refetch())
+                          }
+                        >
+                          拒绝
+                        </button>
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={offline}
+                          onClick={() =>
+                            void client.reviewMemoryFact(fact.id, "active").then(() => memories.refetch())
+                          }
+                        >
+                          保留
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {detailsTab === "schedules" && (
+                <ScheduleArea
+                  schedules={schedules.data ?? []}
+                  disabled={offline}
+                  create={(input) => void client.createSchedule(input).then(() => schedules.refetch())}
+                  toggle={(id, enabled) =>
+                    void client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
+                  }
+                  run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
+                  remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
+                  loadRuns={(id) => client.listScheduleRuns(id)}
+                  cancelRun={(id) => void client.cancelScheduleRun(id).then(() => schedules.refetch())}
+                />
+              )}
+              {detailsTab === "resources" && (
+                <ResourceArea
+                  admin={userRole === "admin"}
+                  skills={skills.data?.available ?? []}
+                  packages={skills.data?.packages ?? []}
+                  mcp={mcp.data ?? []}
+                  knowledge={knowledge.data ?? []}
+                  disabled={offline}
+                  refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
+                  installSkill={(reference) =>
+                    void client.installSkill({ source: "local", reference }).then(() => skills.refetch())
+                  }
+                  setSkillStatus={(id, action) =>
+                    void client.setSkillStatus(id, action).then(() => skills.refetch())
+                  }
+                  addKnowledgePath={(name, path) =>
+                    void client.indexKnowledge(name, path).then(() => knowledge.refetch())
+                  }
+                  uploadKnowledge={(file) =>
+                    void client
+                      .upload(file, file.name, selected)
+                      .then((attachment) => {
+                        if (!selected) throw new Error("Select a session before uploading knowledge");
+                        return client.indexKnowledgeAttachment(file.name, attachment.id, selected);
+                      })
+                      .then(() => knowledge.refetch())
+                  }
+                  deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
+                  reindexKnowledge={(id) => void client.reindexKnowledge(id).then(() => knowledge.refetch())}
+                  searchKnowledge={(query, sourceId) => client.searchKnowledge(query, sourceId)}
+                />
+              )}
+              {detailsTab === "evaluations" && <EvaluationArea reports={evaluations.data ?? []} />}
+              {detailsTab === "diagnostics" && <DiagnosticsArea report={diagnostics.data} />}
+              {detailsTab === "optimization" && (
+                <OptimizationArea
+                  proposals={optimization.data ?? []}
+                  disabled={offline}
+                  generate={() =>
+                    void client.generateOptimizationProposals().then(() => optimization.refetch())
+                  }
+                  decide={(id, status) =>
+                    void client.decideOptimizationProposal(id, status).then(() => optimization.refetch())
+                  }
+                />
+              )}
+              {detailsTab === "settings" && (
+                <SettingsArea
+                  session={snapshot.data?.session}
+                  health={health.data}
+                  installAvailable={Boolean(installPrompt)}
+                  install={() => void installPrompt?.prompt()}
+                  report={report.data}
+                  profile={profile.data}
+                  saveProfile={(content) =>
+                    void client.updateAgentProfile(content).then(() => profile.refetch())
+                  }
+                  logout={() => {
+                    void client.logout().finally(() => {
+                      setInteractionMode("ask");
+                      setSelected(undefined);
+                      setLoginRequired(true);
+                      void clearCacheNamespace();
+                      queryClient.clear();
                     });
                   }}
-                >
-                  <label>
-                    后台任务
-                    <textarea value={taskPrompt} onChange={(event) => setTaskPrompt(event.target.value)} />
-                  </label>
-                  <button type="submit" className="run-action" disabled={offline || !taskPrompt.trim()}>
-                    新建后台任务
-                  </button>
-                </form>
-                {tasks.data?.map((task) => (
-                  <div key={task.id}>
-                    <strong>{task.status}</strong>
-                    <p>{task.prompt}</p>
-                    {task.runId && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelected(task.sessionId);
-                          setDetailsTab("run");
-                        }}
-                      >
-                        打开运行
-                      </button>
-                    )}
-                    {["pending", "running"].includes(task.status) && (
-                      <button
-                        type="button"
-                        disabled={offline}
-                        onClick={() => void client.cancelTask(task.id).then(() => tasks.refetch())}
-                      >
-                        取消
-                      </button>
-                    )}
-                    {!["pending", "running"].includes(task.status) && (
-                      <button
-                        type="button"
-                        disabled={offline}
-                        onClick={() => void client.deleteTask(task.id).then(() => tasks.refetch())}
-                      >
-                        删除记录
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            {detailsTab === "memory" && (
-              <div className="operation-list">
-                {memories.data?.map((fact) => (
-                  <div key={fact.id}>
-                    <p>
-                      {fact.key} = {fact.value}
-                    </p>
-                    <small className="operation-meta">{fact.confidence.toFixed(2)}</small>
-                    <div className="approval-actions">
-                      <button
-                        type="button"
-                        disabled={offline}
-                        onClick={() =>
-                          void client.reviewMemoryFact(fact.id, "rejected").then(() => memories.refetch())
-                        }
-                      >
-                        拒绝
-                      </button>
-                      <button
-                        type="button"
-                        className="primary"
-                        disabled={offline}
-                        onClick={() =>
-                          void client.reviewMemoryFact(fact.id, "active").then(() => memories.refetch())
-                        }
-                      >
-                        保留
-                      </button>
+                  reloadConfig={() => void client.reloadConfig().then(() => queryClient.invalidateQueries())}
+                  publicConfig={publicConfig.data}
+                  disabled={offline}
+                />
+              )}
+              {detailsTab === "audit" && (
+                <div className="operation-list">
+                  {audit.data?.map((record) => (
+                    <div key={record.id}>
+                      <strong>
+                        {record.kind} · {record.name}
+                      </strong>
+                      <small className="operation-meta">{record.status}</small>
+                      {record.error && <p className="error">{record.error}</p>}
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {detailsTab === "schedules" && (
-              <ScheduleArea
-                schedules={schedules.data ?? []}
-                disabled={offline}
-                create={(input) => void client.createSchedule(input).then(() => schedules.refetch())}
-                toggle={(id, enabled) =>
-                  void client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
-                }
-                run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
-                remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
-                loadRuns={(id) => client.listScheduleRuns(id)}
-                cancelRun={(id) => void client.cancelScheduleRun(id).then(() => schedules.refetch())}
-              />
-            )}
-            {detailsTab === "resources" && (
-              <ResourceArea
-                skills={skills.data?.available ?? []}
-                packages={skills.data?.packages ?? []}
-                mcp={mcp.data ?? []}
-                knowledge={knowledge.data ?? []}
-                disabled={offline}
-                refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
-                installSkill={(reference) =>
-                  void client.installSkill({ source: "local", reference }).then(() => skills.refetch())
-                }
-                setSkillStatus={(id, action) =>
-                  void client.setSkillStatus(id, action).then(() => skills.refetch())
-                }
-                addKnowledgePath={(name, path) =>
-                  void client.indexKnowledge(name, path).then(() => knowledge.refetch())
-                }
-                uploadKnowledge={(file) =>
-                  void client
-                    .upload(file, file.name, selected)
-                    .then((attachment) => {
-                      if (!selected) throw new Error("Select a session before uploading knowledge");
-                      return client.indexKnowledgeAttachment(file.name, attachment.id, selected);
-                    })
-                    .then(() => knowledge.refetch())
-                }
-                deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
-                reindexKnowledge={(id) => void client.reindexKnowledge(id).then(() => knowledge.refetch())}
-                searchKnowledge={(query, sourceId) => client.searchKnowledge(query, sourceId)}
-              />
-            )}
-            {detailsTab === "evaluations" && <EvaluationArea reports={evaluations.data ?? []} />}
-            {detailsTab === "diagnostics" && <DiagnosticsArea report={diagnostics.data} />}
-            {detailsTab === "optimization" && (
-              <OptimizationArea
-                proposals={optimization.data ?? []}
-                disabled={offline}
-                generate={() =>
-                  void client.generateOptimizationProposals().then(() => optimization.refetch())
-                }
-                decide={(id, status) =>
-                  void client.decideOptimizationProposal(id, status).then(() => optimization.refetch())
-                }
-              />
-            )}
-            {detailsTab === "settings" && (
-              <SettingsArea
-                session={snapshot.data?.session}
-                health={health.data}
-                installAvailable={Boolean(installPrompt)}
-                install={() => void installPrompt?.prompt()}
-                report={report.data}
-                profile={profile.data}
-                saveProfile={(content) =>
-                  void client.updateAgentProfile(content).then(() => profile.refetch())
-                }
-                reloadConfig={() => void client.reloadConfig().then(() => queryClient.invalidateQueries())}
-                publicConfig={publicConfig.data}
-                disabled={offline}
-              />
-            )}
-            {detailsTab === "audit" && (
-              <div className="operation-list">
-                {audit.data?.map((record) => (
-                  <div key={record.id}>
-                    <strong>
-                      {record.kind} · {record.name}
-                    </strong>
-                    <small className="operation-meta">{record.status}</small>
-                    {record.error && <p className="error">{record.error}</p>}
-                  </div>
-                ))}
-              </div>
-            )}
-          </aside>
+                  ))}
+                </div>
+              )}
+            </div>
+          </InspectorDrawer>
         )}
       </div>
     </div>

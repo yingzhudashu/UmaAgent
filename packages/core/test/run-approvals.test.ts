@@ -13,7 +13,6 @@ afterEach(async () => {
 
 function setup(database: UmaDatabase) {
   const session = database.createSession({
-    mode: "assistant",
     title: "approval test",
     model: { provider: "test", id: "model" },
     thinkingLevel: "off",
@@ -30,6 +29,8 @@ function setup(database: UmaDatabase) {
       capabilities: { tools: true, vision: false, reasoning: false, structuredOutput: true },
     },
     "off",
+    "agent",
+    "agent",
   ).run;
   return { session, run };
 }

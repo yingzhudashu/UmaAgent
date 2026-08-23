@@ -26,25 +26,25 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "workspace",
       title: "test",
       workspace: root,
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
-    const first = db.createRun(session.id, "message-1", modelSnapshot, "off");
-    const second = db.createRun(session.id, "message-1", modelSnapshot, "off");
+    const first = db.createRun(session.id, "message-1", modelSnapshot, "off", "agent", "agent");
+    const second = db.createRun(session.id, "message-1", modelSnapshot, "off", "agent", "agent");
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(second.run.id).toBe(first.run.id);
     const other = db.createSession({
-      mode: "workspace",
       title: "other",
       workspace: root,
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
-    expect(() => db.createRun(other.id, "message-1", modelSnapshot, "off")).toThrow("another session");
+    expect(() => db.createRun(other.id, "message-1", modelSnapshot, "off", "agent", "agent")).toThrow(
+      "another session",
+    );
     db.addMemoryFact({
       sessionId: session.id,
       scope: "session",
@@ -75,13 +75,12 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "workspace",
       title: "restart",
       workspace: root,
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
-    const run = db.createRun(session.id, "active-message", modelSnapshot, "off").run;
+    const run = db.createRun(session.id, "active-message", modelSnapshot, "off", "agent", "agent").run;
     db.updateRun(run.id, { status: "running" });
     db.createCheckpoint({
       runId: run.id,
@@ -145,7 +144,6 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "workspace",
       title: "bounded",
       workspace: root,
       model: { provider: "test", id: "model" },
@@ -154,12 +152,13 @@ describe("UmaDatabase", () => {
     for (let index = 0; index < 105; index++)
       db.insertMessage({ sessionId: session.id, role: "user", status: "complete", content: String(index) });
     for (let index = 0; index < 25; index++) {
-      const run = db.createRun(session.id, `completed-${index}`, modelSnapshot, "off").run;
+      const run = db.createRun(session.id, `completed-${index}`, modelSnapshot, "off", "agent", "agent").run;
       db.updateRun(run.id, { status: "completed" });
     }
     const activeIds = Array.from(
       { length: 3 },
-      (_, index) => db.createRun(session.id, `active-${index}`, modelSnapshot, "off").run.id,
+      (_, index) =>
+        db.createRun(session.id, `active-${index}`, modelSnapshot, "off", "agent", "agent").run.id,
     );
     const snapshot = db.getSnapshot(session.id);
     expect(snapshot.transcript).toHaveLength(100);
@@ -174,7 +173,6 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "assistant",
       title: "attachments",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -204,7 +202,6 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "assistant",
       title: "events",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -226,13 +223,11 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "assistant",
       title: "memory",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
     const other = db.createSession({
-      mode: "assistant",
       title: "other",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -285,7 +280,6 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "assistant",
       title: "recall",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -327,13 +321,11 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const first = db.createSession({
-      mode: "assistant",
       title: "first",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
     const second = db.createSession({
-      mode: "assistant",
       title: "second",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
@@ -364,12 +356,11 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "assistant",
       title: "audit",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
-    const run = db.createRun(session.id, "audit-message", modelSnapshot, "off").run;
+    const run = db.createRun(session.id, "audit-message", modelSnapshot, "off", "agent", "agent").run;
     const audit = db.addAudit({
       runId: run.id,
       kind: "tool",
@@ -390,7 +381,6 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "workspace",
       title: "before",
       workspace: root,
       model: { provider: "test", id: "model" },
@@ -413,7 +403,6 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "workspace",
       title: "history",
       workspace: root,
       model: { provider: "test", id: "model" },
@@ -433,13 +422,12 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = new UmaDatabase(root);
     const session = db.createSession({
-      mode: "workspace",
       title: "action",
       workspace: root,
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",
     });
-    const run = db.createRun(session.id, "action-message", modelSnapshot, "off").run;
+    const run = db.createRun(session.id, "action-message", modelSnapshot, "off", "agent", "agent").run;
     db.createToolCall({ id: "tool-1", runId: run.id, name: "read", args: { path: "README.md" } });
     const action = db.createRunAction({
       runId: run.id,

@@ -232,7 +232,7 @@ export class UmaClient {
   sendMessage(
     sessionId: string,
     text: string,
-    input: Partial<Omit<SendMessageRequest, "text">> = {},
+    input: Pick<SendMessageRequest, "mode"> & Partial<Omit<SendMessageRequest, "text" | "mode">>,
   ): Promise<SendMessageResponse> {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",

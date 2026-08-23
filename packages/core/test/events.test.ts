@@ -15,7 +15,6 @@ async function fixture() {
   temporary.push(root);
   const database = new UmaDatabase(root);
   const session = database.createSession({
-    mode: "assistant",
     title: "events",
     model: { provider: "test", id: "model" },
     thinkingLevel: "off",

@@ -1,4 +1,4 @@
-import type { SessionMode } from "@uma-agent/protocol";
+import type { InteractionMode } from "@uma-agent/protocol";
 
 export type ToolClass =
   | "read"
@@ -41,25 +41,10 @@ export class PermissionPolicy {
     return "mcp";
   }
 
-  decide(mode: SessionMode, toolName: string): PermissionDecision {
+  decide(mode: InteractionMode, toolName: string): PermissionDecision {
     const kind = this.classify(toolName);
-    if (
-      mode === "assistant" &&
-      ![
-        "memory_write",
-        "memory_search",
-        "knowledge_search",
-        "skill_read",
-        "attachment_read",
-        "http_get",
-        "web_search",
-        "schedule_manage",
-        "history_search",
-        "history_read",
-      ].includes(toolName)
-    ) {
-      return { allowed: false, requiresApproval: false, reason: "Tool is unavailable in assistant sessions" };
-    }
+    if (mode !== "agent")
+      return { allowed: false, requiresApproval: false, reason: `${mode} mode does not execute tools` };
     if (kind === "shell" || kind === "mcp" || kind === "memory_write" || kind === "schedule") {
       return {
         allowed: true,

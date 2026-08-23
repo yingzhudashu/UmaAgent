@@ -62,7 +62,6 @@ describe("run context builder", () => {
     );
     const session = {
       id: "session",
-      mode: "assistant",
       title: "test",
       model: { provider: "test", id: "model" },
       thinkingLevel: "off",

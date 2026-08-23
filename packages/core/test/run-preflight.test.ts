@@ -7,7 +7,6 @@ import { RunPreflight } from "../src/run-preflight.js";
 
 const session: Session = {
   id: "session",
-  mode: "workspace",
   title: "Test",
   workspace: "C:/workspace",
   model: { provider: "faux", id: "model" },
@@ -35,11 +34,11 @@ function errorResponse(message = "provider failed") {
 }
 
 describe("RunPreflight.decide", () => {
-  it("routes explicit direct work without a control model call", async () => {
+  it("routes Ask work without a control model call", async () => {
     const { preflight } = fixture();
     const complete = vi.spyOn(preflight, "complete");
     await expect(
-      preflight.decide(session, "answer it", "direct", new AbortController().signal, "run"),
+      preflight.decide(session, "answer it", "ask", new AbortController().signal, "run"),
     ).resolves.toMatchObject({ taskClass: "simple", route: "direct", goal: "answer it" });
     expect(complete).not.toHaveBeenCalled();
   });
@@ -67,7 +66,7 @@ describe("RunPreflight.decide", () => {
     const result = await preflight.decide(
       session,
       "build feature",
-      "auto",
+      "agent",
       new AbortController().signal,
       "run",
     );
@@ -80,16 +79,16 @@ describe("RunPreflight.decide", () => {
   it("rejects failed or repeatedly invalid classification responses", async () => {
     const failed = fixture().preflight;
     vi.spyOn(failed, "complete").mockResolvedValue(errorResponse("classification unavailable"));
-    await expect(failed.decide(session, "work", "auto", new AbortController().signal, "run")).rejects.toThrow(
-      "classification unavailable",
-    );
+    await expect(
+      failed.decide(session, "work", "agent", new AbortController().signal, "run"),
+    ).rejects.toThrow("classification unavailable");
 
     const repairFailed = fixture().preflight;
     vi.spyOn(repairFailed, "complete")
       .mockResolvedValueOnce(fauxAssistantMessage("invalid"))
       .mockResolvedValueOnce(errorResponse("repair unavailable"));
     await expect(
-      repairFailed.decide(session, "work", "auto", new AbortController().signal, "run"),
+      repairFailed.decide(session, "work", "agent", new AbortController().signal, "run"),
     ).rejects.toThrow("repair unavailable");
 
     const invalid = fixture().preflight;
@@ -97,7 +96,7 @@ describe("RunPreflight.decide", () => {
       .mockResolvedValueOnce(fauxAssistantMessage("invalid"))
       .mockResolvedValueOnce(fauxAssistantMessage("also invalid"));
     await expect(
-      invalid.decide(session, "work", "auto", new AbortController().signal, "run"),
+      invalid.decide(session, "work", "agent", new AbortController().signal, "run"),
     ).rejects.toThrow("Provider contract error: invalid task classification");
   });
 
@@ -117,7 +116,7 @@ describe("RunPreflight.decide", () => {
         error: "complex tasks require",
       },
       {
-        mode: "auto" as const,
+        mode: "agent" as const,
         classification: '{"taskClass":"standard"}',
         response: {
           taskClass: "standard",

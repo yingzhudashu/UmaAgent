@@ -98,14 +98,14 @@ try {
   await waitReady();
   const session = await api("/sessions", {
     method: "POST",
-    body: JSON.stringify({ mode: "assistant", title: "Faux soak" }),
+    body: JSON.stringify({ title: "Faux soak" }),
   });
   schedule = await api("/schedules", {
     method: "POST",
     body: JSON.stringify({
       name: "Faux soak interval",
       prompt: "Reply with FAUX_DIRECT.",
-      sessionMode: "assistant",
+      messageMode: "agent",
       schedule: { kind: "interval", everyMs: 60_000 },
       enabled: true,
     }),
@@ -122,7 +122,7 @@ try {
   while (Date.now() < deadline) {
     const accepted = await api(`/sessions/${encodeURIComponent(session.id)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ messageId: randomUUID(), text: "Reply with FAUX_DIRECT.", mode: "direct" }),
+      body: JSON.stringify({ messageId: randomUUID(), text: "Reply with FAUX_DIRECT.", mode: "ask" }),
     });
     const run = await waitRun(accepted.runId);
     if (run.status !== "completed")
