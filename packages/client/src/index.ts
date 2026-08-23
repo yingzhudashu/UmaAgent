@@ -608,7 +608,13 @@ export class UmaClient {
       if (this.socket === socket) this.socket = undefined;
       if (!this.closed) this.scheduleReconnect();
     });
-    socket.addEventListener("error", () => socket.close());
+    // Node's undici WebSocket may dispatch `error` while it is already
+    // closing. Calling close() from that callback recursively re-enters the
+    // error/close dispatch path and can overflow the stack. The native close
+    // event owns teardown and reconnect scheduling; leave the socket alone.
+    socket.addEventListener("error", () => {
+      this.eventConnectionState = "disconnected";
+    });
   }
 
   close(): void {

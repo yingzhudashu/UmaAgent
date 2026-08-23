@@ -4,6 +4,7 @@ import { UmaClient, UmaClientError } from "../src/index.js";
 
 class FakeSocket {
   readyState = 0;
+  closeCalls = 0;
   readonly sent: string[] = [];
   readonly listeners = new Map<string, Array<(event: { data?: string }) => void>>();
 
@@ -14,8 +15,12 @@ class FakeSocket {
     this.sent.push(value);
   }
   close(): void {
+    this.closeCalls += 1;
     this.readyState = 3;
     this.emit("close");
+  }
+  error(): void {
+    this.emit("error");
   }
   open(): void {
     this.readyState = 1;
@@ -103,6 +108,20 @@ describe("UmaClient", () => {
     await client.login("secret");
     expect(sockets).toHaveLength(2);
     expect(sockets[0]?.readyState).toBe(3);
+    client.close();
+  });
+
+  it("does not close an already-failing socket from its error callback", () => {
+    const socket = new FakeSocket();
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: (() => response(snapshot)) as typeof fetch,
+      webSocketFactory: () => socket as unknown as WebSocket,
+    });
+    client.connectEvents();
+    socket.error();
+    expect(socket.closeCalls).toBe(0);
+    expect(client.eventState()).toBe("disconnected");
     client.close();
   });
 
