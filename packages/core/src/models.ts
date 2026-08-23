@@ -21,7 +21,12 @@ function toModel(config: UmaModelConfig): Model<UmaModelConfig["api"]> {
     // The configured OpenAI-compatible gateway rejects the SDK's default
     // `OpenAI/JS ...` user agent. Keep the request identifiable without
     // exposing the SDK implementation detail upstream.
-    headers: { "user-agent": "UmaAgent/1.0", accept: "application/json" },
+    headers: {
+      "user-agent": "UmaAgent/1.0",
+      accept: "application/json",
+      session_id: "",
+      "x-client-request-id": "",
+    },
     compat: { sessionAffinityFormat: "openai-nosession" },
   };
 }
