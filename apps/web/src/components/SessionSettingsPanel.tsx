@@ -1,4 +1,5 @@
 import type { AgentProfile, Health, OperationsReport, PublicConfig, Session } from "@uma-agent/protocol";
+import { Save } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
 export function SessionSettingsPanel({
@@ -88,7 +89,12 @@ export function SessionSettingsPanel({
           />
           <div className="settings-form-actions">
             <span className="settings-help">内容会保存到当前账号。</span>
-            <button type="submit" className="primary" disabled={disabled || saveState === "saving"}>
+            <button
+              type="submit"
+              className="primary settings-primary"
+              disabled={disabled || saveState === "saving"}
+            >
+              <Save size={14} aria-hidden="true" />
               {saveLabel}
             </button>
           </div>
