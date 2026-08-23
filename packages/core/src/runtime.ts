@@ -512,7 +512,10 @@ export class UmaRuntime {
   }
   prepareScheduledTask(prompt: string, source: NonNullable<BackgroundTask["source"]>): BackgroundTask {
     if (!prompt.trim()) throw new Error("Task prompt is required");
+    const ownerId = this.database.scheduledTaskOwner(source.scheduleId);
+    if (!ownerId) throw new Error("Scheduled task owner is missing");
     const session = this.database.createSession({
+      userId: ownerId,
       title: "Scheduled task",
       workspace: this.config.server.workspaceRoots[0] as string,
       model: this.config.defaultModel,
@@ -692,7 +695,7 @@ export class UmaRuntime {
     const model = input.model ?? this.config.defaultModel;
     this.models.get(model);
     return this.database.createSession({
-      ...(ownerId ? { userId: ownerId } : {}),
+      userId: ownerId ?? "system",
       title: input.title ?? "New session",
       ...(workspace ? { workspace } : {}),
       model,
@@ -1450,6 +1453,8 @@ export class UmaRuntime {
   }
 
   private async extractMemories(session: Session, runId: string, signal: AbortSignal): Promise<void> {
+    const ownerId = this.database.sessionOwner(session.id);
+    if (!ownerId) throw new Error("Session owner is missing");
     const model = this.models.forRole("reasoning");
     const transcript = this.database
       .getSnapshot(session.id)
@@ -1520,6 +1525,7 @@ export class UmaRuntime {
         if (!content || isSecretLike(content)) continue;
         this.events.transaction(() => {
           const fact = this.database.addMemoryFact({
+            ownerId,
             sessionId: session.id,
             scope,
             key: value.key.trim(),
@@ -1551,7 +1557,11 @@ export class UmaRuntime {
         workspacePolicy: this.workspacePolicy,
         toolTimeoutMs: this.config.runtime.toolTimeoutMs,
         search: this.search,
-        scheduleManage: (params) => this.manageScheduleTool(params),
+        scheduleManage: (params) => {
+          const ownerId = this.database.sessionOwner(session.id);
+          if (!ownerId) throw new Error("Session owner is missing");
+          return this.manageScheduleTool(params, ownerId);
+        },
         memoryWrite: (scope, content) => this.createMemoryFact(session.id, scope, content),
         attachmentCreateFromWorkspace: async (path) => {
           const data = await import("node:fs/promises").then((fs) => fs.readFile(path));
@@ -1571,10 +1581,11 @@ export class UmaRuntime {
     ];
   }
 
-  private manageScheduleTool(params: Record<string, unknown>): unknown {
+  private manageScheduleTool(params: Record<string, unknown>, ownerId: string): unknown {
     const operation = String(params.operation ?? "");
-    if (operation === "list") return this.listScheduledTasks();
+    if (operation === "list") return this.listScheduledTasks(ownerId);
     const id = typeof params.id === "string" ? params.id : undefined;
+    if (id && this.database.scheduledTaskOwner(id) !== ownerId) throw new Error("Scheduled task not found");
     if (operation === "run") {
       if (!id) throw new Error("schedule_manage run requires id");
       return this.runScheduledTask(id);
@@ -1604,12 +1615,15 @@ export class UmaRuntime {
     if (operation === "create") {
       if (typeof params.name !== "string" || typeof params.prompt !== "string" || !schedule)
         throw new Error("schedule_manage create requires name, prompt, and a complete schedule");
-      return this.createScheduledTask({
-        name: params.name,
-        prompt: params.prompt,
-        schedule,
-        ...(typeof params.enabled === "boolean" ? { enabled: params.enabled } : {}),
-      });
+      return this.createScheduledTask(
+        {
+          name: params.name,
+          prompt: params.prompt,
+          schedule,
+          ...(typeof params.enabled === "boolean" ? { enabled: params.enabled } : {}),
+        },
+        ownerId,
+      );
     }
     if (operation === "update") {
       if (!id) throw new Error("schedule_manage update requires id");

@@ -734,6 +734,7 @@
   --accent-soft: #e4f2ec;
   --danger: #b42318;
   --warning: #9a6700;
+  --success: #18794e;
   background: var(--surface-0);
   color: var(--ink);
 }
@@ -1049,6 +1050,12 @@
 .uma-embed .status-rail button.attention {
   color: var(--warning);
 }
+.uma-embed .status-rail button:focus-visible,
+.uma-embed .inspector-drawer button:focus-visible,
+.uma-embed .new-session:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .uma-embed .status-rail button b {
   position: absolute;
   top: -3px;
@@ -1086,6 +1093,54 @@
   background: var(--surface-0);
   box-shadow: -12px 0 34px rgb(20 45 33 / 12%);
 }
+.uma-embed .drawer-backdrop {
+  content: "";
+  position: absolute;
+  z-index: 19;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: rgb(12 20 16 / 18%);
+}
+.uma-embed .sidebar-error {
+  display: grid;
+  gap: 8px;
+  margin: 10px 14px 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
+  border-radius: 8px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-0));
+  font-size: 11px;
+}
+.uma-embed .sidebar-error .text-action {
+  justify-self: start;
+}
+.uma-embed .status-summary,
+.uma-embed .approval-list {
+  display: grid;
+  gap: 10px;
+}
+.uma-embed .status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+.uma-embed .status-row strong,
+.uma-embed .status-row > span:last-child {
+  color: var(--ink-strong);
+}
+.uma-embed .status-ok {
+  color: var(--success);
+}
+.uma-embed .status-error {
+  color: var(--danger);
+}
 .uma-embed .inspector-header {
   display: flex;
   align-items: flex-start;
@@ -1118,6 +1173,24 @@
   border: 0;
   background: transparent;
   overflow: visible;
+}
+.uma-embed .inspector-group {
+  border-bottom: 1px solid var(--line);
+  padding: 16px 0 18px;
+}
+.uma-embed .inspector-group:first-child {
+  padding-top: 0;
+}
+.uma-embed .inspector-group:last-child {
+  border-bottom: 0;
+}
+.uma-embed .inspector-group h3 {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0 0 10px;
+  text-transform: uppercase;
 }
 .uma-embed .detail-tabs {
   display: flex;
@@ -1184,6 +1257,10 @@
   }
   .uma-embed .inspector-drawer {
     width: min(390px, calc(100% - 276px));
+  }
+  .uma-embed .drawer-backdrop {
+    position: fixed;
+    inset: 0;
   }
 }
 @media (max-width: 700px) {

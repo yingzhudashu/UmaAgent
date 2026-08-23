@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json && vite build",
     "build:embed": "tsc -p tsconfig.json && vite build --config vite.embed.config.ts && node ../../scripts/write-embed-manifest.mjs",
     "dev": "vite",
-    "test": "vitest run"
+    "test": "vitest run --exclude e2e/**"
   },
   "dependencies": {
     "@tanstack/react-query": "5.101.4",

@@ -50,9 +50,11 @@ export class RunContextBuilder {
       model,
     );
     const memory = this.database.searchMemory(input.session.id, input.request.text, 5);
-    const profile = this.database.getAgentProfile();
+    const ownerId = this.database.sessionOwner(input.session.id);
+    if (!ownerId) throw new Error("Session owner is missing");
+    const profile = this.database.getAgentProfile(ownerId);
     const rollups = this.database.listMemoryRollups(input.session.id, 10);
-    const knowledge = this.knowledge.search(input.request.text, 3);
+    const knowledge = this.knowledge.search(input.request.text, 3, undefined, ownerId);
     const supportingContext = [
       profile.content ? `<agent_profile>\n${profile.content}\n</agent_profile>` : "",
       memory.length ? `<relevant_memory>\n${memory.join("\n")}\n</relevant_memory>` : "",

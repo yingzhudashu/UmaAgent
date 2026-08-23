@@ -438,7 +438,9 @@ export function createBuiltinTools(input: {
       parameters: querySchema,
       executionMode: "parallel",
       async execute(_id, params) {
-        const found = knowledge.search(params.query, params.limit ?? 5);
+        const ownerId = database.sessionOwner(session.id);
+        if (!ownerId) throw new Error("Session owner is missing");
+        const found = knowledge.search(params.query, params.limit ?? 5, undefined, ownerId);
         return result(
           found.map((item) => `### ${item.filePath}\n${item.content}`).join("\n\n") || "No knowledge found",
         );

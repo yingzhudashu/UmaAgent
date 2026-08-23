@@ -26,6 +26,7 @@ describe("run context builder", () => {
     await writeFile(imagePath, new Uint8Array([1, 2, 3]));
     const model = { provider: "test", id: "model" } as Model<"openai-responses">;
     const database = {
+      sessionOwner: vi.fn(() => "system"),
       getMessage: vi.fn(() => ({ sequence: 7 })),
       getRun: vi.fn(() => ({ model: { ref: { provider: "test", id: "model" } } })),
       listAgentMessages: vi.fn(() => []),

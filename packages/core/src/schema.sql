@@ -27,7 +27,7 @@ CREATE INDEX auth_tokens_user_active ON auth_tokens(user_id, revoked_at, expires
 
 CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL DEFAULT 'system' REFERENCES users(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
   workspace TEXT,
   model_provider TEXT NOT NULL,
@@ -131,7 +131,7 @@ CREATE INDEX approvals_pending ON approvals(status, created_at);
 
 CREATE TABLE memory_facts (
   id TEXT PRIMARY KEY,
-  owner_id TEXT NOT NULL DEFAULT 'system' REFERENCES users(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
   scope TEXT NOT NULL CHECK (scope IN ('global','session')),
   key TEXT NOT NULL,
@@ -342,7 +342,7 @@ CREATE TABLE context_summaries (
 
 CREATE TABLE knowledge_sources (
   id TEXT PRIMARY KEY,
-  owner_id TEXT NOT NULL DEFAULT 'system' REFERENCES users(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   path TEXT NOT NULL UNIQUE,
   document_count INTEGER NOT NULL DEFAULT 0,
@@ -362,7 +362,7 @@ CREATE VIRTUAL TABLE knowledge_fts USING fts5(id UNINDEXED, source_id UNINDEXED,
 
 CREATE TABLE scheduled_tasks (
   id TEXT PRIMARY KEY,
-  owner_id TEXT NOT NULL DEFAULT 'system' REFERENCES users(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   prompt TEXT NOT NULL,
   message_mode TEXT NOT NULL CHECK (message_mode = 'agent'),

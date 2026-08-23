@@ -28,6 +28,11 @@ test("two devices converge on one session and offline mode is read-only", async 
   const token = await register(first);
   await first.getByRole("button", { name: "新会话" }).click();
   await expect(first.getByPlaceholder("向 UmaAgent 发送消息")).toBeEnabled();
+  await expect(first.locator(".status-rail button")).toHaveCount(5);
+  await first.getByRole("button", { name: "会话设置" }).click();
+  await expect(first.getByRole("dialog", { name: "会话设置" })).toBeVisible();
+  await first.keyboard.press("Escape");
+  await expect(first.getByRole("dialog", { name: "会话设置" })).toHaveCount(0);
   await expect(first.getByRole("button", { name: "Ask" })).toHaveAttribute("aria-pressed", "true");
   await first.getByRole("button", { name: "Agent" }).click();
   await expect(first.getByRole("button", { name: "Agent" })).toHaveAttribute("aria-pressed", "true");

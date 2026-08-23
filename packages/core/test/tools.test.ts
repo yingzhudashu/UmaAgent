@@ -40,6 +40,7 @@ async function fixture() {
   };
   const attachments = new Map<string, { path: string; name: string; mimeType: string }>();
   const database = {
+    sessionOwner: vi.fn(() => "system"),
     searchMemory: vi.fn(() => ["remembered fact"]),
     validateAttachmentForSession: vi.fn(),
     getAttachment: vi.fn((id: string) => {

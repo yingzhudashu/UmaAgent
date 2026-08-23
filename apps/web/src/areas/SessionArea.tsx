@@ -12,14 +12,20 @@ export function SessionArea({
   select,
   close,
   install,
+  creating,
+  createError,
+  retryCreate,
 }: {
   sessions: Session[];
   selected: string | undefined;
   open: boolean;
   disabled: boolean;
+  creating: boolean;
+  createError?: string;
   health: Health | undefined;
   installable: boolean;
   create: () => void;
+  retryCreate: () => void;
   select: (id: string) => void;
   close: () => void;
   install: () => void;
@@ -36,10 +42,18 @@ export function SessionArea({
           <ChevronLeft />
         </button>
       </div>
-      <button type="button" className="new-session" disabled={disabled} onClick={create}>
+      <button type="button" className="new-session" disabled={disabled || creating} onClick={create}>
         <MessageSquarePlus size={17} />
-        新会话
+        {creating ? "创建中…" : "新会话"}
       </button>
+      {createError && (
+        <div className="sidebar-error" role="alert">
+          <span>{createError}</span>
+          <button type="button" className="text-action" onClick={retryCreate} disabled={creating}>
+            重试
+          </button>
+        </div>
+      )}
       <nav>
         {sessions.map((session) => (
           <button

@@ -34,7 +34,9 @@ import {
   clearCacheNamespace,
   setCacheNamespace,
 } from "./cache.js";
+import { InspectorContent } from "./components/InspectorContent.js";
 import { InspectorDrawer } from "./components/InspectorDrawer.js";
+import { ApprovalPanel, ConnectionPanel } from "./components/InspectorStatusPanels.js";
 import { MessageBubble } from "./components/MessageBubble.js";
 import { ModeSelector } from "./components/ModeSelector.js";
 import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
@@ -54,6 +56,7 @@ export interface AppProps {
 export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<string>();
+  const [createSessionError, setCreateSessionError] = useState<string>();
   const [prompt, setPrompt] = useState("");
   const [taskPrompt, setTaskPrompt] = useState("");
   const [interactionMode, setInteractionMode] = useState<InteractionMode>("ask");
@@ -62,18 +65,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [inspectorSection, setInspectorSection] = useState<InspectorSection>();
-  const [detailsTab, setDetailsTab] = useState<
-    | "run"
-    | "tasks"
-    | "schedules"
-    | "memory"
-    | "resources"
-    | "evaluations"
-    | "diagnostics"
-    | "optimization"
-    | "settings"
-    | "audit"
-  >("run");
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
@@ -105,7 +96,12 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     queryFn: () => client.listModels(),
     enabled: authenticated,
   });
-  const health = useQuery({ queryKey: ["health"], queryFn: () => client.health(), refetchInterval: 15_000 });
+  const health = useQuery({
+    queryKey: ["health"],
+    queryFn: () => client.health(),
+    enabled: authenticated,
+    refetchInterval: 15_000,
+  });
   const tasks = useQuery({
     queryKey: ["tasks"],
     queryFn: () => client.listTasks(),
@@ -275,11 +271,27 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [transcriptLength]);
 
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+
   const createSession = useMutation({
     mutationFn: () => client.createSession(),
-    onSuccess: (session) => {
+    onMutate: () => {
+      setCreateSessionError(undefined);
+    },
+    onSuccess: async (session) => {
       setSelected(session.id);
-      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      setSidebarOpen(false);
+      setInteractionMode("ask");
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      const value = await client.getSession(session.id);
+      queryClient.setQueryData(["snapshot", session.id], value);
+      await cacheSnapshot(value);
+      await cacheHistory(session.id, []);
+      await cacheCursor(session.id, value.snapshotSequence);
+      requestAnimationFrame(() => promptRef.current?.focus());
+    },
+    onError: (error) => {
+      setCreateSessionError(requestErrorMessage(error));
     },
   });
   const sendMessage = useMutation({
@@ -329,9 +341,11 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const audit = useQuery({
     queryKey: ["audit", currentRun?.id],
     queryFn: () => client.listAudit(currentRun?.id as string),
-    enabled: Boolean(currentRun) && detailsTab === "audit" && authenticated,
+    enabled: Boolean(currentRun) && inspectorSection === "settings" && authenticated && userRole === "admin",
   });
-  const offline = !browserOnline || health.isError;
+  const browserOffline = !browserOnline;
+  const coreUnavailable = authenticated && health.isError;
+  const offline = browserOffline || coreUnavailable;
   const connectionMessage = !browserOnline
     ? "当前设备处于离线状态，已缓存内容仍可阅读。"
     : health.isError
@@ -346,7 +360,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     return `${error.message}${error.requestId ? `（请求 ${error.requestId}）` : ""}`;
   };
   const Workspace = embedded ? "div" : "main";
-
   const upload = async (file: File) => {
     if (offline) return;
     const attachment = await client.upload(file, file.name, selected);
@@ -418,10 +431,13 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
           sessions={sessions.data ?? []}
           selected={selected}
           open={sidebarOpen}
-          disabled={offline}
+          disabled={browserOffline}
+          creating={createSession.isPending}
+          {...(createSessionError ? { createError: createSessionError } : {})}
           health={health.data}
           installable={Boolean(installPrompt)}
           create={() => createSession.mutate()}
+          retryCreate={() => createSession.mutate()}
           select={(id) => {
             setSelected(id);
             setSidebarOpen(false);
@@ -640,6 +656,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 />
               </label>
               <textarea
+                ref={promptRef}
                 rows={1}
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
@@ -681,11 +698,13 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
           approvals={approvals.filter((approval) => approval.sessionId === selected).length}
           open={panelOpen ? inspectorSection : undefined}
           onOpen={(section) => {
+            if (panelOpen && inspectorSection === section) {
+              setPanelOpen(false);
+              setInspectorSection(undefined);
+              return;
+            }
             setPanelOpen(true);
             setInspectorSection(section);
-            if (section === "run") setDetailsTab("run");
-            if (section === "settings") setDetailsTab("settings");
-            if (section === "resources") setDetailsTab("resources");
           }}
         />
         {panelOpen && inspectorSection && (
@@ -696,44 +715,19 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               setInspectorSection(undefined);
             }}
           >
-            <div className="details">
-              <div className="detail-tabs">
-                {(
-                  [
-                    "run",
-                    "tasks",
-                    "schedules",
-                    "memory",
-                    "resources",
-                    ...(userRole === "admin" ? ["evaluations", "diagnostics", "optimization"] : []),
-                    "settings",
-                    ...(userRole === "admin" ? ["audit"] : []),
-                  ] as const
-                ).map((tab) => (
-                  <button
-                    type="button"
-                    className={`detail-tab ${detailsTab === tab ? "active" : ""}`}
-                    onClick={() => setDetailsTab(tab as typeof detailsTab)}
-                    key={tab}
-                  >
-                    {
-                      {
-                        run: "运行",
-                        tasks: "后台任务",
-                        schedules: "调度",
-                        memory: "记忆",
-                        resources: "资源",
-                        evaluations: "评测",
-                        diagnostics: "诊断",
-                        optimization: "优化",
-                        settings: "设置",
-                        audit: "审计",
-                      }[tab]
-                    }
-                  </button>
-                ))}
-              </div>
-              {detailsTab === "run" && (
+            <InspectorContent>
+              {(inspectorSection === "connection" || inspectorSection === "sync") && (
+                <ConnectionPanel health={health.data} />
+              )}
+              {inspectorSection === "approvals" && (
+                <ApprovalPanel
+                  approvals={approvals}
+                  selected={selected}
+                  disabled={offline}
+                  resolve={(approval, approved) => void resolveApproval(approval, approved)}
+                />
+              )}
+              {inspectorSection === "run" && (
                 <RunPanel
                   run={currentRun}
                   checkpoints={checkpoints.data ?? []}
@@ -752,196 +746,219 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   disabled={offline}
                 />
               )}
-              {detailsTab === "tasks" && (
-                <div className="operation-list">
-                  <form
-                    className="resource-form"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      if (!taskPrompt.trim()) return;
-                      void client.createTask(taskPrompt.trim(), selected).then(() => {
-                        setTaskPrompt("");
-                        void tasks.refetch();
+              {inspectorSection === "settings" && (
+                <section className="inspector-group">
+                  <h3>后台任务</h3>
+                  <div className="operation-list">
+                    <form
+                      className="resource-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        if (!taskPrompt.trim()) return;
+                        void client.createTask(taskPrompt.trim(), selected).then(() => {
+                          setTaskPrompt("");
+                          void tasks.refetch();
+                        });
+                      }}
+                    >
+                      <label>
+                        后台任务
+                        <textarea
+                          value={taskPrompt}
+                          onChange={(event) => setTaskPrompt(event.target.value)}
+                        />
+                      </label>
+                      <button type="submit" className="run-action" disabled={offline || !taskPrompt.trim()}>
+                        新建后台任务
+                      </button>
+                    </form>
+                    {tasks.data?.map((task) => (
+                      <div key={task.id}>
+                        <strong>{task.status}</strong>
+                        <p>{task.prompt}</p>
+                        {task.runId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelected(task.sessionId);
+                              setInspectorSection("run");
+                            }}
+                          >
+                            打开运行
+                          </button>
+                        )}
+                        {["pending", "running"].includes(task.status) && (
+                          <button
+                            type="button"
+                            disabled={offline}
+                            onClick={() => void client.cancelTask(task.id).then(() => tasks.refetch())}
+                          >
+                            取消
+                          </button>
+                        )}
+                        {!["pending", "running"].includes(task.status) && (
+                          <button
+                            type="button"
+                            disabled={offline}
+                            onClick={() => void client.deleteTask(task.id).then(() => tasks.refetch())}
+                          >
+                            删除记录
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {inspectorSection === "settings" && (
+                <section className="inspector-group">
+                  <h3>记忆</h3>
+                  <div className="operation-list">
+                    {memories.data?.map((fact) => (
+                      <div key={fact.id}>
+                        <p>
+                          {fact.key} = {fact.value}
+                        </p>
+                        <small className="operation-meta">{fact.confidence.toFixed(2)}</small>
+                        <div className="approval-actions">
+                          <button
+                            type="button"
+                            disabled={offline}
+                            onClick={() =>
+                              void client.reviewMemoryFact(fact.id, "rejected").then(() => memories.refetch())
+                            }
+                          >
+                            拒绝
+                          </button>
+                          <button
+                            type="button"
+                            className="primary"
+                            disabled={offline}
+                            onClick={() =>
+                              void client.reviewMemoryFact(fact.id, "active").then(() => memories.refetch())
+                            }
+                          >
+                            保留
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {inspectorSection === "settings" && (
+                <section className="inspector-group">
+                  <h3>调度</h3>
+                  <ScheduleArea
+                    schedules={schedules.data ?? []}
+                    disabled={offline}
+                    create={(input) => void client.createSchedule(input).then(() => schedules.refetch())}
+                    toggle={(id, enabled) =>
+                      void client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
+                    }
+                    run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
+                    remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
+                    loadRuns={(id) => client.listScheduleRuns(id)}
+                    cancelRun={(id) => void client.cancelScheduleRun(id).then(() => schedules.refetch())}
+                  />
+                </section>
+              )}
+              {inspectorSection === "settings" && (
+                <section className="inspector-group">
+                  <h3>资源</h3>
+                  <ResourceArea
+                    admin={userRole === "admin"}
+                    skills={skills.data?.available ?? []}
+                    packages={skills.data?.packages ?? []}
+                    mcp={mcp.data ?? []}
+                    knowledge={knowledge.data ?? []}
+                    disabled={offline}
+                    refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
+                    installSkill={(reference) =>
+                      void client.installSkill({ source: "local", reference }).then(() => skills.refetch())
+                    }
+                    setSkillStatus={(id, action) =>
+                      void client.setSkillStatus(id, action).then(() => skills.refetch())
+                    }
+                    addKnowledgePath={(name, path) =>
+                      void client.indexKnowledge(name, path).then(() => knowledge.refetch())
+                    }
+                    uploadKnowledge={(file) =>
+                      void client
+                        .upload(file, file.name, selected)
+                        .then((attachment) => {
+                          if (!selected) throw new Error("Select a session before uploading knowledge");
+                          return client.indexKnowledgeAttachment(file.name, attachment.id, selected);
+                        })
+                        .then(() => knowledge.refetch())
+                    }
+                    deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
+                    reindexKnowledge={(id) =>
+                      void client.reindexKnowledge(id).then(() => knowledge.refetch())
+                    }
+                    searchKnowledge={(query, sourceId) => client.searchKnowledge(query, sourceId)}
+                  />
+                </section>
+              )}
+              {inspectorSection === "settings" && userRole === "admin" && (
+                <section className="inspector-group">
+                  <h3>管理</h3>
+                  <EvaluationArea reports={evaluations.data ?? []} />
+                  <DiagnosticsArea report={diagnostics.data} />
+                  <OptimizationArea
+                    proposals={optimization.data ?? []}
+                    disabled={offline}
+                    generate={() =>
+                      void client.generateOptimizationProposals().then(() => optimization.refetch())
+                    }
+                    decide={(id, status) =>
+                      void client.decideOptimizationProposal(id, status).then(() => optimization.refetch())
+                    }
+                  />
+                  <div className="operation-list">
+                    {audit.data?.map((record) => (
+                      <div key={record.id}>
+                        <strong>
+                          {record.kind} · {record.name}
+                        </strong>
+                        <small className="operation-meta">{record.status}</small>
+                        {record.error && <p className="error">{record.error}</p>}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {inspectorSection === "settings" && (
+                <section className="inspector-group">
+                  <h3>会话设置</h3>
+                  <SettingsArea
+                    session={snapshot.data?.session}
+                    health={health.data}
+                    installAvailable={Boolean(installPrompt)}
+                    install={() => void installPrompt?.prompt()}
+                    report={report.data}
+                    profile={profile.data}
+                    saveProfile={(content) =>
+                      void client.updateAgentProfile(content).then(() => profile.refetch())
+                    }
+                    logout={() => {
+                      void client.logout().finally(() => {
+                        setInteractionMode("ask");
+                        setSelected(undefined);
+                        setLoginRequired(true);
+                        void clearCacheNamespace();
+                        queryClient.clear();
                       });
                     }}
-                  >
-                    <label>
-                      后台任务
-                      <textarea value={taskPrompt} onChange={(event) => setTaskPrompt(event.target.value)} />
-                    </label>
-                    <button type="submit" className="run-action" disabled={offline || !taskPrompt.trim()}>
-                      新建后台任务
-                    </button>
-                  </form>
-                  {tasks.data?.map((task) => (
-                    <div key={task.id}>
-                      <strong>{task.status}</strong>
-                      <p>{task.prompt}</p>
-                      {task.runId && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelected(task.sessionId);
-                            setDetailsTab("run");
-                          }}
-                        >
-                          打开运行
-                        </button>
-                      )}
-                      {["pending", "running"].includes(task.status) && (
-                        <button
-                          type="button"
-                          disabled={offline}
-                          onClick={() => void client.cancelTask(task.id).then(() => tasks.refetch())}
-                        >
-                          取消
-                        </button>
-                      )}
-                      {!["pending", "running"].includes(task.status) && (
-                        <button
-                          type="button"
-                          disabled={offline}
-                          onClick={() => void client.deleteTask(task.id).then(() => tasks.refetch())}
-                        >
-                          删除记录
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                    reloadConfig={() =>
+                      void client.reloadConfig().then(() => queryClient.invalidateQueries())
+                    }
+                    publicConfig={publicConfig.data}
+                    disabled={offline}
+                  />
+                </section>
               )}
-              {detailsTab === "memory" && (
-                <div className="operation-list">
-                  {memories.data?.map((fact) => (
-                    <div key={fact.id}>
-                      <p>
-                        {fact.key} = {fact.value}
-                      </p>
-                      <small className="operation-meta">{fact.confidence.toFixed(2)}</small>
-                      <div className="approval-actions">
-                        <button
-                          type="button"
-                          disabled={offline}
-                          onClick={() =>
-                            void client.reviewMemoryFact(fact.id, "rejected").then(() => memories.refetch())
-                          }
-                        >
-                          拒绝
-                        </button>
-                        <button
-                          type="button"
-                          className="primary"
-                          disabled={offline}
-                          onClick={() =>
-                            void client.reviewMemoryFact(fact.id, "active").then(() => memories.refetch())
-                          }
-                        >
-                          保留
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {detailsTab === "schedules" && (
-                <ScheduleArea
-                  schedules={schedules.data ?? []}
-                  disabled={offline}
-                  create={(input) => void client.createSchedule(input).then(() => schedules.refetch())}
-                  toggle={(id, enabled) =>
-                    void client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
-                  }
-                  run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
-                  remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
-                  loadRuns={(id) => client.listScheduleRuns(id)}
-                  cancelRun={(id) => void client.cancelScheduleRun(id).then(() => schedules.refetch())}
-                />
-              )}
-              {detailsTab === "resources" && (
-                <ResourceArea
-                  admin={userRole === "admin"}
-                  skills={skills.data?.available ?? []}
-                  packages={skills.data?.packages ?? []}
-                  mcp={mcp.data ?? []}
-                  knowledge={knowledge.data ?? []}
-                  disabled={offline}
-                  refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
-                  installSkill={(reference) =>
-                    void client.installSkill({ source: "local", reference }).then(() => skills.refetch())
-                  }
-                  setSkillStatus={(id, action) =>
-                    void client.setSkillStatus(id, action).then(() => skills.refetch())
-                  }
-                  addKnowledgePath={(name, path) =>
-                    void client.indexKnowledge(name, path).then(() => knowledge.refetch())
-                  }
-                  uploadKnowledge={(file) =>
-                    void client
-                      .upload(file, file.name, selected)
-                      .then((attachment) => {
-                        if (!selected) throw new Error("Select a session before uploading knowledge");
-                        return client.indexKnowledgeAttachment(file.name, attachment.id, selected);
-                      })
-                      .then(() => knowledge.refetch())
-                  }
-                  deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
-                  reindexKnowledge={(id) => void client.reindexKnowledge(id).then(() => knowledge.refetch())}
-                  searchKnowledge={(query, sourceId) => client.searchKnowledge(query, sourceId)}
-                />
-              )}
-              {detailsTab === "evaluations" && <EvaluationArea reports={evaluations.data ?? []} />}
-              {detailsTab === "diagnostics" && <DiagnosticsArea report={diagnostics.data} />}
-              {detailsTab === "optimization" && (
-                <OptimizationArea
-                  proposals={optimization.data ?? []}
-                  disabled={offline}
-                  generate={() =>
-                    void client.generateOptimizationProposals().then(() => optimization.refetch())
-                  }
-                  decide={(id, status) =>
-                    void client.decideOptimizationProposal(id, status).then(() => optimization.refetch())
-                  }
-                />
-              )}
-              {detailsTab === "settings" && (
-                <SettingsArea
-                  session={snapshot.data?.session}
-                  health={health.data}
-                  installAvailable={Boolean(installPrompt)}
-                  install={() => void installPrompt?.prompt()}
-                  report={report.data}
-                  profile={profile.data}
-                  saveProfile={(content) =>
-                    void client.updateAgentProfile(content).then(() => profile.refetch())
-                  }
-                  logout={() => {
-                    void client.logout().finally(() => {
-                      setInteractionMode("ask");
-                      setSelected(undefined);
-                      setLoginRequired(true);
-                      void clearCacheNamespace();
-                      queryClient.clear();
-                    });
-                  }}
-                  reloadConfig={() => void client.reloadConfig().then(() => queryClient.invalidateQueries())}
-                  publicConfig={publicConfig.data}
-                  disabled={offline}
-                />
-              )}
-              {detailsTab === "audit" && (
-                <div className="operation-list">
-                  {audit.data?.map((record) => (
-                    <div key={record.id}>
-                      <strong>
-                        {record.kind} · {record.name}
-                      </strong>
-                      <small className="operation-meta">{record.status}</small>
-                      {record.error && <p className="error">{record.error}</p>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            </InspectorContent>
           </InspectorDrawer>
         )}
       </div>

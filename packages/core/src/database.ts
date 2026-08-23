@@ -160,10 +160,6 @@ export class UmaDatabase {
     return value?.user_id ? text(value.user_id) : undefined;
   }
 
-  claimUnownedSessions(userId: string): void {
-    this.db.prepare("UPDATE sessions SET user_id=? WHERE user_id IS NULL").run(userId);
-  }
-
   runOwner(id: string): string | undefined {
     const value = row(
       this.db.prepare("SELECT s.user_id FROM runs r JOIN sessions s ON s.id=r.session_id WHERE r.id=?"),
@@ -1166,9 +1162,10 @@ export class UmaDatabase {
     if (!match) return [];
     return rows(
       this.db.prepare(
-        "SELECT m.value FROM memory_fts f JOIN memory_facts m ON m.id=f.id WHERE memory_fts MATCH ? AND m.status='active' AND (m.scope='global' OR m.session_id=?) ORDER BY bm25(memory_fts) LIMIT ?",
+        "SELECT m.value FROM memory_fts f JOIN memory_facts m ON m.id=f.id WHERE memory_fts MATCH ? AND m.status='active' AND ((m.scope='global' AND m.owner_id=(SELECT user_id FROM sessions WHERE id=?)) OR (m.scope='session' AND m.session_id=?)) ORDER BY bm25(memory_fts) LIMIT ?",
       ),
       match,
+      sessionId,
       sessionId,
       limit,
     ).map((value) => text(value.value));
