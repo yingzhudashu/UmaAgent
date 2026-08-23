@@ -42,7 +42,7 @@ export class RunPreflight {
         const response = await this.models.models.completeSimple(
           model,
           { systemPrompt, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
-          { signal, temperature: 0 },
+          { signal, temperature: 0, headers: { "user-agent": "UmaAgent/1.0", accept: "application/json" } },
         );
         const retryable =
           allowTransientRetries &&

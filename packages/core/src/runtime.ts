@@ -1461,7 +1461,7 @@ export class UmaRuntime {
             systemPrompt,
             messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
           },
-          { signal, temperature: 0 },
+          { signal, temperature: 0, headers: { "user-agent": "UmaAgent/1.0", accept: "application/json" } },
         );
         this.database.finishModelCall(callId, {
           status:
