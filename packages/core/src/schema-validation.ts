@@ -13,6 +13,7 @@ const REQUIRED_TABLES = [
   "scheduled_tasks",
   "background_tasks",
   "session_events",
+  "knowledge_embeddings",
 ] as const;
 
 export function validateSchema(db: DatabaseSync): void {

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type EventConnectionState, type UmaClient, UmaClientError } from "@uma-agent/client";
 import type { Approval, InteractionMode, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
 import {
+  ArrowDown,
   Bot,
   CircleStop,
   FilePlus2,
@@ -13,7 +14,7 @@ import {
   Send,
   Trash2,
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DiagnosticsArea } from "./areas/DiagnosticsArea.js";
 import { EvaluationArea } from "./areas/EvaluationArea.js";
 import { OptimizationArea } from "./areas/OptimizationArea.js";
@@ -73,7 +74,11 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [eventState, setEventState] = useState<EventConnectionState>(() => client.eventState());
   const [lastSyncAt, setLastSyncAt] = useState<number>();
   const [syncCursor, setSyncCursor] = useState<number>();
-  const endRef = useRef<HTMLDivElement>(null);
+  const transcriptRef = useRef<HTMLElement>(null);
+  const selectedForScrollRef = useRef<string | undefined>(undefined);
+  const followTailRef = useRef(true);
+  const scrollFrameRef = useRef<number | undefined>(undefined);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   const sessions = useQuery({
     queryKey: ["sessions"],
@@ -281,10 +286,52 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     );
   }, [historical, snapshot.data?.transcript]);
   const transcriptLength = transcript.length;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: New transcript items must trigger scrolling.
+  const transcriptTail = transcript.at(-1);
+  const transcriptTailSignature = transcriptTail
+    ? `${transcriptTail.id}:${transcriptTail.sequence}:${transcriptTail.content.length}:${transcriptTail.status}`
+    : "empty";
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = "auto") => {
+    const area = transcriptRef.current;
+    if (!area) return;
+    if (scrollFrameRef.current !== undefined) cancelAnimationFrame(scrollFrameRef.current);
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      area.scrollTo({ top: area.scrollHeight, behavior });
+      followTailRef.current = true;
+      setShowJumpToLatest(false);
+      scrollFrameRef.current = undefined;
+    });
+  }, []);
+  useEffect(
+    () => () => {
+      if (scrollFrameRef.current !== undefined) cancelAnimationFrame(scrollFrameRef.current);
+    },
+    [],
+  );
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [transcriptLength]);
+    const area = transcriptRef.current;
+    if (!area) return;
+    const sessionChanged = selectedForScrollRef.current !== selected;
+    if (sessionChanged) {
+      selectedForScrollRef.current = selected;
+      followTailRef.current = true;
+      setShowJumpToLatest(false);
+    }
+    if (followTailRef.current && transcriptLength > 0) scrollToLatest();
+  }, [selected, transcriptLength, scrollToLatest]);
+
+  const onTranscriptScroll = () => {
+    const area = transcriptRef.current;
+    if (!area) return;
+    const nearBottom = area.scrollHeight - area.scrollTop - area.clientHeight <= 96;
+    followTailRef.current = nearBottom;
+    setShowJumpToLatest(!nearBottom && transcriptLength > 0);
+  };
+
+  // New transcript items only move the viewport when the user is already following the tail.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Streaming content changes are encoded in the tail signature.
+  useEffect(() => {
+    if (followTailRef.current && transcriptLength > 0) scrollToLatest();
+  }, [transcriptTailSignature, transcriptLength, scrollToLatest]);
 
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
@@ -554,7 +601,12 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               </button>
             </div>
           </header>
-          <section className="transcript">
+          <section
+            ref={transcriptRef}
+            className="transcript"
+            onScroll={onTranscriptScroll}
+            aria-label="会话消息"
+          >
             {(historyHasMore ?? snapshot.data?.history.hasMoreBefore) && (
               <button
                 type="button"
@@ -562,7 +614,11 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 onClick={() => {
                   if (!selected) return;
                   const before = transcript[0]?.sequence ?? snapshot.data?.history.oldestMessageSequence;
+                  const area = transcriptRef.current;
+                  const previousHeight = area?.scrollHeight ?? 0;
+                  const previousTop = area?.scrollTop ?? 0;
                   void client.getSessionHistory(selected, before, 100).then((page) => {
+                    if (selected !== selectedForScrollRef.current) return;
                     const next = [...page.items, ...historical];
                     const unique = [...new Map(next.map((item) => [item.id, item])).values()].sort(
                       (a, b) => a.sequence - b.sequence,
@@ -570,6 +626,10 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                     setHistorical(unique);
                     setHistoryHasMore(page.hasMore);
                     void cacheHistory(selected, unique);
+                    requestAnimationFrame(() => {
+                      const current = transcriptRef.current;
+                      if (current) current.scrollTop = current.scrollHeight - previousHeight + previousTop;
+                    });
                   });
                 }}
               >
@@ -609,8 +669,19 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 }
               />
             ))}
-            <div ref={endRef} />
+            <div aria-hidden="true" />
           </section>
+          {showJumpToLatest && (
+            <button
+              type="button"
+              className="jump-latest"
+              onClick={() => scrollToLatest("smooth")}
+              title="回到最新消息"
+            >
+              <ArrowDown size={15} />
+              最新消息
+            </button>
+          )}
           <div className="composer-wrap">
             {connectionMessage && <p className="connection-notice">{connectionMessage}</p>}
             {sendMessage.isError && (
@@ -952,9 +1023,10 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                     install={() => void installPrompt?.prompt()}
                     report={report.data}
                     profile={profile.data}
-                    saveProfile={(content) =>
-                      void client.updateAgentProfile(content).then(() => profile.refetch())
-                    }
+                    saveProfile={async (content) => {
+                      await client.updateAgentProfile(content);
+                      await profile.refetch();
+                    }}
                     logout={() => {
                       void client.logout().finally(() => {
                         setInteractionMode("ask");

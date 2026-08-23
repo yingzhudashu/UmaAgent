@@ -12,6 +12,7 @@
 | 记忆事实、候选、supersede | implemented | Memory API、FTS、审计测试 | 增加跨会话召回样本 |
 | rollup 与历史回溯 | implemented | Context、history search/read 测试 | 增加长历史性能样本 |
 | FTS5 知识库 | implemented | Knowledge ingest/search/reindex 测试 | 以 Recall@8 结果决定是否扩展 |
+| Embedding 语义知识检索 | implemented | OpenAI-compatible provider、批量缓存、余弦检索与 FTS 回退 | 增加真实 provider smoke |
 | schedule/background task | implemented | Scheduler 重启、occurrence、API 测试 | soak 验证无重叠和无重复 |
 | SKILL.md 生命周期 | implemented | staging、审查、enable/disable、refresh 测试 | 补压缩包和凭据扫描样本 |
 | MCP stdio/HTTP | implemented | MCP 状态、审批、超时测试 | 保持 Core/Worker 隔离 |

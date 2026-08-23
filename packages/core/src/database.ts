@@ -59,7 +59,7 @@ import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   private readonly auditEvaluations: AuditEvaluationRepository;
@@ -1204,7 +1204,11 @@ export class UmaDatabase {
     ownerId?: string;
     name: string;
     path: string;
-    chunks: Array<{ filePath: string; content: string }>;
+    chunks: Array<{
+      filePath: string;
+      content: string;
+      embedding?: { model: string; vector: number[]; contentHash: string };
+    }>;
   }): KnowledgeSource {
     const existing = row(
       this.db.prepare("SELECT id FROM knowledge_sources WHERE path=? AND owner_id=?"),
@@ -1246,11 +1250,26 @@ export class UmaDatabase {
     const insertFts = this.db.prepare(
       "INSERT INTO knowledge_fts(id,source_id,file_path,content) VALUES(?,?,?,?)",
     );
+    const embeddings: Array<{ chunkId: string; model: string; vector: number[]; contentHash: string }> = [];
     input.chunks.forEach((chunk, position) => {
       const chunkId = randomUUID();
       insertChunk.run(chunkId, id, chunk.filePath, position, chunk.content);
       insertFts.run(chunkId, id, chunk.filePath, chunk.content);
+      if (chunk.embedding) embeddings.push({ chunkId, ...chunk.embedding });
     });
+    this.db.prepare("DELETE FROM knowledge_embeddings WHERE source_id=?").run(id);
+    const insertEmbedding = this.db.prepare(
+      "INSERT INTO knowledge_embeddings(chunk_id,source_id,model,vector_json,content_hash,created_at) VALUES(?,?,?,?,?,?)",
+    );
+    for (const embedding of embeddings)
+      insertEmbedding.run(
+        embedding.chunkId,
+        id,
+        embedding.model,
+        JSON.stringify(embedding.vector),
+        embedding.contentHash,
+        now,
+      );
     return this.getKnowledgeSource(id);
   }
 
@@ -1354,6 +1373,61 @@ export class UmaDatabase {
       filePath: text(value.file_path),
       content: text(value.content),
     }));
+  }
+
+  replaceKnowledgeEmbeddings(
+    sourceId: string,
+    entries: Array<{ chunkId: string; model: string; vector: number[]; contentHash: string }>,
+  ): void {
+    this.withTransaction(() => {
+      this.db.prepare("DELETE FROM knowledge_embeddings WHERE source_id=?").run(sourceId);
+      const insert = this.db.prepare(
+        "INSERT INTO knowledge_embeddings(chunk_id,source_id,model,vector_json,content_hash,created_at) VALUES(?,?,?,?,?,?)",
+      );
+      for (const entry of entries)
+        insert.run(
+          entry.chunkId,
+          sourceId,
+          entry.model,
+          JSON.stringify(entry.vector),
+          entry.contentHash,
+          Date.now(),
+        );
+    });
+  }
+
+  searchKnowledgeSemantic(
+    queryVector: number[],
+    limit = 5,
+    ownerId?: string,
+    model?: string,
+  ): Array<{ sourceId: string; sourceName: string; filePath: string; content: string; score: number }> {
+    const values = rows(
+      this.db.prepare(
+        "SELECT e.source_id,e.model,e.vector_json,c.file_path,c.content,s.name AS source_name FROM knowledge_embeddings e JOIN knowledge_chunks c ON c.id=e.chunk_id JOIN knowledge_sources s ON s.id=e.source_id WHERE (? IS NULL OR s.owner_id=?) AND (? IS NULL OR e.model=?)",
+      ),
+      ownerId ?? null,
+      ownerId ?? null,
+      model ?? null,
+      model ?? null,
+    );
+    const norm = Math.sqrt(queryVector.reduce((sum, value) => sum + value * value, 0)) || 1;
+    return values
+      .map((value) => {
+        const vector = JSON.parse(text(value.vector_json)) as number[];
+        const denominator = Math.sqrt(vector.reduce((sum, item) => sum + item * item, 0)) * norm || 1;
+        const score =
+          vector.reduce((sum, item, index) => sum + item * (queryVector[index] ?? 0), 0) / denominator;
+        return {
+          sourceId: text(value.source_id),
+          sourceName: text(value.source_name),
+          filePath: text(value.file_path),
+          content: text(value.content),
+          score,
+        };
+      })
+      .sort((left, right) => right.score - left.score)
+      .slice(0, Math.max(1, Math.min(100, limit)));
   }
 
   putWebSession(hash: string, expiresAt: number, userId?: string): void {

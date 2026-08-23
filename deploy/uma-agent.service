@@ -1,6 +1,6 @@
 [Unit]
 Description=UmaAgent Core Server
-After=network-online.target
+After=network-online.target uma-browser-worker.service
 Wants=network-online.target
 
 [Service]

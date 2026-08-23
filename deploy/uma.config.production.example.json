@@ -36,6 +36,17 @@
     "fast": { "provider": "openai", "id": "gpt-5.6-sol" },
     "vision": { "provider": "openai", "id": "gpt-5.6-sol" }
   },
+  "embedding": {
+    "enabled": true,
+    "baseUrl": "https://api.siliconflow.cn/v1",
+    "model": "BAAI/bge-m3",
+    "apiKeyEnv": "EMBEDDING_API_KEY",
+    "timeoutMs": 30000,
+    "batchSize": 32,
+    "cacheSize": 2048,
+    "maxConcurrentRequests": 2,
+    "retryAttempts": 2
+  },
   "defaultThinkingLevel": "medium",
   "skillsDirs": ["/data/state/skills"],
   "mcpServers": [

@@ -3,6 +3,7 @@ import { extname, join, relative, resolve } from "node:path";
 import type { KnowledgeSearchHit, KnowledgeSource } from "@uma-agent/protocol";
 import type { UmaDatabase } from "./database.js";
 import { parseDocument } from "./document-parser.js";
+import type { EmbeddingService } from "./embedding.js";
 
 const EXTENSIONS = new Set([
   ".md",
@@ -52,6 +53,7 @@ export class KnowledgeService {
     private readonly database: UmaDatabase,
     roots: string[],
     stateDir: string,
+    private readonly embedding?: EmbeddingService,
     private readonly changed: () => void = () => undefined,
   ) {
     this.allowedRoots = [...roots, join(stateDir, "uploads")].map((root) => resolve(root));
@@ -63,6 +65,37 @@ export class KnowledgeService {
 
   search(query: string, limit = 5, sourceId?: string, ownerId?: string): KnowledgeSearchHit[] {
     return this.database.searchKnowledge(query, limit, sourceId, ownerId);
+  }
+
+  async searchSemantic(query: string, limit = 5, ownerId?: string): Promise<KnowledgeSearchHit[]> {
+    const vector = await this.embedding?.embed(query);
+    if (!vector) return this.search(query, limit, undefined, ownerId);
+    const semantic = this.database.searchKnowledgeSemantic(
+      vector,
+      Math.max(limit * 2, 10),
+      ownerId,
+      this.embeddingModel(),
+    );
+    const keyword = this.search(query, Math.max(limit * 2, 10), undefined, ownerId);
+    const merged = new Map<string, { item: KnowledgeSearchHit; score: number }>();
+    semantic.forEach((hit, index) => {
+      const key = `${hit.sourceId}:${hit.filePath}:${hit.content}`;
+      merged.set(key, { item: hit, score: Math.max(0, (hit.score + 1) / 2) + 0.2 / (index + 1) });
+    });
+    keyword.forEach((item, index) => {
+      const key = `${item.sourceId}:${item.filePath}:${item.content}`;
+      const existing = merged.get(key);
+      if (existing) existing.score += 0.35 / (index + 1);
+      else merged.set(key, { item, score: 0.35 / (index + 1) });
+    });
+    return [...merged.values()]
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit)
+      .map(({ item }) => item);
+  }
+
+  private embeddingModel(): string | undefined {
+    return this.embedding?.model;
   }
 
   async enqueue(name: string, sourcePath: string, ownerId?: string): Promise<KnowledgeSource> {
@@ -124,7 +157,11 @@ export class KnowledgeService {
       if (info.isFile()) files.push(canonical);
       else if (info.isDirectory()) await collect(canonical, canonical, files);
       else throw new Error("Knowledge source must be a file or directory");
-      const indexed: Array<{ filePath: string; content: string }> = [];
+      const indexed: Array<{
+        filePath: string;
+        content: string;
+        embedding?: { model: string; vector: number[]; contentHash: string };
+      }> = [];
       for (const path of files) {
         const extension = extname(path).toLowerCase();
         const content = DOCUMENT_EXTENSIONS.has(extension)
@@ -133,6 +170,18 @@ export class KnowledgeService {
         if (content.length > 2_000_000) continue;
         chunks(content).forEach((chunk) => {
           indexed.push({ filePath: info.isFile() ? path : relative(canonical, path), content: chunk });
+        });
+      }
+      if (this.embedding?.enabled) {
+        const vectors = await this.embedding.embedBatch(indexed.map((item) => item.content));
+        indexed.forEach((item, index) => {
+          const vector = vectors[index];
+          if (vector && this.embedding)
+            item.embedding = {
+              model: this.embedding.model,
+              vector,
+              contentHash: this.embedding.hash(item.content),
+            };
         });
       }
       const source = this.database.replaceKnowledgeSource({

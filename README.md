@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.2.0`，协议版本为 `11`，SQLite schema 为 `14`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.2.0`，协议版本为 `11`，SQLite schema 为 `15`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 

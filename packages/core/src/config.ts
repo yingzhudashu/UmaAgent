@@ -148,6 +148,7 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
       "mcpServers",
       "runtime",
       "roles",
+      "embedding",
     ],
     "config",
   );
@@ -157,6 +158,7 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
   const modelProfiles = record(root.models, "models");
   const runtime = record(root.runtime ?? {}, "runtime");
   const roles = record(root.roles, "roles");
+  const embedding = record(root.embedding ?? {}, "embedding");
   const models = Object.entries(modelProfiles).map(([id, value], index) => {
     const item = record(value, `models.${id}`);
     const providerId = stringValue(item.provider, `models.${id}.provider`);
@@ -204,6 +206,21 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
       fast: resultModelRef(roles.fast, "roles.fast"),
       vision: resultModelRef(roles.vision, "roles.vision"),
     },
+    embedding: {
+      enabled: embedding.enabled === true,
+      baseUrl: httpUrl(embedding.baseUrl ?? "https://api.siliconflow.cn/v1", "embedding.baseUrl"),
+      model: stringValue(embedding.model ?? "BAAI/bge-m3", "embedding.model"),
+      apiKeyEnv: stringValue(embedding.apiKeyEnv ?? "EMBEDDING_API_KEY", "embedding.apiKeyEnv"),
+      timeoutMs: numberValue(embedding.timeoutMs, "embedding.timeoutMs", 30_000),
+      batchSize: numberValue(embedding.batchSize, "embedding.batchSize", 32),
+      cacheSize: numberValue(embedding.cacheSize, "embedding.cacheSize", 2048),
+      maxConcurrentRequests: numberValue(
+        embedding.maxConcurrentRequests,
+        "embedding.maxConcurrentRequests",
+        2,
+      ),
+      retryAttempts: numberValue(embedding.retryAttempts, "embedding.retryAttempts", 2),
+    },
   };
   if (
     !models.some(
@@ -219,6 +236,8 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
   for (const model of result.models) {
     if (!process.env[model.apiKeyEnv]?.trim()) throw new Error(`Missing model API key: ${model.apiKeyEnv}`);
   }
+  if (result.embedding.enabled && !process.env[result.embedding.apiKeyEnv]?.trim())
+    throw new Error(`Missing embedding API key: ${result.embedding.apiKeyEnv}`);
   if (!isLoopbackHost(host) && allowedWebOrigins.length === 0)
     throw new Error("Public server hosts require at least one server.webOrigins entry");
   return result;

@@ -11,6 +11,7 @@ services:
       FEISHU_MCP_TOKEN: ${FEISHU_MCP_TOKEN:-}
       SKILL_WORKER_TOKEN: ${SKILL_WORKER_TOKEN:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       UMA_LOG_LEVEL: ${UMA_LOG_LEVEL:-info}
     volumes:
       - uma-state:/data/state

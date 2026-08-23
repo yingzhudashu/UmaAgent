@@ -54,7 +54,16 @@ export class RunContextBuilder {
     if (!ownerId) throw new Error("Session owner is missing");
     const profile = this.database.getAgentProfile(ownerId);
     const rollups = this.database.listMemoryRollups(input.session.id, 10);
-    const knowledge = this.knowledge.search(input.request.text, 3, undefined, ownerId);
+    const knowledge = await ((
+      this.knowledge as KnowledgeService & {
+        searchSemantic?: (
+          query: string,
+          limit: number,
+          ownerId: string,
+        ) => Promise<Awaited<ReturnType<KnowledgeService["search"]>>>;
+      }
+    ).searchSemantic?.(input.request.text, 3, ownerId) ??
+      this.knowledge.search(input.request.text, 3, undefined, ownerId));
     const supportingContext = [
       profile.content ? `<agent_profile>\n${profile.content}\n</agent_profile>` : "",
       memory.length ? `<relevant_memory>\n${memory.join("\n")}\n</relevant_memory>` : "",

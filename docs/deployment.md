@@ -1,6 +1,6 @@
 # UmaAgent 服务器部署与验收
 
-本文档面向 UmaAgent `1.2.0`、Protocol v11、SQLite schema 14。Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
+本文档面向 UmaAgent `1.2.0`、Protocol v11、SQLite schema 15。Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
 
 ## 1. 部署前确认
 
@@ -32,6 +32,7 @@ openssl rand -hex 32 # BROWSER_WORKER_TOKEN
 
 - 将 `server.webOrigins` 改为 Web 实际使用的精确 Origin，例如 `https://agent.example.com`。不接受通配符、路径或结尾 `/`。
 - 核对 Provider `baseUrl`、模型 ID、API 类型、上下文窗口、输出上限和 capabilities。示例值不是对任意 Provider 的兼容承诺。
+- 若启用语义知识检索，设置 `EMBEDDING_API_KEY`，并在配置中保持 `embedding.enabled=true`；默认使用 SiliconFlow `BAAI/bge-m3`。Embedding 暂时不可用时，知识库回退到 FTS 检索。
 - 密钥只通过 `apiKeyEnv` 和 `authTokenEnv` 引用环境变量，不能写进 JSON。
 - 多用户 Web/移动端认证使用用户个人令牌；个人令牌只保存哈希，Web Cookie 绑定用户。原生 App 的 PKCE redirect 必须通过 `UMA_OAUTH_REDIRECTS` 显式配置为 `clientId|redirectUri`，禁止通配符。
 - `workspaceRoots` 保持为容器内路径 `/data/workspace`。远程客户端路径不是服务器工作区路径。
@@ -312,6 +313,8 @@ docker run --rm \
 
 恢复 Feishu state 使用同样方式但指向 `umaagent_feishu-state`。启动后先检查 readiness，再检查 Session、附件、技能和 Adapter 映射。
 
+原生部署从新版本开始时，使用 release 中的 `deploy/reset-native-state.sh --apply`。脚本只处理 UmaAgent Core、工作区、Browser Worker 和 Feishu 独立 state，并先移动到 `/srv/backups/uma-agent/reset-<UTC>`；不会读取、删除或移动 `/home/ubuntu/miniagent`。
+
 本项目不提供 migration、旧 DTO 或 schema fallback。数据库 `PRAGMA user_version` 与当前 schema 不匹配时会拒绝启动。升级前必须备份；如果新版本升级了 schema，应按该版本的发布说明显式重置，不能把旧数据库强行交给新版本。回滚时部署原版本并恢复原版本生成的备份。
 
 ## 9. 故障排查
@@ -348,4 +351,4 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] Feishu 白名单、消息去重、重启恢复和可选卡片回调通过。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v11 和 schema 14，保留可回滚 release 与同版本备份。
+- [ ] 确认当前应用版本、Protocol v11 和 schema 15，保留可回滚 release 与同版本备份。

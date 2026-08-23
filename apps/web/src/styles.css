@@ -742,6 +742,168 @@
   grid-template-columns: 248px minmax(0, 1fr) 52px;
   position: relative;
   background: var(--surface-1);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.uma-embed.uma-embed--standalone {
+  height: 100dvh;
+  min-height: 480px;
+  overflow: hidden;
+}
+.uma-embed.uma-embed--embedded {
+  min-height: 720px;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+.uma-embed .workspace {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 72px minmax(0, 1fr) auto;
+}
+.uma-embed .workspace > header {
+  min-width: 0;
+}
+.uma-embed .workspace > header > :first-child {
+  min-width: 0;
+}
+.uma-embed .workspace > header > :first-child h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.uma-embed .transcript {
+  min-height: 0;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+}
+.uma-embed .jump-latest {
+  position: absolute;
+  z-index: 3;
+  right: max(28px, calc((100% - 860px) / 2));
+  bottom: calc(94px + env(safe-area-inset-bottom));
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-strong);
+  background: var(--surface-0);
+  box-shadow: 0 5px 18px rgb(16 42 31 / 16%);
+  font-size: 12px;
+  font-weight: 650;
+}
+.uma-embed .jump-latest:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.uma-embed .inspector-content {
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+.uma-embed .settings-panel {
+  display: grid;
+  gap: 14px;
+}
+.uma-embed .settings-section {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 15px;
+  background: var(--surface-1);
+}
+.uma-embed .settings-section-heading {
+  margin-bottom: 12px;
+}
+.uma-embed .settings-section-heading h3 {
+  color: var(--ink-strong);
+  font-size: 13px;
+  font-weight: 700;
+}
+.uma-embed .settings-section-heading p,
+.uma-embed .settings-help,
+.uma-embed .settings-note {
+  color: var(--ink-muted);
+}
+.uma-embed .settings-row {
+  min-height: 42px;
+  padding: 9px 0;
+  border-bottom-color: var(--line);
+}
+.uma-embed .settings-row:last-child {
+  border-bottom: 0;
+}
+.uma-embed .settings-form textarea {
+  width: 100%;
+  min-height: 124px;
+  border-color: var(--line);
+  border-radius: 8px;
+  color: var(--ink-strong);
+  background: var(--surface-0);
+}
+.uma-embed .settings-form textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.uma-embed .settings-feedback {
+  display: block;
+  min-height: 18px;
+  margin-top: 8px;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+.uma-embed .settings-feedback.saved {
+  color: var(--success);
+}
+.uma-embed .settings-feedback.error {
+  color: var(--danger);
+}
+.uma-embed .settings-actions {
+  display: grid;
+  gap: 8px;
+}
+.uma-embed .settings-actions button,
+.uma-embed .settings-danger > button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-strong);
+  background: var(--surface-0);
+}
+.uma-embed .settings-actions button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.uma-embed .settings-danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: color-mix(in srgb, var(--danger) 4%, var(--surface-1));
+}
+.uma-embed .settings-danger > button {
+  width: 100%;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: transparent;
+}
+.uma-embed .settings-danger > button:hover {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+@media (max-width: 700px) {
+  .uma-embed.uma-embed--standalone {
+    min-height: 100dvh;
+  }
+  .uma-embed .workspace {
+    height: 100dvh;
+  }
+  .uma-embed .jump-latest {
+    right: 14px;
+    bottom: calc(88px + env(safe-area-inset-bottom));
+  }
+  .uma-embed .settings-section {
+    padding: 13px;
+  }
 }
 .uma-embed .sidebar {
   background: var(--surface-0);

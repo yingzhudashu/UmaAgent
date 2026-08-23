@@ -360,6 +360,16 @@ CREATE TABLE knowledge_chunks (
 );
 CREATE VIRTUAL TABLE knowledge_fts USING fts5(id UNINDEXED, source_id UNINDEXED, file_path UNINDEXED, content, tokenize='trigram');
 
+CREATE TABLE knowledge_embeddings (
+  chunk_id TEXT PRIMARY KEY REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL REFERENCES knowledge_sources(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  vector_json TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX knowledge_embeddings_source_model ON knowledge_embeddings(source_id, model);
+
 CREATE TABLE scheduled_tasks (
   id TEXT PRIMARY KEY,
   owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -435,4 +445,4 @@ CREATE TABLE external_identities (
   CHECK((user_id IS NOT NULL) <> (space_id IS NOT NULL))
 );
 
-PRAGMA user_version = 14;
+PRAGMA user_version = 15;

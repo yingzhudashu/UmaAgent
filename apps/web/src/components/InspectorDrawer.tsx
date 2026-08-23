@@ -23,20 +23,38 @@ export function InspectorDrawer({
   const drawerRef = useRef<HTMLElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    return () => {
-      returnFocusRef.current?.focus({ preventScroll: true });
-      returnFocusRef.current = null;
-    };
-  }, []);
-  useEffect(() => {
     if (!section) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     drawerRef.current?.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
+      if (event.key !== "Tab" || !drawerRef.current) return;
+      const focusable = [
+        ...drawerRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ];
+      if (!focusable.length) {
+        event.preventDefault();
+        drawerRef.current.focus({ preventScroll: true });
+        return;
+      }
+      const first = focusable[0] as HTMLElement;
+      const last = focusable[focusable.length - 1] as HTMLElement;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
     };
     document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      returnFocusRef.current?.focus({ preventScroll: true });
+      returnFocusRef.current = null;
+    };
   }, [onClose, section]);
   if (!section) return null;
   return (

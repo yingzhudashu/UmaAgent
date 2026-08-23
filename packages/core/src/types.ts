@@ -49,6 +49,19 @@ export interface UmaConfig {
   mcpServers: McpServerConfig[];
   runtime: { maxParallelSessions: number; approvalTimeoutMs: number; toolTimeoutMs: number };
   roles: { default: ModelRef; reasoning: ModelRef; fast: ModelRef; vision: ModelRef };
+  embedding: EmbeddingConfig;
+}
+
+export interface EmbeddingConfig {
+  enabled: boolean;
+  baseUrl: string;
+  model: string;
+  apiKeyEnv: string;
+  timeoutMs: number;
+  batchSize: number;
+  cacheSize: number;
+  maxConcurrentRequests: number;
+  retryAttempts: number;
 }
 
 export interface PreflightDecision {

@@ -38,6 +38,7 @@ import type {
 import Value from "typebox/value";
 import { ContextManager } from "./context-manager.js";
 import { UmaDatabase } from "./database.js";
+import { EmbeddingService } from "./embedding.js";
 import { EventHub, type EventListener, type ResourceListener } from "./events.js";
 import { KnowledgeService } from "./knowledge.js";
 import { McpManager } from "./mcp.js";
@@ -78,6 +79,7 @@ export class UmaRuntime {
   readonly skillPackages: SkillPackageService;
   readonly scheduler: SchedulerService;
   readonly search = new SearchService();
+  readonly embedding: EmbeddingService;
   mcp = new McpManager();
   readonly workspacePolicy: WorkspacePolicy;
   private contextManager: ContextManager;
@@ -112,10 +114,12 @@ export class UmaRuntime {
       throw error;
     }
     this.events = new EventHub(this.database);
+    this.embedding = new EmbeddingService(config.embedding);
     this.knowledge = new KnowledgeService(
       this.database,
       config.server.workspaceRoots,
       config.server.stateDir,
+      this.embedding,
       () => this.invalidateResource("knowledge"),
     );
     this.models = new ModelRegistry(config);
@@ -210,6 +214,7 @@ export class UmaRuntime {
     if (changed(this.config.server, next.server)) restartRequired.push("server");
     if (changed(this.config.auth, next.auth)) restartRequired.push("auth");
     if (changed(this.config.runtime, next.runtime)) restartRequired.push("runtime");
+    if (changed(this.config.embedding, next.embedding)) restartRequired.push("embedding");
     const modelChanged = changed(
       {
         models: this.config.models,

@@ -1,0 +1,24 @@
+[Unit]
+Description=UmaAgent Browser Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=umaagent-browser
+Group=umaagent-browser
+WorkingDirectory=/opt/uma-agent/current
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/uma-agent/browser.env
+ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent/current/apps/browser-worker/dist/main.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/uma-agent/browser
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

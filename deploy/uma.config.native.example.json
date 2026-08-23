@@ -37,8 +37,32 @@
     "vision": { "provider": "openai", "id": "gpt-5.6-sol" }
   },
   "defaultThinkingLevel": "medium",
+  "embedding": {
+    "enabled": true,
+    "baseUrl": "https://api.siliconflow.cn/v1",
+    "model": "BAAI/bge-m3",
+    "apiKeyEnv": "EMBEDDING_API_KEY",
+    "timeoutMs": 30000,
+    "batchSize": 32,
+    "cacheSize": 2048,
+    "maxConcurrentRequests": 2,
+    "retryAttempts": 2
+  },
   "skillsDirs": ["/var/lib/uma-agent/state/skills"],
-  "mcpServers": [],
+  "mcpServers": [
+    {
+      "name": "browser",
+      "transport": "http",
+      "url": "http://127.0.0.1:3230/mcp",
+      "authTokenEnv": "BROWSER_WORKER_TOKEN"
+    },
+    {
+      "name": "feishu",
+      "transport": "http",
+      "url": "http://127.0.0.1:3240/mcp",
+      "authTokenEnv": "FEISHU_MCP_TOKEN"
+    }
+  ],
   "runtime": {
     "maxParallelSessions": 2,
     "approvalTimeoutMs": 120000,
