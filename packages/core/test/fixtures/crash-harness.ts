@@ -114,12 +114,15 @@ const responses: FauxResponseStep[] =
 faux.setResponses(responses);
 runtime.models.models.setProvider(faux.provider);
 await runtime.start();
+runtime.database.db
+  .prepare("INSERT INTO users(id,role,status,created_at,updated_at) VALUES(?,?,?,?,?)")
+  .run("test-user", "user", "active", Date.now(), Date.now());
 runtime.subscribe((event) => {
   if (point.includes("side-effect") && event.type === "approval.requested") {
     runtime.resolveApproval((event.payload as Approval).id, true);
   }
 });
-const session = await runtime.createSession();
+const session = await runtime.createSession({}, "test-user");
 runtime.sendMessage(session.id, {
   messageId: `message-${point.replaceAll(".", "-")}`,
   text: `crash at ${point}`,
