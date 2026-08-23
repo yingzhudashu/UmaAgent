@@ -18,6 +18,10 @@ function toModel(config: UmaModelConfig): Model<UmaModelConfig["api"]> {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: config.contextWindow,
     maxTokens: config.maxTokens,
+    // The configured OpenAI-compatible gateway rejects the SDK's default
+    // `OpenAI/JS ...` user agent. Keep the request identifiable without
+    // exposing the SDK implementation detail upstream.
+    headers: { "user-agent": "UmaAgent/1.0", accept: "application/json" },
   };
 }
 

@@ -60,6 +60,7 @@ describe("ModelRegistry snapshots", () => {
       maxTokens: 4_096,
       reasoning: true,
       input: ["text"],
+      headers: { "user-agent": "UmaAgent/1.0", accept: "application/json" },
     });
   });
 
