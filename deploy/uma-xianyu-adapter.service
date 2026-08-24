@@ -1,0 +1,26 @@
+[Unit]
+Description=UmaAgent Xianyu Adapter
+After=network-online.target uma-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=umaagent-xianyu
+Group=umaagent-xianyu
+SupplementaryGroups=umaagent
+WorkingDirectory=/opt/uma-agent/current
+Environment=NODE_ENV=production
+Environment=XIANYU_AUTOSTART=1
+EnvironmentFile=/etc/uma-agent/xianyu.env
+ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent/current/apps/xianyu-adapter/dist/main.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/uma-agent/xianyu
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

@@ -22,7 +22,7 @@
 | trace/diagnostics/stats | partial | operations/diagnostics API | 补性能快照、队列等待和恢复指标 |
 | dream 维护 | implemented | 确定性 rollup/裁剪，不调用模型 | 不引入模型梦境生成 |
 | 自动修改代码/自我优化 | partial | 提案接受、workspace 边界、变更预览和显式批准后受控写入；禁止 Git/危险路径 | 增加持久备份、配置测试命令和失败恢复记录 |
-| 新第三方渠道 | partial | Xianyu 独立协议中立适配器骨架，支持启停、暂停/恢复、转发和健康指标 | 接入真实平台 transport 后补生产协议、重连和端到端验收 |
+| Xianyu 闲鱼渠道 | partial | 已移植远端协议：Cookie/MTop access token、Set-Cookie 刷新、WebSocket 注册/ACK/心跳/可中断退避重连、文本/图片入站、持久会话映射/去重、图片上传、商品详情/历史/建聊/分类推荐/位置解析/发布和出站回复；提供 `/health`、`/pause`、`/resume`、`/item`、`/history`、`/chat`、`/publish` 接口 | 补 CLI 二维码登录与共享命令工具，注入真实 `XIANYU_COOKIE` 后做真实账号端到端验收；当前不启用生产服务 |
 
 ## 使用规则
 

@@ -11,6 +11,11 @@
   "dependencies": {
     "@uma-agent/channel-adapter": "1.2.0",
     "@uma-agent/client": "1.2.0",
-    "@uma-agent/protocol": "1.2.0"
+    "@uma-agent/protocol": "1.2.0",
+    "@msgpack/msgpack": "3.1.3",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1"
   }
 }

@@ -5,8 +5,13 @@ import type {
   MessageSource,
 } from "@uma-agent/protocol";
 
+export interface XianyuInboundMessage extends ChannelInboundMessage {
+  imageUrl?: string;
+  itemId?: string;
+}
+
 export interface XianyuTransport {
-  start(onMessage: (message: ChannelInboundMessage) => Promise<void>): Promise<void>;
+  start(onMessage: (message: XianyuInboundMessage) => Promise<void>): Promise<void>;
   stop(): Promise<void>;
   send(conversation: ExternalConversation, text: string): Promise<void>;
   connected(): boolean;
@@ -14,7 +19,13 @@ export interface XianyuTransport {
 
 export interface XianyuCore {
   mapConversation(input: ExternalConversation): Promise<string>;
-  sendMessage(sessionId: string, text: string, source?: MessageSource): Promise<void>;
+  sendMessage(
+    sessionId: string,
+    text: string,
+    source?: MessageSource,
+    attachmentIds?: string[],
+  ): Promise<void>;
+  uploadRemoteImage?(url: string, sessionId: string): Promise<string>;
 }
 
 /**
@@ -30,16 +41,26 @@ export function createXianyuAdapter(deps: { transport: XianyuTransport; core: Xi
   let reconnects = 0;
   let lastError: string | undefined;
   let lastInboundAt: number | undefined;
-  const handleInbound = async (message: ChannelInboundMessage) => {
+  const handleInbound = async (message: XianyuInboundMessage) => {
     if (!started || paused) return;
     try {
       const sessionId = await deps.core.mapConversation(message.conversation);
-      await deps.core.sendMessage(sessionId, message.text, {
-        adapter: message.conversation.adapter,
-        conversationId: message.conversation.conversationId,
-        externalMessageId: message.externalMessageId,
-        ...(message.senderId ? { senderId: message.senderId } : {}),
-      });
+      const attachmentIds =
+        message.imageUrl && deps.core.uploadRemoteImage
+          ? [await deps.core.uploadRemoteImage(message.imageUrl, sessionId)]
+          : undefined;
+      const text = message.text || (message.imageUrl ? "请分析买家发送的图片。" : "");
+      await deps.core.sendMessage(
+        sessionId,
+        text,
+        {
+          adapter: message.conversation.adapter,
+          conversationId: message.conversation.conversationId,
+          externalMessageId: message.externalMessageId,
+          ...(message.senderId ? { senderId: message.senderId } : {}),
+        },
+        attachmentIds,
+      );
       inbound += 1;
       lastInboundAt = Date.now();
     } catch (error) {
