@@ -18,6 +18,7 @@ import {
   type Run,
   RunActionDecisionSchema,
   SendMessageRequestSchema,
+  ShortcutRequestSchema,
   SkillInstallRequestSchema,
   UpdateScheduledTaskRequestSchema,
   UpdateSessionRequestSchema,
@@ -366,6 +367,18 @@ export async function createServer(
       return reply.code(202).send({ runId: run.id, status: run.status });
     },
   );
+  app.post<{ Params: { id: string } }>("/api/v11/sessions/:id/shortcuts", async (request) => {
+    if (!Value.Check(ShortcutRequestSchema, request.body)) throw new Error("Invalid shortcut request");
+    const ownerId = runtime.database.sessionOwner(request.params.id);
+    requireSessionOwner(request, request.params.id);
+    const configLoader = options.configLoader;
+    return runtime.executeShortcut(
+      request.params.id,
+      request.body.command,
+      ownerId,
+      configLoader ? async () => runtime.reloadConfig(await configLoader()) : undefined,
+    );
+  });
   app.get<{ Params: { id: string }; Querystring: { q?: string; limit?: string } }>(
     "/api/v11/sessions/:id/history/search",
     async (request) =>
@@ -627,6 +640,42 @@ export async function createServer(
   app.get("/api/v11/optimization-proposals", async (request) =>
     adminResult(request, () => runtime.listOptimizationProposals()),
   );
+  app.post<{
+    Body: {
+      proposalId?: string;
+      workspace?: string;
+      changes?: Array<{ path: string; content: string }>;
+      approved?: boolean;
+    };
+  }>("/api/v11/optimization-proposals/preview", async (request) => {
+    requireAdmin(request);
+    if (!request.body?.proposalId || !request.body.workspace || !Array.isArray(request.body.changes))
+      throw new Error("Invalid optimization preview request");
+    return runtime.optimizationExecution.preview(
+      request.body.proposalId,
+      request.body.workspace,
+      request.body.changes,
+      request.body.approved === true,
+    );
+  });
+  app.post<{
+    Body: {
+      proposalId?: string;
+      workspace?: string;
+      changes?: Array<{ path: string; content: string }>;
+      approved?: boolean;
+    };
+  }>("/api/v11/optimization-proposals/apply", async (request) => {
+    requireAdmin(request);
+    if (!request.body?.proposalId || !request.body.workspace || !Array.isArray(request.body.changes))
+      throw new Error("Invalid optimization apply request");
+    return runtime.optimizationExecution.apply(
+      request.body.proposalId,
+      request.body.workspace,
+      request.body.changes,
+      request.body.approved === true,
+    );
+  });
   app.get<{ Querystring: { limit?: string } }>("/api/v11/evaluations", async (request) =>
     adminResult(request, () => runtime.listEvaluationReports(Number(request.query.limit ?? 100))),
   );

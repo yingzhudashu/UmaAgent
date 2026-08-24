@@ -12,6 +12,7 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
+  TerminalSquare,
   Trash2,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -34,6 +35,7 @@ import {
   clearCacheNamespace,
   setCacheNamespace,
 } from "./cache.js";
+import { CommandPaletteHost } from "./components/CommandPalette.js";
 import { InspectorContent } from "./components/InspectorContent.js";
 import { InspectorDrawer } from "./components/InspectorDrawer.js";
 import { ApprovalPanel, ConnectionPanel, SyncPanel } from "./components/InspectorStatusPanels.js";
@@ -79,6 +81,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const followTailRef = useRef(true);
   const scrollFrameRef = useRef<number | undefined>(undefined);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
 
   const sessions = useQuery({
     queryKey: ["sessions"],
@@ -468,7 +471,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       .sendMessage(selected, item.content, { mode, ...(ids.length ? { attachmentIds: ids } : {}) })
       .then(() => queryClient.invalidateQueries({ queryKey: ["snapshot", selected] }));
   };
-
   if (loginRequired === undefined)
     return (
       <div className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${theme}`}>
@@ -559,6 +561,16 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   ))}
                 </select>
               )}
+              <button
+                type="button"
+                className="icon"
+                onClick={() => {
+                  setCommandOpen(true);
+                }}
+                title="快捷命令"
+              >
+                <TerminalSquare />
+              </button>
               <button
                 type="button"
                 className="icon"
@@ -777,6 +789,24 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             </form>
           </div>
         </Workspace>
+        <CommandPaletteHost
+          open={commandOpen}
+          client={client}
+          sessionId={selected}
+          models={models.data}
+          sessions={sessions.data}
+          snapshot={snapshot.data}
+          tasks={tasks.data}
+          schedules={schedules.data}
+          knowledge={knowledge.data}
+          memoryCount={memories.data?.length ?? 0}
+          report={report.data}
+          publicConfig={publicConfig.data}
+          evaluations={evaluations.data}
+          optimization={optimization.data}
+          skills={skills}
+          onClose={() => setCommandOpen(false)}
+        />
         <StatusRail
           online={!offline}
           busy={Boolean(busy)}

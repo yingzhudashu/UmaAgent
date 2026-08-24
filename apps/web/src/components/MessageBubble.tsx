@@ -1,5 +1,5 @@
 import type { TranscriptItem } from "@uma-agent/protocol";
-import { Bot, Check, Copy, UserRound } from "lucide-react";
+import { Bot, Check, ChevronRight, Copy, UserRound } from "lucide-react";
 import { useState } from "react";
 import { Markdown } from "../Markdown.js";
 
@@ -19,6 +19,8 @@ export function MessageBubble({
   const [copied, setCopied] = useState(false);
   const isUser = item.role === "user";
   const isTool = item.role === "tool";
+  const toolSummary =
+    item.status === "error" ? "执行失败" : item.status === "streaming" ? "执行中" : "已完成";
   const copy = async () => {
     await navigator.clipboard?.writeText(item.content);
     setCopied(true);
@@ -40,7 +42,14 @@ export function MessageBubble({
         </div>
         <div className={`message-body ${isUser ? "user-bubble" : isTool ? "tool-output" : "assistant-body"}`}>
           {isTool ? (
-            <pre>{item.content}</pre>
+            <details className="tool-details">
+              <summary>
+                <ChevronRight size={14} aria-hidden="true" />
+                <span>{toolSummary}</span>
+                <small>{item.content.length.toLocaleString()} 字符</small>
+              </summary>
+              <pre>{item.content}</pre>
+            </details>
           ) : isUser ? (
             <p>{item.content}</p>
           ) : (

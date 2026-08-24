@@ -11,7 +11,7 @@ export interface EvalCase {
   name: string;
   category?: "security" | "prompt_injection" | "tool_selection" | "schema" | "regression" | "cost";
   prompt: string;
-  mode: InteractionMode;
+  mode?: InteractionMode;
   expectedStatus: Run["status"];
   expectedIncludes?: string;
   expectedRoute?: Run["route"];
@@ -52,7 +52,7 @@ export async function evaluateSuite(client: EvalClient, cases: EvalCase[]): Prom
     try {
       const session = await client.createSession({ title: `Eval: ${item.name}` });
       const accepted = await client.sendMessage(session.id, item.prompt, {
-        mode: item.mode,
+        mode: item.mode ?? "agent",
       });
       const run = await client.waitForRun(accepted.runId, { pollMs: 50 });
       const snapshot = await client.getSession(session.id);

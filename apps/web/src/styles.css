@@ -1662,10 +1662,18 @@
   overflow: hidden;
 }
 .uma-embed.uma-embed--embedded {
+  position: fixed;
+  inset: 0;
   width: 100%;
   height: 100dvh;
   min-height: 0;
   max-height: 100dvh;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  z-index: 2147483000;
+  background: var(--surface-1, #fff);
   overflow: hidden;
 }
 .uma-embed .app-shell,
@@ -1714,6 +1722,149 @@
 .uma-embed .tool-output pre {
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+.uma-embed .tool-details,
+.uma-embed .action-details {
+  min-width: 0;
+}
+.uma-embed .tool-details > summary,
+.uma-embed .action-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--ink-muted);
+  user-select: none;
+}
+.uma-embed .tool-details > summary::-webkit-details-marker,
+.uma-embed .action-details > summary::-webkit-details-marker {
+  display: none;
+}
+.uma-embed .tool-details > summary svg,
+.uma-embed .action-details > summary svg {
+  flex: none;
+  transition: transform 120ms ease;
+}
+.uma-embed .tool-details[open] > summary svg,
+.uma-embed .action-details[open] > summary svg {
+  transform: rotate(90deg);
+}
+.uma-embed .tool-details > summary small,
+.uma-embed .action-details > summary small {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+.uma-embed .tool-details > summary:focus-visible,
+.uma-embed .action-details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.uma-embed .tool-details pre,
+.uma-embed .action-input {
+  margin-top: 6px;
+}
+.uma-embed .command-overlay {
+  position: fixed;
+  z-index: 2147483002;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+  padding: 9vh 16px 16px;
+  background: rgb(15 25 20 / 38%);
+}
+.uma-embed .command-palette {
+  width: min(560px, 100%);
+  max-height: min(720px, 84dvh);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-1);
+  box-shadow: 0 20px 60px rgb(10 30 20 / 25%);
+}
+.uma-embed .command-palette-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 15px 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.uma-embed .command-palette-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 3px 0 0;
+  color: var(--ink-strong);
+  font-size: 15px;
+}
+.uma-embed .command-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+.uma-embed .command-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-muted);
+}
+.uma-embed .command-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink-strong);
+}
+.uma-embed .command-list {
+  display: grid;
+  max-height: 260px;
+  overflow-y: auto;
+  gap: 2px;
+}
+.uma-embed .command-list button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+.uma-embed .command-list button:hover,
+.uma-embed .command-list button.selected {
+  background: var(--accent-soft);
+  color: var(--ink-strong);
+}
+.uma-embed .command-output {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-0);
+  color: var(--ink);
+  font:
+    12px / 1.55 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.uma-embed .command-run {
+  min-height: 36px;
+  padding: 0 13px;
 }
 .uma-embed .markdown pre,
 .uma-embed .tool-output pre {

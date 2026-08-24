@@ -1,14 +1,22 @@
 import Value from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_SHORTCUT_COMMANDS,
   AgentEventEnvelopeSchema,
   CreateScheduledTaskRequestSchema,
   CreateSessionRequestSchema,
   RunActionDecisionSchema,
   SendMessageRequestSchema,
+  ShortcutRequestSchema,
 } from "../src/index.js";
 
 describe("protocol schemas", () => {
+  it("validates shortcut requests and exposes the canonical command set", () => {
+    expect(AGENT_SHORTCUT_COMMANDS).toContain("/self-opt proposals");
+    expect(Value.Check(ShortcutRequestSchema, { command: "/status" })).toBe(true);
+    expect(Value.Check(ShortcutRequestSchema, { command: "" })).toBe(false);
+    expect(Value.Check(ShortcutRequestSchema, { command: "/status", extra: true })).toBe(false);
+  });
   it("accepts strict message requests", () => {
     expect(Value.Check(SendMessageRequestSchema, { messageId: "m1", text: "hello", mode: "ask" })).toBe(true);
     expect(Value.Check(SendMessageRequestSchema, { messageId: "m1", text: "hello", unknown: true })).toBe(

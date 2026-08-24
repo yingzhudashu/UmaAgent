@@ -58,6 +58,18 @@ const response = (body: unknown) =>
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("UmaClient", () => {
+  it("posts structured shortcut commands to the session endpoint", async () => {
+    const fetchMock = vi.fn(() => response({ command: "/status", output: "ok" }));
+    const client = new UmaClient({ baseUrl: "http://localhost:3210", fetch: fetchMock as typeof fetch });
+    await expect(client.executeShortcut("session-1", "/status")).resolves.toEqual({
+      command: "/status",
+      output: "ok",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3210/api/v11/sessions/session-1/shortcuts",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ command: "/status" }) }),
+    );
+  });
   it("recovers an authoritative snapshot when an event sequence has a gap", async () => {
     const fetchMock = vi.fn(() => response(snapshot));
     const socket = new FakeSocket();

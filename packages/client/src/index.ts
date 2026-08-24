@@ -406,6 +406,22 @@ export class UmaClient {
       body: JSON.stringify({ status }),
     });
   }
+  previewOptimization(input: {
+    proposalId: string;
+    workspace: string;
+    changes: Array<{ path: string; content: string }>;
+    approved?: boolean;
+  }): Promise<unknown> {
+    return this.request("/optimization-proposals/preview", { method: "POST", body: JSON.stringify(input) });
+  }
+  applyOptimization(input: {
+    proposalId: string;
+    workspace: string;
+    changes: Array<{ path: string; content: string }>;
+    approved?: boolean;
+  }): Promise<unknown> {
+    return this.request("/optimization-proposals/apply", { method: "POST", body: JSON.stringify(input) });
+  }
   listMemoryFacts(status?: MemoryFact["status"]): Promise<MemoryFact[]> {
     return this.request(`/memory${status ? `?status=${status}` : ""}`);
   }
@@ -453,6 +469,12 @@ export class UmaClient {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/commands`, {
       method: "POST",
       body: JSON.stringify({ command, ...(messageId ? { messageId } : {}) }),
+    });
+  }
+  executeShortcut(sessionId: string, command: string): Promise<{ command: string; output: string }> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/shortcuts`, {
+      method: "POST",
+      body: JSON.stringify({ command }),
     });
   }
   getRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
@@ -581,8 +603,13 @@ export class UmaClient {
       : new WebSocket(url);
     this.socket = socket;
     socket.addEventListener("open", () => {
+      if (this.socket !== socket || this.closed) return;
       this.eventConnectionState = "connected";
       this.reconnectAttempt = 0;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = undefined;
+      }
       if (this.options.token) socket.send(JSON.stringify({ type: "auth", token: this.options.token }));
       this.sendSubscriptions();
       for (const sessionId of this.subscriptions) {
@@ -604,8 +631,9 @@ export class UmaClient {
       }
     });
     socket.addEventListener("close", () => {
+      if (this.socket !== socket) return;
       this.eventConnectionState = "disconnected";
-      if (this.socket === socket) this.socket = undefined;
+      this.socket = undefined;
       if (!this.closed) this.scheduleReconnect();
     });
     // Node's undici WebSocket may dispatch `error` while it is already
@@ -619,9 +647,13 @@ export class UmaClient {
 
   close(): void {
     this.closed = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.socket?.close();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    const socket = this.socket;
     this.socket = undefined;
+    socket?.close();
     this.eventConnectionState = "disconnected";
   }
 
@@ -736,13 +768,20 @@ export class UmaClient {
 
   private restartEvents(): void {
     const socket = this.socket;
+    const wasClosed = this.closed;
+    this.closed = true;
     this.socket = undefined;
     socket?.close();
+    this.closed = wasClosed;
     if (!this.closed) this.connectEvents();
   }
 
   private scheduleReconnect(): void {
+    if (this.reconnectTimer || this.closed || this.socket) return;
     const delay = Math.min(30_000, 500 * 2 ** this.reconnectAttempt++);
-    this.reconnectTimer = setTimeout(() => this.connectEvents(), delay);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      this.connectEvents();
+    }, delay);
   }
 }

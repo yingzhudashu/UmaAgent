@@ -176,6 +176,30 @@ describe("server", () => {
       headers: { authorization: `Bearer ${testToken}` },
     });
     expect(snapshot.json<{ session: { title: string } }>().session.title).toBe("API test");
+    const shortcut = await app.inject({
+      method: "POST",
+      url: `/api/v11/sessions/${session.id}/shortcuts`,
+      headers: { authorization: `Bearer ${testToken}` },
+      payload: { command: "/session status" },
+    });
+    expect(shortcut.statusCode).toBe(200);
+    expect(shortcut.json<{ output: string }>().output).toContain("API test");
+    const other = runtime.database.createUser("user");
+    const otherToken = new AuthService(runtime).issueToken(other.id, "other-test").token;
+    const forbiddenShortcut = await app.inject({
+      method: "POST",
+      url: `/api/v11/sessions/${session.id}/shortcuts`,
+      headers: { authorization: `Bearer ${otherToken}` },
+      payload: { command: "/status" },
+    });
+    expect(forbiddenShortcut.statusCode).toBe(404);
+    const invalidShortcut = await app.inject({
+      method: "POST",
+      url: `/api/v11/sessions/${session.id}/shortcuts`,
+      headers: { authorization: `Bearer ${testToken}` },
+      payload: { command: "/not-a-command" },
+    });
+    expect(invalidShortcut.statusCode).toBe(400);
     const memory = await app.inject({
       method: "POST",
       url: "/api/v11/memory",

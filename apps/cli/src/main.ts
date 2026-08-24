@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { UmaClient, UmaClientError } from "@uma-agent/client";
 import {
+  AGENT_SHORTCUT_COMMANDS,
   type AgentEventEnvelope,
   type Approval,
   PROTOCOL_VERSION,
@@ -205,10 +206,8 @@ async function chat(): Promise<void> {
       finish();
       return;
     }
-    if (value === "/help") {
-      render(
-        "/new  /sessions  /session delete <id>  /use <id>  /older  /newer  /review  /improve  /queue  /btw  /schedule  /kb  /test  /self-opt  /config  /doctor  /copy  @file:<path>  !<shell>  /exit",
-      );
+    if (AGENT_SHORTCUT_COMMANDS.includes(value as (typeof AGENT_SHORTCUT_COMMANDS)[number])) {
+      render((await client.executeShortcut(active.id, value)).output);
       return;
     }
     if (value === "/new") {

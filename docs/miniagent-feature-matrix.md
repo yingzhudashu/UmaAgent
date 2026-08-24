@@ -21,8 +21,8 @@
 | `/test` 与评测趋势 | partial | Eval Runner Faux、报告持久化测试 | 补 CLI/Web 历史趋势和失败样本 |
 | trace/diagnostics/stats | partial | operations/diagnostics API | 补性能快照、队列等待和恢复指标 |
 | dream 维护 | implemented | 确定性 rollup/裁剪，不调用模型 | 不引入模型梦境生成 |
-| 自动修改代码/自我优化 | excluded | Optimization Proposal 只有读写决策 | 禁止 apply/Git API |
-| 新第三方渠道 | excluded | 当前仅 Feishu Adapter | 不实现 Slack、钉钉等渠道 |
+| 自动修改代码/自我优化 | partial | 提案接受、workspace 边界、变更预览和显式批准后受控写入；禁止 Git/危险路径 | 增加持久备份、配置测试命令和失败恢复记录 |
+| 新第三方渠道 | partial | Xianyu 独立协议中立适配器骨架，支持启停、暂停/恢复、转发和健康指标 | 接入真实平台 transport 后补生产协议、重连和端到端验收 |
 
 ## 使用规则
 

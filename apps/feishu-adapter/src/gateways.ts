@@ -8,6 +8,7 @@ export type CoreGateway = Pick<
   | "upload"
   | "createSession"
   | "sendMessage"
+  | "executeShortcut"
   | "subscribeSessions"
   | "resolveApproval"
   | "resumeRun"

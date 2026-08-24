@@ -50,8 +50,10 @@ import { RunOrchestrator } from "./run-orchestrator.js";
 import { RunPreflight } from "./run-preflight.js";
 import { RunQualityService } from "./run-quality.js";
 import { RuntimeOptimizationService } from "./runtime-optimization.js";
+import { RuntimeOptimizationExecutionService } from "./runtime-optimization-execution.js";
 import { RuntimeQualityOperations } from "./runtime-quality-operations.js";
 import { RuntimeResourceService } from "./runtime-resources.js";
+import { RuntimeShortcutService } from "./runtime-shortcuts.js";
 import {
   extractJson,
   injectRuntimeFault,
@@ -90,7 +92,9 @@ export class UmaRuntime {
   private quality: RunQualityService;
   private readonly qualityOperations: RuntimeQualityOperations;
   private readonly optimization: RuntimeOptimizationService;
+  readonly optimizationExecution: RuntimeOptimizationExecutionService;
   private readonly resources: RuntimeResourceService;
+  private readonly shortcuts: RuntimeShortcutService;
   private readonly controllers = new Map<string, AbortController>();
   private readonly preemptedRuns = new Set<string>();
   private readonly approvals: RunApprovals;
@@ -154,6 +158,7 @@ export class UmaRuntime {
     this.approvals = new RunApprovals(this.database, this.events, config.runtime.approvalTimeoutMs);
     this.scheduler = new SchedulerService(this.database, this, () => this.invalidateResource("schedules"));
     this.workspacePolicy = new WorkspacePolicy(config.server.workspaceRoots);
+    this.optimizationExecution = new RuntimeOptimizationExecutionService(this.database, this.workspacePolicy);
     this.resources = new RuntimeResourceService({
       database: this.database,
       events: this.events,
@@ -165,6 +170,24 @@ export class UmaRuntime {
       optimization: this.optimization,
       config: () => this.config,
       invalidate: (resource) => this.invalidateResource(resource),
+    });
+    this.shortcuts = new RuntimeShortcutService({
+      database: this.database,
+      health: () => this.health(),
+      listModels: () => this.listModels(),
+      publicConfig: () => this.publicConfig(),
+      getSnapshot: (sessionId) => this.getSnapshot(sessionId),
+      listTasks: (ownerId) => this.listTasks(ownerId),
+      listScheduledTasks: (ownerId) => this.listScheduledTasks(ownerId),
+      listMemoryFacts: (status, ownerId) => this.listMemoryFacts(status, ownerId),
+      listEvaluationReports: (limit) => this.listEvaluationReports(limit),
+      listOptimizationProposals: () => this.listOptimizationProposals(),
+      listKnowledge: (ownerId) => this.listKnowledge(ownerId),
+      refreshSkills: async () => this.refreshSkills(),
+      getTask: (id) => this.getTask(id),
+      cancelTask: (id) => this.cancelTask(id),
+      deleteTask: (id) => this.deleteTask(id),
+      listKnowledgeSearch: (query, ownerId) => this.knowledge.search(query, 20, undefined, ownerId),
     });
   }
 
@@ -563,6 +586,9 @@ export class UmaRuntime {
   listMemoryFacts(status?: "active" | "candidate" | "superseded" | "rejected", ownerId?: string) {
     return this.resources.listMemoryFacts(status, ownerId);
   }
+  listKnowledge(ownerId?: string) {
+    return this.knowledge.list(ownerId);
+  }
   createMemoryFact(sessionId: string, scope: "global" | "session", content: string, ownerId?: string) {
     this.database.getSession(sessionId);
     const owner = ownerId ?? this.database.sessionOwner(sessionId) ?? "system";
@@ -672,6 +698,15 @@ export class UmaRuntime {
 
   decideOptimizationProposal(id: string, status: "accepted" | "rejected"): OptimizationProposal {
     return this.resources.decideOptimizationProposal(id, status);
+  }
+
+  executeShortcut(
+    sessionId: string,
+    command: string,
+    ownerId: string | undefined,
+    reloadConfig?: () => Promise<ReloadResult>,
+  ) {
+    return this.shortcuts.execute(sessionId, command, ownerId, reloadConfig);
   }
 
   listQualityAssessments(runId: string): QualityAssessment[] {

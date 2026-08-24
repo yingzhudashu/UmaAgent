@@ -52,33 +52,74 @@ export async function startFeishuService() {
   });
   const feishuGateway = new LarkFeishuGateway(feishuSdk);
   let eventDispatcher: lark.EventDispatcher;
+  let longConnection: lark.WSClient | undefined;
   let longConnected = false;
-  const longConnection = new lark.WSClient({
-    appId: config.appId,
-    appSecret: config.appSecret,
-    domain: lark.Domain.Feishu,
-    autoReconnect: true,
-    onReady: () => {
-      longConnected = true;
-    },
-    onReconnecting: () => {
-      longConnected = false;
-    },
-    onReconnected: () => {
-      longConnected = true;
-    },
-    onError: (error) => {
-      longConnected = false;
-      adapter.failed(error);
-    },
-  });
+  let stopping = false;
+  let reconnectAttempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let reportFailure: (error: unknown) => void = () => {};
+  let startLongConnection: () => Promise<void>;
+  const scheduleReconnect = (error?: unknown): void => {
+    if (error) reportFailure(error);
+    longConnected = false;
+    if (stopping || reconnectTimer) return;
+    const delay = Math.min(30_000, 1_000 * 2 ** reconnectAttempt++);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = undefined;
+      void startLongConnection().catch(() => {});
+    }, delay);
+  };
+  startLongConnection = async () => {
+    if (stopping) return;
+    const connection = new lark.WSClient({
+      appId: config.appId,
+      appSecret: config.appSecret,
+      domain: lark.Domain.Feishu,
+      // Keep reconnection ownership here. The SDK's close/error interaction
+      // can recurse when its internal reconnect loop races shutdown.
+      autoReconnect: false,
+      onReady: () => {
+        if (longConnection !== connection || stopping) return;
+        longConnected = true;
+        reconnectAttempt = 0;
+      },
+      onError: (error) => {
+        if (longConnection === connection) {
+          longConnection = undefined;
+          scheduleReconnect(error);
+        }
+      },
+    });
+    longConnection = connection;
+    try {
+      await connection.start({ eventDispatcher });
+    } catch (error) {
+      if (longConnection === connection) longConnection = undefined;
+      scheduleReconnect(error);
+      throw error;
+    }
+  };
+  const stopLongConnection = (): void => {
+    stopping = true;
+    longConnected = false;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+    }
+    const connection = longConnection;
+    longConnection = undefined;
+    connection?.close({ force: true });
+  };
   const adapter = createFeishuAdapter({
     core: coreGateway,
     feishu: feishuGateway,
     store: storeInstance,
     connection: {
-      start: () => longConnection.start({ eventDispatcher }),
-      stop: () => longConnection.close({ force: true }),
+      start: async () => {
+        stopping = false;
+        await startLongConnection();
+      },
+      stop: stopLongConnection,
       connected: () => longConnected,
     },
     onStart: () => {
@@ -98,6 +139,7 @@ export async function startFeishuService() {
       storeInstance.close();
     },
   });
+  reportFailure = (error) => adapter.failed(error);
   const { core: uma, feishu, store, clock } = adapter;
   const cards = new Map<string, { text: string; lastUpdate: number; messageId?: string }>();
   const pendingCards = new Map<string, Parameters<typeof sendCardNow>>();
@@ -408,6 +450,20 @@ export async function startFeishuService() {
     text = text.replace(/<at[^>]*>.*?<\/at>/gi, "").trim();
     try {
       subscribeSession(conversation.sessionId, message.chat_id, conversation.id);
+      if (text.startsWith("/")) {
+        const shortcut = await uma.executeShortcut(conversation.sessionId, text);
+        await retryWithBackoff(() =>
+          feishu.createCard(
+            message.chat_id,
+            JSON.stringify({
+              config: { wide_screen_mode: true },
+              elements: [{ tag: "div", text: { tag: "lark_md", content: shortcut.output.slice(0, 28_000) } }],
+            }),
+          ),
+        );
+        store.markInbound(umaMessageId, "processed");
+        return;
+      }
       const attachmentIds =
         message.message_type === "image" || message.message_type === "file"
           ? [

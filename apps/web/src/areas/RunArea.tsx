@@ -1,5 +1,5 @@
 import type { Approval, Run, RunAction, RunCheckpoint } from "@uma-agent/protocol";
-import { Check, RotateCcw, X } from "lucide-react";
+import { Check, ChevronRight, RotateCcw, X } from "lucide-react";
 
 export function RunPanel({
   run,
@@ -52,8 +52,14 @@ export function RunPanel({
         .filter((action) => ["prepared", "uncertain"].includes(action.status))
         .map((action) => (
           <div className="action-card" key={action.id}>
-            <strong>{action.toolName}</strong>
-            <small className="action-status">{action.status}</small>
+            <details className="action-details">
+              <summary>
+                <ChevronRight size={14} aria-hidden="true" />
+                <strong>{action.toolName}</strong>
+                <small className="action-status">{action.status}</small>
+              </summary>
+              <pre className="action-input">{JSON.stringify(action.input, null, 2)}</pre>
+            </details>
             <div className="approval-actions">
               <button type="button" disabled={disabled} onClick={() => decide(action, "reject")}>
                 拒绝

@@ -1090,6 +1090,48 @@ describe("UmaRuntime preflight", () => {
     expect(runtime.generateOptimizationProposals()).toEqual([]);
   });
 
+  it("requires an accepted proposal and explicit approval before optimization writes", async () => {
+    const runtime = await runtimeWith([]);
+    const session = await runtime.createSession({ title: "Optimization" });
+    const proposal = runtime.database.addOptimizationProposal({
+      title: "Test change",
+      evidence: ["fixture"],
+      risk: "low",
+      recommendation: "Apply fixture",
+      validation: ["check"],
+      status: "pending",
+    });
+    const change = [{ path: "safe.txt", content: "safe" }];
+    const pending = await runtime.optimizationExecution.apply(
+      proposal.id,
+      session.workspace as string,
+      change,
+      true,
+    );
+    expect(pending.applied).toBe(false);
+    runtime.decideOptimizationProposal(proposal.id, "accepted");
+    const unapproved = await runtime.optimizationExecution.apply(
+      proposal.id,
+      session.workspace as string,
+      change,
+    );
+    expect(unapproved.applied).toBe(false);
+    const applied = await runtime.optimizationExecution.apply(
+      proposal.id,
+      session.workspace as string,
+      change,
+      true,
+    );
+    expect(applied.applied).toBe(true);
+    const git = await runtime.optimizationExecution.preview(
+      proposal.id,
+      session.workspace as string,
+      [{ path: ".git/config", content: "x" }],
+      true,
+    );
+    expect(git.writable).toBe(false);
+  });
+
   it("enforces command, attachment, profile, message-id, and memory safety edges", async () => {
     const runtime = await runtimeWith([]);
     const workspace = await runtime.createSession({ title: "Edges" });

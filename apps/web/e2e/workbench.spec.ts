@@ -36,6 +36,11 @@ test("two devices converge on one session and offline mode is read-only", async 
   await expect(first.getByRole("button", { name: "Ask" })).toHaveAttribute("aria-pressed", "true");
   await first.getByRole("button", { name: "Agent" }).click();
   await expect(first.getByRole("button", { name: "Agent" })).toHaveAttribute("aria-pressed", "true");
+  await first.getByRole("button", { name: "快捷命令" }).click();
+  await expect(first.getByRole("dialog", { name: "快捷命令" })).toBeVisible();
+  await first.getByRole("button", { name: /执行 \/help/ }).click();
+  await expect(first.getByRole("dialog", { name: "快捷命令" }).getByText(/可用命令/)).toBeVisible();
+  await first.getByRole("button", { name: "关闭快捷命令" }).click();
 
   await login(second, token);
   await expect(second.getByRole("button", { name: /New session/ }).first()).toBeVisible();
@@ -164,4 +169,18 @@ test("keeps the workbench fixed while the transcript and settings scroll indepen
   await settings.getByLabel("Profile 内容").fill("保持简洁并先说明风险。");
   await settings.getByRole("button", { name: "保存 Profile" }).click();
   await expect(settings.getByText("Profile 已同步到当前账号。")).toBeVisible();
+});
+
+test("keeps tool output collapsed until requested", async ({ page }) => {
+  await register(page);
+  await page.getByRole("button", { name: "新会话" }).click();
+  await page.getByRole("button", { name: "Agent" }).click();
+  const input = page.getByPlaceholder("向 UmaAgent 发送消息");
+  await input.fill("Use the configured deterministic read tool and report its result.");
+  await page.getByRole("button", { name: "发送" }).click();
+  const tool = page.locator(".tool-details").first();
+  await expect(tool).toBeVisible();
+  await expect(tool).not.toHaveAttribute("open", "");
+  await tool.locator("summary").click();
+  await expect(tool).toHaveAttribute("open", "");
 });
