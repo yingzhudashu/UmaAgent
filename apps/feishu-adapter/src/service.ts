@@ -55,6 +55,7 @@ export async function startFeishuService() {
   let longConnection: lark.WSClient | undefined;
   let longConnected = false;
   let stopping = false;
+  let serviceStarted = false;
   let reconnectAttempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let reportFailure: (error: unknown) => void = () => {};
@@ -62,7 +63,7 @@ export async function startFeishuService() {
   const scheduleReconnect = (error?: unknown): void => {
     if (error) reportFailure(error);
     longConnected = false;
-    if (stopping || reconnectTimer) return;
+    if (stopping || !serviceStarted || reconnectTimer) return;
     const delay = Math.min(30_000, 1_000 * 2 ** reconnectAttempt++);
     reconnectTimer = setTimeout(() => {
       reconnectTimer = undefined;
@@ -101,6 +102,7 @@ export async function startFeishuService() {
   };
   const stopLongConnection = (): void => {
     stopping = true;
+    serviceStarted = false;
     longConnected = false;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -590,6 +592,7 @@ export async function startFeishuService() {
   });
 
   await adapter.start();
+  serviceStarted = true;
   server.listen(config.port, config.host);
   const stop = async () => {
     await adapter.stop();
