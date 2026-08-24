@@ -13,8 +13,16 @@ dist-embed/
 *.db-shm
 *.db-wal
 /uma.config.json
+config.user.json
+/docker/config.user.json
 .env
 /workspace/
+/users/
+/.tmp-*/
+/.uma-faux*/
+/.uma-perf-*/
+/.uma-soak-*/
+/.test-*/
 /approved-skills/
 /backups/
 /deploy/uma.config.production.json

@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.2.0`，协议版本为 `11`，SQLite schema 为 `15`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.3.0`，协议版本为 `12`，SQLite schema 为 `17`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -23,7 +23,7 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 - Agent Profile、结构化渐进记忆、事实 supersede、历史 rollup 与按需原文回溯
 - 技能包 staging、风险扫描、人工启用、热刷新，以及可选的隔离 Skill Worker
 - 独立 Feishu MCP，提供文档、多维表格和云盘工具，不污染消息 Adapter 或 Core
-- 证据化只读优化提案；接受提案只进入人工待办，不存在 apply API
+- 证据化优化提案；接受提案后可在固定验证命令约束下备份、原子应用、失败回滚和人工回滚
 - 每 Run 工具循环保护：重复调用、无进展结果和 A/B ping-pong 会先产生公开告警，再以 `tool_loop_detected` 安全终止
 - 持久化 Faux/real 评测报告、跨设备评测历史，以及知识搜索、重建索引和终态任务清理
 
@@ -119,59 +119,56 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 ## API 摘要
 
-服务器支持多用户隔离：`POST /api/v11/auth/register` 创建用户并一次性返回个人令牌，
+服务器支持多用户隔离：`POST /api/v12/auth/register` 创建用户并一次性返回个人令牌，
 `/auth/login` 将令牌交换为绑定用户的 HttpOnly Cookie，`/auth/me`、`/auth/tokens` 提供令牌
 查询和撤销。Session、Run、Task、Approval、Message、Attachment 和工作区请求均按用户所有权
 校验。移动端或其他网页可使用 `/auth/authorize` + `/auth/token` 的 S256 PKCE 流程；服务器只
 接受环境变量 `UMA_OAUTH_REDIRECTS` 中的精确 `clientId|redirectUri` 配对。
 
-- `GET/POST /api/v11/sessions`
-- `GET /api/v11/sessions/:id/snapshot`
-- `GET /api/v11/sessions/:id/events?after=<sequence>` 增量事件
-- `GET /api/v11/sessions/:id/history?before=<sequence>` 历史分页
-- `POST /api/v11/sessions/:id/messages|cancel|compact`
-- `PATCH /api/v11/sessions/:id` 可更新 `queueMode`
-- `POST /api/v11/messages/:id/review|improve`、`GET /api/v11/runs/:id/quality`
-- `POST /api/v11/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
-- `GET /api/v11/attachments/:id/content`
-- `GET /api/v11/runs/:id/checkpoints|actions`
-- `POST /api/v11/runs/:id/resume|cancel`
-- `POST /api/v11/runs/:id/actions/:actionId/decide`
-- `POST /api/v11/approvals/:id`、`POST /api/v11/uploads`
-- `GET /api/v11/health/live|ready`
-- `GET /api/v11/events` WebSocket
-- `/api/v11/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
-- `GET /api/v11/knowledge/search`、`POST /api/v11/knowledge/:id/reindex`
-- `GET/POST /api/v11/evaluations`、`GET /api/v11/evaluations/:id`
-- `DELETE /api/v11/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
-- `/api/v11/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
-- `/api/v11/skills/search|install` 与技能 enable/disable/reject 生命周期
-- `POST /api/v11/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
-- `GET /api/v11/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
-- `/api/v11/schedules` 调度 CRUD、立即执行与运行历史
-- `GET /api/v11/reports/operations|diagnostics` 脱敏运行统计
-- `/api/v11/optimization-proposals` 只读证据、建议和人工接受/拒绝状态
+- `GET/POST /api/v12/sessions`
+- `GET /api/v12/sessions/:id/snapshot`
+- `GET /api/v12/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v12/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v12/sessions/:id/messages|cancel|compact`
+- `PATCH /api/v12/sessions/:id` 可更新 `queueMode`
+- `POST /api/v12/messages/:id/review|improve`、`GET /api/v12/runs/:id/quality`
+- `POST /api/v12/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
+- `GET /api/v12/attachments/:id/content`
+- `GET /api/v12/runs/:id/checkpoints|actions`
+- `POST /api/v12/runs/:id/resume|cancel`
+- `POST /api/v12/runs/:id/actions/:actionId/decide`
+- `POST /api/v12/approvals/:id`、`POST /api/v12/uploads`
+- `GET /api/v12/health/live|ready`
+- `GET /api/v12/events` WebSocket
+- `/api/v12/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `GET /api/v12/knowledge/search`、`POST /api/v12/knowledge/:id/reindex`
+- `GET/POST /api/v12/evaluations`、`GET /api/v12/evaluations/:id`
+- `DELETE /api/v12/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
+- `/api/v12/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
+- `/api/v12/skills/search|install` 与技能 enable/disable/reject 生命周期
+- `POST /api/v12/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
+- `GET /api/v12/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
+- `/api/v12/schedules` 调度 CRUD、立即执行与运行历史
+- `GET /api/v12/reports/operations|diagnostics|resources` 脱敏运行、Trace 延迟和 CPU/RSS/WAL 统计
+- `GET /api/v12/traces?runId=<runId>` 查询 Run 的完整持久化 Trace Span 树，也支持按 Trace、时间、状态和名称过滤
+- `/api/v12/optimization-proposals` 提供证据、建议和人工接受/拒绝；`/api/v12/optimization-applications` 提供验证、回滚记录
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
 ## 飞书 Adapter
 
-飞书接入是独立进程，不访问 Core SQLite。构建后使用以下环境变量启动：
+飞书接入是独立进程，不访问 Core SQLite。先复制 `config.user.example.json` 为未纳入 Git 的 `config.user.json`，填写 Core 令牌和飞书配置，然后使用统一配置启动：
 
 ```powershell
-$env:FEISHU_APP_ID = "..."
-$env:FEISHU_APP_SECRET = "..."
-$env:FEISHU_VERIFICATION_TOKEN = "..."
-$env:FEISHU_ENCRYPT_KEY = "..."
-$env:FEISHU_ALLOWED_OPEN_IDS = "ou_owner_open_id"
-$env:UMA_SERVER_URL = "http://127.0.0.1:3210"
-$env:UMA_TOKEN = "个人访问令牌"
-$env:FEISHU_HOST = "127.0.0.1"
+Copy-Item config.user.example.json config.user.json
+# 编辑 config.user.json 中的 core、feishu 字段
 npm run build --workspace=@uma-agent/feishu-adapter
-npm run start --workspace=@uma-agent/feishu-adapter
+npm run start:feishu -- --config=config.user.json
 ```
 
-Adapter 只接受 `FEISHU_ALLOWED_OPEN_IDS` 白名单中的所有者。Webhook 在签名校验后先持久化去重记录并立即 ACK，后台 Worker 再处理；重启会恢复 pending 入站。私聊全部进入 Core，群聊仅处理白名单用户 @机器人或回复 Adapter 已发送消息的内容；文本、图片和文件会转换为标准消息与 Attachment。运行卡片支持审批、恢复及副作用 Action 决策，更新采用一秒尾随节流且终态立即定稿。按钮只携带短期 opaque token，重复点击保持幂等。Adapter 自己的 SQLite 只保存会话映射、入站队列、卡片游标和回调状态。
+Docker 中请改用 `docker/config.user.example.json` 生成 `docker/config.user.json`；其中 Core 地址必须是 Compose 服务名 `http://uma:3210`。
+
+Adapter 只接受 `config.user.json` 中 `feishu.allowedOpenIds` 白名单中的所有者。Webhook 在签名校验后先持久化去重记录并立即 ACK，后台 Worker 再处理；重启会恢复 pending 入站。私聊全部进入 Core，群聊仅处理白名单用户 @机器人或回复 Adapter 已发送消息的内容；文本、图片和文件会转换为标准消息与 Attachment。运行卡片支持审批、恢复及副作用 Action 决策，更新采用一秒尾随节流且终态立即定稿。按钮只携带短期 opaque token，重复点击保持幂等。Adapter 自己的 SQLite 只保存会话映射、入站队列、卡片游标和回调状态。
 通用渠道类型、指数退避和节流工具由 `@uma-agent/channel-adapter` 提供；Core 不依赖任何渠道 SDK。
 
 ## 质量、记忆与技能
@@ -209,13 +206,9 @@ node apps/eval-runner/dist/main.js eval-suite.json
 消息 Adapter 只处理通道。飞书业务工具由 `apps/feishu-mcp` 独立提供，使用官方 SDK 暴露云文档、Bitable 与 Drive MCP 工具，包括 Markdown 创建/追加文档、Bitable 分页与批量记录操作、Drive 上传下载/复制/移动/权限管理。文件输入使用 Uma Attachment ID，通过 Client SDK 下载，不挂载 Core state 或 workspace。所有分页工具统一返回 `items + nextPageToken + hasMore`；不支持的 Markdown 结构保留为公开纯文本。服务必须设置独立 Bearer Token，并仅部署在内部网络：
 
 ```powershell
-$env:FEISHU_APP_ID = "..."
-$env:FEISHU_APP_SECRET = "..."
-$env:FEISHU_MCP_AUTH_TOKEN = "独立高熵令牌"
-$env:UMA_SERVER_URL = "http://core:3210"
-$env:UMA_TOKEN = "Core 令牌"
+# 在 config.user.json 的 feishu.mcpHost/mcpPort/mcpAuthToken 中配置 MCP
 npm run build --workspace=@uma-agent/feishu-mcp
-npm run start --workspace=@uma-agent/feishu-mcp
+npm run start --workspace=@uma-agent/feishu-mcp -- --config=config.user.json
 ```
 
 `apps/skill-worker` 只运行已批准且内容哈希与 `skill-worker.json` 清单一致的预打包 JavaScript ESM 工具。它不执行 `npm install`，技能目录只读，scratch 独立；容器默认无 Core state、workspace 或宿主路径挂载。Worker 未部署时，静态技能指令仍可用，但对应可执行工具显示 unavailable。
@@ -266,6 +259,10 @@ npx playwright install chromium
 npm run test:web:e2e
 npm run test:eval:faux
 npm run test:soak:faux # 默认 4 小时；可用 UMA_SOAK_HOURS=8 延长
+npm run test:real:smoke # 需 UMA_REAL_API=1；默认读取 MiniAgent 配置中的对应模型密钥
+npm run test:real:eval
+npm run test:real:perf
+npm run test:real:soak
 ```
 
 单元与集成测试覆盖 Runtime、SQLite、Protocol、Client、Server、CLI JSON 流、Web 离线缓存、飞书持久队列、Feishu MCP、Skill Worker、Browser Worker 和 Eval Runner；Playwright 使用两个独立浏览器上下文验证同一 Session 的实时同步与离线只读。Docker 构建也属于 CI 门禁；本机没有 Docker 时可先完成其余门禁，再在 CI 或具备 Docker Engine 的环境验证全部镜像。

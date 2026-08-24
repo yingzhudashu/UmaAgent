@@ -8,15 +8,15 @@ fi
 
 state_root=/var/lib/uma-agent/state
 workspace_root=/srv/uma-workspace
-feishu_root=/var/lib/uma-agent/feishu
-feishu_mcp_root=/var/lib/uma-agent/feishu-mcp
+feishu_root=/var/lib/uma-agent/channels/feishu
+feishu_mcp_root=/var/lib/uma-agent/channels/feishu-mcp
 browser_root=/var/lib/uma-agent/browser
 archive_root=/srv/backups/uma-agent/reset-$(date -u +%Y%m%d%H%M%S)
 archive_glob_root=/var/lib/uma-agent
 
 for path in "$state_root" "$workspace_root" "$feishu_root" "$feishu_mcp_root" "$browser_root"; do
   case "$path" in
-    /var/lib/uma-agent/state|/srv/uma-workspace|/var/lib/uma-agent/feishu|/var/lib/uma-agent/feishu-mcp|/var/lib/uma-agent/browser) ;;
+    /var/lib/uma-agent/state|/srv/uma-workspace|/var/lib/uma-agent/channels/feishu|/var/lib/uma-agent/channels/feishu-mcp|/var/lib/uma-agent/browser) ;;
     *) echo "Unexpected reset path: $path" >&2; exit 3 ;;
   esac
 done

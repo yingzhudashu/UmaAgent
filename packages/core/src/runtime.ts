@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { Agent, type AgentEvent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AssistantMessage,
@@ -16,12 +18,14 @@ import type {
   CreateEvaluationReport,
   CreateScheduledTaskRequest,
   CreateSessionRequest,
+  EvaluationTrend,
   InteractionMode,
   ModelRef,
   OptimizationProposal,
   PublicConfig,
   QualityAssessment,
   ReloadResult,
+  ResourceSnapshot,
   Run,
   RunAction,
   RunActionDecision,
@@ -32,6 +36,7 @@ import type {
   SkillInstallRequest,
   SkillPackage,
   SkillSummary,
+  TraceQuery,
   TranscriptItem,
   UpdateScheduledTaskRequest,
 } from "@uma-agent/protocol";
@@ -70,6 +75,7 @@ import { SkillRegistry } from "./skills.js";
 import { StateLock } from "./state-lock.js";
 import { ToolLoopGuard } from "./tool-loop-guard.js";
 import { createBuiltinTools } from "./tools.js";
+import { type TraceContext, TraceService } from "./trace.js";
 import type { PreflightDecision, RuntimeHealth, UmaConfig } from "./types.js";
 import { WorkspacePolicy } from "./workspace.js";
 
@@ -102,6 +108,11 @@ export class UmaRuntime {
   readonly permissions = new PermissionPolicy();
   private readonly taskSemaphore = new Semaphore(4);
   private readonly taskControllers = new Map<string, AbortController>();
+  private resourceTimer: NodeJS.Timeout | undefined;
+  private readonly eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+  private previousCpu = process.cpuUsage();
+  private readonly trace: TraceService;
+  private readonly activeTraces = new Map<string, TraceContext>();
   private started = false;
   private stopping = false;
   private stopPromise: Promise<void> | undefined;
@@ -113,6 +124,7 @@ export class UmaRuntime {
     this.stateLock = StateLock.acquire(config.server.stateDir);
     try {
       this.database = new UmaDatabase(config.server.stateDir);
+      this.trace = new TraceService(this.database);
     } catch (error) {
       this.stateLock.release();
       throw error;
@@ -151,6 +163,7 @@ export class UmaRuntime {
       isAcceptingRuns: () => this.started && !this.stopping,
       getQualityService: () => this.quality,
       getReasoningModel: () => this.models.snapshot(this.config.roles.reasoning),
+      trace: this.trace,
     });
     this.optimization = new RuntimeOptimizationService(this.database, () =>
       this.invalidateResource("optimization"),
@@ -200,6 +213,9 @@ export class UmaRuntime {
     this.skills.startWatching(() => this.invalidateResource("skills"));
     await this.mcp.connect(this.config.mcpServers, this.config.runtime.toolTimeoutMs);
     this.scheduler.start();
+    this.eventLoopDelay.enable();
+    this.resourceTimer = setInterval(() => this.captureResourceSnapshot(), 30_000);
+    this.captureResourceSnapshot();
     this.started = true;
   }
 
@@ -211,6 +227,9 @@ export class UmaRuntime {
   private async stopInternal(): Promise<void> {
     this.stopping = true;
     this.scheduler.stop();
+    if (this.resourceTimer) clearInterval(this.resourceTimer);
+    this.resourceTimer = undefined;
+    this.eventLoopDelay.disable();
     this.skills.stopWatching();
     this.approvals.rejectAll();
     for (const controller of this.controllers.values()) controller.abort();
@@ -228,6 +247,49 @@ export class UmaRuntime {
       started: this.started,
       databaseReady: this.database.isReady(),
     };
+  }
+
+  private captureResourceSnapshot(): void {
+    try {
+      const currentCpu = process.cpuUsage();
+      const cpuUserMicros = Math.max(0, currentCpu.user - this.previousCpu.user);
+      const cpuSystemMicros = Math.max(0, currentCpu.system - this.previousCpu.system);
+      this.previousCpu = currentCpu;
+      const memory = process.memoryUsage();
+      let walBytes = 0;
+      try {
+        walBytes = statSync(`${this.config.server.stateDir}/state.db-wal`).size;
+      } catch {
+        /* WAL may be checkpointed. */
+      }
+      const queuedRuns = this.database
+        .listSessions()
+        .reduce((sum, session) => sum + this.database.listQueuedRuns(session.id).length, 0);
+      const snapshot: ResourceSnapshot = {
+        id: randomUUID(),
+        capturedAt: Date.now(),
+        cpuUserMicros,
+        cpuSystemMicros,
+        rssBytes: memory.rss,
+        heapUsedBytes: memory.heapUsed,
+        heapTotalBytes: memory.heapTotal,
+        externalBytes: memory.external,
+        arrayBuffersBytes: memory.arrayBuffers,
+        eventLoopDelayMs: Number(this.eventLoopDelay.mean / 1e6 || 0),
+        walBytes,
+        activeRuns: this.orchestrator.activeCount(),
+        queuedRuns,
+      };
+      this.database.insertResourceSnapshot(snapshot);
+      this.eventLoopDelay.reset();
+    } catch (error) {
+      process.emitWarning(
+        `Resource snapshot failed: ${error instanceof Error ? error.name : "UnknownError"}`,
+        {
+          code: "UMA_RESOURCE_SNAPSHOT",
+        },
+      );
+    }
   }
 
   async reloadConfig(next: UmaConfig): Promise<ReloadResult> {
@@ -363,6 +425,10 @@ export class UmaRuntime {
   }
   listEvaluationReports(limit?: number) {
     return this.resources.listEvaluationReports(limit);
+  }
+
+  listEvaluationTrends(from: number, to: number, groupBy: "day" | "suite" | "mode"): EvaluationTrend[] {
+    return this.resources.listEvaluationTrends(from, to, groupBy);
   }
   getEvaluationReport(id: string) {
     return this.resources.getEvaluationReport(id);
@@ -648,6 +714,12 @@ export class UmaRuntime {
   }
   audit(runId: string) {
     return this.resources.audit(runId);
+  }
+  listTrace(query: TraceQuery) {
+    return this.database.listTrace(query);
+  }
+  listResourceSnapshots(from = 0, to = Date.now(), limit = 500) {
+    return this.database.listResourceSnapshots(from, to, limit);
   }
   listSkills(): SkillSummary[] {
     return this.resources.listSkills();
@@ -1029,10 +1101,17 @@ export class UmaRuntime {
   }
 
   private async executeCommand(session: Session, runId: string, command: string): Promise<void> {
+    const rootTrace = this.trace.startRoot(runId, session.id, "command", { "run.kind": "command" });
+    this.activeTraces.set(runId, rootTrace);
     await this.waitForSideEffectGate(session.id, runId);
     const release = await this.orchestrator.acquire();
     if (this.database.getRun(runId).status === "cancelled") {
-      release();
+      try {
+        rootTrace.finish({ status: "cancelled" });
+      } finally {
+        this.activeTraces.delete(runId);
+        release();
+      }
       return;
     }
     const controller = new AbortController();
@@ -1053,14 +1132,29 @@ export class UmaRuntime {
         this.events.emit(session.id, runId, "run.action_prepared", value);
         return value;
       });
-      const approved = await this.approvals.request({
-        sessionId: session.id,
-        runId,
-        toolCallId,
-        toolName: "shell",
-        args: { command },
-        signal: controller.signal,
-      });
+      const approvalTrace = rootTrace.child("approval", "approval", { tool: "shell" });
+      let approved: boolean;
+      try {
+        approved = await this.approvals.request({
+          sessionId: session.id,
+          runId,
+          toolCallId,
+          toolName: "shell",
+          args: { command },
+          signal: controller.signal,
+        });
+        approvalTrace.finish(
+          approved
+            ? { status: "ok" }
+            : { status: "error", error: { name: "ApprovalRejected", message: "Approval was rejected" } },
+        );
+      } catch (error) {
+        approvalTrace.finish({
+          status: "error",
+          error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+        });
+        throw error;
+      }
       if (!approved) {
         this.events.transaction(() => {
           const rejected = this.database.transitionRunAction(action.id, ["prepared"], {
@@ -1072,12 +1166,23 @@ export class UmaRuntime {
         throw new Error("Command execution was not approved");
       }
       this.database.createToolCall({ id: toolCallId, runId, name: "shell", args: { command } });
-      const result = await this.executeRecoveredAction(
-        this.database.getRun(runId),
-        action,
-        false,
-        controller.signal,
-      );
+      const toolTrace = rootTrace.child("tool", "tool", { tool: "shell" });
+      let result: { status: string; error?: string; result?: unknown };
+      try {
+        result = await this.executeRecoveredAction(
+          this.database.getRun(runId),
+          action,
+          false,
+          controller.signal,
+        );
+        toolTrace.finish({ status: result.status === "completed" ? "ok" : "error" });
+      } catch (error) {
+        toolTrace.finish({
+          status: "error",
+          error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+        });
+        throw error;
+      }
       if (result.status !== "completed") throw new Error(result.error ?? "Command execution failed");
       const output =
         result.result && typeof result.result === "object"
@@ -1096,14 +1201,23 @@ export class UmaRuntime {
         this.events.emit(session.id, runId, "run.updated", completed);
       });
     } catch (error) {
+      rootTrace.setStatus({
+        status: "error",
+        error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+      });
       const interrupted = this.database.listRunActions(runId).some((action) => action.status === "uncertain");
       this.transitionRun(session.id, runId, {
         status: interrupted ? "interrupted" : controller.signal.aborted ? "cancelled" : "failed",
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      this.controllers.delete(session.id);
-      release();
+      try {
+        rootTrace.finish();
+      } finally {
+        this.activeTraces.delete(runId);
+        this.controllers.delete(session.id);
+        release();
+      }
     }
   }
 
@@ -1185,10 +1299,17 @@ export class UmaRuntime {
     promptOverride?: string,
     resumeFromCheckpoint = false,
   ): Promise<void> {
+    const rootTrace = this.trace.startRoot(runId, sessionAtQueueTime.id, "run", { "run.kind": "agent" });
+    this.activeTraces.set(runId, rootTrace);
     await this.waitForSideEffectGate(sessionAtQueueTime.id, runId);
     const release = await this.orchestrator.acquire();
     if (this.database.getRun(runId).status === "cancelled") {
-      release();
+      try {
+        rootTrace.finish({ status: "cancelled" });
+      } finally {
+        this.activeTraces.delete(runId);
+        release();
+      }
       return;
     }
     if (this.stopping) {
@@ -1196,7 +1317,12 @@ export class UmaRuntime {
         status: "cancelled",
         error: "Server is shutting down",
       });
-      release();
+      try {
+        rootTrace.finish({ status: "cancelled" });
+      } finally {
+        this.activeTraces.delete(runId);
+        release();
+      }
       return;
     }
     const controller = new AbortController();
@@ -1225,6 +1351,7 @@ export class UmaRuntime {
         this.events.emit(session.id, runId, "run.updated", preflightRun);
       });
       const currentRun = this.database.getRun(runId);
+      const preflightTrace = rootTrace.child("preflight", "run");
       const decision =
         resumeFromCheckpoint && currentRun.route && currentRun.route !== "clarify"
           ? {
@@ -1356,6 +1483,7 @@ export class UmaRuntime {
             `Execute only plan step ${step.position + 1}: ${step.title}. Preserve completed work and finish this step with a concise progress result.`,
             budget,
           );
+          preflightTrace.finish({ status: "ok" });
           this.events.transaction(() => {
             this.database.updatePlanStep(step.id, "completed");
             this.database.createCheckpoint({
@@ -1413,6 +1541,14 @@ export class UmaRuntime {
         .some((action) => action.status === "uncertain");
       const cancelled =
         controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError");
+      rootTrace.setStatus(
+        cancelled
+          ? { status: "cancelled" }
+          : {
+              status: "error",
+              error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+            },
+      );
       this.events.transaction(() => {
         const failed = this.database.updateRun(runId, {
           status: wasPreempted && pendingSideEffect ? "interrupted" : cancelled ? "cancelled" : "failed",
@@ -1440,8 +1576,13 @@ export class UmaRuntime {
         if (failed.plan.length) this.events.emit(sessionAtQueueTime.id, runId, "plan.updated", failed.plan);
       });
     } finally {
-      this.controllers.delete(sessionAtQueueTime.id);
-      release();
+      try {
+        rootTrace.finish();
+      } finally {
+        this.activeTraces.delete(runId);
+        this.controllers.delete(sessionAtQueueTime.id);
+        release();
+      }
     }
   }
 
@@ -1954,14 +2095,31 @@ export class UmaRuntime {
           });
         injectRuntimeFault("tool.prepared");
         if (permission.requiresApproval) {
-          const approved = await this.approvals.request({
-            sessionId: session.id,
-            runId,
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            args,
-            signal: toolSignal ?? signal,
-          });
+          const approvalTrace = this.activeTraces
+            .get(runId)
+            ?.child("approval", "approval", { tool: toolCall.name });
+          let approved: boolean;
+          try {
+            approved = await this.approvals.request({
+              sessionId: session.id,
+              runId,
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              args,
+              signal: toolSignal ?? signal,
+            });
+            approvalTrace?.finish(
+              approved
+                ? { status: "ok" }
+                : { status: "error", error: { name: "ApprovalRejected", message: "Approval was rejected" } },
+            );
+          } catch (error) {
+            approvalTrace?.finish({
+              status: "error",
+              error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+            });
+            throw error;
+          }
           if (!approved) {
             this.events.transaction(() => {
               const rejected = this.database.transitionRunAction(action.id, ["prepared"], {
@@ -2017,6 +2175,9 @@ export class UmaRuntime {
     const toolMessages = new Map<string, string>();
     const toolActions = new Map<string, string>();
     let activeModelCall: { id: string; startedAt: number } | undefined;
+    let activeModelTrace: TraceContext | undefined;
+    const toolTraces = new Map<string, TraceContext>();
+    const rootTrace = this.activeTraces.get(runId);
     const flushAssistant = () => {
       if (!assistantItem || !pendingAssistant) return;
       const message = pendingAssistant;
@@ -2042,6 +2203,10 @@ export class UmaRuntime {
           }),
           startedAt: Date.now(),
         };
+        activeModelTrace = rootTrace?.child("model", "model", {
+          provider: run.model.ref.provider,
+          model: run.model.ref.id,
+        });
         injectRuntimeFault("model.started");
       } else if (event.type === "message_start" && event.message.role === "assistant") {
         assistantItem = this.events.transaction(() => {
@@ -2089,6 +2254,10 @@ export class UmaRuntime {
               usage: message.usage,
               ...(message.errorMessage ? { error: message.errorMessage } : {}),
             });
+          activeModelTrace?.finish({
+            status: message.stopReason === "error" || message.stopReason === "aborted" ? "error" : "ok",
+          });
+          activeModelTrace = undefined;
           this.database.addAudit({
             runId,
             kind: "model",
@@ -2112,6 +2281,8 @@ export class UmaRuntime {
         activeModelCall = undefined;
         assistantItem = undefined;
       } else if (event.type === "tool_execution_start") {
+        const toolTrace = rootTrace?.child("tool", "tool", { tool: event.toolName });
+        if (toolTrace) toolTraces.set(event.toolCallId, toolTrace);
         const created = this.events.transaction(() => {
           this.database.createToolCall({
             id: event.toolCallId,
@@ -2202,6 +2373,8 @@ export class UmaRuntime {
               toolCallId: event.toolCallId,
               isError: event.isError,
             });
+            toolTraces.get(event.toolCallId)?.finish({ status: event.isError ? "error" : "ok" });
+            toolTraces.delete(event.toolCallId);
           });
           injectRuntimeFault("tool.completed");
         }
@@ -2223,6 +2396,11 @@ export class UmaRuntime {
             content: assistantItem.content,
           });
         activeModelCall = undefined;
+        activeModelTrace?.finish({
+          status: "error",
+          error: { name: "AgentError", message: "Agent ended before model response" },
+        });
+        activeModelTrace = undefined;
         assistantItem = undefined;
       }
     });

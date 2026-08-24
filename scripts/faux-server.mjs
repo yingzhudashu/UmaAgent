@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { rm } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { UmaRuntime } from "@uma-agent/core";
 import { createServer } from "../apps/server/dist/app.js";
@@ -12,7 +13,9 @@ const webOrigins = (process.env.UMA_FAUX_WEB_ORIGINS ?? `http://127.0.0.1:${port
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
-const stateDir = resolve(process.env.UMA_FAUX_STATE ?? ".uma-faux");
+const stateDir = process.env.UMA_FAUX_STATE
+  ? resolve(process.env.UMA_FAUX_STATE)
+  : await mkdtemp(join(tmpdir(), "uma-faux-"));
 if (process.env.UMA_FAUX_RESET_STATE === "1") {
   await rm(stateDir, { recursive: true, force: true });
 }

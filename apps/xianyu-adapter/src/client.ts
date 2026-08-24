@@ -39,8 +39,8 @@ export class XianyuClient {
   ) {
     this.cookies = parseCookieHeader(cookieHeader);
     this.ownerId = this.cookies.unb?.trim() ?? "";
-    if (!this.ownerId) throw new XianyuAuthError("XIANYU_COOKIE 缺少 unb");
-    if (!this.cookies._m_h5_tk) throw new XianyuAuthError("XIANYU_COOKIE 缺少 _m_h5_tk");
+    if (!this.ownerId) throw new XianyuAuthError("user config.xianyu.cookie 缺少 unb");
+    if (!this.cookies._m_h5_tk) throw new XianyuAuthError("user config.xianyu.cookie 缺少 _m_h5_tk");
     this.deviceId = generateDeviceId(this.ownerId);
   }
   cookieHeader(): string {
@@ -48,7 +48,7 @@ export class XianyuClient {
   }
   private token(): string {
     const token = this.cookies._m_h5_tk?.split("_", 1)[0] ?? "";
-    if (!token) throw new XianyuAuthError("XIANYU_COOKIE 的 _m_h5_tk 无效");
+    if (!token) throw new XianyuAuthError("user config.xianyu.cookie 的 _m_h5_tk 无效");
     return token;
   }
   private async mtop(

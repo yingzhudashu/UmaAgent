@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import type { McpServerConfig, UmaConfig, UmaModelConfig } from "./types.js";
 
@@ -167,9 +167,33 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
   });
   if (models.length === 0) throw new Error("At least one model is required");
   const configDir = resolve(absolute, "..");
-  const resolvePath = (value: string) => (isAbsolute(value) ? resolve(value) : resolve(configDir, value));
+  const expandPathVariables = (value: string): string =>
+    value.replace(/%([A-Za-z_][A-Za-z0-9_]*)%|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, windows, unix) => {
+      const name = windows ?? unix;
+      const expanded = process.env[name];
+      if (!expanded) throw new Error(`config path references missing environment variable ${name}`);
+      return expanded;
+    });
+  const resolvePath = (value: string) => {
+    const expanded = expandPathVariables(value);
+    return isAbsolute(expanded) ? resolve(expanded) : resolve(configDir, expanded);
+  };
   const workspaceRoots = stringArray(server.workspaceRoots, "server.workspaceRoots").map(resolvePath);
   if (workspaceRoots.length === 0) throw new Error("server.workspaceRoots must not be empty");
+  // 旧版根目录承载的真实数据不自动迁移，避免误读或覆盖用户状态。
+  if (server.stateDir === ".uma" || workspaceRoots.some((root) => root === configDir)) {
+    const legacy = [resolve(configDir, ".uma"), resolve(configDir, "users")];
+    for (const path of legacy) {
+      try {
+        await access(path);
+        throw new Error(
+          `检测到旧运行数据目录 ${path}。请先人工备份并移动到外部 UmaAgent 数据目录后再启动；不会自动迁移。`,
+        );
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("检测到旧运行数据目录")) throw error;
+      }
+    }
+  }
   const thinking = typeof root.defaultThinkingLevel === "string" ? root.defaultThinkingLevel : "medium";
   if (!new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).has(thinking))
     throw new Error("Invalid defaultThinkingLevel");

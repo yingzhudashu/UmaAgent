@@ -1,7 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
@@ -14,7 +15,9 @@ if (!Number.isFinite(messageIntervalMs) || messageIntervalMs < 500)
 const port = Number(process.env.UMA_SOAK_PORT ?? 33212);
 const tokenSecret = "faux-soak-token-012345678901234567890123";
 const token = `uma_pat_00000000-0000-4000-8000-000000000001_${tokenSecret}`;
-const stateDir = resolve(process.env.UMA_SOAK_STATE ?? ".uma-faux-soak");
+const stateDir = process.env.UMA_SOAK_STATE
+  ? resolve(process.env.UMA_SOAK_STATE)
+  : await mkdtemp(join(tmpdir(), `uma-soak-${process.pid}-`));
 await mkdir(stateDir, { recursive: true });
 const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
   cwd: resolve("."),
@@ -22,7 +25,6 @@ const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
     ...process.env,
     UMA_FAUX_PORT: String(port),
     UMA_FAUX_TOKEN: tokenSecret,
-    UMA_FAUX_STATE: stateDir,
     UMA_FAUX_RESET_STATE: "1",
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -35,7 +37,7 @@ server.stderr.on("data", (chunk) => {
   serverOutput = `${serverOutput}${chunk}`.slice(-20_000);
 });
 
-const baseUrl = `http://127.0.0.1:${port}/api/v11`;
+const baseUrl = `http://127.0.0.1:${port}/api/v12`;
 async function api(path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
@@ -179,4 +181,5 @@ try {
     if (server.exitCode !== null) resolveExit();
     else server.once("exit", resolveExit);
   });
+  await rm(stateDir, { recursive: true, force: true });
 }

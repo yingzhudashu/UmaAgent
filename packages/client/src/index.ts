@@ -10,18 +10,21 @@ import type {
   CreateSessionRequest,
   DiagnosticsReport,
   EvaluationReport,
+  EvaluationTrend,
   Health,
   KnowledgeSearchHit,
   KnowledgeSource,
   MemoryFact,
   ModelRef,
   OperationsReport,
+  OptimizationApplication,
   OptimizationProposal,
   PublicConfig,
   QualityAssessment,
   ReloadResult,
   ResourceInvalidated,
   ResourceResyncRequired,
+  ResourceSnapshot,
   ScheduledTask,
   ScheduledTaskRun,
   SendMessageRequest,
@@ -34,6 +37,8 @@ import type {
   SkillPackage,
   SkillSummary,
   SyncBootstrap,
+  TraceQuery,
+  TraceQueryPage,
   UpdateScheduledTaskRequest,
   UpdateSessionRequest,
 } from "@uma-agent/protocol";
@@ -118,7 +123,7 @@ export class UmaClient {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v11${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v12${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -382,8 +387,29 @@ export class UmaClient {
     if (to !== undefined) query.set("to", String(to));
     return this.request(`/reports/diagnostics${query.size ? `?${query}` : ""}`);
   }
+  queryTraces(query: TraceQuery): Promise<TraceQueryPage> {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
+    return this.request(`/traces?${params}`);
+  }
+  resourceReport(from?: number, to?: number, limit = 500): Promise<ResourceSnapshot[]> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (from !== undefined) query.set("from", String(from));
+    if (to !== undefined) query.set("to", String(to));
+    return this.request(`/reports/resources?${query}`);
+  }
   listEvaluationReports(limit = 100): Promise<EvaluationReport[]> {
     return this.request(`/evaluations?limit=${limit}`);
+  }
+  listEvaluationTrends(
+    from?: number,
+    to?: number,
+    groupBy: "day" | "suite" | "mode" = "day",
+  ): Promise<EvaluationTrend[]> {
+    const query = new URLSearchParams({ groupBy });
+    if (from !== undefined) query.set("from", String(from));
+    if (to !== undefined) query.set("to", String(to));
+    return this.request(`/evaluations/trends?${query}`);
   }
   getEvaluationReport(id: string): Promise<EvaluationReport> {
     return this.request(`/evaluations/${encodeURIComponent(id)}`);
@@ -410,6 +436,7 @@ export class UmaClient {
     proposalId: string;
     workspace: string;
     changes: Array<{ path: string; content: string }>;
+    validationCommand: "test" | "check" | "build" | "test:eval:faux" | "test:perf";
     approved?: boolean;
   }): Promise<unknown> {
     return this.request("/optimization-proposals/preview", { method: "POST", body: JSON.stringify(input) });
@@ -418,9 +445,16 @@ export class UmaClient {
     proposalId: string;
     workspace: string;
     changes: Array<{ path: string; content: string }>;
+    validationCommand: "test" | "check" | "build" | "test:eval:faux" | "test:perf";
     approved?: boolean;
   }): Promise<unknown> {
     return this.request("/optimization-proposals/apply", { method: "POST", body: JSON.stringify(input) });
+  }
+  listOptimizationApplications(limit = 100): Promise<OptimizationApplication[]> {
+    return this.request(`/optimization-applications?limit=${limit}`);
+  }
+  rollbackOptimization(id: string): Promise<{ application: OptimizationApplication; rolledBack: boolean }> {
+    return this.request(`/optimization-applications/${encodeURIComponent(id)}/rollback`, { method: "POST" });
   }
   listMemoryFacts(status?: MemoryFact["status"]): Promise<MemoryFact[]> {
     return this.request(`/memory${status ? `?status=${status}` : ""}`);
@@ -539,7 +573,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v11/attachments/${encodeURIComponent(id)}/content`,
+      `${this.baseUrl}/api/v12/attachments/${encodeURIComponent(id)}/content`,
       { headers, credentials: "include" },
     );
     if (!response.ok) {
@@ -596,7 +630,7 @@ export class UmaClient {
   connectEvents(): void {
     if (this.socket || this.closed) return;
     this.eventConnectionState = "connecting";
-    const url = new URL("/api/v11/events", this.baseUrl);
+    const url = new URL("/api/v12/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())

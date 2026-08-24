@@ -2,8 +2,8 @@
   "server": {
     "host": "127.0.0.1",
     "port": 3210,
-    "stateDir": ".uma",
-    "workspaceRoots": ["."],
+    "stateDir": "%LOCALAPPDATA%/UmaAgent/state",
+    "workspaceRoots": ["%LOCALAPPDATA%/UmaAgent/workspaces"],
     "webOrigins": ["http://127.0.0.1:3210", "http://127.0.0.1:3211"],
     "maxUploadBytes": 20971520
   },
@@ -28,7 +28,7 @@
     "vision": { "provider": "openai", "id": "gpt-5.6-sol" }
   },
   "defaultThinkingLevel": "medium",
-  "skillsDirs": [".uma/skills"],
+  "skillsDirs": ["%LOCALAPPDATA%/UmaAgent/state/skills"],
   "mcpServers": [],
   "runtime": {
     "maxParallelSessions": 4,

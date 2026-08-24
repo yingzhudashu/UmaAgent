@@ -17,6 +17,7 @@ export function mapServerError(
   const provider =
     !providerContract && /(provider|preflight|classification|verification|model)/i.test(error.message);
   const cancelled = /cancel/i.test(error.message);
+  const forbidden = /administrator access|required permission|forbidden/i.test(error.message);
   const validation =
     /(invalid|required|must |unsupported|outside|escapes|exceeds|unavailable|does not support|belongs to another session)/i.test(
       error.message,
@@ -29,26 +30,30 @@ export function mapServerError(
         ? "not_found"
         : conflict
           ? "conflict"
-          : providerContract
-            ? "provider_contract_error"
-            : cancelled
-              ? "cancelled"
-              : provider
-                ? "provider_error"
-                : validation
-                  ? "validation_failed"
-                  : "internal_error";
+          : forbidden
+            ? "forbidden"
+            : providerContract
+              ? "provider_contract_error"
+              : cancelled
+                ? "cancelled"
+                : provider
+                  ? "provider_error"
+                  : validation
+                    ? "validation_failed"
+                    : "internal_error";
   const status = schemaMismatch
     ? 503
     : notFound
       ? 404
       : conflict || cancelled
         ? 409
-        : providerContract || provider
-          ? 502
-          : validation
-            ? 400
-            : 500;
+        : forbidden
+          ? 403
+          : providerContract || provider
+            ? 502
+            : validation
+              ? 400
+              : 500;
   if (schemaMismatch) message = "Server state does not match this release; reset state explicitly.";
   else if (databaseFailure)
     message = "The server could not persist this operation. Retry after checking server state.";

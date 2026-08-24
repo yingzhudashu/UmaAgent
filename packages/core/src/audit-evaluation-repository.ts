@@ -5,6 +5,7 @@ import type {
   CreateEvaluationReport,
   DiagnosticsReport,
   EvaluationReport,
+  EvaluationTrend,
   OperationsReport,
 } from "@uma-agent/protocol";
 
@@ -22,6 +23,12 @@ function parseJson<T>(value: unknown, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function percentile(values: number[], p: number): number {
+  if (!values.length) return 0;
+  const ordered = [...values].sort((a, b) => a - b);
+  return ordered[Math.min(ordered.length - 1, Math.ceil((p / 100) * ordered.length) - 1)] ?? 0;
 }
 
 function redactAudit(value: unknown): unknown {
@@ -229,6 +236,49 @@ export class AuditEvaluationRepository {
     ).map((value) => this.getEvaluationReport(text(value.id)));
   }
 
+  evaluationTrends(from: number, to: number, groupBy: "day" | "suite" | "mode"): EvaluationTrend[] {
+    const reports = rows(
+      this.db.prepare(
+        "SELECT * FROM evaluation_reports WHERE created_at BETWEEN ? AND ? ORDER BY created_at",
+      ),
+      from,
+      to,
+    );
+    const groups = new Map<string, { reports: EvaluationReport[] }>();
+    for (const value of reports) {
+      const report = this.getEvaluationReport(text(value.id));
+      const key =
+        groupBy === "suite"
+          ? report.suiteVersion
+          : groupBy === "mode"
+            ? report.mode
+            : new Date(report.createdAt).toISOString().slice(0, 10);
+      const group = groups.get(key) ?? { reports: [] };
+      group.reports.push(report);
+      groups.set(key, group);
+    }
+    return [...groups.entries()].map(([group, value]) => {
+      const allCases = value.reports.flatMap((report) => report.cases);
+      const durations = value.reports.map((report) => report.durationMs);
+      const failures = new Map<string, number>();
+      for (const item of allCases.filter((item) => !item.passed))
+        failures.set(item.category, (failures.get(item.category) ?? 0) + 1);
+      const totalCases = allCases.length;
+      return {
+        group,
+        from: Math.min(...value.reports.map((report) => report.createdAt)),
+        to: Math.max(...value.reports.map((report) => report.createdAt)),
+        reports: value.reports.length,
+        totalCases,
+        passedCases: allCases.filter((item) => item.passed).length,
+        failedCases: allCases.filter((item) => !item.passed).length,
+        passRate: totalCases ? allCases.filter((item) => item.passed).length / totalCases : 0,
+        durationMs: { p50: percentile(durations, 50), p95: percentile(durations, 95) },
+        failures: [...failures.entries()].map(([category, count]) => ({ category, count })),
+      };
+    });
+  }
+
   operationsReport(from: number, to: number): OperationsReport {
     const runRows = rows(
       this.db.prepare(
@@ -333,6 +383,12 @@ export class AuditEvaluationRepository {
       requested: integer(value.requested),
       denied: integer(value.denied),
     }));
+    const traceRows = rows(
+      this.db.prepare("SELECT duration_ms,status FROM trace_spans WHERE started_at BETWEEN ? AND ?"),
+      from,
+      to,
+    );
+    const traceDurations = traceRows.map((value) => integer(value.duration_ms));
     return {
       from,
       to,
@@ -341,6 +397,15 @@ export class AuditEvaluationRepository {
       toolFailures,
       recoveryFrequency: summary.runs.total ? summary.recoveries / summary.runs.total : 0,
       approvalBottlenecks,
+      trace: {
+        spans: traceRows.length,
+        incomplete: traceRows.filter((value) => text(value.status) === "incomplete").length,
+        latencyMs: {
+          p50: percentile(traceDurations, 50),
+          p95: percentile(traceDurations, 95),
+          p99: percentile(traceDurations, 99),
+        },
+      },
     };
   }
 }

@@ -1,3 +1,3 @@
 import { startFeishuService } from "./service.js";
 
-await startFeishuService();
+await startFeishuService(process.argv.find((arg) => arg.startsWith("--config="))?.slice(9));

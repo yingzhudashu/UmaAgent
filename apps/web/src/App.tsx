@@ -137,6 +137,11 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     queryFn: () => client.listEvaluationReports(),
     enabled: authenticated && userRole === "admin",
   });
+  const evaluationTrends = useQuery({
+    queryKey: ["evaluation-trends"],
+    queryFn: () => client.listEvaluationTrends(Date.now() - 30 * 86_400_000, Date.now(), "day"),
+    enabled: authenticated && userRole === "admin",
+  });
   const optimization = useQuery({
     queryKey: ["optimization"],
     queryFn: () => client.listOptimizationProposals(),
@@ -861,7 +866,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   disabled={offline}
                 />
               )}
-              {false && inspectorSection === "settings" && (
+              {inspectorSection === "settings" && (
                 <section className="inspector-group">
                   <h3>后台任务</h3>
                   <div className="operation-list">
@@ -925,7 +930,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   </div>
                 </section>
               )}
-              {false && inspectorSection === "settings" && (
+              {inspectorSection === "settings" && (
                 <section className="inspector-group">
                   <h3>记忆</h3>
                   <div className="operation-list">
@@ -961,7 +966,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   </div>
                 </section>
               )}
-              {false && inspectorSection === "settings" && (
+              {inspectorSection === "settings" && (
                 <section className="inspector-group">
                   <h3>调度</h3>
                   <ScheduleArea
@@ -978,7 +983,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   />
                 </section>
               )}
-              {false && inspectorSection === "settings" && (
+              {inspectorSection === "settings" && (
                 <section className="inspector-group">
                   <h3>资源</h3>
                   <ResourceArea
@@ -1015,10 +1020,10 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   />
                 </section>
               )}
-              {false && inspectorSection === "settings" && userRole === "admin" && (
+              {inspectorSection === "settings" && userRole === "admin" && (
                 <section className="inspector-group">
                   <h3>管理</h3>
-                  <EvaluationArea reports={evaluations.data ?? []} />
+                  <EvaluationArea reports={evaluations.data ?? []} trends={evaluationTrends.data ?? []} />
                   <DiagnosticsArea report={diagnostics.data} />
                   <OptimizationArea
                     proposals={optimization.data ?? []}

@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 const port = 33211;
 const tokenSecret = "faux-eval-token-012345678901234567890123";
 const token = `uma_pat_00000000-0000-4000-8000-000000000001_${tokenSecret}`;
 const root = resolve(".");
-await mkdir(resolve("test-results"), { recursive: true });
+const stateDir = await mkdtemp(join(tmpdir(), `uma-eval-${process.pid}-`));
+const junitPath = join(stateDir, "eval-faux.xml");
 
 const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
   cwd: root,
@@ -14,7 +16,7 @@ const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
     ...process.env,
     UMA_FAUX_PORT: String(port),
     UMA_FAUX_TOKEN: tokenSecret,
-    UMA_FAUX_STATE: ".uma-faux-eval",
+    UMA_FAUX_STATE: join(stateDir, "state"),
     UMA_FAUX_RESET_STATE: "1",
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -31,7 +33,7 @@ async function waitUntilReady() {
   for (let attempt = 0; attempt < 120; attempt++) {
     if (server.exitCode !== null) throw new Error(`Faux Core exited early:\n${serverOutput}`);
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/api/v11/health/ready`);
+      const response = await fetch(`http://127.0.0.1:${port}/api/v12/health/ready`);
       if (response.ok) return;
     } catch {
       // Startup is still in progress.
@@ -52,7 +54,7 @@ try {
         ...process.env,
         UMA_SERVER_URL: `http://127.0.0.1:${port}`,
         UMA_TOKEN: token,
-        EVAL_JUNIT_PATH: resolve("test-results", "eval-faux.xml"),
+        EVAL_JUNIT_PATH: junitPath,
       },
       stdio: "inherit",
     },
@@ -68,4 +70,5 @@ try {
     if (server.exitCode !== null) resolveExit();
     else server.once("exit", resolveExit);
   });
+  await rm(stateDir, { recursive: true, force: true });
 }

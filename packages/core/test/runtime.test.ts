@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -997,6 +997,12 @@ describe("UmaRuntime preflight", () => {
     runtime.database.updateRun(source.id, { status: "completed" });
     const review = runtime.reviewMessage("quality-answer", "Check completeness");
     expect((await waitForRunTerminal(runtime, review.id)).status).toBe("completed");
+    expect(runtime.database.listTrace({ runId: review.id }).spans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "review", kind: "run", status: "ok", runId: review.id }),
+        expect.objectContaining({ name: "model.review", kind: "model", status: "ok", runId: review.id }),
+      ]),
+    );
     expect(runtime.listQualityAssessments(review.id)[0]).toMatchObject({
       targetMessageId: "quality-answer",
       passed: false,
@@ -1004,6 +1010,12 @@ describe("UmaRuntime preflight", () => {
     });
     const improve = runtime.improveMessage("quality-answer");
     expect((await waitForRunTerminal(runtime, improve.id)).status).toBe("completed");
+    expect(runtime.database.listTrace({ runId: improve.id }).spans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "improve", kind: "run", status: "ok", runId: improve.id }),
+        expect.objectContaining({ name: "model.improve", kind: "model", status: "ok", runId: improve.id }),
+      ]),
+    );
     const revision = runtime
       .getSnapshot(session.id)
       .transcript.find((item) => item.runId === improve.id && item.role === "assistant");
@@ -1093,6 +1105,10 @@ describe("UmaRuntime preflight", () => {
   it("requires an accepted proposal and explicit approval before optimization writes", async () => {
     const runtime = await runtimeWith([]);
     const session = await runtime.createSession({ title: "Optimization" });
+    await writeFile(
+      join(session.workspace as string, "package.json"),
+      JSON.stringify({ scripts: { check: 'node -e "process.exit(0)"' } }),
+    );
     const proposal = runtime.database.addOptimizationProposal({
       title: "Test change",
       evidence: ["fixture"],
@@ -1106,6 +1122,7 @@ describe("UmaRuntime preflight", () => {
       proposal.id,
       session.workspace as string,
       change,
+      "check",
       true,
     );
     expect(pending.applied).toBe(false);
@@ -1114,19 +1131,48 @@ describe("UmaRuntime preflight", () => {
       proposal.id,
       session.workspace as string,
       change,
+      "check",
     );
     expect(unapproved.applied).toBe(false);
     const applied = await runtime.optimizationExecution.apply(
       proposal.id,
       session.workspace as string,
       change,
+      "check",
       true,
     );
     expect(applied.applied).toBe(true);
+    expect(await readFile(join(session.workspace as string, "safe.txt"), "utf8")).toBe("safe");
+    const rolledBack = await runtime.optimizationExecution.rollback(applied.application?.id as string);
+    expect(rolledBack.rolledBack).toBe(true);
+    await expect(readFile(join(session.workspace as string, "safe.txt"), "utf8")).rejects.toThrow();
+    await writeFile(
+      join(session.workspace as string, "package.json"),
+      JSON.stringify({ scripts: { check: 'node -e "process.exit(1)"' } }),
+    );
+    const failingProposal = runtime.database.addOptimizationProposal({
+      title: "Failing validation",
+      evidence: ["fixture"],
+      risk: "low",
+      recommendation: "Exercise rollback",
+      validation: ["check"],
+      status: "accepted",
+    });
+    await expect(
+      runtime.optimizationExecution.apply(
+        failingProposal.id,
+        session.workspace as string,
+        [{ path: "failed.txt", content: "must be removed" }],
+        "check",
+        true,
+      ),
+    ).rejects.toMatchObject({ application: { status: "rolled_back", rollbackStatus: "completed" } });
+    await expect(readFile(join(session.workspace as string, "failed.txt"), "utf8")).rejects.toThrow();
     const git = await runtime.optimizationExecution.preview(
       proposal.id,
       session.workspace as string,
       [{ path: ".git/config", content: "x" }],
+      "check",
       true,
     );
     expect(git.writable).toBe(false);

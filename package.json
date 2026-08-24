@@ -1,6 +1,6 @@
 {
   "name": "uma-agent",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -22,6 +22,10 @@
     "test:eval:faux": "node scripts/eval-faux.mjs",
     "test:perf": "node scripts/perf-baseline.mjs",
     "test:soak:faux": "node scripts/soak-faux.mjs",
+    "test:real:smoke": "node scripts/real-smoke.mjs",
+    "test:real:eval": "node scripts/real-test.mjs eval",
+    "test:real:perf": "node scripts/real-test.mjs perf",
+    "test:real:soak": "node scripts/real-test.mjs soak",
     "test:watch": "vitest",
     "start": "npm run start --workspace=@uma-agent/server",
     "start:configured": "node --env-file=.env apps/server/dist/main.js",
@@ -29,7 +33,9 @@
     "cli:configured": "node --env-file=.env apps/cli/dist/main.js",
     "dev:web": "npm run dev --workspace=@uma-agent/web",
     "build:web": "npm run build --workspace=@uma-agent/web",
-    "build:web:embed": "npm run build:embed --workspace=@uma-agent/web"
+    "build:web:embed": "npm run build:embed --workspace=@uma-agent/web",
+    "start:feishu": "node apps/feishu-adapter/dist/main.js",
+    "start:xianyu": "node apps/xianyu-adapter/dist/main.js"
   },
   "devDependencies": {
     "@biomejs/biome": "2.3.5",

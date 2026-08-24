@@ -1,6 +1,6 @@
 # UmaAgent 服务器部署与验收
 
-本文档面向 UmaAgent `1.2.0`、Protocol v11、SQLite schema 15。Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
+本文档面向 UmaAgent `1.3.0`、Protocol v12、SQLite schema 17。Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
 
 ## 1. 部署前确认
 
@@ -93,7 +93,7 @@ docker compose \
 | --- | --- | --- |
 | Core SQLite、WAL、上传、技能 | `/data/state` | `umaagent_uma-state` 命名卷 |
 | 服务器工作区 | `/data/workspace` | `./workspace` bind mount |
-| Feishu 队列和映射 | `/data/feishu` | `umaagent_feishu-state` 命名卷 |
+| Feishu 队列和映射 | `/data/feishu`（外部 state 对应 `channels/feishu`） | `umaagent_feishu-state` 命名卷 |
 | Skill Worker scratch | `/scratch` | `umaagent_skill-scratch` 命名卷 |
 
 卷名前缀由 `COMPOSE_PROJECT_NAME` 决定。不要让第二个 Core 挂载同一 `uma-state` 卷；SQLite WAL 是单进程、单副本设计。
@@ -183,11 +183,11 @@ Browser Worker 和 Feishu 服务应使用各自的 systemd unit 与环境文件�
 Liveness 只表示进程事件循环可响应；readiness 还检查数据库、工作区、模型目录和 MCP：
 
 ```bash
-curl --fail http://127.0.0.1:3210/api/v11/health/live
-curl --fail http://127.0.0.1:3210/api/v11/health/ready
+curl --fail http://127.0.0.1:3210/api/v12/health/live
+curl --fail http://127.0.0.1:3210/api/v12/health/ready
 curl --fail \
   -H "Authorization: Bearer ${UMA_TOKEN}" \
-  http://127.0.0.1:3210/api/v11/sessions
+  http://127.0.0.1:3210/api/v12/sessions
 ```
 
 再从另一台设备验证 SDK/CLI，而不是只在服务器本机测试：
@@ -227,7 +227,7 @@ Caddy 和 Nginx 样例都支持 WebSocket。证书域名必须和 `server.webOri
 
 ### Feishu Adapter
 
-在 `.env` 中设置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和至少一个 `FEISHU_ALLOWED_OPEN_IDS`。Open ID 多值用逗号分隔。默认使用飞书官方长连接接收 `im.message.receive_v1`，不需要公开消息 Webhook：
+复制仓库根目录的 `config.user.example.json` 为 `/etc/uma-agent/config.user.json`（Docker 使用 `docker/config.user.example.json` 生成被挂载的 `docker/config.user.json`），仅在该文件的 `core` 和 `feishu` 节点填写令牌、应用凭据与白名单。Adapter 不再读取 `FEISHU_*` 凭据环境变量。默认使用飞书官方长连接接收 `im.message.receive_v1`，不需要公开消息 Webhook：
 
 ```bash
 docker compose \
@@ -246,7 +246,7 @@ curl --fail http://127.0.0.1:3220/health
 
 ### Feishu MCP
 
-设置 `FEISHU_MCP_TOKEN`，在 Core 配置的 `mcpServers` 中加入前述片段，然后启动 profile 并重建 Core：
+在同一 `config.user.json` 的 `feishu.mcpHost`、`mcpPort` 和 `mcpAuthToken` 中配置 MCP，在 Core 配置的 `mcpServers` 中加入前述片段，然后启动 profile 并重建 Core：
 
 ```bash
 docker compose \
@@ -317,7 +317,26 @@ docker run --rm \
 
 本项目不提供 migration、旧 DTO 或 schema fallback。数据库 `PRAGMA user_version` 与当前 schema 不匹配时会拒绝启动。升级前必须备份；如果新版本升级了 schema，应按该版本的发布说明显式重置，不能把旧数据库强行交给新版本。回滚时部署原版本并恢复原版本生成的备份。
 
-## 9. 故障排查
+## 9. Trace、资源报告与真实 API 验证
+
+Core 使用 SQLite schema 17 持久化 Trace。Run、queue、preflight、model、tool、command、approval 和终态会形成一棵有父子关系的 Span 树；查询入口为 `GET /api/v12/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。资源快照和诊断报告分别通过 `/api/v12/reports/resources` 与 `/api/v12/reports/diagnostics` 读取，均只允许管理员。
+
+真实测试默认读取 `D:\AIhub\miniagent-python\config.user.json` 的 Provider、模型、API 类型和能力字段，在临时目录生成 Uma 配置和 schema 17 状态库。执行时优先使用配置声明的环境变量；若环境变量为空，且 `UMA_REAL_API=1` 已明确授权，脚本才会从该配置的对应 credential 读取 API key，并仅注入当前 Node 进程，不写入临时配置、数据库、Trace、日志或测试报告。缺少授权或密钥时命令直接失败，不切换 Faux：
+
+```powershell
+$env:UMA_REAL_API = "1"
+$env:OPENAI_API_KEY = "从受控密钥管理注入"
+npm run test:real:smoke
+npm run test:real:eval
+$env:UMA_REAL_MESSAGES = "20"
+npm run test:real:perf
+$env:UMA_REAL_SOAK_MINUTES = "5"
+npm run test:real:soak
+```
+
+输出只包含 p50/p95/p99、CPU/内存/WAL/event-loop 聚合值、token 数量、错误分类和脱敏 Trace ID，不包含 prompt、完整响应、凭据或隐藏思维链。真实测试结束后会删除临时状态目录。
+
+## 10. 故障排查
 
 ```bash
 docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml ps
@@ -340,7 +359,7 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 | Feishu 无入站 | 应用未发布、事件未启用、Open ID 不在白名单或长连接无法出站 |
 | Core readiness 等待 MCP | profile 未启动、Token 不一致、网络名/URL 错误或循环依赖配置未按本文启动 |
 
-## 10. 部署验收清单
+## 11. 部署验收清单
 
 - [ ] `.env`、生产配置和备份未被 Git 跟踪，也未进入 Docker build context。
 - [ ] `docker compose config --quiet`、镜像构建和全部容器健康检查通过。
@@ -351,4 +370,4 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] Feishu 白名单、消息去重、重启恢复和可选卡片回调通过。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v11 和 schema 15，保留可回滚 release 与同版本备份。
+- [ ] 确认当前应用版本、Protocol v12 和 schema 17，保留可回滚 release 与同版本备份。

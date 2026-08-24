@@ -4,6 +4,7 @@ import type {
   BackgroundTask,
   CreateEvaluationReport,
   CreateScheduledTaskRequest,
+  EvaluationTrend,
   ModelRef,
   OptimizationProposal,
   PublicConfig,
@@ -18,6 +19,7 @@ import type {
   SkillInstallRequest,
   SkillPackage,
   SkillSummary,
+  TraceQuery,
   TranscriptItem,
   UpdateScheduledTaskRequest,
 } from "@uma-agent/protocol";
@@ -78,6 +80,10 @@ export class RuntimeResourceService {
 
   listEvaluationReports(limit?: number) {
     return this.deps.database.listEvaluationReports(limit);
+  }
+
+  listEvaluationTrends(from: number, to: number, groupBy: "day" | "suite" | "mode"): EvaluationTrend[] {
+    return this.deps.database.evaluationTrends(from, to, groupBy);
   }
 
   getEvaluationReport(id: string) {
@@ -174,6 +180,10 @@ export class RuntimeResourceService {
 
   audit(runId: string) {
     return this.deps.database.listAudit(runId);
+  }
+
+  listTrace(query: TraceQuery) {
+    return this.deps.database.listTrace(query);
   }
 
   listSkills(): SkillSummary[] {

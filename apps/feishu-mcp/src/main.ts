@@ -2,16 +2,14 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import * as lark from "@larksuiteoapi/node-sdk";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { loadUserConfig } from "@uma-agent/channel-adapter";
 import { UmaClient } from "@uma-agent/client";
 import type { Request, Response } from "express";
 import { createFeishuMcp, type FeishuBusinessGateway, retryFeishuOperation } from "./service.js";
 
-const required = (name: string) => {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name} is required`);
-  return value;
-};
-const sdk = new lark.Client({ appId: required("FEISHU_APP_ID"), appSecret: required("FEISHU_APP_SECRET") });
+const configPath = process.argv.find((arg) => arg.startsWith("--config="))?.slice(9) ?? "config.user.json";
+const user = await loadUserConfig(configPath, "feishu");
+const sdk = new lark.Client({ appId: user.feishu.appId, appSecret: user.feishu.appSecret });
 const gateway: FeishuBusinessGateway = {
   request: (method, url, input) =>
     retryFeishuOperation(() =>
@@ -32,16 +30,16 @@ const gateway: FeishuBusinessGateway = {
     return { name: "feishu-download", type: "application/octet-stream", bytes: new Uint8Array(response) };
   },
 };
-const core = new UmaClient({ baseUrl: required("UMA_SERVER_URL"), token: required("UMA_TOKEN") });
+const core = new UmaClient({ baseUrl: user.core.serverUrl, token: user.core.token });
 const mcp = createFeishuMcp({ gateway, core });
 const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID } as never);
 transport.onerror = (error) => console.error("MCP transport error", error);
 await mcp.connect(transport as Parameters<typeof mcp.connect>[0]);
-const host = process.env.FEISHU_MCP_HOST?.trim() || "127.0.0.1";
-const port = Number(process.env.FEISHU_MCP_PORT ?? 3240);
-const token = process.env.FEISHU_MCP_AUTH_TOKEN?.trim();
+const host = user.feishu.mcpHost;
+const port = user.feishu.mcpPort;
+const token = user.feishu.mcpAuthToken;
 if (!new Set(["127.0.0.1", "localhost", "::1", "[::1]"]).has(host) && !token)
-  throw new Error("FEISHU_MCP_AUTH_TOKEN is required for non-loopback hosts");
+  throw new Error("user config.feishu.mcpAuthToken is required for non-loopback hosts");
 const authenticated = (header?: string) => {
   if (!token) return true;
   const actual = Buffer.from(header ?? "");

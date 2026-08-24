@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本保持 UmaAgent 1.2.0、Protocol v11 和 SQLite schema 15。数据库只接受 schema 15，旧 schema 直接拒绝启动，不提供 migration 或兼容路径。
+当前版本为 UmaAgent 1.3.0、Protocol v12 和 SQLite schema 17。数据库只接受 schema 17，旧 schema 直接拒绝启动，不提供 migration 或兼容路径。
 
 ## 已落地的边界
 
@@ -19,6 +19,7 @@
 - 空闲 Core RSS < 256 MiB
 - WAL < 256 MiB
 - soak 期间 RSS 增长 < 10%
+- Trace Span 必须有完整父子关系，Run 终态不得遗留未结束 Span
 
 ## 验证入口
 
@@ -32,4 +33,4 @@ npm run test:soak:faux
 npm run test:web:e2e
 ```
 
-Docker 和 4 小时 soak 由 CI/nightly 执行；本机没有 Docker 时只运行 Node/SQLite 级门禁。MiniAgent 差异审计见 `docs/miniagent-feature-matrix.md`，partial 项目先补可复现测试，再决定是否扩展公共接口。
+Docker 和 4 小时 soak 由 CI/nightly 执行；本机没有 Docker 时只运行 Node/SQLite 级门禁。MiniAgent 差异审计见 `docs/miniagent-feature-matrix.md`，真实外部网关仅在显式授权时运行。

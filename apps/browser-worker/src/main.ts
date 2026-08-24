@@ -30,7 +30,7 @@ async function closeHandle(id: string): Promise<void> {
   await handle?.context.close();
 }
 
-const mcp = new McpServer({ name: "uma-browser-worker", version: "1.2.0" });
+const mcp = new McpServer({ name: "uma-browser-worker", version: "1.3.0" });
 mcp.registerTool(
   "open",
   { description: "Open a public HTTP(S) page.", inputSchema: { url: z.url() } },

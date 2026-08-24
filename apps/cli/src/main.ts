@@ -12,6 +12,7 @@ import {
   Text,
   TuiMainScreen,
 } from "@earendil-works/pi-tui";
+import { loadUserConfig } from "@uma-agent/channel-adapter";
 import { UmaClient, UmaClientError } from "@uma-agent/client";
 import {
   AGENT_SHORTCUT_COMMANDS,
@@ -25,6 +26,7 @@ import {
 import clipboard from "clipboardy";
 import { BUILTIN_EVALUATIONS, runBuiltInEvaluations } from "./evaluations.js";
 import { createTuiAutocomplete } from "./tui-completion.js";
+import { xianyuLogin } from "./xianyu-login.js";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "chat";
@@ -818,6 +820,15 @@ async function evalCommand(): Promise<void> {
     );
     return;
   }
+  if (action === "trend") {
+    const days = Number(positionals[1] ?? 30);
+    if (!Number.isSafeInteger(days) || days < 1 || days > 365)
+      throw new Error("trend days must be between 1 and 365");
+    console.log(
+      JSON.stringify(await client.listEvaluationTrends(Date.now() - days * 86_400_000, Date.now()), null, 2),
+    );
+    return;
+  }
   if (action === "show" && positionals[1]) {
     console.log(JSON.stringify(await client.getEvaluationReport(positionals[1]), null, 2));
     return;
@@ -871,6 +882,27 @@ async function channelStatusCommand(): Promise<void> {
   console.log(JSON.stringify(await response.json(), null, 2));
 }
 
+async function xianyuCommand(): Promise<void> {
+  const action = positionals[0] ?? "status";
+  const channelUrl = valueAfter("--channel-url") ?? process.env.UMA_CHANNEL_URL;
+  if (action === "login") {
+    const configPath = valueAfter("--config") ?? process.env.UMA_CONFIG_USER ?? "config.user.json";
+    await xianyuLogin(configPath);
+    return;
+  }
+  if (!channelUrl) throw new Error("Set --channel-url=<url> or UMA_CHANNEL_URL");
+  const configPath = valueAfter("--config") ?? "config.user.json";
+  const user = await loadUserConfig(configPath, "xianyu");
+  const headers = { authorization: `Bearer ${user.xianyu.controlToken}` };
+  const endpoint = action === "status" ? "/health" : `/${action}`;
+  const response = await fetch(`${channelUrl.replace(/\/$/, "")}${endpoint}`, {
+    method: action === "status" ? "GET" : "POST",
+    headers,
+  });
+  if (!response.ok) throw new Error(`Xianyu request failed: HTTP ${response.status}`);
+  if (response.status !== 204) console.log(JSON.stringify(await response.json(), null, 2));
+}
+
 async function main(): Promise<void> {
   if (command === "chat") return chat();
   if (command === "run") await runCommand();
@@ -887,9 +919,10 @@ async function main(): Promise<void> {
   else if (command === "eval" || command === "test") await evalCommand();
   else if (command === "sync") await syncCommand();
   else if (command === "channel" && positionals[0] === "status") await channelStatusCommand();
+  else if (command === "xianyu") await xianyuCommand();
   else
     console.log(
-      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel|delete\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa eval list|run|status|show\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|mount|search|unmount|reload\numa channel status --channel-url=<url>\numa doctor",
+      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel|delete\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa eval list|run|status|show|trend\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|mount|search|unmount|reload\numa xianyu login|status|start|stop|pause|resume\numa channel status --channel-url=<url>\numa doctor",
     );
   client.close();
 }

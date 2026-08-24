@@ -12,6 +12,7 @@ import type {
   CreateEvaluationReport,
   DiagnosticsReport,
   EvaluationReport,
+  EvaluationTrend,
   KnowledgeSource,
   MemoryFact,
   MemoryRollup,
@@ -19,9 +20,11 @@ import type {
   ModelRef,
   ModelSnapshot,
   OperationsReport,
+  OptimizationApplication,
   OptimizationProposal,
   PlanStep,
   QualityAssessment,
+  ResourceSnapshot,
   Run,
   RunAction,
   RunCheckpoint,
@@ -34,6 +37,9 @@ import type {
   SessionHistoryPage,
   SessionSnapshot,
   SkillPackage,
+  TraceQuery,
+  TraceQueryPage,
+  TraceSpan,
   TranscriptItem,
 } from "@uma-agent/protocol";
 import { type AgentEventEnvelope, type AgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
@@ -59,15 +65,17 @@ import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 17;
 export class UmaDatabase {
   readonly db: DatabaseSync;
+  readonly stateDir: string;
   private readonly auditEvaluations: AuditEvaluationRepository;
   private readonly messages: MessageRepository;
   private readonly sessions: SessionRepository;
   private transactionDepth = 0;
 
   constructor(stateDir: string) {
+    this.stateDir = stateDir;
     mkdirSync(stateDir, { recursive: true });
     this.db = new DatabaseSync(join(stateDir, "state.db"));
     this.messages = new MessageRepository(this.db);
@@ -1961,6 +1969,87 @@ export class UmaDatabase {
     );
   }
 
+  addOptimizationApplication(
+    input: Omit<OptimizationApplication, "id" | "createdAt">,
+  ): OptimizationApplication {
+    const id = randomUUID();
+    const createdAt = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO optimization_applications(id,proposal_id,workspace,changes_json,backups_json,validation_command,validation_status,validation_output,status,rollback_status,error,created_at,completed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        input.proposalId,
+        input.workspace,
+        JSON.stringify(input.changes),
+        JSON.stringify(input.backups),
+        input.validationCommand,
+        input.validationStatus,
+        input.validationOutput ?? null,
+        input.status,
+        input.rollbackStatus,
+        input.error ?? null,
+        createdAt,
+        input.completedAt ?? null,
+      );
+    return this.getOptimizationApplication(id);
+  }
+
+  getOptimizationApplication(id: string): OptimizationApplication {
+    const value = row(this.db.prepare("SELECT * FROM optimization_applications WHERE id=?"), id);
+    if (!value) throw new Error(`Optimization application not found: ${id}`);
+    return {
+      id: text(value.id),
+      proposalId: text(value.proposal_id),
+      workspace: text(value.workspace),
+      changes: parseJson(value.changes_json, []),
+      backups: parseJson(value.backups_json, []),
+      validationCommand: text(value.validation_command),
+      validationStatus: text(value.validation_status) as OptimizationApplication["validationStatus"],
+      ...(value.validation_output ? { validationOutput: text(value.validation_output) } : {}),
+      status: text(value.status) as OptimizationApplication["status"],
+      rollbackStatus: text(value.rollback_status) as OptimizationApplication["rollbackStatus"],
+      ...(value.error ? { error: text(value.error) } : {}),
+      createdAt: integer(value.created_at),
+      ...(value.completed_at ? { completedAt: integer(value.completed_at) } : {}),
+    };
+  }
+
+  updateOptimizationApplication(
+    id: string,
+    patch: Partial<
+      Pick<
+        OptimizationApplication,
+        "status" | "rollbackStatus" | "validationStatus" | "validationOutput" | "error" | "completedAt"
+      >
+    >,
+  ): OptimizationApplication {
+    const current = this.getOptimizationApplication(id);
+    const next = { ...current, ...patch };
+    this.db
+      .prepare(
+        "UPDATE optimization_applications SET validation_status=?,validation_output=?,status=?,rollback_status=?,error=?,completed_at=? WHERE id=?",
+      )
+      .run(
+        next.validationStatus,
+        next.validationOutput ?? null,
+        next.status,
+        next.rollbackStatus,
+        next.error ?? null,
+        next.completedAt ?? null,
+        id,
+      );
+    return this.getOptimizationApplication(id);
+  }
+
+  listOptimizationApplications(limit = 100): OptimizationApplication[] {
+    return rows(
+      this.db.prepare("SELECT id FROM optimization_applications ORDER BY created_at DESC LIMIT ?"),
+      Math.max(1, Math.min(500, limit)),
+    ).map((value) => this.getOptimizationApplication(text(value.id)));
+  }
+
   updateOptimizationProposal(id: string, status: "accepted" | "rejected"): OptimizationProposal {
     const result = this.db
       .prepare("UPDATE optimization_proposals SET status=?,updated_at=? WHERE id=?")
@@ -2217,12 +2306,161 @@ export class UmaDatabase {
     return this.auditEvaluations.listEvaluationReports(limit);
   }
 
+  evaluationTrends(from: number, to: number, groupBy: "day" | "suite" | "mode"): EvaluationTrend[] {
+    return this.auditEvaluations.evaluationTrends(from, to, groupBy);
+  }
+
   operationsReport(from: number, to: number): OperationsReport {
     return this.auditEvaluations.operationsReport(from, to);
   }
 
   diagnosticsReport(from: number, to: number): DiagnosticsReport {
     return this.auditEvaluations.diagnosticsReport(from, to);
+  }
+
+  insertTraceSpan(span: TraceSpan): void {
+    this.db
+      .prepare(
+        "INSERT INTO trace_spans(trace_id,span_id,parent_span_id,run_id,session_id,name,kind,status,started_at,duration_ms,attributes_json,error_type,error_message,ended_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        span.traceId,
+        span.spanId,
+        span.parentSpanId ?? null,
+        span.runId,
+        span.sessionId,
+        span.name,
+        span.kind,
+        span.status,
+        span.startedAt,
+        span.durationMs,
+        JSON.stringify(span.attributes),
+        span.errorType ?? null,
+        span.errorMessage ?? null,
+        span.endedAt,
+      );
+  }
+
+  insertResourceSnapshot(snapshot: ResourceSnapshot): void {
+    this.db
+      .prepare(
+        "INSERT INTO resource_snapshots(id,captured_at,cpu_user_micros,cpu_system_micros,rss_bytes,heap_used_bytes,heap_total_bytes,external_bytes,array_buffers_bytes,event_loop_delay_ms,wal_bytes,active_runs,queued_runs) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        snapshot.id,
+        snapshot.capturedAt,
+        snapshot.cpuUserMicros,
+        snapshot.cpuSystemMicros,
+        snapshot.rssBytes,
+        snapshot.heapUsedBytes,
+        snapshot.heapTotalBytes,
+        snapshot.externalBytes,
+        snapshot.arrayBuffersBytes,
+        snapshot.eventLoopDelayMs,
+        snapshot.walBytes,
+        snapshot.activeRuns,
+        snapshot.queuedRuns,
+      );
+  }
+
+  listResourceSnapshots(from = 0, to = Date.now(), limit = 500): ResourceSnapshot[] {
+    return rows(
+      this.db.prepare(
+        "SELECT * FROM resource_snapshots WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at DESC LIMIT ?",
+      ),
+      from,
+      to,
+      Math.max(1, Math.min(500, limit)),
+    ).map((value) => ({
+      id: text(value.id),
+      capturedAt: integer(value.captured_at),
+      cpuUserMicros: integer(value.cpu_user_micros),
+      cpuSystemMicros: integer(value.cpu_system_micros),
+      rssBytes: integer(value.rss_bytes),
+      heapUsedBytes: integer(value.heap_used_bytes),
+      heapTotalBytes: integer(value.heap_total_bytes),
+      externalBytes: integer(value.external_bytes),
+      arrayBuffersBytes: integer(value.array_buffers_bytes),
+      eventLoopDelayMs: Number(value.event_loop_delay_ms ?? 0),
+      walBytes: integer(value.wal_bytes),
+      activeRuns: integer(value.active_runs),
+      queuedRuns: integer(value.queued_runs),
+    }));
+  }
+
+  listTrace(query: TraceQuery): TraceQueryPage {
+    if (
+      !query.runId &&
+      !query.traceId &&
+      query.from === undefined &&
+      query.to === undefined &&
+      !query.name &&
+      !query.status
+    )
+      throw new Error("Trace query requires a filter");
+    const safeOffset = Math.max(0, Math.floor(query.offset ?? 0));
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 500)));
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    if (query.runId) {
+      clauses.push("run_id=?");
+      params.push(query.runId);
+    }
+    if (query.traceId) {
+      clauses.push("trace_id=?");
+      params.push(query.traceId);
+    }
+    if (query.from !== undefined) {
+      clauses.push("started_at>=?");
+      params.push(query.from);
+    }
+    if (query.to !== undefined) {
+      clauses.push("started_at<=?");
+      params.push(query.to);
+    }
+    if (query.status) {
+      clauses.push("status=?");
+      params.push(query.status);
+    }
+    if (query.name) {
+      clauses.push("name LIKE ?");
+      params.push(`%${query.name}%`);
+    }
+    const values = rows(
+      this.db.prepare(
+        `SELECT * FROM trace_spans WHERE ${clauses.join(" AND ")} ORDER BY started_at,span_id LIMIT ? OFFSET ?`,
+      ),
+      ...params,
+      safeLimit + 1,
+      safeOffset,
+    );
+    const hasMore = values.length > safeLimit;
+    const spans = values.slice(0, safeLimit).map(
+      (value): TraceSpan => ({
+        traceId: text(value.trace_id),
+        spanId: text(value.span_id),
+        ...(value.parent_span_id ? { parentSpanId: text(value.parent_span_id) } : {}),
+        runId: text(value.run_id),
+        sessionId: text(value.session_id),
+        name: text(value.name),
+        kind: text(value.kind),
+        status: text(value.status) as TraceSpan["status"],
+        startedAt: integer(value.started_at),
+        durationMs: integer(value.duration_ms),
+        attributes: parseJson(value.attributes_json, {}),
+        ...(value.error_type ? { errorType: text(value.error_type) } : {}),
+        ...(value.error_message ? { errorMessage: text(value.error_message) } : {}),
+        endedAt: integer(value.ended_at),
+      }),
+    );
+    return {
+      traceId: spans[0]?.traceId ?? "",
+      ...(query.runId ? { runId: query.runId } : {}),
+      ...(spans[0]?.sessionId ? { sessionId: spans[0].sessionId } : {}),
+      spans,
+      hasMore,
+      nextOffset: safeOffset + spans.length,
+    };
   }
 
   recoverScheduledTaskRuns(): ScheduledTaskRun[] {

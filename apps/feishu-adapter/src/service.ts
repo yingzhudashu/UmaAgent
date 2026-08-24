@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import * as lark from "@larksuiteoapi/node-sdk";
-import { retryWithBackoff } from "@uma-agent/channel-adapter";
+import { loadUserConfig, retryWithBackoff } from "@uma-agent/channel-adapter";
 import { UmaClient } from "@uma-agent/client";
 import type { Approval, RunAction, RunActionDecision, SessionSnapshot } from "@uma-agent/protocol";
 import { createFeishuAdapter } from "./adapter.js";
@@ -9,39 +9,30 @@ import { type CoreGateway, LarkFeishuGateway } from "./gateways.js";
 import { acceptsInbound, isAllowedOpenId } from "./inbound-policy.js";
 import { AdapterStore } from "./store.js";
 
-const required = (name: string): string => {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`Missing ${name}`);
-  return value;
-};
-const optional = (name: string): string | undefined => process.env[name]?.trim() || undefined;
-
-export async function startFeishuService() {
+export async function startFeishuService(
+  configPath = process.argv.find((arg) => arg.startsWith("--config="))?.slice(9) ?? "config.user.json",
+) {
+  const user = await loadUserConfig(configPath, "feishu");
   const config = {
-    appId: required("FEISHU_APP_ID"),
-    appSecret: required("FEISHU_APP_SECRET"),
-    verificationToken: optional("FEISHU_VERIFICATION_TOKEN"),
-    encryptKey: optional("FEISHU_ENCRYPT_KEY"),
-    umaUrl: required("UMA_SERVER_URL"),
-    umaToken: required("UMA_TOKEN"),
-    stateDir: process.env.FEISHU_STATE_DIR?.trim() || ".uma-feishu",
-    host: process.env.FEISHU_HOST?.trim() || "127.0.0.1",
-    port: Number(process.env.FEISHU_PORT ?? 3220),
-    maxAttachmentBytes: Number(process.env.FEISHU_MAX_ATTACHMENT_BYTES ?? 25 * 1024 * 1024),
-    allowedOpenIds: new Set(
-      required("FEISHU_ALLOWED_OPEN_IDS")
-        .split(",")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    ),
+    appId: user.feishu.appId,
+    appSecret: user.feishu.appSecret,
+    verificationToken: user.feishu.verificationToken,
+    encryptKey: user.feishu.encryptKey,
+    umaUrl: user.core.serverUrl,
+    umaToken: user.core.token,
+    stateDir: user.feishu.stateDir,
+    host: user.feishu.host,
+    port: user.feishu.port,
+    maxAttachmentBytes: user.feishu.maxAttachmentBytes,
+    allowedOpenIds: new Set(user.feishu.allowedOpenIds),
   };
   const cardCallbacksEnabled = Boolean(config.verificationToken && config.encryptKey);
   if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535)
-    throw new Error("FEISHU_PORT must be a valid TCP port");
+    throw new Error("user config.feishu.port must be a valid TCP port");
   if (!Number.isSafeInteger(config.maxAttachmentBytes) || config.maxAttachmentBytes < 1)
-    throw new Error("FEISHU_MAX_ATTACHMENT_BYTES must be a positive integer");
+    throw new Error("user config.feishu.maxAttachmentBytes must be a positive integer");
   if (config.allowedOpenIds.size === 0)
-    throw new Error("FEISHU_ALLOWED_OPEN_IDS must contain at least one Open ID");
+    throw new Error("user config.feishu.allowedOpenIds must contain at least one Open ID");
 
   const storeInstance = new AdapterStore(config.stateDir);
   const coreGateway: CoreGateway = new UmaClient({ baseUrl: config.umaUrl, token: config.umaToken });

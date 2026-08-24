@@ -5,6 +5,7 @@ import type { EventHub } from "./events.js";
 import type { ModelRegistry } from "./models.js";
 import type { RunOrchestrator } from "./run-orchestrator.js";
 import type { RunQualityService } from "./run-quality.js";
+import type { TraceService } from "./trace.js";
 
 export interface QualityRunOptions {
   feedback?: string;
@@ -20,6 +21,7 @@ interface RuntimeQualityDependencies {
   isAcceptingRuns: () => boolean;
   getQualityService: () => RunQualityService;
   getReasoningModel: () => ReturnType<ModelRegistry["snapshot"]>;
+  trace: TraceService;
 }
 
 /** Owns tool-free review/improve Runs while UmaRuntime remains the public facade. */
@@ -84,10 +86,15 @@ export class RuntimeQualityOperations {
     kind: "review" | "improve",
     options: QualityRunOptions,
   ): Promise<void> {
-    const { database, events, orchestrator, controllers } = this.dependencies;
+    const { database, events, orchestrator, controllers, trace } = this.dependencies;
+    const rootTrace = trace.startRoot(runId, session.id, kind, { "run.kind": kind });
     const release = await orchestrator.acquire();
     if (database.getRun(runId).status === "cancelled") {
-      release();
+      try {
+        rootTrace.finish({ status: "cancelled" });
+      } finally {
+        release();
+      }
       return;
     }
     const controller = new AbortController();
@@ -101,14 +108,24 @@ export class RuntimeQualityOperations {
       if (!question) throw new Error("The target answer has no preceding user message");
       this.transitionRun(session.id, runId, { status: "running", phase: "execute" });
       const quality = this.dependencies.getQualityService();
+      const invokeModel = async <T>(name: string, operation: () => Promise<T>): Promise<T> => {
+        const span = rootTrace.child(name, "model", { "run.kind": kind });
+        try {
+          const result = await operation();
+          span.finish({ status: "ok" });
+          return result;
+        } catch (error) {
+          span.finish({
+            status: "error",
+            error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+          });
+          throw error;
+        }
+      };
       let output = "";
       if (kind === "review") {
-        const iterations = await quality.review(
-          runId,
-          question,
-          target.content,
-          options.feedback ?? "",
-          controller.signal,
+        const iterations = await invokeModel("model.review", () =>
+          quality.review(runId, question, target.content, options.feedback ?? "", controller.signal),
         );
         iterations.forEach((iteration, index) => {
           database.addQualityAssessment({
@@ -129,7 +146,9 @@ export class RuntimeQualityOperations {
       } else {
         let assessments = database.listQualityForMessage(target.id);
         if (options.force || assessments.length === 0) {
-          const reviewed = await quality.review(runId, question, target.content, "", controller.signal);
+          const reviewed = await invokeModel("model.review", () =>
+            quality.review(runId, question, target.content, "", controller.signal),
+          );
           reviewed.forEach((iteration, index) => {
             database.addQualityAssessment({
               runId,
@@ -145,12 +164,14 @@ export class RuntimeQualityOperations {
         const suggestions = assessments.flatMap((item) => item.suggestions).filter(Boolean);
         if (!suggestions.length && !options.force) throw new Error("No quality suggestions are available");
         output = (
-          await quality.improve(
-            runId,
-            question,
-            target.content,
-            suggestions.length ? suggestions : ["Improve accuracy, completeness and clarity"],
-            controller.signal,
+          await invokeModel("model.improve", () =>
+            quality.improve(
+              runId,
+              question,
+              target.content,
+              suggestions.length ? suggestions : ["Improve accuracy, completeness and clarity"],
+              controller.signal,
+            ),
           )
         ).improvedAnswer;
       }
@@ -169,13 +190,26 @@ export class RuntimeQualityOperations {
         events.invalidate("quality");
       });
     } catch (error) {
+      const cancelled = controller.signal.aborted;
+      rootTrace.setStatus(
+        cancelled
+          ? { status: "cancelled" }
+          : {
+              status: "error",
+              error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+            },
+      );
       this.transitionRun(session.id, runId, {
-        status: controller.signal.aborted ? "cancelled" : "failed",
+        status: cancelled ? "cancelled" : "failed",
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      controllers.delete(session.id);
-      release();
+      try {
+        rootTrace.finish();
+      } finally {
+        controllers.delete(session.id);
+        release();
+      }
     }
   }
 }

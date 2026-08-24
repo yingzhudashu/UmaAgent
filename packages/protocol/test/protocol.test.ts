@@ -8,6 +8,7 @@ import {
   RunActionDecisionSchema,
   SendMessageRequestSchema,
   ShortcutRequestSchema,
+  TraceSpanSchema,
 } from "../src/index.js";
 
 describe("protocol schemas", () => {
@@ -37,6 +38,40 @@ describe("protocol schemas", () => {
         timestamp: 1,
         type: "server.status",
         payload: {},
+      }),
+    ).toBe(false);
+  });
+
+  it("validates bounded trace spans", () => {
+    expect(
+      Value.Check(TraceSpanSchema, {
+        traceId: "trace",
+        spanId: "span",
+        runId: "run",
+        sessionId: "session",
+        name: "model",
+        kind: "model",
+        status: "ok",
+        startedAt: 1,
+        durationMs: 2,
+        attributes: { provider: "test" },
+        endedAt: 3,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(TraceSpanSchema, {
+        traceId: "trace",
+        spanId: "span",
+        runId: "run",
+        sessionId: "session",
+        name: "model",
+        kind: "model",
+        status: "ok",
+        startedAt: 1,
+        durationMs: 2,
+        attributes: { prompt: "secret" },
+        endedAt: 3,
+        extra: true,
       }),
     ).toBe(false);
   });

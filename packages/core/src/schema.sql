@@ -213,6 +213,24 @@ CREATE TABLE optimization_proposals (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE optimization_applications (
+  id TEXT PRIMARY KEY,
+  proposal_id TEXT NOT NULL REFERENCES optimization_proposals(id) ON DELETE RESTRICT,
+  workspace TEXT NOT NULL,
+  changes_json TEXT NOT NULL,
+  backups_json TEXT NOT NULL,
+  validation_command TEXT NOT NULL,
+  validation_status TEXT NOT NULL CHECK(validation_status IN ('passed','failed')),
+  validation_output TEXT,
+  status TEXT NOT NULL CHECK(status IN ('applied','rolled_back','failed')),
+  rollback_status TEXT NOT NULL CHECK(rollback_status IN ('not_requested','completed','failed')),
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  completed_at INTEGER
+);
+CREATE INDEX optimization_applications_proposal ON optimization_applications(proposal_id, created_at DESC);
+CREATE INDEX optimization_applications_status ON optimization_applications(status, created_at DESC);
+
 CREATE TABLE evaluation_reports (
   id TEXT PRIMARY KEY,
   mode TEXT NOT NULL CHECK (mode IN ('faux','real')),
@@ -445,4 +463,41 @@ CREATE TABLE external_identities (
   CHECK((user_id IS NOT NULL) <> (space_id IS NOT NULL))
 );
 
-PRAGMA user_version = 15;
+CREATE TABLE trace_spans (
+  trace_id TEXT NOT NULL,
+  span_id TEXT PRIMARY KEY,
+  parent_span_id TEXT,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('ok','error','cancelled')),
+  started_at INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  attributes_json TEXT NOT NULL DEFAULT '{}',
+  error_type TEXT,
+  error_message TEXT,
+  ended_at INTEGER NOT NULL
+);
+CREATE INDEX trace_spans_trace_started ON trace_spans(trace_id, started_at, span_id);
+CREATE INDEX trace_spans_run_started ON trace_spans(run_id, started_at, span_id);
+CREATE INDEX trace_spans_session_started ON trace_spans(session_id, started_at);
+
+CREATE TABLE resource_snapshots (
+  id TEXT PRIMARY KEY,
+  captured_at INTEGER NOT NULL,
+  cpu_user_micros INTEGER NOT NULL,
+  cpu_system_micros INTEGER NOT NULL,
+  rss_bytes INTEGER NOT NULL,
+  heap_used_bytes INTEGER NOT NULL,
+  heap_total_bytes INTEGER NOT NULL,
+  external_bytes INTEGER NOT NULL,
+  array_buffers_bytes INTEGER NOT NULL,
+  event_loop_delay_ms REAL NOT NULL,
+  wal_bytes INTEGER NOT NULL,
+  active_runs INTEGER NOT NULL,
+  queued_runs INTEGER NOT NULL
+);
+CREATE INDEX resource_snapshots_captured ON resource_snapshots(captured_at DESC);
+
+PRAGMA user_version = 17;

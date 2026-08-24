@@ -124,7 +124,7 @@ async function appendMarkdown(input: {
 }
 
 export function createFeishuMcp(input: { gateway: FeishuBusinessGateway; core: UmaClient }): McpServer {
-  const server = new McpServer({ name: "uma-feishu-mcp", version: "1.2.0" });
+  const server = new McpServer({ name: "uma-feishu-mcp", version: "1.3.0" });
   const requestTool = (
     name: string,
     description: string,

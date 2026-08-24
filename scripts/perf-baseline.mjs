@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, readFile, rm, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 
@@ -9,7 +10,9 @@ const baseline = JSON.parse(await readFile(resolve("scripts/perf-baseline.json")
 const port = Number(process.env.UMA_PERF_PORT ?? 33321);
 const tokenSecret = process.env.UMA_PERF_TOKEN ?? "faux-perf-token-012345678901234567890123";
 const token = `uma_pat_00000000-0000-4000-8000-000000000001_${tokenSecret}`;
-const stateDir = resolve(process.env.UMA_PERF_STATE ?? `.uma-perf-${process.pid}`);
+const stateDir = process.env.UMA_PERF_STATE
+  ? resolve(process.env.UMA_PERF_STATE)
+  : await mkdtemp(join(tmpdir(), `uma-perf-${process.pid}-`));
 const requireBudget = process.env.UMA_PERF_REQUIRE === "1";
 const messages = Number(process.env.UMA_PERF_MESSAGES ?? baseline.smokeMessages);
 const budgets = baseline.budgets;
@@ -25,7 +28,6 @@ const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
     ...process.env,
     UMA_FAUX_PORT: String(port),
     UMA_FAUX_TOKEN: tokenSecret,
-    UMA_FAUX_STATE: stateDir,
     UMA_FAUX_RESET_STATE: "1",
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -38,7 +40,7 @@ server.stderr.on("data", (chunk) => {
   output = `${output}${chunk}`.slice(-10_000);
 });
 
-const base = `http://127.0.0.1:${port}/api/v11`;
+const base = `http://127.0.0.1:${port}/api/v12`;
 async function api(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
     ...options,
@@ -125,6 +127,9 @@ try {
     const run = await waitRun(accepted.runId);
     if (run.status !== "completed")
       throw new Error(`Performance run ended as ${run.status}: ${run.error ?? "unknown"}`);
+    const trace = await api(`/traces?runId=${encodeURIComponent(accepted.runId)}`);
+    if (!trace.traceId || trace.spans.length < 2)
+      throw new Error(`Run ${accepted.runId} has incomplete Trace`);
     for (;;) {
       const eventStart = performance.now();
       const page = await api(`/sessions/${encodeURIComponent(session.id)}/events?after=${cursor}&limit=1000`);
@@ -153,9 +158,14 @@ try {
     durationMs: Date.now() - startedAt,
     cursor,
     apiP95Ms: Number(percentile(apiSamples, 95).toFixed(2)),
+    apiP50Ms: Number(percentile(apiSamples, 50).toFixed(2)),
+    apiP99Ms: Number(percentile(apiSamples, 99).toFixed(2)),
     eventP95Ms: Number(percentile(eventSamples, 95).toFixed(2)),
+    eventP50Ms: Number(percentile(eventSamples, 50).toFixed(2)),
+    eventP99Ms: Number(percentile(eventSamples, 99).toFixed(2)),
     maxRssBytes: maxRss,
     maxWalBytes: maxWal,
+    resources: await api("/reports/resources?from=0&limit=500"),
     dataset: baseline.dataset,
     budgets,
   };

@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 11 as const;
+export const PROTOCOL_VERSION = 12 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -590,6 +590,15 @@ export const DiagnosticsReportSchema = Strict({
   approvalBottlenecks: Type.Array(
     Strict({ tool: Id, requested: Type.Integer({ minimum: 0 }), denied: Type.Integer({ minimum: 0 }) }),
   ),
+  trace: Strict({
+    spans: Type.Integer({ minimum: 0 }),
+    incomplete: Type.Integer({ minimum: 0 }),
+    latencyMs: Strict({
+      p50: Type.Number({ minimum: 0 }),
+      p95: Type.Number({ minimum: 0 }),
+      p99: Type.Number({ minimum: 0 }),
+    }),
+  }),
 });
 export type DiagnosticsReport = Static<typeof DiagnosticsReportSchema>;
 
@@ -627,6 +636,25 @@ export const EvaluationReportSchema = Strict({
   createdAt: Timestamp,
 });
 export type EvaluationReport = Static<typeof EvaluationReportSchema>;
+
+export const EvaluationTrendSchema = Strict({
+  group: Type.String({ minLength: 1, maxLength: 200 }),
+  from: Timestamp,
+  to: Timestamp,
+  reports: Type.Integer({ minimum: 0 }),
+  totalCases: Type.Integer({ minimum: 0 }),
+  passedCases: Type.Integer({ minimum: 0 }),
+  failedCases: Type.Integer({ minimum: 0 }),
+  passRate: Type.Number({ minimum: 0, maximum: 1 }),
+  durationMs: Strict({
+    p50: Type.Number({ minimum: 0 }),
+    p95: Type.Number({ minimum: 0 }),
+  }),
+  failures: Type.Array(
+    Strict({ category: Type.String({ minLength: 1 }), count: Type.Integer({ minimum: 0 }) }),
+  ),
+});
+export type EvaluationTrend = Static<typeof EvaluationTrendSchema>;
 
 export const CreateEvaluationReportSchema = Strict({
   mode: EvaluationReportSchema.properties.mode,
@@ -794,6 +822,104 @@ export const AuditRecordSchema = Strict({
   createdAt: Timestamp,
 });
 export type AuditRecord = Static<typeof AuditRecordSchema>;
+
+export const TraceSpanSchema = Strict({
+  traceId: Id,
+  spanId: Id,
+  parentSpanId: Type.Optional(Id),
+  runId: Id,
+  sessionId: Id,
+  name: Type.String({ minLength: 1, maxLength: 200 }),
+  kind: Type.String({ minLength: 1, maxLength: 40 }),
+  status: Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("cancelled")]),
+  startedAt: Timestamp,
+  durationMs: Type.Integer({ minimum: 0 }),
+  attributes: Type.Record(
+    Type.String({ maxLength: 80 }),
+    Type.Union([Type.String(), Type.Number(), Type.Boolean()]),
+  ),
+  errorType: Type.Optional(Type.String({ maxLength: 200 })),
+  errorMessage: Type.Optional(Type.String({ maxLength: 2_000 })),
+  endedAt: Timestamp,
+});
+export type TraceSpan = Static<typeof TraceSpanSchema>;
+
+export const TraceQuerySchema = Strict({
+  runId: Type.Optional(Id),
+  traceId: Type.Optional(Id),
+  from: Type.Optional(Timestamp),
+  to: Type.Optional(Timestamp),
+  status: Type.Optional(Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("cancelled")])),
+  name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+  offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+});
+export type TraceQuery = Static<typeof TraceQuerySchema>;
+
+export const TraceQueryPageSchema = Strict({
+  traceId: Id,
+  runId: Type.Optional(Id),
+  sessionId: Type.Optional(Id),
+  spans: Type.Array(TraceSpanSchema),
+  hasMore: Type.Boolean(),
+  nextOffset: Type.Integer({ minimum: 0 }),
+});
+export type TraceQueryPage = Static<typeof TraceQueryPageSchema>;
+
+export const OptimizationApplicationSchema = Strict({
+  id: Id,
+  proposalId: Id,
+  workspace: Type.String({ minLength: 1 }),
+  changes: Type.Array(Strict({ path: Type.String({ minLength: 1 }), bytes: Type.Integer({ minimum: 0 }) })),
+  backups: Type.Array(Strict({ path: Type.String({ minLength: 1 }), existed: Type.Boolean() })),
+  validationCommand: Type.String({ minLength: 1 }),
+  validationStatus: Type.Union([Type.Literal("passed"), Type.Literal("failed")]),
+  validationOutput: Type.Optional(Type.String({ maxLength: 4_000 })),
+  status: Type.Union([Type.Literal("applied"), Type.Literal("rolled_back"), Type.Literal("failed")]),
+  rollbackStatus: Type.Union([
+    Type.Literal("not_requested"),
+    Type.Literal("completed"),
+    Type.Literal("failed"),
+  ]),
+  error: Type.Optional(Type.String({ maxLength: 2_000 })),
+  createdAt: Timestamp,
+  completedAt: Type.Optional(Timestamp),
+});
+export type OptimizationApplication = Static<typeof OptimizationApplicationSchema>;
+
+export const OptimizationValidationSchema = Strict({
+  command: Type.Union([
+    Type.Literal("test"),
+    Type.Literal("check"),
+    Type.Literal("build"),
+    Type.Literal("test:eval:faux"),
+    Type.Literal("test:perf"),
+  ]),
+});
+export type OptimizationValidation = Static<typeof OptimizationValidationSchema>;
+
+export const OptimizationRollbackResultSchema = Strict({
+  application: OptimizationApplicationSchema,
+  rolledBack: Type.Boolean(),
+});
+export type OptimizationRollbackResult = Static<typeof OptimizationRollbackResultSchema>;
+
+export const ResourceSnapshotSchema = Strict({
+  id: Id,
+  capturedAt: Timestamp,
+  cpuUserMicros: Type.Integer({ minimum: 0 }),
+  cpuSystemMicros: Type.Integer({ minimum: 0 }),
+  rssBytes: Type.Integer({ minimum: 0 }),
+  heapUsedBytes: Type.Integer({ minimum: 0 }),
+  heapTotalBytes: Type.Integer({ minimum: 0 }),
+  externalBytes: Type.Integer({ minimum: 0 }),
+  arrayBuffersBytes: Type.Integer({ minimum: 0 }),
+  eventLoopDelayMs: Type.Number({ minimum: 0 }),
+  walBytes: Type.Integer({ minimum: 0 }),
+  activeRuns: Type.Integer({ minimum: 0 }),
+  queuedRuns: Type.Integer({ minimum: 0 }),
+});
+export type ResourceSnapshot = Static<typeof ResourceSnapshotSchema>;
 
 export const SessionEventPageSchema = Strict({
   sessionId: Id,

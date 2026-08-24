@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => {
   const core = {
@@ -81,6 +84,7 @@ const state = vi.hoisted(() => {
     eventListener: undefined as ((event: Record<string, unknown>) => void) | undefined,
   };
 });
+const userConfigPath = join(tmpdir(), "uma-feishu-vitest-config.json");
 
 vi.mock("@uma-agent/client", () => ({
   UmaClient: class {
@@ -168,21 +172,26 @@ const inbound = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const configure = (callbacks = true) => {
-  process.env.FEISHU_APP_ID = "app";
-  process.env.FEISHU_APP_SECRET = "secret";
-  process.env.UMA_SERVER_URL = "http://127.0.0.1:3000";
-  process.env.UMA_TOKEN = "token";
-  process.env.FEISHU_ALLOWED_OPEN_IDS = "owner";
-  process.env.FEISHU_PORT = String(34_000 + Math.floor(Math.random() * 10_000));
-  process.env.FEISHU_STATE_DIR = ".test-feishu";
-  delete process.env.FEISHU_MAX_ATTACHMENT_BYTES;
-  if (callbacks) {
-    process.env.FEISHU_VERIFICATION_TOKEN = "verification";
-    process.env.FEISHU_ENCRYPT_KEY = "encrypt";
-  } else {
-    delete process.env.FEISHU_VERIFICATION_TOKEN;
-    delete process.env.FEISHU_ENCRYPT_KEY;
-  }
+  const port = 34_000 + Math.floor(Math.random() * 10_000);
+  writeFileSync(
+    userConfigPath,
+    JSON.stringify({
+      version: 1,
+      core: { serverUrl: "http://127.0.0.1:3000", token: "token" },
+      feishu: {
+        appId: "app",
+        appSecret: "secret",
+        ...(callbacks ? { verificationToken: "verification", encryptKey: "encrypt" } : {}),
+        allowedOpenIds: ["owner"],
+        host: "127.0.0.1",
+        port,
+        stateDir: join(tmpdir(), "uma-feishu-vitest-state"),
+        maxAttachmentBytes: 25 * 1024 * 1024,
+        mcpHost: "127.0.0.1",
+        mcpPort: 3240,
+      },
+    }),
+  );
 };
 
 describe("Feishu service", () => {
@@ -205,24 +214,8 @@ describe("Feishu service", () => {
     configure();
   });
 
-  afterEach(() => {
-    for (const name of [
-      "FEISHU_APP_ID",
-      "FEISHU_APP_SECRET",
-      "UMA_SERVER_URL",
-      "UMA_TOKEN",
-      "FEISHU_ALLOWED_OPEN_IDS",
-      "FEISHU_PORT",
-      "FEISHU_STATE_DIR",
-      "FEISHU_VERIFICATION_TOKEN",
-      "FEISHU_ENCRYPT_KEY",
-      "FEISHU_MAX_ATTACHMENT_BYTES",
-    ])
-      delete process.env[name];
-  });
-
   it("processes inbound messages, renders durable events, and handles approval callbacks idempotently", async () => {
-    const service = await startFeishuService();
+    const service = await startFeishuService(userConfigPath);
     if (!service.server.listening) await once(service.server, "listening");
     expect(service.adapter.health()).toMatchObject({ status: "ok", connected: true });
 
@@ -275,7 +268,7 @@ describe("Feishu service", () => {
     state.store.listConversations.mockReturnValueOnce([
       { id: "existing-conversation", sessionId: "existing-session", chatId: "existing-chat" },
     ]);
-    const service = await startFeishuService();
+    const service = await startFeishuService(userConfigPath);
     if (!service.server.listening) await once(service.server, "listening");
     await vi.waitFor(() => expect(state.core.sendMessage).toHaveBeenCalled());
 
@@ -328,7 +321,7 @@ describe("Feishu service", () => {
 
   it("surfaces disabled callbacks, failed cards and failed callback decisions", async () => {
     configure(false);
-    const service = await startFeishuService();
+    const service = await startFeishuService(userConfigPath);
     if (!service.server.listening) await once(service.server, "listening");
     const address = service.server.address();
     if (!address || typeof address === "string") throw new Error("missing test address");
@@ -368,16 +361,62 @@ describe("Feishu service", () => {
   });
 
   it("rejects missing and invalid environment configuration", async () => {
-    delete process.env.FEISHU_APP_ID;
-    await expect(startFeishuService()).rejects.toThrow("Missing FEISHU_APP_ID");
+    await expect(startFeishuService(join(tmpdir(), "missing-user-config.json"))).rejects.toThrow(
+      "Cannot read user config",
+    );
     configure();
-    process.env.FEISHU_PORT = "0";
-    await expect(startFeishuService()).rejects.toThrow("FEISHU_PORT");
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        version: 1,
+        core: { serverUrl: "http://127.0.0.1:3000", token: "token" },
+        feishu: {
+          appId: "app",
+          appSecret: "secret",
+          allowedOpenIds: ["owner"],
+          host: "127.0.0.1",
+          port: 0,
+          stateDir: join(tmpdir(), "uma-feishu-vitest-state"),
+          maxAttachmentBytes: 25 * 1024 * 1024,
+        },
+      }),
+    );
+    await expect(startFeishuService(userConfigPath)).rejects.toThrow("valid TCP port");
     configure();
-    process.env.FEISHU_MAX_ATTACHMENT_BYTES = "0";
-    await expect(startFeishuService()).rejects.toThrow("FEISHU_MAX_ATTACHMENT_BYTES");
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        version: 1,
+        core: { serverUrl: "http://127.0.0.1:3000", token: "token" },
+        feishu: {
+          appId: "app",
+          appSecret: "secret",
+          allowedOpenIds: ["owner"],
+          host: "127.0.0.1",
+          port: 3220,
+          stateDir: join(tmpdir(), "uma-feishu-vitest-state"),
+          maxAttachmentBytes: 0,
+        },
+      }),
+    );
+    await expect(startFeishuService(userConfigPath)).rejects.toThrow("positive integer");
     configure();
-    process.env.FEISHU_ALLOWED_OPEN_IDS = " , ";
-    await expect(startFeishuService()).rejects.toThrow("FEISHU_ALLOWED_OPEN_IDS");
+    writeFileSync(
+      userConfigPath,
+      JSON.stringify({
+        version: 1,
+        core: { serverUrl: "http://127.0.0.1:3000", token: "token" },
+        feishu: {
+          appId: "app",
+          appSecret: "secret",
+          allowedOpenIds: [],
+          host: "127.0.0.1",
+          port: 3220,
+          stateDir: join(tmpdir(), "uma-feishu-vitest-state"),
+          maxAttachmentBytes: 25 * 1024 * 1024,
+        },
+      }),
+    );
+    await expect(startFeishuService(userConfigPath)).rejects.toThrow("at least one Open ID");
   });
 });

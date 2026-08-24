@@ -1,6 +1,6 @@
 {
   "name": "@uma-agent/eval-runner",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "main": "dist/main.js",
@@ -15,7 +15,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@uma-agent/client": "1.2.0",
-    "@uma-agent/protocol": "1.2.0"
+    "@uma-agent/client": "1.3.0",
+    "@uma-agent/protocol": "1.3.0"
   }
 }

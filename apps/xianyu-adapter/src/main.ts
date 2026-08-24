@@ -1,17 +1,22 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
+import { loadUserConfig } from "@uma-agent/channel-adapter";
 import { UmaClient } from "@uma-agent/client";
 import type { ExternalConversation, SessionSnapshot } from "@uma-agent/protocol";
 import { createXianyuAdapter, type XianyuTransport } from "./adapter.js";
 import { XianyuClient } from "./client.js";
 import { GoofishTransport } from "./transport.js";
 
-const required = (name: string): string => {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`Missing ${name}`);
-  return value;
-};
+function requireControlToken(request: IncomingMessage, token: string): void {
+  const header = request.headers.authorization;
+  if (header !== `Bearer ${token}`) throw new Error("Xianyu control authentication required");
+}
+
+function localHealthRequest(request: IncomingMessage): boolean {
+  const address = request.socket.remoteAddress;
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
 
 function allowedImageUrl(value: string): boolean {
   const url = new URL(value);
@@ -23,9 +28,18 @@ function allowedImageUrl(value: string): boolean {
   );
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJsonBody(
+  request: IncomingMessage,
+  maxBytes = 2 * 1024 * 1024,
+): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  let size = 0;
+  for await (const chunk of request) {
+    const value = Buffer.from(chunk);
+    size += value.byteLength;
+    if (size > maxBytes) throw new Error("请求体超过限制");
+    chunks.push(value);
+  }
   const value = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("请求体必须是 JSON 对象");
@@ -42,12 +56,13 @@ interface XianyuState {
 interface ConfiguredState {
   initial?: Partial<XianyuState>;
   onChange?: (state: XianyuState) => void;
+  core: { serverUrl: string; token: string };
 }
 
-export function createConfiguredXianyuAdapter(transport: XianyuTransport, state: ConfiguredState = {}) {
+export function createConfiguredXianyuAdapter(transport: XianyuTransport, state: ConfiguredState) {
   const client = new UmaClient({
-    baseUrl: process.env.UMA_SERVER_URL ?? "http://127.0.0.1:3210",
-    ...(process.env.UMA_TOKEN ? { token: process.env.UMA_TOKEN } : {}),
+    baseUrl: state.core.serverUrl,
+    token: state.core.token,
   });
   const sessions = new Map<string, string>(Object.entries(state.initial?.sessions ?? {}));
   const conversations = new Map<string, ExternalConversation>(
@@ -149,20 +164,26 @@ function createStateWriter(path: string, state: XianyuState): () => void {
         await rename(temporary, path);
       }
       running = false;
-    })().catch(() => {
+    })().catch((error) => {
+      // 状态写入失败不能改变渠道业务结果，但必须显式告警，便于运维发现恢复点丢失。
+      console.error("Xianyu state persistence failed", {
+        path,
+        error: error instanceof Error ? error.message : String(error),
+      });
       running = false;
     });
   };
 }
 
-export async function startXianyuService() {
-  const cookie = required("XIANYU_COOKIE");
-  const host = process.env.XIANYU_HOST?.trim() || "127.0.0.1";
-  const port = Number(process.env.XIANYU_PORT ?? 3250);
-  if (!Number.isInteger(port) || port < 1 || port > 65535)
-    throw new Error("XIANYU_PORT must be a valid TCP port");
-  const stateDir = process.env.XIANYU_STATE_DIR?.trim();
-  const statePath = stateDir ? join(stateDir, "state.json") : undefined;
+export async function startXianyuService(
+  configPath = process.argv.find((arg) => arg.startsWith("--config="))?.slice(9) ?? "config.user.json",
+) {
+  const user = await loadUserConfig(configPath, "xianyu");
+  const cookie = user.xianyu.cookie;
+  const controlToken = user.xianyu.controlToken;
+  const host = user.xianyu.host;
+  const port = user.xianyu.port;
+  const statePath = join(user.xianyu.stateDir, "state.json");
   const persisted = statePath
     ? await loadXianyuState(statePath)
     : { sessions: {}, conversations: {}, seenIds: [] };
@@ -179,6 +200,7 @@ export async function startXianyuService() {
   });
   const configured = createConfiguredXianyuAdapter(transport, {
     initial: state,
+    core: user.core,
     onChange: (next) => {
       state.sessions = next.sessions;
       state.conversations = next.conversations;
@@ -188,6 +210,11 @@ export async function startXianyuService() {
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
     try {
       if (request.url === "/health" && request.method === "GET") {
+        if (!localHealthRequest(request)) {
+          response.writeHead(403, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: "Local health check required" }));
+          return;
+        }
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
@@ -199,22 +226,26 @@ export async function startXianyuService() {
         return;
       }
       if (request.url === "/pause" && request.method === "POST") {
+        requireControlToken(request, controlToken);
         configured.adapter.pause();
         response.writeHead(204).end();
         return;
       }
       if (request.url === "/resume" && request.method === "POST") {
+        requireControlToken(request, controlToken);
         configured.adapter.resume();
         response.writeHead(204).end();
         return;
       }
       if (request.method === "GET" && request.url?.startsWith("/item/")) {
+        requireControlToken(request, controlToken);
         const item = await xianyuClient.getItem(decodeURIComponent(request.url.slice("/item/".length)));
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(item));
         return;
       }
       if (request.method === "GET" && request.url?.startsWith("/history/")) {
+        requireControlToken(request, controlToken);
         const conversationId = decodeURIComponent(request.url.slice("/history/".length));
         const messages = await transport.getHistory(conversationId);
         response.writeHead(200, { "content-type": "application/json" });
@@ -222,6 +253,7 @@ export async function startXianyuService() {
         return;
       }
       if (request.method === "POST" && request.url === "/chat") {
+        requireControlToken(request, controlToken);
         const body = await readJsonBody(request);
         const conversationId = await transport.createChat(
           String(body.receiverId ?? ""),
@@ -232,6 +264,7 @@ export async function startXianyuService() {
         return;
       }
       if (request.method === "POST" && request.url === "/publish") {
+        requireControlToken(request, controlToken);
         const body = await readJsonBody(request);
         const result = await xianyuClient.publishItem({
           imagePaths: Array.isArray(body.imagePaths) ? body.imagePaths.map(String) : [],
@@ -269,4 +302,4 @@ export async function startXianyuService() {
   return { ...configured, server, stop };
 }
 
-if (process.env.XIANYU_AUTOSTART === "1") await startXianyuService();
+if (process.argv.some((arg) => arg.startsWith("--config="))) await startXianyuService();

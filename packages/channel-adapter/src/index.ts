@@ -4,6 +4,8 @@ export type {
   ChannelInboundMessage,
   ExternalConversation,
 } from "@uma-agent/protocol";
+export type { UserConfig } from "./user-config.js";
+export { loadUserConfig } from "./user-config.js";
 
 export async function retryWithBackoff<T>(
   operation: () => Promise<T>,
