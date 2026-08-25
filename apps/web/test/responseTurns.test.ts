@@ -79,4 +79,26 @@ describe("buildConversationEntries", () => {
     );
     expect(entries.filter((entry) => entry.kind === "response")).toHaveLength(1);
   });
+
+  it("keeps multiple assistant updates in the single run response", () => {
+    const transcript = [
+      item({ id: "user-1", sequence: 1, role: "user", runId: "run-1" }),
+      item({ id: "assistant-1", sequence: 2, role: "assistant", runId: "run-1", content: "阶段" }),
+      item({ id: "tool-1", sequence: 3, role: "tool", runId: "run-1", name: "mcp_browser_open", content: "工具" }),
+      item({ id: "assistant-2", sequence: 4, role: "assistant", runId: "run-1", content: "结论" }),
+    ];
+    const entries = buildConversationEntries(
+      transcript,
+      [response({ id: "response-1", runId: "run-1", messageId: "user-1" })],
+      [run("run-1")],
+    );
+    expect(entries.filter((entry) => entry.kind === "response")).toHaveLength(1);
+    const entry = entries.find((value) => value.kind === "response");
+    if (entry?.kind === "response") expect(entry.items.map((value) => value.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "tool-1",
+      "assistant-2",
+    ]);
+  });
 });

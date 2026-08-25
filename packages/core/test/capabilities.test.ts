@@ -55,7 +55,10 @@ describe("session capabilities", () => {
     );
     const policy = new PermissionPolicy();
     expect(policy.decide("plan", "write").allowed).toBe(true);
-    expect(policy.decide("agent", "memory_write").requiresApproval).toBe(true);
+    expect(policy.decide("agent", "memory_write").requiresApproval).toBe(false);
+    expect(policy.decide("agent", "schedule_manage").requiresApproval).toBe(false);
+    expect(policy.decide("agent", "mcp_browser_open").requiresApproval).toBe(false);
+    expect(policy.decide("agent", "shell").requiresApproval).toBe(true);
     const utf16Path = join(root, "utf16.txt");
     await writeFile(utf16Path, Buffer.from("\ufeffencoded attachment", "utf16le"));
     const attachment = db.addAttachment({

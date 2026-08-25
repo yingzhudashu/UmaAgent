@@ -13,7 +13,15 @@ let browser: Browser | undefined;
 const proxy = await createValidatingProxy();
 
 async function browserInstance(): Promise<Browser> {
-  browser ??= await chromium.launch({ headless: true, args: [`--proxy-server=${proxy.url}`] });
+  if (!browser) {
+    try {
+      browser = await chromium.launch({ headless: true, args: [`--proxy-server=${proxy.url}`] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("browser.execution.failed", { phase: "launch", error: message.slice(0, 300) });
+      throw new Error(`browser_launch_failed: ${message}`, { cause: error });
+    }
+  }
   return browser;
 }
 
@@ -30,92 +38,103 @@ async function closeHandle(id: string): Promise<void> {
   await handle?.context.close();
 }
 
-const mcp = new McpServer({ name: "uma-browser-worker", version: "1.3.0" });
-mcp.registerTool(
-  "open",
-  { description: "Open a public HTTP(S) page.", inputSchema: { url: z.url() } },
-  async ({ url }) => {
-    await assertPublicUrl(url);
-    for (const [id, handle] of handles) if (handle.expiresAt <= Date.now()) await closeHandle(id);
-    if (handles.size >= 4) throw new Error("Browser context limit reached");
-    const context = await (await browserInstance()).newContext();
-    await context.route(/^https?:\/\//, async (route) => {
-      try {
-        await assertPublicUrl(route.request().url());
-        await route.continue();
-      } catch {
-        await route.abort("blockedbyclient");
-      }
-    });
-    const page = await context.newPage();
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    const handle = randomUUID();
-    handles.set(handle, { context, page, expiresAt: Date.now() + 15 * 60_000 });
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({ handle, url: page.url(), title: await page.title() }),
-        },
-      ],
-    };
-  },
-);
-mcp.registerTool(
-  "extract",
-  {
-    description: "Extract visible text from a page or selector.",
-    inputSchema: { handle: z.string(), selector: z.string().optional() },
-  },
-  async ({ handle, selector }) => {
-    const page = getHandle(handle).page;
-    const text = selector
-      ? await page.locator(selector).innerText({ timeout: 10_000 })
-      : await page.locator("body").innerText({ timeout: 10_000 });
-    return { content: [{ type: "text", text: text.slice(0, 100_000) }] };
-  },
-);
-mcp.registerTool(
-  "click",
-  { description: "Click an element.", inputSchema: { handle: z.string(), selector: z.string() } },
-  async ({ handle, selector }) => {
-    await getHandle(handle).page.locator(selector).click({ timeout: 10_000 });
-    return { content: [{ type: "text", text: "Clicked" }] };
-  },
-);
-mcp.registerTool(
-  "fill",
-  {
-    description: "Fill an input element.",
-    inputSchema: { handle: z.string(), selector: z.string(), value: z.string() },
-  },
-  async ({ handle, selector, value }) => {
-    await getHandle(handle).page.locator(selector).fill(value, { timeout: 10_000 });
-    return { content: [{ type: "text", text: "Filled" }] };
-  },
-);
-mcp.registerTool(
-  "screenshot",
-  { description: "Capture a PNG screenshot.", inputSchema: { handle: z.string() } },
-  async ({ handle }) => {
-    const data = await getHandle(handle).page.screenshot({ type: "png", fullPage: false });
-    return { content: [{ type: "image", data: data.toString("base64"), mimeType: "image/png" }] };
-  },
-);
-mcp.registerTool(
-  "close",
-  { description: "Close a browser handle.", inputSchema: { handle: z.string() } },
-  async ({ handle }) => {
-    await closeHandle(handle);
-    return { content: [{ type: "text", text: "Closed" }] };
-  },
-);
+function registerTools(mcp: McpServer): void {
+  mcp.registerTool(
+    "open",
+    { description: "Open a public HTTP(S) page.", inputSchema: { url: z.url() } },
+    async ({ url }) => {
+      await assertPublicUrl(url);
+      for (const [id, handle] of handles) if (handle.expiresAt <= Date.now()) await closeHandle(id);
+      if (handles.size >= 4) throw new Error("Browser context limit reached");
+      const context = await (await browserInstance()).newContext();
+      await context.route(/^https?:\/\//, async (route) => {
+        try {
+          await assertPublicUrl(route.request().url());
+          await route.continue();
+        } catch {
+          await route.abort("blockedbyclient");
+        }
+      });
+      const page = await context.newPage();
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      const handle = randomUUID();
+      handles.set(handle, { context, page, expiresAt: Date.now() + 15 * 60_000 });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ handle, url: page.url(), title: await page.title() }),
+          },
+        ],
+      };
+    },
+  );
+  mcp.registerTool(
+    "extract",
+    {
+      description: "Extract visible text from a page or selector.",
+      inputSchema: { handle: z.string(), selector: z.string().optional() },
+    },
+    async ({ handle, selector }) => {
+      const page = getHandle(handle).page;
+      const text = selector
+        ? await page.locator(selector).innerText({ timeout: 10_000 })
+        : await page.locator("body").innerText({ timeout: 10_000 });
+      return { content: [{ type: "text", text: text.slice(0, 100_000) }] };
+    },
+  );
+  mcp.registerTool(
+    "click",
+    { description: "Click an element.", inputSchema: { handle: z.string(), selector: z.string() } },
+    async ({ handle, selector }) => {
+      await getHandle(handle).page.locator(selector).click({ timeout: 10_000 });
+      return { content: [{ type: "text", text: "Clicked" }] };
+    },
+  );
+  mcp.registerTool(
+    "fill",
+    {
+      description: "Fill an input element.",
+      inputSchema: { handle: z.string(), selector: z.string(), value: z.string() },
+    },
+    async ({ handle, selector, value }) => {
+      await getHandle(handle).page.locator(selector).fill(value, { timeout: 10_000 });
+      return { content: [{ type: "text", text: "Filled" }] };
+    },
+  );
+  mcp.registerTool(
+    "screenshot",
+    { description: "Capture a PNG screenshot.", inputSchema: { handle: z.string() } },
+    async ({ handle }) => {
+      const data = await getHandle(handle).page.screenshot({ type: "png", fullPage: false });
+      return { content: [{ type: "image", data: data.toString("base64"), mimeType: "image/png" }] };
+    },
+  );
+  mcp.registerTool(
+    "close",
+    { description: "Close a browser handle.", inputSchema: { handle: z.string() } },
+    async ({ handle }) => {
+      await closeHandle(handle);
+      return { content: [{ type: "text", text: "Closed" }] };
+    },
+  );
+}
 
-const transport = new StreamableHTTPServerTransport({
-  sessionIdGenerator: randomUUID,
-} as unknown as ConstructorParameters<typeof StreamableHTTPServerTransport>[0]);
-transport.onerror = (error) => console.error("MCP transport error", error);
-await mcp.connect(transport as Parameters<McpServer["connect"]>[0]);
+type McpSession = { server: McpServer; transport: StreamableHTTPServerTransport };
+const sessions = new Map<string, McpSession>();
+const createSession = async (): Promise<McpSession> => {
+  const server = new McpServer({ name: "uma-browser-worker", version: "1.3.0" });
+  registerTools(server);
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
+  transport.onerror = (error) =>
+    console.error("browser.mcp.error", { phase: "transport", error: error.message });
+  const session = { server, transport };
+  transport.onclose = () => {
+    if (transport.sessionId) sessions.delete(transport.sessionId);
+  };
+  await server.connect(transport as Parameters<McpServer["connect"]>[0]);
+  return session;
+};
 const port = Number(process.env.BROWSER_WORKER_PORT ?? 3230);
 const host = process.env.BROWSER_WORKER_HOST?.trim() || "127.0.0.1";
 const authToken = process.env.BROWSER_WORKER_AUTH_TOKEN?.trim();
@@ -137,9 +156,22 @@ app.all("/mcp", async (request: Request, response: Response) => {
     return;
   }
   try {
-    await transport.handleRequest(request, response, request.body);
+    const rawSessionId = request.headers["mcp-session-id"];
+    const sessionId = Array.isArray(rawSessionId) ? rawSessionId[0] : rawSessionId;
+    const session = sessionId
+      ? sessions.get(sessionId)
+      : request.method === "POST"
+        ? await createSession()
+        : undefined;
+    if (!session) {
+      response.status(400).json({ error: "MCP session is missing or expired" });
+      return;
+    }
+    await session.transport.handleRequest(request, response, request.body);
+    if (session.transport.sessionId) sessions.set(session.transport.sessionId, session);
   } catch (error) {
-    console.error("MCP request failed", error);
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("browser.mcp.failed", { phase: "request", error: message.slice(0, 300) });
     if (!response.headersSent) response.status(500).end();
   }
 });
@@ -153,7 +185,8 @@ const stop = async () => {
   for (const id of [...handles.keys()]) await closeHandle(id);
   await browser?.close();
   await proxy.close();
-  await transport.close();
+  await Promise.allSettled([...sessions.values()].map(({ transport }) => transport.close()));
+  sessions.clear();
   server.close();
 };
 process.once("SIGINT", () => void stop());

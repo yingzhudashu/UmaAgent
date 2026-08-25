@@ -10,6 +10,7 @@ Group=umaagent-browser
 SupplementaryGroups=umaagent
 WorkingDirectory=/opt/uma-agent/current
 Environment=NODE_ENV=production
+Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/uma-agent/browser/.cache/ms-playwright
 EnvironmentFile=/etc/uma-agent/browser.env
 ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent/current/apps/browser-worker/dist/main.js
 Restart=on-failure

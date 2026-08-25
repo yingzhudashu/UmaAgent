@@ -181,7 +181,7 @@ test("keeps tool output collapsed until requested", async ({ page }) => {
   const steps = page.locator(".response-steps").first();
   await expect(steps).toBeVisible();
   await expect(steps).not.toHaveAttribute("open", "");
-  await steps.locator("summary").click();
+  await steps.locator(":scope > summary").click();
   await expect(steps).toHaveAttribute("open", "");
   const tool = page.locator(".tool-details").first();
   await expect(tool).toBeVisible();

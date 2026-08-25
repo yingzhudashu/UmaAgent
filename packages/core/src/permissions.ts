@@ -52,20 +52,20 @@ export class PermissionPolicy {
         reason: "Unknown tool is denied by capability policy",
       };
     }
-    if (kind === "shell" || kind === "mcp" || kind === "memory_write" || kind === "schedule") {
+    if (kind === "shell") {
       return {
         allowed: true,
         requiresApproval: true,
-        reason:
-          kind === "shell"
-            ? "Shell execution always requires approval"
-            : kind === "memory_write"
-              ? "Explicit memory writes require approval"
-              : kind === "schedule"
-                ? "Schedule changes always require approval"
-                : "MCP tools require approval",
+        reason: "Shell execution always requires approval",
       };
     }
-    return { allowed: true, requiresApproval: false, reason: "Allowed by session policy" };
+    return {
+      allowed: true,
+      requiresApproval: false,
+      reason:
+        kind === "mcp"
+          ? "MCP tools run automatically unless explicitly classified as dangerous"
+          : "Allowed by session policy",
+    };
   }
 }
