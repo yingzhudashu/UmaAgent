@@ -15,7 +15,11 @@ const proxy = await createValidatingProxy();
 async function browserInstance(): Promise<Browser> {
   if (!browser) {
     try {
-      browser = await chromium.launch({ headless: true, args: [`--proxy-server=${proxy.url}`] });
+      browser = await chromium.launch({
+        channel: "chromium",
+        headless: true,
+        args: [`--proxy-server=${proxy.url}`],
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("browser.execution.failed", { phase: "launch", error: message.slice(0, 300) });
