@@ -1,8 +1,14 @@
-import type { Response, Run, TranscriptItem } from "@uma-agent/protocol";
+import type { Response, ResponseStatus, Run, TranscriptItem } from "@uma-agent/protocol";
 
 export type ConversationEntry =
   | { kind: "message"; item: TranscriptItem }
-  | { kind: "response"; response: Response; run: Run | undefined; items: TranscriptItem[] };
+  | {
+      kind: "response";
+      id: string;
+      response: Response;
+      run: Run | undefined;
+      items: TranscriptItem[];
+    };
 
 function responseForItem(
   item: TranscriptItem,
@@ -29,35 +35,47 @@ export function buildConversationEntries(
   }
 
   const entries: ConversationEntry[] = [];
-  const renderedResponses = new Set<string>();
+  const renderedSegments = new Set<string>();
+  const appendResponseSegment = (response: Response, run: Run | undefined, segment: TranscriptItem[]) => {
+    const firstUser = segment.find((item) => item.role === "user");
+    const segmentId = `${response.id}:${firstUser?.id ?? segment[0]?.id ?? "empty"}`;
+    if (renderedSegments.has(segmentId)) return;
+    renderedSegments.add(segmentId);
+    const hasLaterUser = (itemsByRun.get(response.runId) ?? []).some(
+      (item) => item.role === "user" && item.sequence > (firstUser?.sequence ?? 0),
+    );
+    const status: ResponseStatus = hasLaterUser ? "clarifying" : response.status;
+    entries.push({
+      kind: "response",
+      id: segmentId,
+      response: status === response.status ? response : { ...response, status },
+      run,
+      items: segment,
+    });
+  };
   for (const item of transcript) {
     const response = responseForItem(item, byMessageId, byRunId);
     if (response) {
       if (item.role !== "user") continue;
       entries.push({ kind: "message", item });
-      if (!renderedResponses.has(response.id)) {
-        renderedResponses.add(response.id);
-        entries.push({
-          kind: "response",
-          response,
-          run: runsById.get(response.runId),
-          items: itemsByRun.get(response.runId) ?? [],
-        });
-      }
+      const runItems = itemsByRun.get(response.runId) ?? [];
+      const segment = runItems.filter(
+        (candidate) =>
+          candidate.sequence >= item.sequence &&
+          candidate.sequence <
+            (runItems.find((next) => next.role === "user" && next.sequence > item.sequence)?.sequence ??
+              Number.POSITIVE_INFINITY),
+      );
+      appendResponseSegment(response, runsById.get(response.runId), segment);
       continue;
     }
     entries.push({ kind: "message", item });
   }
 
   for (const response of responses) {
-    if (renderedResponses.has(response.id)) continue;
-    renderedResponses.add(response.id);
-    entries.push({
-      kind: "response",
-      response,
-      run: runsById.get(response.runId),
-      items: itemsByRun.get(response.runId) ?? [],
-    });
+    const runItems = itemsByRun.get(response.runId) ?? [];
+    if (!runItems.some((item) => item.role === "user"))
+      appendResponseSegment(response, runsById.get(response.runId), runItems);
   }
 
   return entries;

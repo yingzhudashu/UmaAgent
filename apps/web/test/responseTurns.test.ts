@@ -109,4 +109,20 @@ describe("buildConversationEntries", () => {
         "assistant-2",
       ]);
   });
+
+  it("splits clarification replies around the user's answer", () => {
+    const transcript = [
+      item({ id: "user-1", sequence: 1, role: "user", runId: "run-1", content: "开始" }),
+      item({ id: "assistant-1", sequence: 2, role: "assistant", runId: "run-1", content: "请说明目标" }),
+      item({ id: "user-2", sequence: 3, role: "user", runId: "run-1", content: "目标 A" }),
+      item({ id: "assistant-2", sequence: 4, role: "assistant", runId: "run-1", content: "已完成" }),
+    ];
+    const entries = buildConversationEntries(
+      transcript,
+      [response({ id: "response-1", runId: "run-1", messageId: "user-1", content: "已完成" })],
+      [run("run-1")],
+    );
+    expect(entries.map((entry) => entry.kind)).toEqual(["message", "response", "message", "response"]);
+    expect(entries.filter((entry) => entry.kind === "response")).toHaveLength(2);
+  });
 });

@@ -696,7 +696,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 />
               ) : (
                 <ResponseCard
-                  key={entry.response.id}
+                  key={entry.id}
                   response={entry.response}
                   run={entry.run}
                   items={entry.items}

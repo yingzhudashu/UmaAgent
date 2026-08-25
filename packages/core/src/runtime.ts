@@ -1086,12 +1086,18 @@ export class UmaRuntime {
         attachmentIds,
         ...(input.source ? { source: input.source } : {}),
       });
-      const response = this.database.createResponse({
-        sessionId,
-        runId: result.run.id,
-        messageId: input.messageId,
-        status: "queued",
-      });
+      const response = continuation
+        ? this.database.responseForRun(result.run.id)
+        : this.database.createResponse({
+            sessionId,
+            runId: result.run.id,
+            messageId: input.messageId,
+            status: "queued",
+          });
+      if (continuation && response) {
+        const updated = this.database.updateResponse(response.id, { status: "queued" });
+        this.events.emit(sessionId, result.run.id, "response.updated", updated);
+      }
       if (continuation) {
         this.database.updateRun(result.run.id, {
           clarificationCount: (result.run.clarificationCount ?? 0) + 1,
@@ -1108,32 +1114,26 @@ export class UmaRuntime {
         "message.completed",
         this.database.getMessage(input.messageId),
       );
-      this.events.emit(sessionId, result.run.id, "response.started", response);
+      if (response) this.events.emit(sessionId, result.run.id, "response.started", response);
       return result;
     });
     if (!created) return run;
-    const originalPrompt = continuation
-      ? this.database.getMessage(continuation.messageId).content
-      : undefined;
-    this.orchestrator.enqueue(sessionId, () =>
-      this.executeRun(
-        session,
-        run.id,
-        input,
-        continuation ? `${originalPrompt}\n\nClarification: ${input.text}` : undefined,
-      ),
-    );
+    const prompt =
+      continuation &&
+      `${this.database.getMessage(continuation.messageId).content}\n\nClarification: ${input.text}`;
+    const enqueue = continuation
+      ? this.orchestrator.enqueueFirst.bind(this.orchestrator)
+      : this.orchestrator.enqueue.bind(this.orchestrator);
+    enqueue(sessionId, () => this.executeRun(session, run.id, input, prompt));
+    if (continuation) this.orchestrator.resume(sessionId);
     return run;
   }
-
   reviewMessage(messageId: string, feedback = ""): Run {
     return this.qualityOperations.start("review", messageId, { feedback });
   }
-
   improveMessage(messageId: string, options: { force?: boolean; reset?: boolean } = {}): Run {
     return this.qualityOperations.start("improve", messageId, options);
   }
-
   sendCommand(sessionId: string, command: string, messageId: string = randomUUID()): Run {
     const normalized = command.trim();
     if (!normalized) throw new Error("Command is required");
@@ -1170,7 +1170,6 @@ export class UmaRuntime {
     this.orchestrator.enqueue(sessionId, () => this.executeCommand(session, run.id, normalized));
     return run;
   }
-
   private async executeCommand(session: Session, runId: string, command: string): Promise<void> {
     const rootTrace = this.trace.startRoot(runId, session.id, "command", { "run.kind": "command" });
     this.activeTraces.set(runId, rootTrace);
@@ -1504,6 +1503,7 @@ export class UmaRuntime {
       injectRuntimeFault("checkpoint.created");
       injectRuntimeFault("preflight.completed");
       if (decision.route === "clarify") {
+        this.orchestrator.pause(session.id);
         const content = decision.questions.map((question, index) => `${index + 1}. ${question}`).join("\n");
         this.events.transaction(() => {
           const message = this.database.insertMessage({
