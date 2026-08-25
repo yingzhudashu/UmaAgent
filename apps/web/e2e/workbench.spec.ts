@@ -178,6 +178,11 @@ test("keeps tool output collapsed until requested", async ({ page }) => {
   const input = page.getByPlaceholder("向 UmaAgent 发送消息");
   await input.fill("Use the configured deterministic read tool and report its result.");
   await page.getByRole("button", { name: "发送" }).click();
+  const steps = page.locator(".response-steps").first();
+  await expect(steps).toBeVisible();
+  await expect(steps).not.toHaveAttribute("open", "");
+  await steps.locator("summary").click();
+  await expect(steps).toHaveAttribute("open", "");
   const tool = page.locator(".tool-details").first();
   await expect(tool).toBeVisible();
   await expect(tool).not.toHaveAttribute("open", "");

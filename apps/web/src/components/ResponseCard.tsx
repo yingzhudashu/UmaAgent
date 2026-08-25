@@ -1,8 +1,10 @@
-import type { Response, ResponseStatus } from "@uma-agent/protocol";
-import { Download, FileText, LoaderCircle } from "lucide-react";
+import type { Response, ResponseStatus, Run, TranscriptItem } from "@uma-agent/protocol";
+import { Check, ChevronRight, Copy, Download, FileText, LoaderCircle } from "lucide-react";
+import { useState } from "react";
+import { Markdown } from "../Markdown.js";
 
-const labels: Record<ResponseStatus, string> = {
-  queued: "已排队",
+export const responseStatusLabels: Record<ResponseStatus, string> = {
+  queued: "正在回复",
   thinking: "正在分析",
   clarifying: "等待补充信息",
   planning: "正在制定计划",
@@ -15,28 +17,127 @@ const labels: Record<ResponseStatus, string> = {
   cancelled: "已取消",
 };
 
+function toolSummary(item: TranscriptItem): string {
+  if (item.status === "error") return "执行失败";
+  if (item.status === "streaming") return "执行中";
+  return "已完成";
+}
+
 export function ResponseCard({
   response,
+  run,
+  items,
   onDownload,
   onConfirm,
+  onReview,
+  onImprove,
 }: {
   response: Response;
+  run: Run | undefined;
+  items: TranscriptItem[];
   onDownload: (id: string) => void;
   onConfirm?: () => void;
+  onReview?: (messageId: string) => void;
+  onImprove?: (messageId: string) => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  const assistantItems = items.filter((item) => item.role === "assistant");
+  const finalAssistant = assistantItems.at(-1);
+  const finalContent = response.content || finalAssistant?.content || "";
+  const intermediateItems = items
+    .filter((item) => item.role !== "user" && item.id !== finalAssistant?.id)
+    .sort((a, b) => a.sequence - b.sequence);
+  const hasSteps = Boolean(run?.plan.length || intermediateItems.length);
+  const copy = async () => {
+    await navigator.clipboard?.writeText(finalContent);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+
   return (
     <article className="response-card" aria-live="polite">
       <div className="response-card__status">
-        {!["completed", "failed", "cancelled"].includes(response.status) && (
+        {!(["completed", "failed", "cancelled"] as ResponseStatus[]).includes(response.status) && (
           <LoaderCircle size={15} className="spin" aria-hidden="true" />
         )}
-        <strong>{labels[response.status]}</strong>
+        <strong>{responseStatusLabels[response.status]}</strong>
         {response.status === "awaiting_confirmation" && onConfirm && (
           <button type="button" className="primary compact" onClick={onConfirm}>
             确认执行
           </button>
         )}
       </div>
+
+      {hasSteps && (
+        <details className="response-steps">
+          <summary>
+            <ChevronRight size={14} aria-hidden="true" />
+            <span>执行步骤</span>
+            <small>{intermediateItems.length + (run?.plan.length ?? 0)} 项</small>
+          </summary>
+          <div className="response-steps__body">
+            {run?.plan.length ? (
+              <ol className="response-plan">
+                {run.plan.map((step) => (
+                  <li key={step.id} data-status={step.status}>
+                    <span className="response-plan__marker">
+                      {step.status === "completed" ? <Check size={13} /> : <span className="step-dot" />}
+                    </span>
+                    <span>{step.title}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+
+            {intermediateItems.map((item) =>
+              item.role === "tool" ? (
+                <details className="tool-details response-step" key={item.id}>
+                  <summary>
+                    <ChevronRight size={14} aria-hidden="true" />
+                    <strong>{item.name ?? "工具"}</strong>
+                    <span>{toolSummary(item)}</span>
+                    <small>{item.content.length.toLocaleString()} 字符</small>
+                  </summary>
+                  <pre>{item.content}</pre>
+                </details>
+              ) : (
+                <details className="response-step response-step--assistant" key={item.id}>
+                  <summary>
+                    <ChevronRight size={14} aria-hidden="true" />
+                    <span>阶段回复</span>
+                  </summary>
+                  <Markdown content={item.content} />
+                </details>
+              ),
+            )}
+          </div>
+        </details>
+      )}
+
+      <div className="response-card__content assistant-body">
+        {finalContent ? (
+          <Markdown content={finalContent} />
+        ) : (
+          <span className="response-card__placeholder">正在准备回复…</span>
+        )}
+      </div>
+
+      <div className="response-card__actions">
+        <button type="button" className="text-action" onClick={() => void copy()} title="复制内容">
+          {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "已复制" : "复制"}
+        </button>
+        {finalAssistant && onReview && (
+          <button type="button" className="text-action" onClick={() => onReview(finalAssistant.id)}>
+            审查
+          </button>
+        )}
+        {finalAssistant && onImprove && (
+          <button type="button" className="text-action" onClick={() => onImprove(finalAssistant.id)}>
+            改进
+          </button>
+        )}
+      </div>
+
       {response.attachments.length > 0 && (
         <div className="response-files">
           {response.attachments.map((attachment) => (

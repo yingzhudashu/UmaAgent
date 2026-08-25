@@ -135,15 +135,23 @@ export async function safeFetch(raw: string, signal?: AbortSignal): Promise<stri
   for (let redirects = 0; redirects <= 3; redirects++) {
     if (url.protocol !== "http:" && url.protocol !== "https:")
       throw new Error("Only HTTP(S) URLs are supported");
-    const resolved = await lookup(url.hostname, { all: true });
+    let resolved: Array<{ address: string; family: number }>;
+    try {
+      resolved = await lookup(url.hostname, { all: true });
+    } catch (error) {
+      const cause = error instanceof Error ? error : new Error(String(error));
+      const code = "code" in cause && typeof cause.code === "string" ? cause.code : cause.name;
+      throw new Error(`http_get_dns_failed (${code}): ${cause.message}`, { cause });
+    }
     if (!resolved.length || resolved.some((item) => privateAddress(item.address)))
       throw new Error("Private or unresolved network targets are blocked");
     const selected = resolved[0];
     if (!selected) throw new Error("Network target did not resolve");
     const dispatcher = new HttpAgent({
       connect: {
-        lookup(_hostname, _options, callback) {
-          callback(null, selected.address, selected.family);
+        lookup(_hostname, options, callback) {
+          if (options.all) callback(null, [selected]);
+          else callback(null, selected.address, selected.family);
         },
       },
     });
@@ -157,13 +165,22 @@ export async function safeFetch(raw: string, signal?: AbortSignal): Promise<stri
       });
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get("location");
-        if (!location) throw new Error("Redirect has no location");
+        if (!location) throw new Error("http_get_redirect: Redirect has no location");
         url = new URL(location, url);
         continue;
       }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) throw new Error(`http_get_http_status: HTTP ${response.status}`);
       const body = await response.text();
       return body.slice(0, 100_000);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (error instanceof Error && error.message.startsWith("http_get_")) throw error;
+      const cause = error instanceof Error ? error : new Error(String(error));
+      const nested = cause.cause instanceof Error ? cause.cause : undefined;
+      const diagnostic = nested ?? cause;
+      const code =
+        "code" in diagnostic && typeof diagnostic.code === "string" ? diagnostic.code : diagnostic.name;
+      throw new Error(`http_get_connection_failed (${code}): ${diagnostic.message}`, { cause });
     } finally {
       await dispatcher.close();
     }

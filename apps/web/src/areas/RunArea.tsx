@@ -1,5 +1,18 @@
-import type { Approval, Run, RunAction, RunCheckpoint } from "@uma-agent/protocol";
+import type { Approval, Run, RunAction, RunCheckpoint, RunStatus } from "@uma-agent/protocol";
 import { Check, ChevronRight, RotateCcw, X } from "lucide-react";
+
+const runStatusLabels: Record<RunStatus, string> = {
+  queued: "正在回复",
+  preflight: "正在分析",
+  awaiting_input: "等待补充信息",
+  awaiting_confirmation: "等待确认执行计划",
+  running: "正在执行",
+  verifying: "正在验证",
+  completed: "已完成",
+  failed: "执行失败",
+  cancelled: "已取消",
+  interrupted: "已中断",
+};
 
 export function RunPanel({
   run,
@@ -22,7 +35,7 @@ export function RunPanel({
   return (
     <div className="run-panel">
       <div className="panel-label">当前运行</div>
-      <div className={`status status-${run.status}`}>{run.status.replace("_", " ")}</div>
+      <div className={`status status-${run.status}`}>{runStatusLabels[run.status]}</div>
       {run.reasoningSummary && (
         <>
           <div className="panel-label">判断</div>

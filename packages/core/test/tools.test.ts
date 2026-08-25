@@ -252,4 +252,16 @@ describe("builtin tools", () => {
     ])
       await expect(safeFetch(`http://${address}/`)).rejects.toThrow("Private");
   });
+
+  it("fetches a public URL without the invalid IP lookup regression", async () => {
+    const body = await safeFetch("https://example.com");
+    expect(body.toLowerCase()).toContain("doctype html");
+  });
+
+  it("keeps diagnostic categories for DNS and HTTP failures", async () => {
+    await expect(safeFetch("https://host.invalid.example")).rejects.toThrow("http_get_dns_failed");
+    await expect(safeFetch("https://example.com/not-found-for-uma-agent")).rejects.toThrow(
+      "http_get_http_status",
+    );
+  });
 });

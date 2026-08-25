@@ -15,7 +15,6 @@ import {
   ImproveMessageRequestSchema,
   PROTOCOL_VERSION,
   ReviewMessageRequestSchema,
-  type Run,
   RunActionDecisionSchema,
   SendMessageRequestSchema,
   ShortcutRequestSchema,
@@ -28,6 +27,7 @@ import Value from "typebox/value";
 import type { RawData } from "ws";
 import { type AuthPrincipal, AuthService } from "./auth.js";
 import { mapServerError } from "./error-mapping.js";
+import { installRuntimeLogging } from "./runtimeLogging.js";
 
 type SocketMessage = {
   type?: string;
@@ -82,22 +82,7 @@ export async function createServer(
     },
     bodyLimit: runtime.config.server.maxUploadBytes + 1024,
   });
-  const stopRuntimeLogging = runtime.subscribe((event) => {
-    if (event.type !== "run.updated") return;
-    const run = event.payload as Run;
-    app.log.info(
-      {
-        sessionId: event.sessionId,
-        runId: run.id,
-        provider: run.model.ref.provider,
-        model: run.model.ref.id,
-        status: run.status,
-        phase: run.phase,
-        durationMs: Math.max(0, run.updatedAt - run.createdAt),
-      },
-      "run state changed",
-    );
-  });
+  const stopRuntimeLogging = installRuntimeLogging(runtime, app);
   app.addHook("onClose", async () => stopRuntimeLogging());
   const auth = new AuthService(runtime);
   await app.register(cookie);

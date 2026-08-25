@@ -45,6 +45,7 @@ import { ResponseCard } from "./components/ResponseCard.js";
 import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
 import { Login } from "./Login.js";
+import { buildConversationEntries } from "./responseTurns.js";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -293,27 +294,13 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     const unique = [...new Map(items.map((item) => [item.id, item])).values()].sort(
       (a, b) => a.sequence - b.sequence,
     );
-    const merged = new Map<string, TranscriptItem>();
-    for (const item of unique) {
-      if (item.role !== "assistant" || !item.runId) {
-        merged.set(item.id, item);
-        continue;
-      }
-      const previous = [...merged.values()].find(
-        (candidate) => candidate.role === "assistant" && candidate.runId === item.runId,
-      );
-      if (!previous) merged.set(item.id, item);
-      else
-        merged.set(previous.id, {
-          ...previous,
-          content: [previous.content, item.content].filter(Boolean).join("\n\n"),
-          status: item.status,
-          updatedAt: item.updatedAt,
-          attachments: [...previous.attachments, ...item.attachments],
-        });
-    }
-    return [...merged.values()].sort((a, b) => a.sequence - b.sequence);
+    return unique;
   }, [historical, snapshot.data?.transcript]);
+  const conversationEntries = useMemo(
+    () =>
+      buildConversationEntries(transcript, snapshot.data?.responses ?? [], snapshot.data?.recentRuns ?? []),
+    [transcript, snapshot.data?.responses, snapshot.data?.recentRuns],
+  );
   const transcriptLength = transcript.length;
   const transcriptTail = transcript.at(-1);
   const transcriptTailSignature = transcriptTail
@@ -683,41 +670,46 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 <p>消息、工具和计划都会在服务器上持久化。</p>
               </div>
             )}
-            {transcript.map((item) => (
-              <MessageBubble
-                key={item.id}
-                item={item}
-                onRetry={item.role === "user" ? () => retryMessage(item) : undefined}
-                onReview={
-                  item.role === "assistant"
-                    ? () => void client.reviewMessage(item.id).then(() => snapshot.refetch())
-                    : undefined
-                }
-                onImprove={
-                  item.role === "assistant"
-                    ? () => void client.improveMessage(item.id).then(() => snapshot.refetch())
-                    : undefined
-                }
-                onAttachment={(id) =>
-                  void client.attachmentContent(id).then((blob) => {
-                    const url = URL.createObjectURL(blob);
-                    window.open(url, "_blank", "noopener,noreferrer");
-                    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-                  })
-                }
-              />
-            ))}
-            {(snapshot.data?.responses ?? [])
-              .filter((response) => response.status !== "completed" || response.attachments.length > 0)
-              .map((response) => (
+            {conversationEntries.map((entry) =>
+              entry.kind === "message" ? (
+                <MessageBubble
+                  key={entry.item.id}
+                  item={entry.item}
+                  onRetry={entry.item.role === "user" ? () => retryMessage(entry.item) : undefined}
+                  onReview={
+                    entry.item.role === "assistant"
+                      ? () => void client.reviewMessage(entry.item.id).then(() => snapshot.refetch())
+                      : undefined
+                  }
+                  onImprove={
+                    entry.item.role === "assistant"
+                      ? () => void client.improveMessage(entry.item.id).then(() => snapshot.refetch())
+                      : undefined
+                  }
+                  onAttachment={(id) =>
+                    void client.attachmentContent(id).then((blob) => {
+                      const url = URL.createObjectURL(blob);
+                      window.open(url, "_blank", "noopener,noreferrer");
+                      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                    })
+                  }
+                />
+              ) : (
                 <ResponseCard
-                  key={response.id}
-                  response={response}
-                  {...(response.status === "awaiting_confirmation"
+                  key={entry.response.id}
+                  response={entry.response}
+                  run={entry.run}
+                  items={entry.items}
+                  onReview={(messageId) =>
+                    void client.reviewMessage(messageId).then(() => snapshot.refetch())
+                  }
+                  onImprove={(messageId) =>
+                    void client.improveMessage(messageId).then(() => snapshot.refetch())
+                  }
+                  {...(entry.response.status === "awaiting_confirmation"
                     ? {
-                        onConfirm: () => {
-                          void client.confirmPlan(response.runId).then(() => snapshot.refetch());
-                        },
+                        onConfirm: () =>
+                          void client.confirmPlan(entry.response.runId).then(() => snapshot.refetch()),
                       }
                     : {})}
                   onDownload={(id) =>
@@ -725,13 +717,15 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                       const url = URL.createObjectURL(blob);
                       const link = document.createElement("a");
                       link.href = url;
-                      link.download = response.attachments.find((item) => item.id === id)?.name ?? "download";
+                      link.download =
+                        entry.response.attachments.find((item) => item.id === id)?.name ?? "download";
                       link.click();
                       setTimeout(() => URL.revokeObjectURL(url), 60_000);
                     })
                   }
                 />
-              ))}
+              ),
+            )}
             <div aria-hidden="true" />
           </section>
           {showJumpToLatest && (
