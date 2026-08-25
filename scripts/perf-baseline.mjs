@@ -40,7 +40,7 @@ server.stderr.on("data", (chunk) => {
   output = `${output}${chunk}`.slice(-10_000);
 });
 
-const base = `http://127.0.0.1:${port}/api/v12`;
+const base = `http://127.0.0.1:${port}/api/v13`;
 async function api(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
     ...options,
@@ -120,7 +120,7 @@ try {
       body: JSON.stringify({
         messageId: `perf-${index}-${process.pid}`,
         text: "Reply with FAUX_DIRECT.",
-        mode: "ask",
+        mode: "agent",
       }),
     });
     apiSamples.push(performance.now() - requestStart);

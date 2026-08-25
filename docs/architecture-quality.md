@@ -1,6 +1,6 @@
 # UmaAgent 架构与质量基线
 
-当前发布版本为 `1.3.0`，Protocol v12，HTTP API `/api/v12`，SQLite schema 17。旧 API 和旧数据库不会迁移或兼容。
+当前发布版本为 `1.3.0`，Protocol v13，HTTP API `/api/v13`，SQLite schema 18。旧 API 和旧数据库不会迁移或兼容。
 
 ## 事实源与分层
 
@@ -10,7 +10,7 @@
 - SQLite 使用 WAL；schema 不匹配直接拒绝启动。
 - Trace 只保存脱敏属性和耗时，不保存 prompt、完整模型响应、隐藏思维链、凭据或原始工具参数。
 - Windows 真实运行数据位于 `%LOCALAPPDATA%/UmaAgent`：`state` 保存 Core 状态，`workspaces` 保存用户工作区，`channels` 保存 Adapter 状态；仓库根目录不承载运行数据。
-- Feishu/Xianyu Adapter 与 Feishu MCP 只读取 `config.user.json`，旧凭据环境变量入口已删除；Docker 使用 `docker/config.user.json` 的显式挂载。
+- Feishu/Xianyu Adapter 与 Feishu MCP 使用 `config.user.json` 管理应用和渠道参数；Feishu MCP Bearer Token 与 Core MCP 配置统一从 `FEISHU_MCP_TOKEN` 环境变量读取。旧应用凭据环境变量入口已删除。
 
 ## 关键不变量
 
@@ -20,6 +20,7 @@
 - WebSocket 以快照和永久事件游标恢复；发送缓冲超过上限时主动断开，避免无界内存。
 - 所有 Session、Run、Attachment、Memory、Task 和 Trace 查询按用户所有权隔离。
 - 优化写入必须先备份，再原子替换，使用固定验证命令；验证失败自动恢复。
+- Skill 只在 Core 中解释静态说明；MiniAgent 风格 frontmatter 的环境、系统命令、操作系统、模型可见性和 Session 作用域在加载时门控，可执行代码只能进入批准的 Skill Worker。
 
 ## 质量审查记录
 

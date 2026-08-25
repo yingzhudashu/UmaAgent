@@ -65,7 +65,7 @@ import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 18;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   readonly stateDir: string;
@@ -582,6 +582,7 @@ export class UmaDatabase {
       taskClass?: Run["taskClass"];
       goal?: string;
       successCriteria?: string[];
+      assumptions?: string[];
       turnCount?: number;
       correctionCount?: 0 | 1;
       route?: Run["route"];
@@ -593,7 +594,7 @@ export class UmaDatabase {
     const current = this.getRun(id);
     this.db
       .prepare(
-        "UPDATE runs SET status=?,phase=?,task_class=?,goal=?,success_criteria_json=?,turn_count=?,correction_count=?,route=?,reasoning_summary=?,error=?,clarification_count=?,updated_at=? WHERE id=?",
+        "UPDATE runs SET status=?,phase=?,task_class=?,goal=?,success_criteria_json=?,assumptions_json=?,turn_count=?,correction_count=?,route=?,reasoning_summary=?,error=?,clarification_count=?,updated_at=? WHERE id=?",
       )
       .run(
         patch.status ?? current.status,
@@ -601,6 +602,7 @@ export class UmaDatabase {
         patch.taskClass ?? current.taskClass ?? null,
         patch.goal ?? current.goal ?? null,
         JSON.stringify(patch.successCriteria ?? current.successCriteria),
+        JSON.stringify(patch.assumptions ?? current.assumptions),
         patch.turnCount ?? current.turnCount,
         patch.correctionCount ?? current.correctionCount,
         patch.route ?? current.route ?? null,
@@ -662,6 +664,7 @@ export class UmaDatabase {
       ...(value.task_class ? { taskClass: text(value.task_class) as NonNullable<Run["taskClass"]> } : {}),
       ...(value.goal ? { goal: text(value.goal) } : {}),
       successCriteria: parseJson<string[]>(value.success_criteria_json, []),
+      assumptions: parseJson<string[]>(value.assumptions_json, []),
       model: parseJson<ModelSnapshot>(value.model_snapshot_json, {} as ModelSnapshot),
       thinkingLevel: text(value.thinking_level) as Run["thinkingLevel"],
       turnCount: integer(value.turn_count),

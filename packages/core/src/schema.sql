@@ -44,13 +44,14 @@ CREATE TABLE runs (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   message_id TEXT NOT NULL UNIQUE,
-  interaction_mode TEXT NOT NULL CHECK (interaction_mode IN ('ask','plan','agent')),
+  interaction_mode TEXT NOT NULL CHECK (interaction_mode IN ('plan','agent')),
   kind TEXT NOT NULL DEFAULT 'agent' CHECK (kind IN ('agent','review','improve','command')),
   status TEXT NOT NULL,
   phase TEXT NOT NULL,
   task_class TEXT,
   goal TEXT,
   success_criteria_json TEXT NOT NULL DEFAULT '[]',
+  assumptions_json TEXT NOT NULL DEFAULT '[]',
   model_snapshot_json TEXT NOT NULL,
   thinking_level TEXT NOT NULL,
   turn_count INTEGER NOT NULL DEFAULT 0,
@@ -500,4 +501,4 @@ CREATE TABLE resource_snapshots (
 );
 CREATE INDEX resource_snapshots_captured ON resource_snapshots(captured_at DESC);
 
-PRAGMA user_version = 17;
+PRAGMA user_version = 18;

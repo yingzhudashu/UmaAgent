@@ -87,7 +87,7 @@ describe("browser network policy", () => {
           {
             host: target.hostname,
             port: target.port,
-            path: "http://127.0.0.1:3210/api/v12/health/live",
+            path: "http://127.0.0.1:3210/api/v13/health/live",
           },
           (response) => {
             response.resume();

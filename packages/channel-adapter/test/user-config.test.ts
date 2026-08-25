@@ -29,6 +29,26 @@ describe("user config", () => {
     await expect(loadUserConfig(path, "xianyu")).rejects.toThrow("unknown fields");
   });
 
+  it("rejects the removed MCP token field", async () => {
+    const path = await fixture({
+      version: 1,
+      core: valid.core,
+      feishu: {
+        appId: "app",
+        appSecret: "secret",
+        allowedOpenIds: ["owner"],
+        host: "127.0.0.1",
+        port: 3220,
+        stateDir: "/tmp/uma-feishu",
+        maxAttachmentBytes: 1024,
+        mcpHost: "127.0.0.1",
+        mcpPort: 3240,
+        mcpAuthToken: "removed",
+      },
+    });
+    await expect(loadUserConfig(path, "feishu")).rejects.toThrow("unknown fields");
+  });
+
   it("rejects missing channel credentials", async () => {
     const path = await fixture({ version: 1, core: valid.core, xianyu: { ...valid.xianyu, cookie: "" } });
     await expect(loadUserConfig(path, "xianyu")).rejects.toThrow("cookie must be a non-empty string");

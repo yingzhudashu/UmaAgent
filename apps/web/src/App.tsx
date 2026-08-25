@@ -62,7 +62,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [createSessionError, setCreateSessionError] = useState<string>();
   const [prompt, setPrompt] = useState("");
   const [taskPrompt, setTaskPrompt] = useState("");
-  const [interactionMode, setInteractionMode] = useState<InteractionMode>("ask");
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>("agent");
   const [loginRequired, setLoginRequired] = useState<boolean>();
   const [userRole, setUserRole] = useState<"admin" | "user">("user");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -351,7 +351,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     onSuccess: async (session) => {
       setSelected(session.id);
       setSidebarOpen(false);
-      setInteractionMode("ask");
+      setInteractionMode("agent");
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       const value = await client.getSession(session.id);
       queryClient.setQueryData(["snapshot", session.id], value);
@@ -1064,7 +1064,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                     }}
                     logout={() => {
                       void client.logout().finally(() => {
-                        setInteractionMode("ask");
+                        setInteractionMode("agent");
                         setSelected(undefined);
                         setLoginRequired(true);
                         void clearCacheNamespace();

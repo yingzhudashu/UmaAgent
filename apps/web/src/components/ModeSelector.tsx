@@ -1,10 +1,9 @@
 import type { InteractionMode } from "@uma-agent/protocol";
-import { Bot, ListChecks, MessageCircle } from "lucide-react";
+import { Bot, ListChecks } from "lucide-react";
 
 const modes: Array<{ id: InteractionMode; label: string; hint: string; Icon: typeof Bot }> = [
-  { id: "ask", label: "Ask", hint: "只回答，不执行操作", Icon: MessageCircle },
-  { id: "plan", label: "Plan", hint: "生成计划，不执行操作", Icon: ListChecks },
-  { id: "agent", label: "Agent", hint: "执行任务，敏感操作需审批", Icon: Bot },
+  { id: "plan", label: "Plan", hint: "先规划，再执行并验证", Icon: ListChecks },
+  { id: "agent", label: "Agent", hint: "直接执行，敏感操作需审批", Icon: Bot },
 ];
 
 export function ModeSelector({

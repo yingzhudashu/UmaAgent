@@ -19,7 +19,12 @@ describe("protocol schemas", () => {
     expect(Value.Check(ShortcutRequestSchema, { command: "/status", extra: true })).toBe(false);
   });
   it("accepts strict message requests", () => {
-    expect(Value.Check(SendMessageRequestSchema, { messageId: "m1", text: "hello", mode: "ask" })).toBe(true);
+    expect(Value.Check(SendMessageRequestSchema, { messageId: "m1", text: "hello", mode: "agent" })).toBe(
+      true,
+    );
+    expect(Value.Check(SendMessageRequestSchema, { messageId: "m1", text: "hello", mode: "legacy" })).toBe(
+      false,
+    );
     expect(Value.Check(SendMessageRequestSchema, { messageId: "m1", text: "hello", unknown: true })).toBe(
       false,
     );

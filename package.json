@@ -22,7 +22,7 @@
     "test:eval:faux": "node scripts/eval-faux.mjs",
     "test:perf": "node scripts/perf-baseline.mjs",
     "test:soak:faux": "node scripts/soak-faux.mjs",
-    "test:real:smoke": "node scripts/real-smoke.mjs",
+    "test:real:smoke": "node scripts/real-test.mjs smoke",
     "test:real:eval": "node scripts/real-test.mjs eval",
     "test:real:perf": "node scripts/real-test.mjs perf",
     "test:real:soak": "node scripts/real-test.mjs soak",

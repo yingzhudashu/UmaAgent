@@ -20,8 +20,13 @@ function fixture(memory: string[] = []) {
   const database = {
     searchMemory: vi.fn(() => memory),
     addAudit: vi.fn(),
+    startModelCall: vi.fn(() => "model-call"),
+    finishModelCall: vi.fn(),
   };
-  const models = { forRole: vi.fn(() => ({ provider: "faux", id: "model" })) };
+  const models = {
+    forRole: vi.fn(() => ({ provider: "faux", id: "model" })),
+    models: { completeSimple: vi.fn(async () => fauxAssistantMessage('{"taskClass":"simple"}')) },
+  };
   const preflight = new RunPreflight(database as unknown as UmaDatabase, models as unknown as ModelRegistry);
   return { preflight, database, models };
 }
@@ -34,13 +39,13 @@ function errorResponse(message = "provider failed") {
 }
 
 describe("RunPreflight.decide", () => {
-  it("routes Ask work without a control model call", async () => {
+  it("derives agent routing for simple work", async () => {
     const { preflight } = fixture();
     const complete = vi.spyOn(preflight, "complete");
     await expect(
-      preflight.decide(session, "answer it", "ask", new AbortController().signal, "run"),
+      preflight.decide(session, "answer it", "agent", new AbortController().signal, "run"),
     ).resolves.toMatchObject({ taskClass: "simple", route: "direct", goal: "answer it" });
-    expect(complete).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledOnce();
   });
 
   it("repairs classification and preflight JSON, injects memory, and supplies a fallback plan step", async () => {
@@ -48,16 +53,14 @@ describe("RunPreflight.decide", () => {
     const complete = vi
       .spyOn(preflight, "complete")
       .mockResolvedValueOnce(fauxAssistantMessage("invalid"))
-      .mockResolvedValueOnce(fauxAssistantMessage('{"taskClass":"complex"}'))
-      .mockResolvedValueOnce(fauxAssistantMessage("still invalid"))
       .mockResolvedValueOnce(
         fauxAssistantMessage(
           JSON.stringify({
             taskClass: "complex",
-            route: "plan",
             goal: "ship it",
             reasoningSummary: "Needs steps",
             successCriteria: ["done"],
+            assumptions: [],
             questions: [],
             steps: [],
           }),
@@ -66,7 +69,7 @@ describe("RunPreflight.decide", () => {
     const result = await preflight.decide(
       session,
       "build feature",
-      "agent",
+      "plan",
       new AbortController().signal,
       "run",
     );
@@ -100,34 +103,34 @@ describe("RunPreflight.decide", () => {
     ).rejects.toThrow("Provider contract error: invalid task classification");
   });
 
-  it("enforces safe standard and complex routing contracts", async () => {
+  it("derives routes from mode and rejects empty clarification", async () => {
     const cases = [
       {
         mode: "plan" as const,
         response: {
           taskClass: "complex",
-          route: "direct",
           goal: "goal",
           reasoningSummary: "bad",
           successCriteria: ["done"],
+          assumptions: [],
           questions: [],
-          steps: [],
+          steps: ["do it"],
         },
-        error: "complex tasks require",
+        expected: { route: "plan" },
       },
       {
         mode: "agent" as const,
         classification: '{"taskClass":"standard"}',
         response: {
           taskClass: "standard",
-          route: "clarify",
           goal: "goal",
-          reasoningSummary: "ask",
+          reasoningSummary: "missing information",
           successCriteria: ["done"],
+          assumptions: [],
           questions: [],
           steps: [],
         },
-        error: "requires questions",
+        expected: { route: "direct" },
       },
     ];
     for (const value of cases) {
@@ -143,7 +146,7 @@ describe("RunPreflight.decide", () => {
       });
       await expect(
         preflight.decide(session, "work", value.mode, new AbortController().signal, "run"),
-      ).rejects.toThrow(value.error);
+      ).resolves.toMatchObject(value.expected);
     }
   });
 

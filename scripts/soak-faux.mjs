@@ -37,7 +37,7 @@ server.stderr.on("data", (chunk) => {
   serverOutput = `${serverOutput}${chunk}`.slice(-20_000);
 });
 
-const baseUrl = `http://127.0.0.1:${port}/api/v12`;
+const baseUrl = `http://127.0.0.1:${port}/api/v13`;
 async function api(path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
@@ -124,7 +124,7 @@ try {
   while (Date.now() < deadline) {
     const accepted = await api(`/sessions/${encodeURIComponent(session.id)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ messageId: randomUUID(), text: "Reply with FAUX_DIRECT.", mode: "ask" }),
+      body: JSON.stringify({ messageId: randomUUID(), text: "Reply with FAUX_DIRECT.", mode: "agent" }),
     });
     const run = await waitRun(accepted.runId);
     if (run.status !== "completed")

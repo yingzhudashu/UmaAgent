@@ -15,8 +15,7 @@
     "stateDir": "%LOCALAPPDATA%/UmaAgent/channels/feishu",
     "maxAttachmentBytes": 26214400,
     "mcpHost": "127.0.0.1",
-    "mcpPort": 3240,
-    "mcpAuthToken": "仅当 MCP 监听非回环地址时填写"
+    "mcpPort": 3240
   },
   "xianyu": {
     "cookie": "运行 uma xianyu login 后由 CLI 写入",

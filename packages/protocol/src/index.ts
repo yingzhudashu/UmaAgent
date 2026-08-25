@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 12 as const;
+export const PROTOCOL_VERSION = 13 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -26,11 +26,7 @@ export const ModelSnapshotSchema = Strict({
 });
 export type ModelSnapshot = Static<typeof ModelSnapshotSchema>;
 
-export const InteractionModeSchema = Type.Union([
-  Type.Literal("ask"),
-  Type.Literal("plan"),
-  Type.Literal("agent"),
-]);
+export const InteractionModeSchema = Type.Union([Type.Literal("plan"), Type.Literal("agent")]);
 export type InteractionMode = Static<typeof InteractionModeSchema>;
 
 export const QueueModeSchema = Type.Union([Type.Literal("queue"), Type.Literal("preemptive")]);
@@ -147,6 +143,7 @@ export const RunSchema = Strict({
   taskClass: Type.Optional(TaskClassSchema),
   goal: Type.Optional(Type.String()),
   successCriteria: Type.Array(Type.String()),
+  assumptions: Type.Array(Type.String({ maxLength: 1024 }), { maxItems: 32 }),
   model: ModelSnapshotSchema,
   thinkingLevel: ThinkingLevelSchema,
   turnCount: Type.Integer({ minimum: 0, maximum: 400 }),
@@ -247,6 +244,10 @@ export const SkillSummarySchema = Strict({
   description: Type.String(),
   enabled: Type.Boolean(),
   diagnostics: Type.Array(Type.String()),
+  keywords: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { maxItems: 64 })),
+  scope: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+  userInvocable: Type.Optional(Type.Boolean()),
+  modelInvocable: Type.Optional(Type.Boolean()),
 });
 export type SkillSummary = Static<typeof SkillSummarySchema>;
 

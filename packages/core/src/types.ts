@@ -70,6 +70,7 @@ export interface PreflightDecision {
   goal: string;
   reasoningSummary: string;
   successCriteria: string[];
+  assumptions: string[];
   questions: string[];
   steps: string[];
 }

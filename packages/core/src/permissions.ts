@@ -43,7 +43,7 @@ export class PermissionPolicy {
 
   decide(mode: InteractionMode, toolName: string): PermissionDecision {
     const kind = this.classify(toolName);
-    if (mode !== "agent")
+    if (mode !== "agent" && mode !== "plan")
       return { allowed: false, requiresApproval: false, reason: `${mode} mode does not execute tools` };
     if (kind === "shell" || kind === "mcp" || kind === "memory_write" || kind === "schedule") {
       return {

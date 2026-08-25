@@ -1,6 +1,6 @@
 # UmaAgent 服务器部署与验收
 
-本文档面向 UmaAgent `1.3.0`、Protocol v12、SQLite schema 17。Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
+本文档面向 UmaAgent `1.3.0`、Protocol v13、SQLite schema 18。Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
 
 ## 1. 部署前确认
 
@@ -118,7 +118,7 @@ sudo useradd --system --home /var/lib/uma-agent --shell /usr/sbin/nologin umaage
 sudo install -d -o umaagent -g umaagent /var/lib/uma-agent/state /srv/uma-workspace
 sudo install -d -m 0750 /etc/uma-agent
 sudo cp deploy/uma.config.production.json /etc/uma-agent/uma.config.json
-sudo cp .env /etc/uma-agent/uma.env
+sudo cp deploy/uma.env.native.example /etc/uma-agent/uma.env
 sudo chmod 0600 /etc/uma-agent/uma.env
 
 npm ci --ignore-scripts
@@ -183,11 +183,11 @@ Browser Worker 和 Feishu 服务应使用各自的 systemd unit 与环境文件�
 Liveness 只表示进程事件循环可响应；readiness 还检查数据库、工作区、模型目录和 MCP：
 
 ```bash
-curl --fail http://127.0.0.1:3210/api/v12/health/live
-curl --fail http://127.0.0.1:3210/api/v12/health/ready
+curl --fail http://127.0.0.1:3210/api/v13/health/live
+curl --fail http://127.0.0.1:3210/api/v13/health/ready
 curl --fail \
   -H "Authorization: Bearer ${UMA_TOKEN}" \
-  http://127.0.0.1:3210/api/v12/sessions
+  http://127.0.0.1:3210/api/v13/sessions
 ```
 
 再从另一台设备验证 SDK/CLI，而不是只在服务器本机测试：
@@ -236,7 +236,7 @@ docker compose \
   --profile feishu up -d --build
 ```
 
-如需交互卡片按钮，还必须同时设置 `FEISHU_VERIFICATION_TOKEN` 和 `FEISHU_ENCRYPT_KEY`，并将飞书卡片回调指向 `https://feishu-callback.example.com/webhook/card`。未配置公网回调时消息收发仍可使用，但按钮回调会禁用。Adapter 的 `/health` 可由服务器本机检查：
+如需交互卡片按钮，在 `config.user.json` 中填写 `feishu.verificationToken` 和 `feishu.encryptKey`，并将飞书卡片回调指向 `https://feishu-callback.example.com/webhook/card`。未配置公网回调时消息收发仍可使用，但按钮回调会禁用。Adapter 的 `/health` 可由服务器本机检查：
 
 ```bash
 curl --fail http://127.0.0.1:3220/health
@@ -246,7 +246,7 @@ curl --fail http://127.0.0.1:3220/health
 
 ### Feishu MCP
 
-在同一 `config.user.json` 的 `feishu.mcpHost`、`mcpPort` 和 `mcpAuthToken` 中配置 MCP，在 Core 配置的 `mcpServers` 中加入前述片段，然后启动 profile 并重建 Core：
+在同一 `config.user.json` 的 `feishu.mcpHost` 和 `mcpPort` 中配置 MCP，并在 `.env`/`uma.env` 中设置 `FEISHU_MCP_TOKEN`。在 Core 配置的 `mcpServers` 中加入前述片段，然后启动 profile 并重建 Core：
 
 ```bash
 docker compose \
@@ -319,9 +319,9 @@ docker run --rm \
 
 ## 9. Trace、资源报告与真实 API 验证
 
-Core 使用 SQLite schema 17 持久化 Trace。Run、queue、preflight、model、tool、command、approval 和终态会形成一棵有父子关系的 Span 树；查询入口为 `GET /api/v12/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。资源快照和诊断报告分别通过 `/api/v12/reports/resources` 与 `/api/v12/reports/diagnostics` 读取，均只允许管理员。
+Core 使用 SQLite schema 18 持久化 Trace。Run、queue、preflight、model、tool、command、approval 和终态会形成一棵有父子关系的 Span 树；查询入口为 `GET /api/v13/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。资源快照和诊断报告分别通过 `/api/v13/reports/resources` 与 `/api/v13/reports/diagnostics` 读取，均只允许管理员。
 
-真实测试默认读取 `D:\AIhub\miniagent-python\config.user.json` 的 Provider、模型、API 类型和能力字段，在临时目录生成 Uma 配置和 schema 17 状态库。执行时优先使用配置声明的环境变量；若环境变量为空，且 `UMA_REAL_API=1` 已明确授权，脚本才会从该配置的对应 credential 读取 API key，并仅注入当前 Node 进程，不写入临时配置、数据库、Trace、日志或测试报告。缺少授权或密钥时命令直接失败，不切换 Faux：
+真实测试默认读取 `D:\AIhub\miniagent-python\config.user.json` 的 Provider、模型、API 类型和能力字段，在临时目录生成 Uma 配置和 schema 18 状态库。执行时优先使用配置声明的环境变量；若环境变量为空，且 `UMA_REAL_API=1` 已明确授权，脚本才会从该配置的对应 credential 读取 API key，并仅注入当前 Node 进程，不写入临时配置、数据库、Trace、日志或测试报告。缺少授权或密钥时命令直接失败，不切换 Faux：
 
 ```powershell
 $env:UMA_REAL_API = "1"
@@ -370,4 +370,4 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] Feishu 白名单、消息去重、重启恢复和可选卡片回调通过。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v12 和 schema 17，保留可回滚 release 与同版本备份。
+- [ ] 确认当前应用版本、Protocol v13 和 schema 18，保留可回滚 release 与同版本备份。

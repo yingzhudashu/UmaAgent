@@ -139,7 +139,7 @@ export class UmaRuntime {
       () => this.invalidateResource("knowledge"),
     );
     this.models = new ModelRegistry(config);
-    this.skills = new SkillRegistry(config.skillsDirs);
+    this.skills = new SkillRegistry(config.skillsDirs, { includeBuiltins: true });
     this.skillPackages = new SkillPackageService(config.server.stateDir, this.database, this.skills, () =>
       this.invalidateResource("skills"),
     );
@@ -1360,6 +1360,7 @@ export class UmaRuntime {
               goal: currentRun.goal ?? input.text,
               reasoningSummary: currentRun.reasoningSummary ?? "Resuming from checkpoint",
               successCriteria: currentRun.successCriteria,
+              assumptions: currentRun.assumptions,
               questions: [],
               steps: currentRun.plan.map((step) => step.title),
             }
@@ -1376,6 +1377,7 @@ export class UmaRuntime {
           taskClass: decision.taskClass,
           goal: decision.goal,
           successCriteria: decision.successCriteria,
+          assumptions: decision.assumptions,
           reasoningSummary: decision.reasoningSummary,
         });
         this.database.createCheckpoint({
@@ -1429,6 +1431,7 @@ export class UmaRuntime {
             questions: decision.questions,
           });
         });
+        preflightTrace.finish({ status: "ok" });
         return;
       }
       if (decision.route === "plan" && currentRun.plan.length === 0) {
@@ -1445,20 +1448,10 @@ export class UmaRuntime {
           this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
         });
       }
+      preflightTrace.finish({ status: "ok" });
       this.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
       const budget = { turns: this.database.getRun(runId).turnCount };
-      if (input.mode === "plan") {
-        await this.runAgent(
-          session,
-          runId,
-          input,
-          { ...decision, route: "direct" },
-          controller.signal,
-          "Return the requested plan only. Do not execute tools or describe completed work.",
-          budget,
-          true,
-        );
-      } else if (decision.route === "plan") {
+      if (decision.route === "plan") {
         for (const step of this.database.listPlan(runId)) {
           if (step.status === "completed") continue;
           this.events.transaction(() => {
@@ -1483,7 +1476,6 @@ export class UmaRuntime {
             `Execute only plan step ${step.position + 1}: ${step.title}. Preserve completed work and finish this step with a concise progress result.`,
             budget,
           );
-          preflightTrace.finish({ status: "ok" });
           this.events.transaction(() => {
             this.database.updatePlanStep(step.id, "completed");
             this.database.createCheckpoint({
@@ -1503,7 +1495,7 @@ export class UmaRuntime {
         await this.runAgent(session, runId, input, decision, controller.signal, promptOverride, budget);
       }
       if (controller.signal.aborted) throw new DOMException("Run cancelled", "AbortError");
-      if (input.mode === "agent" && decision.route === "plan") {
+      if (decision.route === "plan") {
         this.transitionRun(session.id, runId, { status: "verifying", phase: "verify" });
         await this.verifyAndCorrect(session, runId, decision, controller.signal);
         this.events.transaction(() => {
@@ -1519,10 +1511,11 @@ export class UmaRuntime {
         });
         injectRuntimeFault("verify.completed");
       }
-      if (input.mode === "agent") {
+      if (input.mode === "agent" || input.mode === "plan") {
         this.persistTurnRollup(session.id, runId);
         await this.extractMemories(session, runId, controller.signal);
       }
+      this.appendAssumptionsToResult(session.id, runId);
       this.events.transaction(() => {
         const completed = this.database.updateRun(runId, { status: "completed", error: null });
         this.database.addAudit({
@@ -1726,7 +1719,7 @@ export class UmaRuntime {
   }
 
   private toolsForSession(session: Session, mode: InteractionMode): AgentTool[] {
-    if (mode !== "agent") return [];
+    if (mode !== "agent" && mode !== "plan") return [];
     return [
       ...createBuiltinTools({
         session,
@@ -1837,13 +1830,14 @@ export class UmaRuntime {
     await this.runAgent(
       session,
       run.id,
-      { messageId: run.messageId, text: prompt, mode: "ask" },
+      { messageId: run.messageId, text: prompt, mode: "agent" },
       {
         taskClass: "simple",
         route: "direct",
         goal: "Reconcile an uncertain side effect using read-only inspection",
         reasoningSummary: "Read-only reconciliation after an acknowledged uncertain action",
         successCriteria: ["Do not repeat the uncertain action", "Report only observed state"],
+        assumptions: [],
         questions: [],
         steps: [],
       },
@@ -2160,6 +2154,25 @@ export class UmaRuntime {
     } finally {
       signal.removeEventListener("abort", abort);
     }
+  }
+
+  /**
+   * 在终态前统一披露影响结果的非敏感假设，避免依赖模型是否记得提示词要求。
+   * 假设来自严格 schema，仍需再次过滤疑似凭据；空假设不会修改用户结果。
+   */
+  private appendAssumptionsToResult(sessionId: string, runId: string): void {
+    const run = this.database.getRun(runId);
+    const assumptions = run.assumptions.filter((item) => !isSecretLike(item));
+    if (!assumptions.length) return;
+    const final = [...this.database.listMessages(sessionId)]
+      .reverse()
+      .find((item) => item.runId === runId && item.role === "assistant" && item.status === "complete");
+    if (!final || final.content.includes("执行假设：")) return;
+    const content = `${final.content}\n\n执行假设：\n${assumptions.map((item) => `- ${item}`).join("\n")}`;
+    this.events.transaction(() => {
+      const updated = this.database.updateMessage(final.id, { content });
+      this.events.emit(sessionId, runId, "message.delta", updated);
+    });
   }
 
   private bindAgentEvents(

@@ -10,6 +10,19 @@ afterEach(async () => {
 });
 
 describe("SkillRegistry", () => {
+  it("loads the MiniAgent-inspired built-in skill baseline", async () => {
+    const registry = new SkillRegistry([], { includeBuiltins: true });
+    await registry.refresh();
+    expect(registry.list().map((item) => item.name)).toEqual([
+      "builtin-stackexchange",
+      "builtin-web",
+      "skill-creator",
+      "skill-vetter",
+    ]);
+    expect(registry.systemPrompt()).toContain("<name>builtin-web</name>");
+    expect(registry.read("builtin-web")).toContain("Browser MCP");
+  });
+
   it("ignores unavailable and excluded directories", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-skills-empty-"));
     temporary.push(root);
@@ -77,5 +90,35 @@ describe("SkillRegistry", () => {
     expect((await registry.refresh()).map((item) => item.name)).toEqual(["alpha", "zeta"]);
     expect(registry.systemPrompt()).toContain("<name>alpha</name>");
     expect(registry.systemPrompt()).not.toContain("Secret body");
+  });
+
+  it("applies MiniAgent metadata gates, model visibility, and session scope", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-skills-gates-"));
+    temporary.push(root);
+    await mkdir(join(root, "gated"));
+    await writeFile(
+      join(root, "gated", "SKILL.md"),
+      "---\nname: gated\ndescription: Gated\nkeywords: [test, gate]\nmetadata:\n  env: [UMA_SKILL_TEST_MISSING]\n---\nUnavailable",
+      "utf8",
+    );
+    await mkdir(join(root, "private"));
+    await writeFile(
+      join(root, "private", "SKILL.md"),
+      "---\nname: private\ndescription: Private\nscope: session:session-a\nmetadata:\n  disable_model_invocation: true\n---\nPrivate body",
+      "utf8",
+    );
+    const registry = new SkillRegistry([root]);
+    const summaries = await registry.refresh();
+    expect(summaries.find((item) => item.name === "gated")).toMatchObject({
+      enabled: false,
+      keywords: ["test", "gate"],
+    });
+    expect(summaries.find((item) => item.name === "gated")?.diagnostics).toContain(
+      "Missing environment variable: UMA_SKILL_TEST_MISSING",
+    );
+    expect(registry.list("session-a").find((item) => item.name === "private")).toBeDefined();
+    expect(registry.list("session-b").find((item) => item.name === "private")).toBeUndefined();
+    expect(registry.systemPrompt("session-a")).not.toContain("<name>private</name>");
+    expect(() => registry.read("private", "session-a")).toThrow("unavailable");
   });
 });

@@ -37,9 +37,9 @@ transport.onerror = (error) => console.error("MCP transport error", error);
 await mcp.connect(transport as Parameters<typeof mcp.connect>[0]);
 const host = user.feishu.mcpHost;
 const port = user.feishu.mcpPort;
-const token = user.feishu.mcpAuthToken;
+const token = process.env.FEISHU_MCP_TOKEN?.trim();
 if (!new Set(["127.0.0.1", "localhost", "::1", "[::1]"]).has(host) && !token)
-  throw new Error("user config.feishu.mcpAuthToken is required for non-loopback hosts");
+  throw new Error("FEISHU_MCP_TOKEN is required for non-loopback hosts");
 const authenticated = (header?: string) => {
   if (!token) return true;
   const actual = Buffer.from(header ?? "");

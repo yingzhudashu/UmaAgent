@@ -16,7 +16,6 @@ export interface UserConfig {
     maxAttachmentBytes: number;
     mcpHost: string;
     mcpPort: number;
-    mcpAuthToken?: string;
   };
   xianyu?: {
     cookie: string;
@@ -105,7 +104,6 @@ function parse(value: unknown): UserConfig {
         "maxAttachmentBytes",
         "mcpHost",
         "mcpPort",
-        "mcpAuthToken",
       ],
       "user config.feishu",
     );
@@ -120,7 +118,6 @@ function parse(value: unknown): UserConfig {
       "user config.feishu.verificationToken",
     );
     const encryptKey = optionalString(feishu.encryptKey, "user config.feishu.encryptKey");
-    const mcpAuthToken = optionalString(feishu.mcpAuthToken, "user config.feishu.mcpAuthToken");
     result.feishu = {
       appId: stringValue(feishu.appId, "user config.feishu.appId"),
       appSecret: stringValue(feishu.appSecret, "user config.feishu.appSecret"),
@@ -136,7 +133,6 @@ function parse(value: unknown): UserConfig {
       maxAttachmentBytes: positiveInteger(feishu.maxAttachmentBytes, "user config.feishu.maxAttachmentBytes"),
       mcpHost: stringValue(feishu.mcpHost ?? "127.0.0.1", "user config.feishu.mcpHost"),
       mcpPort: port(feishu.mcpPort ?? 3240, "user config.feishu.mcpPort"),
-      ...(mcpAuthToken ? { mcpAuthToken } : {}),
     };
   }
   if (root.xianyu !== undefined) {

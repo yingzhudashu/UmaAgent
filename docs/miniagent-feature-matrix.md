@@ -13,7 +13,7 @@
 | FTS5 知识库 | implemented | Knowledge ingest/search/reindex 测试 | 以 Recall@8 结果决定是否扩展 |
 | Embedding 语义知识检索 | implemented | OpenAI-compatible provider、批量缓存、余弦检索与 FTS 回退 | 增加真实 provider smoke |
 | schedule/background task | implemented | Scheduler 重启、occurrence、API 测试 | soak 验证无重叠和无重复 |
-| SKILL.md 生命周期 | implemented | staging、审查、enable/disable、refresh 测试 | 补压缩包和凭据扫描样本 |
+| SKILL.md 生命周期 | implemented | 内置 Web/StackExchange/Skill Creator/Vetter 基线、MiniAgent frontmatter 门控、staging、审查、enable/disable、refresh 测试 | 可执行 Skill 继续通过隔离 Worker 验证 |
 | MCP stdio/HTTP | implemented | MCP 状态、审批、超时测试 | 保持 Core/Worker 隔离 |
 | Feishu 消息与卡片 | implemented | Fake Gateway、去重、cursor、回调和重连测试 | 仅在显式授权时运行真实网关验收 |
 | Feishu 文档/Bitable/Drive | implemented | Markdown 创建/追加、Drive 分页/附件、Bitable 映射和 malformed response 高层契约测试 | 仅在显式授权时运行真实网关验收 |

@@ -84,21 +84,18 @@ const response = (context) => {
         : "simple";
     return fauxAssistantMessage(JSON.stringify({ taskClass }));
   }
-  if (context.systemPrompt.includes("Specify an agent request")) {
-    const route = content.includes("FAUX_CLARIFY")
-      ? "clarify"
-      : content.includes("deterministic plan")
-        ? "plan"
-        : "direct";
+  if (context.systemPrompt.includes("Specify the request execution contract")) {
+    const clarify = content.includes("FAUX_CLARIFY");
+    const planned = content.includes("deterministic plan");
     return fauxAssistantMessage(
       JSON.stringify({
-        taskClass: route === "plan" ? "complex" : "standard",
-        route,
-        goal: route === "clarify" ? "Clarify the target" : "Complete the deterministic evaluation",
-        reasoningSummary: `Deterministic ${route} evaluation route.`,
+        taskClass: planned ? "complex" : "standard",
+        goal: clarify ? "Clarify the target" : "Complete the deterministic evaluation",
+        reasoningSummary: `Deterministic ${planned ? "plan" : "direct"} evaluation strategy.`,
         successCriteria: ["Produce the expected public evaluation result"],
-        questions: route === "clarify" ? ["Which FAUX_CLARIFY target should be used?"] : [],
-        steps: route === "plan" ? ["Produce the first plan result", "Produce the final plan result"] : [],
+        assumptions: [],
+        questions: clarify ? ["Which FAUX_CLARIFY target should be used?"] : [],
+        steps: planned ? ["Produce the first plan result", "Produce the final plan result"] : [],
       }),
     );
   }

@@ -72,10 +72,10 @@ const responses: FauxResponseStep[] =
         fauxAssistantMessage(
           JSON.stringify({
             taskClass: "complex",
-            route: "plan",
             goal: "exercise verification recovery",
             reasoningSummary: "A deterministic recovery plan is required.",
             successCriteria: ["complete the step"],
+            assumptions: [],
             questions: [],
             steps: ["complete the deterministic step"],
           }),
@@ -89,10 +89,10 @@ const responses: FauxResponseStep[] =
           fauxAssistantMessage(
             JSON.stringify({
               taskClass: "complex",
-              route: "plan",
               goal: "exercise checkpoint recovery",
               reasoningSummary: "A deterministic recovery plan is required.",
               successCriteria: ["complete the step"],
+              assumptions: [],
               questions: [],
               steps: ["complete the deterministic step"],
             }),
@@ -126,7 +126,7 @@ const session = await runtime.createSession({}, "test-user");
 runtime.sendMessage(session.id, {
   messageId: `message-${point.replaceAll(".", "-")}`,
   text: `crash at ${point}`,
-  mode: "agent",
+  mode: point === "verify.completed" || point === "checkpoint.created" ? "plan" : "agent",
 });
 
 await new Promise((_, reject) =>

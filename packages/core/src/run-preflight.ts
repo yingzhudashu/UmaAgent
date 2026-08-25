@@ -80,8 +80,7 @@ export class RunPreflight {
     runId: string,
   ): Promise<PreflightDecision> {
     let taskClass: PreflightDecision["taskClass"];
-    if (mode === "ask") taskClass = "simple";
-    else if (mode === "plan") taskClass = "complex";
+    if (mode === "plan") taskClass = "complex";
     else {
       const classify = async (repair?: string) =>
         this.complete(
@@ -122,6 +121,7 @@ export class RunPreflight {
         goal: prompt,
         reasoningSummary: "Direct execution is sufficient",
         successCriteria: ["Satisfy the user request accurately"],
+        assumptions: [],
         questions: [],
         steps: [],
       };
@@ -132,14 +132,14 @@ export class RunPreflight {
       this.complete(
         runId,
         "reasoning",
-        "Specify an agent request. Return JSON only with taskClass (standard|complex), route (direct|clarify|plan), goal, reasoningSummary (one public sentence), successCriteria (string[]), questions (string[]), and steps (string[]). Clarify only if missing information blocks safe work. Complex work must plan unless clarification is required. Never include chain-of-thought.",
+        "Specify the request execution contract. Return JSON only with taskClass (standard|complex), goal, reasoningSummary (one public sentence), successCriteria (string[]), assumptions (string[]), questions (string[]), and steps (string[]). Put a question only when missing information blocks safe work. For non-blocking uncertainty choose the safest reversible default and record it in assumptions. Never include chain-of-thought or an execution route; the server derives the route from the user's mode.",
         repair ?? controlPrompt,
         signal,
       );
     let response = await decide();
     if (response.stopReason === "error" || response.stopReason === "aborted")
       throw new Error(response.errorMessage ?? "Preflight failed");
-    let decision: PreflightDecision;
+    let decision: Omit<PreflightDecision, "route">;
     try {
       decision = decisionFrom(extractJson(contentText(response.content)));
     } catch {
@@ -155,19 +155,21 @@ export class RunPreflight {
       }
     }
     decision.taskClass = taskClass;
-    if (taskClass === "complex" && decision.route === "direct")
-      throw new Error("Provider contract error: complex tasks require a plan or clarification");
+    const route: PreflightDecision["route"] = decision.questions.length
+      ? "clarify"
+      : mode === "plan"
+        ? "plan"
+        : "direct";
+    if (route === "plan" && decision.steps.length === 0) decision.steps = [decision.goal];
+    const resolved: PreflightDecision = { ...decision, route };
     this.database.addAudit({
       runId,
       kind: "model",
       name: `${this.models.forRole("reasoning").provider}/${this.models.forRole("reasoning").id}:preflight`,
-      output: decision,
+      output: resolved,
       status: response.stopReason,
       usage: response.usage,
     });
-    if (decision.route === "clarify" && decision.questions.length === 0)
-      throw new Error("Clarification route requires questions");
-    if (decision.route === "plan" && decision.steps.length === 0) decision.steps = [decision.goal];
-    return decision;
+    return resolved;
   }
 }

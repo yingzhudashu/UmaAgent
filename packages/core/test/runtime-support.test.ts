@@ -66,10 +66,10 @@ describe("runtime support", () => {
   it("validates preflight decisions strictly", () => {
     const decision = {
       taskClass: "standard" as const,
-      route: "clarify" as const,
       goal: "goal",
       reasoningSummary: "summary",
       successCriteria: ["done"],
+      assumptions: [],
       questions: ["which?"],
       steps: [],
     };

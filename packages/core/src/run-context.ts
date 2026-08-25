@@ -80,6 +80,9 @@ export class RunContextBuilder {
       input.decision.route === "plan"
         ? `\n\nApproved execution plan:\n${input.decision.steps.map((step, index) => `${index + 1}. ${step}`).join("\n")}`
         : "";
+    const assumptions = input.decision.assumptions.length
+      ? `\n\nWorking assumptions (use these defaults unless evidence disproves them; mention material assumptions in the final result):\n${input.decision.assumptions.map((item) => `- ${item}`).join("\n")}`
+      : "";
     const attachments = input.request.attachmentIds?.length
       ? `\n\nAttachments: ${input.request.attachmentIds.join(", ")}. Use attachment_read when needed.`
       : "";
@@ -95,8 +98,8 @@ export class RunContextBuilder {
     }
     return {
       model,
-      systemPrompt: `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought.${this.skills.systemPrompt()}${history.summary ? `\n\n<conversation_summary>\n${history.summary.content}\n</conversation_summary>` : ""}${supportingContext ? `\n\n${supportingContext}` : ""}`,
-      prompt: `${input.promptOverride ?? input.request.text}${plan}${attachments}`,
+      systemPrompt: `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought.${this.skills.systemPrompt(input.session.id)}${history.summary ? `\n\n<conversation_summary>\n${history.summary.content}\n</conversation_summary>` : ""}${supportingContext ? `\n\n${supportingContext}` : ""}`,
+      prompt: `${input.promptOverride ?? input.request.text}${plan}${assumptions}${attachments}`,
       images,
       tools: input.tools.filter(
         (tool) =>

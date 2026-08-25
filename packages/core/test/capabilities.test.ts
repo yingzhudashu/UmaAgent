@@ -54,8 +54,7 @@ describe("session capabilities", () => {
       expect.arrayContaining(["memory_search", "knowledge_search", "attachment_read"]),
     );
     const policy = new PermissionPolicy();
-    expect(policy.decide("ask", "shell").allowed).toBe(false);
-    expect(policy.decide("plan", "write").allowed).toBe(false);
+    expect(policy.decide("plan", "write").allowed).toBe(true);
     expect(policy.decide("agent", "memory_write").requiresApproval).toBe(true);
     const utf16Path = join(root, "utf16.txt");
     await writeFile(utf16Path, Buffer.from("\ufeffencoded attachment", "utf16le"));
@@ -89,7 +88,16 @@ describe("session capabilities", () => {
     const skills = new SkillRegistry([root]);
     const summaries = await skills.refresh();
     expect(summaries).toEqual([
-      { name: "daily-helper", description: "Helps with daily work.", enabled: true, diagnostics: [] },
+      {
+        name: "daily-helper",
+        description: "Helps with daily work.",
+        enabled: true,
+        diagnostics: [],
+        keywords: [],
+        scope: "global",
+        userInvocable: true,
+        modelInvocable: true,
+      },
     ]);
     expect(skills.read("daily-helper")).toContain("Follow the documented steps");
     expect(JSON.stringify(summaries)).not.toContain(root);

@@ -74,12 +74,12 @@ jobs:
             wait_healthy uma-core
           }
           start_core
-          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v12/sessions',{method:'POST',headers:{authorization:'Bearer ci-core-token','content-type':'application/json'},body:JSON.stringify({mode:'assistant',title:'CI persistence'})}).then(async r=>{if(!r.ok)throw new Error(await r.text())})"
+          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v13/sessions',{method:'POST',headers:{authorization:'Bearer ci-core-token','content-type':'application/json'},body:JSON.stringify({mode:'assistant',title:'CI persistence'})}).then(async r=>{if(!r.ok)throw new Error(await r.text())})"
 
           docker stop uma-core >/dev/null
           docker rm uma-core >/dev/null
           start_core
-          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v12/sessions',{headers:{authorization:'Bearer ci-core-token'}}).then(r=>r.json()).then(items=>{if(!items.some(item=>item.title==='CI persistence'))process.exit(1)})"
+          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v13/sessions',{headers:{authorization:'Bearer ci-core-token'}}).then(r=>r.json()).then(items=>{if(!items.some(item=>item.title==='CI persistence'))process.exit(1)})"
 
           docker create --name uma-core-lock --network "$network" \
             -e UMA_AUTH_TOKEN=ci-core-token \

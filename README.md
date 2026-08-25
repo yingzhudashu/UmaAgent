@@ -110,7 +110,7 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 - `server.workspaceRoots`：服务器允许建立会话的真实目录根列表
 - `server.webOrigins`：允许访问 Core 的精确 Web Origin，不接受路径或通配符
 - `providers`、`models`、`roles`：Provider 凭据、模型 profile 和 default/reasoning/fast/vision 路由；所有角色必须显式配置
-- `skillsDirs`：递归扫描 `SKILL.md`，只加载说明，不执行技能代码
+- `skillsDirs`：递归扫描 `SKILL.md`；Core 内置 `builtin-web`、`builtin-stackexchange`、`skill-creator`、`skill-vetter`，外部 Skill 可使用 MiniAgent 风格的 `keywords`、`metadata.env/bins/os/always`、`scope`、`user_invocable` 和 `disable_model_invocation`
 - `mcpServers`：`stdio` 需要 `command/args`，`http` 需要 Streamable HTTP `url`
 - `mcpServers`：非回环 HTTP MCP 应设置 `authTokenEnv`，Core 从该环境变量注入 Bearer Token
 - `runtime.maxParallelSessions`：跨会话并发上限；单会话默认 FIFO，也可在 Session 上设为安全抢占模式
@@ -119,39 +119,39 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 ## API 摘要
 
-服务器支持多用户隔离：`POST /api/v12/auth/register` 创建用户并一次性返回个人令牌，
+服务器支持多用户隔离：`POST /api/v13/auth/register` 创建用户并一次性返回个人令牌，
 `/auth/login` 将令牌交换为绑定用户的 HttpOnly Cookie，`/auth/me`、`/auth/tokens` 提供令牌
 查询和撤销。Session、Run、Task、Approval、Message、Attachment 和工作区请求均按用户所有权
 校验。移动端或其他网页可使用 `/auth/authorize` + `/auth/token` 的 S256 PKCE 流程；服务器只
 接受环境变量 `UMA_OAUTH_REDIRECTS` 中的精确 `clientId|redirectUri` 配对。
 
-- `GET/POST /api/v12/sessions`
-- `GET /api/v12/sessions/:id/snapshot`
-- `GET /api/v12/sessions/:id/events?after=<sequence>` 增量事件
-- `GET /api/v12/sessions/:id/history?before=<sequence>` 历史分页
-- `POST /api/v12/sessions/:id/messages|cancel|compact`
-- `PATCH /api/v12/sessions/:id` 可更新 `queueMode`
-- `POST /api/v12/messages/:id/review|improve`、`GET /api/v12/runs/:id/quality`
-- `POST /api/v12/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
-- `GET /api/v12/attachments/:id/content`
-- `GET /api/v12/runs/:id/checkpoints|actions`
-- `POST /api/v12/runs/:id/resume|cancel`
-- `POST /api/v12/runs/:id/actions/:actionId/decide`
-- `POST /api/v12/approvals/:id`、`POST /api/v12/uploads`
-- `GET /api/v12/health/live|ready`
-- `GET /api/v12/events` WebSocket
-- `/api/v12/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
-- `GET /api/v12/knowledge/search`、`POST /api/v12/knowledge/:id/reindex`
-- `GET/POST /api/v12/evaluations`、`GET /api/v12/evaluations/:id`
-- `DELETE /api/v12/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
-- `/api/v12/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
-- `/api/v12/skills/search|install` 与技能 enable/disable/reject 生命周期
-- `POST /api/v12/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
-- `GET /api/v12/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
-- `/api/v12/schedules` 调度 CRUD、立即执行与运行历史
-- `GET /api/v12/reports/operations|diagnostics|resources` 脱敏运行、Trace 延迟和 CPU/RSS/WAL 统计
-- `GET /api/v12/traces?runId=<runId>` 查询 Run 的完整持久化 Trace Span 树，也支持按 Trace、时间、状态和名称过滤
-- `/api/v12/optimization-proposals` 提供证据、建议和人工接受/拒绝；`/api/v12/optimization-applications` 提供验证、回滚记录
+- `GET/POST /api/v13/sessions`
+- `GET /api/v13/sessions/:id/snapshot`
+- `GET /api/v13/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v13/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v13/sessions/:id/messages|cancel|compact`
+- `PATCH /api/v13/sessions/:id` 可更新 `queueMode`
+- `POST /api/v13/messages/:id/review|improve`、`GET /api/v13/runs/:id/quality`
+- `POST /api/v13/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
+- `GET /api/v13/attachments/:id/content`
+- `GET /api/v13/runs/:id/checkpoints|actions`
+- `POST /api/v13/runs/:id/resume|cancel`
+- `POST /api/v13/runs/:id/actions/:actionId/decide`
+- `POST /api/v13/approvals/:id`、`POST /api/v13/uploads`
+- `GET /api/v13/health/live|ready`
+- `GET /api/v13/events` WebSocket
+- `/api/v13/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `GET /api/v13/knowledge/search`、`POST /api/v13/knowledge/:id/reindex`
+- `GET/POST /api/v13/evaluations`、`GET /api/v13/evaluations/:id`
+- `DELETE /api/v13/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
+- `/api/v13/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
+- `/api/v13/skills/search|install` 与技能 enable/disable/reject 生命周期
+- `POST /api/v13/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
+- `GET /api/v13/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
+- `/api/v13/schedules` 调度 CRUD、立即执行与运行历史
+- `GET /api/v13/reports/operations|diagnostics|resources` 脱敏运行、Trace 延迟和 CPU/RSS/WAL 统计
+- `GET /api/v13/traces?runId=<runId>` 查询 Run 的完整持久化 Trace Span 树，也支持按 Trace、时间、状态和名称过滤
+- `/api/v13/optimization-proposals` 提供证据、建议和人工接受/拒绝；`/api/v13/optimization-applications` 提供验证、回滚记录
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
@@ -173,13 +173,25 @@ Adapter 只接受 `config.user.json` 中 `feishu.allowedOpenIds` 白名单中的
 
 ## 质量、记忆与技能
 
+### 交互模式与执行路由
+
+请求中的 `mode` 是用户选择的执行模式，Preflight 只负责目标、成功标准、问题和假设；`route` 由服务端根据模式派生：
+
+| 用户模式 `mode` | 系统路由 `route` | 行为 |
+| --- | --- | --- |
+| `plan` | `plan` | 先创建并执行步骤，再统一验证；敏感操作仍需审批。 |
+| `agent` | `direct` | 进入完整 Agent loop，可按权限调用工具。 |
+| `agent` | `clarify` | 信息不足，Run 进入 `awaiting_input`，下一条消息补充原 Run。 |
+
+因此，`plan` 是“规划并执行”，`agent` 是“直接执行”；`clarify` 只表示 Preflight 阶段确实缺少关键输入，不是用户模式。模型不能覆盖用户选择的执行策略。
+
 `queue` 模式按 Session 严格 FIFO，最多等待 100 条；`preemptive` 在新消息到达时取消旧排队 Run，并请求取消活动 Run。若活动工具可能产生副作用，其 Action 会转为 `uncertain`，必须先 acknowledge 或 reject，新 Run 才能继续。`awaiting_input` 的下一条消息始终作为原 Run 的澄清补充，不参与抢占。
 
 `/review [反馈]` 对目标答案执行最多三轮、无工具的结构化审查；`/improve` 根据最近评估只重写一次，`--force` 先评估，`--reset` 从原始答案而不是最近修订重写。原答案永久不变，新答案使用 `revisionOfMessageId` 建立版本链。
 
 Core 仅向上下文注入 Profile、active 事实和相关历史 rollup。事实 key 出现明确新值时，旧事实转为 `superseded` 并保留来源和证据；原始 transcript 仍是唯一历史原文。`history_search` 与 `history_read` 是只读工具，允许 Agent 从摘要回溯原文。
 
-技能安装先进入 staging：Core 校验元数据、路径、数量、大小、疑似凭据、危险命令和动态执行，再由所有者 enable。Core 只读取 `SKILL.md` 与静态资源，从不加载技能代码。配置和技能重载采用“完整校验后原子替换”；活动 Run 继续使用其冻结的模型与工具快照。`stateDir`、监听地址、认证及 workspace roots 等变更只报告 `restartRequired`。
+技能安装先进入 staging：Core 校验元数据、路径、数量、大小、疑似凭据、危险命令和动态执行，再由所有者 enable。Core 只读取 `SKILL.md` 与静态资源，从不加载技能代码；MiniAgent 的 Python `tools.py` 不会在 Core 内直接执行，必须改造成已批准且哈希固定的 Skill Worker。Skill frontmatter 的环境变量、系统命令、操作系统和作用域门控在刷新时生效；被 `disable_model_invocation` 标记的 Skill 不会进入模型提示词。配置和技能重载采用“完整校验后原子替换”；活动 Run 继续使用其冻结的模型与工具快照。`stateDir`、监听地址、认证及 workspace roots 等变更只报告 `restartRequired`。
 
 ## 浏览器 Worker 与评测
 
@@ -206,7 +218,7 @@ node apps/eval-runner/dist/main.js eval-suite.json
 消息 Adapter 只处理通道。飞书业务工具由 `apps/feishu-mcp` 独立提供，使用官方 SDK 暴露云文档、Bitable 与 Drive MCP 工具，包括 Markdown 创建/追加文档、Bitable 分页与批量记录操作、Drive 上传下载/复制/移动/权限管理。文件输入使用 Uma Attachment ID，通过 Client SDK 下载，不挂载 Core state 或 workspace。所有分页工具统一返回 `items + nextPageToken + hasMore`；不支持的 Markdown 结构保留为公开纯文本。服务必须设置独立 Bearer Token，并仅部署在内部网络：
 
 ```powershell
-# 在 config.user.json 的 feishu.mcpHost/mcpPort/mcpAuthToken 中配置 MCP
+# 在 config.user.json 的 feishu.mcpHost/mcpPort 中配置 MCP，并通过 FEISHU_MCP_TOKEN 提供 Bearer Token
 npm run build --workspace=@uma-agent/feishu-mcp
 npm run start --workspace=@uma-agent/feishu-mcp -- --config=config.user.json
 ```

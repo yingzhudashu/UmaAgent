@@ -453,7 +453,7 @@ export function createBuiltinTools(input: {
       parameters: Type.Object({ name: Type.String() }),
       executionMode: "parallel",
       async execute(_id, params) {
-        return result(skills.read(params.name), { name: params.name });
+        return result(skills.read(params.name, session.id), { name: params.name });
       },
     }),
     defineTool({

@@ -13,7 +13,6 @@
     "stateDir": "/data/feishu",
     "maxAttachmentBytes": 26214400,
     "mcpHost": "0.0.0.0",
-    "mcpPort": 3240,
-    "mcpAuthToken": "仅在暴露 MCP 时填写"
+    "mcpPort": 3240
   }
 }

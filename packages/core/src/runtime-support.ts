@@ -56,10 +56,10 @@ export const TaskClassificationSchema = Type.Object(
 export const PreflightDecisionSchema = Type.Object(
   {
     taskClass: Type.Union([Type.Literal("simple"), Type.Literal("standard"), Type.Literal("complex")]),
-    route: Type.Union([Type.Literal("direct"), Type.Literal("clarify"), Type.Literal("plan")]),
     goal: Type.String({ minLength: 1 }),
     reasoningSummary: Type.String(),
     successCriteria: Type.Array(Type.String({ minLength: 1 })),
+    assumptions: Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { maxItems: 32 }),
     questions: Type.Array(Type.String({ minLength: 1 })),
     steps: Type.Array(Type.String({ minLength: 1 })),
   },
@@ -85,7 +85,7 @@ export const MemoryExtractionSchema = Type.Array(
   ),
 );
 
-export function decisionFrom(value: unknown): PreflightDecision {
+export function decisionFrom(value: unknown): Omit<PreflightDecision, "route"> {
   if (!Value.Check(PreflightDecisionSchema, value)) throw new Error("Preflight response is invalid");
   return value;
 }

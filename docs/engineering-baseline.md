@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本为 UmaAgent 1.3.0、Protocol v12 和 SQLite schema 17。数据库只接受 schema 17，旧 schema 直接拒绝启动，不提供 migration 或兼容路径。
+当前版本为 UmaAgent 1.3.0、Protocol v13 和 SQLite schema 18。数据库只接受 schema 18，旧 schema 直接拒绝启动，不提供 migration 或兼容路径。
 
 ## 已落地的边界
 

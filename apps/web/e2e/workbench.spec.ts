@@ -33,7 +33,7 @@ test("two devices converge on one session and offline mode is read-only", async 
   await expect(first.getByRole("dialog", { name: "会话设置" })).toBeVisible();
   await first.keyboard.press("Escape");
   await expect(first.getByRole("dialog", { name: "会话设置" })).toHaveCount(0);
-  await expect(first.getByRole("button", { name: "Ask" })).toHaveAttribute("aria-pressed", "true");
+  await expect(first.getByRole("button", { name: "Agent" })).toHaveAttribute("aria-pressed", "true");
   await first.getByRole("button", { name: "Agent" }).click();
   await expect(first.getByRole("button", { name: "Agent" })).toHaveAttribute("aria-pressed", "true");
   await first.getByRole("button", { name: "快捷命令" }).click();

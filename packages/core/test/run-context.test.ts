@@ -84,6 +84,7 @@ describe("run context builder", () => {
         goal: "goal",
         reasoningSummary: "summary",
         successCriteria: ["done"],
+        assumptions: [],
         questions: [],
         steps: ["first", "second"],
       },

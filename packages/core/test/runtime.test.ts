@@ -124,26 +124,29 @@ function waitForRunTerminal(runtime: UmaRuntime, runId: string): Promise<Run> {
   });
 }
 
-const decision = (route: "direct" | "clarify" | "plan") =>
+const decision = (kind: "clarify" | "plan" = "plan", assumptions: string[] = []) =>
   fauxAssistantMessage(
     JSON.stringify({
-      taskClass: route === "plan" ? "complex" : route === "clarify" ? "standard" : "simple",
-      route,
+      taskClass: kind === "plan" ? "complex" : "standard",
       goal: "finish the task",
-      reasoningSummary: `${route} route`,
+      reasoningSummary: `${kind} preflight`,
       successCriteria: ["done"],
-      questions: route === "clarify" ? ["Which target?"] : [],
-      steps: route === "plan" ? ["Do work", "Verify work"] : [],
+      assumptions,
+      questions: kind === "clarify" ? ["Which target?"] : [],
+      steps: kind === "plan" ? ["Do work", "Verify work"] : [],
     }),
   );
 
 const classification = (taskClass: "simple" | "standard" | "complex") =>
   fauxAssistantMessage(JSON.stringify({ taskClass }));
 
-async function runOnce(runtime: UmaRuntime): Promise<{ run: Run; snapshot: SessionSnapshot }> {
+async function runOnce(
+  runtime: UmaRuntime,
+  mode: "agent" | "plan" = "agent",
+): Promise<{ run: Run; snapshot: SessionSnapshot }> {
   const session = await runtime.createSession({ title: "Runtime test" });
   const terminal = waitForTerminal(runtime, session.id);
-  runtime.sendMessage(session.id, { messageId: crypto.randomUUID(), text: "do it", mode: "agent" });
+  runtime.sendMessage(session.id, { messageId: crypto.randomUUID(), text: "do it", mode });
   return { run: await terminal, snapshot: runtime.getSnapshot(session.id) };
 }
 
@@ -153,6 +156,19 @@ describe("UmaRuntime preflight", () => {
     const { run, snapshot } = await runOnce(runtime);
     expect(run.status, run.error).toBe("completed");
     expect(snapshot.transcript.at(-1)?.content).toBe("finished");
+  });
+
+  it("persists and discloses non-sensitive execution assumptions", async () => {
+    const runtime = await runtimeWith([
+      classification("standard"),
+      decision("plan", ["Use the existing workspace as the target"]),
+      fauxAssistantMessage("finished with the selected target"),
+      fauxAssistantMessage("[]"),
+    ]);
+    const { run, snapshot } = await runOnce(runtime);
+    expect(run.status, run.error).toBe("completed");
+    expect(run.assumptions).toEqual(["Use the existing workspace as the target"]);
+    expect(snapshot.transcript.at(-1)?.content).toContain("执行假设：");
   });
 
   it("persists clarification questions without entering the agent loop", async () => {
@@ -192,7 +208,7 @@ describe("UmaRuntime preflight", () => {
       fauxAssistantMessage("planned result"),
       fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" })),
     ]);
-    const { run } = await runOnce(runtime);
+    const { run } = await runOnce(runtime, "plan");
     expect(run.status).toBe("completed");
     expect(run.plan.every((step) => step.status === "completed")).toBe(true);
   });
@@ -346,7 +362,7 @@ describe("UmaRuntime preflight", () => {
       fauxAssistantMessage([fauxToolCall("list", { path: String(index) })]),
     );
     const runtime = await runtimeWith([classification("complex"), decision("plan"), ...toolTurns]);
-    const { run } = await runOnce(runtime);
+    const { run } = await runOnce(runtime, "plan");
     expect(run.status).toBe("failed");
     expect(run.turnCount).toBe(48);
     expect(run.error).toContain("Plan step turn limit exceeded (48)");
@@ -403,7 +419,7 @@ describe("UmaRuntime preflight", () => {
       fauxAssistantMessage(JSON.stringify({ accepted: false, feedback: "fix it" })),
       fauxAssistantMessage("corrected result"),
     ]);
-    const { run, snapshot } = await runOnce(runtime);
+    const { run, snapshot } = await runOnce(runtime, "plan");
     expect(run.status, run.error).toBe("completed");
     expect(run.correctionCount).toBe(1);
     expect(snapshot.recentRuns.filter((item) => item.id === run.id)).toHaveLength(1);
@@ -802,24 +818,30 @@ describe("UmaRuntime preflight", () => {
   });
 
   it("covers explicit direct and plan routing contract guards", async () => {
-    const direct = await runtimeWith([fauxAssistantMessage("direct result"), fauxAssistantMessage("[]")]);
+    const direct = await runtimeWith([
+      classification("simple"),
+      fauxAssistantMessage("direct result"),
+      fauxAssistantMessage("[]"),
+    ]);
     const directSession = await direct.createSession();
     const directTerminal = waitForTerminal(direct, directSession.id);
-    direct.sendMessage(directSession.id, { messageId: "direct-mode", text: "answer", mode: "ask" });
+    direct.sendMessage(directSession.id, { messageId: "direct-mode", text: "answer", mode: "agent" });
     expect((await directTerminal).status).toBe("completed");
 
     const complexDirect = await runtimeWith([
       fauxAssistantMessage(
         JSON.stringify({
           taskClass: "complex",
-          route: "direct",
           goal: "complex",
-          reasoningSummary: "wrong route",
+          reasoningSummary: "mode decides route",
           successCriteria: ["done"],
+          assumptions: [],
           questions: [],
-          steps: [],
+          steps: ["complete the task"],
         }),
       ),
+      fauxAssistantMessage("planned result"),
+      fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" })),
     ]);
     const complexSession = await complexDirect.createSession();
     const complexTerminal = waitForTerminal(complexDirect, complexSession.id);
@@ -828,24 +850,23 @@ describe("UmaRuntime preflight", () => {
       text: "complex",
       mode: "plan",
     });
-    expect(await complexTerminal).toMatchObject({
-      status: "failed",
-      error: expect.stringContaining("require"),
-    });
+    expect(await complexTerminal).toMatchObject({ status: "completed", route: "plan" });
 
     const clarifyWithoutQuestions = await runtimeWith([
       classification("standard"),
       fauxAssistantMessage(
         JSON.stringify({
           taskClass: "standard",
-          route: "clarify",
           goal: "goal",
           reasoningSummary: "missing question",
           successCriteria: ["done"],
+          assumptions: [],
           questions: [],
           steps: [],
         }),
       ),
+      fauxAssistantMessage("completed"),
+      fauxAssistantMessage("[]"),
     ]);
     const clarifySession = await clarifyWithoutQuestions.createSession();
     const clarifyTerminal = waitForTerminal(clarifyWithoutQuestions, clarifySession.id);
@@ -854,10 +875,7 @@ describe("UmaRuntime preflight", () => {
       text: "question",
       mode: "agent",
     });
-    expect(await clarifyTerminal).toMatchObject({
-      status: "failed",
-      error: expect.stringContaining("requires questions"),
-    });
+    expect(await clarifyTerminal).toMatchObject({ status: "completed", route: "direct" });
   });
 
   it("retries transient control responses before public output and stops after the retry cap", async () => {
