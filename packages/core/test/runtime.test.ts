@@ -102,6 +102,10 @@ function waitForTerminal(runtime: UmaRuntime, sessionId: string, timeoutMs = 15_
     const unsubscribe = runtime.subscribe((event) => {
       if (event.sessionId !== sessionId || event.type !== "run.updated") return;
       const run = event.payload as Run;
+      if (run.status === "awaiting_confirmation") {
+        runtime.confirmPlan(run.id);
+        return;
+      }
       if (!["completed", "failed", "cancelled", "awaiting_input"].includes(run.status)) return;
       clearTimeout(timer);
       unsubscribe();
@@ -116,6 +120,10 @@ function waitForRunTerminal(runtime: UmaRuntime, runId: string): Promise<Run> {
     const unsubscribe = runtime.subscribe((event) => {
       if (event.runId !== runId || event.type !== "run.updated") return;
       const run = event.payload as Run;
+      if (run.status === "awaiting_confirmation") {
+        runtime.confirmPlan(run.id);
+        return;
+      }
       if (!["completed", "failed", "cancelled", "awaiting_input"].includes(run.status)) return;
       clearTimeout(timer);
       unsubscribe();

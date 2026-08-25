@@ -71,11 +71,11 @@ describe("UmaDatabase", () => {
     expect(() => new UmaDatabase(root)).toThrow("Unsupported database schema");
   });
 
-  it("initializes the current schema directly at version 18", async () => {
+  it("initializes the current schema directly at version 19", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-schema-18-"));
     temporary.push(root);
     const db = testDatabase(root);
-    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(18);
+    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(19);
     db.close();
   });
 

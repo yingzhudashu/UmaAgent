@@ -123,7 +123,7 @@ export class UmaClient {
     const headers = new Headers(init.headers);
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v13${path}`, {
+    const response = await this.fetchFn(`${this.baseUrl}/api/v14${path}`, {
       ...init,
       headers,
       credentials: "include",
@@ -545,6 +545,9 @@ export class UmaClient {
   resumeRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
     return this.request(`/runs/${encodeURIComponent(runId)}/resume`, { method: "POST" });
   }
+  confirmPlan(runId: string): Promise<import("@uma-agent/protocol").Run> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/confirm-plan`, { method: "POST" });
+  }
   cancelRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
     return this.request(`/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
   }
@@ -573,7 +576,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v13/attachments/${encodeURIComponent(id)}/content`,
+      `${this.baseUrl}/api/v14/attachments/${encodeURIComponent(id)}/content`,
       { headers, credentials: "include" },
     );
     if (!response.ok) {
@@ -588,6 +591,21 @@ export class UmaClient {
         body?.error?.requestId,
       );
     }
+    return response.blob();
+  }
+
+  response(id: string): Promise<import("@uma-agent/protocol").Response> {
+    return this.request(`/responses/${encodeURIComponent(id)}`);
+  }
+
+  async downloadAttachment(id: string): Promise<Blob> {
+    const headers = new Headers();
+    if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
+    const response = await this.fetchFn(
+      `${this.baseUrl}/api/v14/attachments/${encodeURIComponent(id)}/content?download=1`,
+      { headers, credentials: "include" },
+    );
+    if (!response.ok) throw new UmaClientError(response.status, "http_error", response.statusText, false);
     return response.blob();
   }
 
@@ -630,7 +648,7 @@ export class UmaClient {
   connectEvents(): void {
     if (this.socket || this.closed) return;
     this.eventConnectionState = "connecting";
-    const url = new URL("/api/v13/events", this.baseUrl);
+    const url = new URL("/api/v14/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())

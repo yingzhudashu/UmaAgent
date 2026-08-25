@@ -80,12 +80,44 @@ CREATE TABLE plan_steps (
 CREATE TABLE attachments (
   id TEXT PRIMARY KEY,
   session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  response_id TEXT,
+  owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   mime_type TEXT NOT NULL,
   size INTEGER NOT NULL,
+  sha256 TEXT,
+  status TEXT NOT NULL DEFAULT 'ready',
+  expires_at INTEGER,
   storage_path TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE INDEX attachments_response ON attachments(response_id, created_at);
+CREATE INDEX attachments_owner ON attachments(owner_user_id, created_at);
+
+CREATE TABLE responses (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(message_id)
+);
+CREATE INDEX responses_session_updated ON responses(session_id, updated_at DESC);
+
+CREATE TABLE response_activities (
+  id TEXT PRIMARY KEY,
+  response_id TEXT NOT NULL REFERENCES responses(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  status TEXT,
+  text TEXT,
+  tool_name TEXT,
+  attachment_id TEXT REFERENCES attachments(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX response_activities_response ON response_activities(response_id, created_at);
 
 CREATE TABLE messages (
   id TEXT PRIMARY KEY,
@@ -501,4 +533,4 @@ CREATE TABLE resource_snapshots (
 );
 CREATE INDEX resource_snapshots_captured ON resource_snapshots(captured_at DESC);
 
-PRAGMA user_version = 18;
+PRAGMA user_version = 19;

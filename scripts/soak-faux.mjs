@@ -37,7 +37,7 @@ server.stderr.on("data", (chunk) => {
   serverOutput = `${serverOutput}${chunk}`.slice(-20_000);
 });
 
-const baseUrl = `http://127.0.0.1:${port}/api/v13`;
+const baseUrl = `http://127.0.0.1:${port}/api/v14`;
 async function api(path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,

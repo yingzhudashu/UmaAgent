@@ -33,7 +33,7 @@ async function waitUntilReady() {
   for (let attempt = 0; attempt < 120; attempt++) {
     if (server.exitCode !== null) throw new Error(`Faux Core exited early:\n${serverOutput}`);
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/api/v13/health/ready`);
+      const response = await fetch(`http://127.0.0.1:${port}/api/v14/health/ready`);
       if (response.ok) return;
     } catch {
       // Startup is still in progress.

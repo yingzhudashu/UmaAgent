@@ -45,6 +45,13 @@ export class PermissionPolicy {
     const kind = this.classify(toolName);
     if (mode !== "agent" && mode !== "plan")
       return { allowed: false, requiresApproval: false, reason: `${mode} mode does not execute tools` };
+    if (kind === "mcp" && !toolName.startsWith("mcp_")) {
+      return {
+        allowed: false,
+        requiresApproval: false,
+        reason: "Unknown tool is denied by capability policy",
+      };
+    }
     if (kind === "shell" || kind === "mcp" || kind === "memory_write" || kind === "schedule") {
       return {
         allowed: true,

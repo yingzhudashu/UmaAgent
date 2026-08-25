@@ -8,6 +8,8 @@ const REQUIRED_TABLES = [
   "messages",
   "approvals",
   "attachments",
+  "responses",
+  "response_activities",
   "memory_facts",
   "knowledge_sources",
   "scheduled_tasks",

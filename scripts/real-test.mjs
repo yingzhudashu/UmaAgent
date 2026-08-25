@@ -124,7 +124,7 @@ server.stdout.on("data", (chunk) => {
 server.stderr.on("data", (chunk) => {
   serverOutput = `${serverOutput}${chunk}`.slice(-12_000);
 });
-const base = `http://127.0.0.1:${port}/api/v13`;
+const base = `http://127.0.0.1:${port}/api/v14`;
 async function request(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
     ...options,

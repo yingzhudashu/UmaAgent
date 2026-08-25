@@ -25,6 +25,9 @@ import type {
   PlanStep,
   QualityAssessment,
   ResourceSnapshot,
+  Response,
+  ResponseActivity,
+  ResponseStatus,
   Run,
   RunAction,
   RunCheckpoint,
@@ -65,7 +68,7 @@ import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 18;
+const SCHEMA_VERSION = 19;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   readonly stateDir: string;
@@ -199,7 +202,7 @@ export class UmaDatabase {
   attachmentOwner(id: string): string | undefined {
     const value = row(
       this.db.prepare(
-        "SELECT s.user_id FROM attachments a JOIN sessions s ON s.id=a.session_id WHERE a.id=?",
+        "SELECT COALESCE(a.owner_user_id,s.user_id) AS user_id FROM attachments a LEFT JOIN sessions s ON s.id=a.session_id WHERE a.id=?",
       ),
       id,
     );
@@ -983,6 +986,138 @@ export class UmaDatabase {
         oldestMessageSequence: visible.length ? integer(visible[0]?.sequence) : 0,
         hasMoreBefore,
       },
+      responses: this.listResponses(sessionId),
+    };
+  }
+
+  createResponse(input: {
+    id?: string;
+    sessionId: string;
+    runId: string;
+    messageId: string;
+    status?: ResponseStatus;
+  }): Response {
+    const id = input.id ?? randomUUID();
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO responses(id,session_id,run_id,message_id,status,content,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+      )
+      .run(id, input.sessionId, input.runId, input.messageId, input.status ?? "queued", "", now, now);
+    return this.getResponse(id);
+  }
+
+  getResponse(id: string): Response {
+    const value = row(this.db.prepare("SELECT * FROM responses WHERE id=?"), id);
+    if (!value) throw new Error(`Response not found: ${id}`);
+    return this.toResponse(value);
+  }
+
+  responseOwner(id: string): string | undefined {
+    const value = row(
+      this.db.prepare("SELECT s.user_id FROM responses r JOIN sessions s ON s.id=r.session_id WHERE r.id=?"),
+      id,
+    );
+    return value?.user_id ? text(value.user_id) : undefined;
+  }
+
+  listResponses(sessionId: string): Response[] {
+    return rows(
+      this.db.prepare("SELECT * FROM responses WHERE session_id=? ORDER BY created_at"),
+      sessionId,
+    ).map((value) => this.toResponse(value));
+  }
+
+  responseForRun(runId: string): Response | undefined {
+    const value = row(this.db.prepare("SELECT id FROM responses WHERE run_id=?"), runId);
+    return value ? this.getResponse(text(value.id)) : undefined;
+  }
+
+  responseForMessage(messageId: string): Response | undefined {
+    const value = row(this.db.prepare("SELECT id FROM responses WHERE message_id=?"), messageId);
+    return value ? this.getResponse(text(value.id)) : undefined;
+  }
+
+  updateResponse(id: string, patch: { status?: ResponseStatus; content?: string }): Response {
+    const current = row(this.db.prepare("SELECT * FROM responses WHERE id=?"), id);
+    if (!current) throw new Error(`Response not found: ${id}`);
+    this.db
+      .prepare("UPDATE responses SET status=?,content=?,updated_at=? WHERE id=?")
+      .run(patch.status ?? text(current.status), patch.content ?? text(current.content), Date.now(), id);
+    return this.getResponse(id);
+  }
+
+  updateResponseAttachmentStatus(responseId: string, status: NonNullable<Attachment["status"]>): void {
+    this.db.prepare("UPDATE attachments SET status=? WHERE response_id=?").run(status, responseId);
+  }
+
+  addResponseActivity(input: {
+    responseId: string;
+    kind: ResponseActivity["kind"];
+    status?: ResponseStatus;
+    text?: string;
+    toolName?: string;
+    attachmentId?: string;
+  }): ResponseActivity {
+    const id = randomUUID();
+    const createdAt = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO response_activities(id,response_id,kind,status,text,tool_name,attachment_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        input.responseId,
+        input.kind,
+        input.status ?? null,
+        input.text ?? null,
+        input.toolName ?? null,
+        input.attachmentId ?? null,
+        createdAt,
+      );
+    return {
+      id,
+      responseId: input.responseId,
+      kind: input.kind,
+      ...(input.status ? { status: input.status } : {}),
+      ...(input.text !== undefined ? { text: input.text } : {}),
+      ...(input.toolName ? { toolName: input.toolName } : {}),
+      ...(input.attachmentId ? { attachmentId: input.attachmentId } : {}),
+      createdAt,
+    };
+  }
+
+  private toResponse(value: Row): Response {
+    const activities = rows(
+      this.db.prepare("SELECT * FROM response_activities WHERE response_id=? ORDER BY created_at"),
+      text(value.id),
+    ).map(
+      (item): ResponseActivity => ({
+        id: text(item.id),
+        responseId: text(item.response_id),
+        kind: text(item.kind) as ResponseActivity["kind"],
+        ...(item.status ? { status: text(item.status) as ResponseStatus } : {}),
+        ...(item.text !== null && item.text !== undefined ? { text: text(item.text) } : {}),
+        ...(item.tool_name ? { toolName: text(item.tool_name) } : {}),
+        ...(item.attachment_id ? { attachmentId: text(item.attachment_id) } : {}),
+        createdAt: integer(item.created_at),
+      }),
+    );
+    const attachments = rows(
+      this.db.prepare("SELECT * FROM attachments WHERE response_id=? ORDER BY created_at"),
+      text(value.id),
+    ).map((item) => toAttachment(item));
+    return {
+      id: text(value.id),
+      sessionId: text(value.session_id),
+      runId: text(value.run_id),
+      messageId: text(value.message_id),
+      status: text(value.status) as ResponseStatus,
+      content: text(value.content),
+      activities,
+      attachments,
+      createdAt: integer(value.created_at),
+      updatedAt: integer(value.updated_at),
     };
   }
 
@@ -1135,18 +1270,36 @@ export class UmaDatabase {
 
   addAttachment(input: {
     sessionId?: string;
+    responseId?: string;
+    ownerUserId?: string;
     name: string;
     mimeType: string;
     size: number;
     storagePath: string;
+    sha256?: string;
+    status?: Attachment["status"];
+    expiresAt?: number;
   }): Attachment {
     const id = randomUUID();
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO attachments(id,session_id,name,mime_type,size,storage_path,created_at) VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO attachments(id,session_id,response_id,owner_user_id,name,mime_type,size,sha256,status,expires_at,storage_path,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
       )
-      .run(id, input.sessionId ?? null, input.name, input.mimeType, input.size, input.storagePath, now);
+      .run(
+        id,
+        input.sessionId ?? null,
+        input.responseId ?? null,
+        input.ownerUserId ?? (input.sessionId ? this.sessionOwner(input.sessionId) : null) ?? null,
+        input.name,
+        input.mimeType,
+        input.size,
+        input.sha256 ?? null,
+        input.status ?? "ready",
+        input.expiresAt ?? null,
+        input.storagePath,
+        now,
+      );
     return this.getAttachment(id) as Attachment;
   }
 
@@ -1164,10 +1317,12 @@ export class UmaDatabase {
   }
 
   validateAttachmentForSession(id: string, sessionId: string): void {
-    const value = row(this.db.prepare("SELECT session_id FROM attachments WHERE id=?"), id);
+    const value = row(this.db.prepare("SELECT session_id,status,expires_at FROM attachments WHERE id=?"), id);
     if (!value) throw new Error(`Attachment not found: ${id}`);
     if (!value.session_id || text(value.session_id) !== sessionId)
       throw new Error(`Attachment belongs to another session: ${id}`);
+    if (text(value.status) === "revoked" || (value.expires_at && integer(value.expires_at) <= Date.now()))
+      throw new Error(`Attachment is no longer available: ${id}`);
   }
 
   searchMemory(sessionId: string, query: string, limit = 5): string[] {

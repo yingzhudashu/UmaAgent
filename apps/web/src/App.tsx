@@ -41,6 +41,7 @@ import { InspectorDrawer } from "./components/InspectorDrawer.js";
 import { ApprovalPanel, ConnectionPanel, SyncPanel } from "./components/InspectorStatusPanels.js";
 import { MessageBubble } from "./components/MessageBubble.js";
 import { ModeSelector } from "./components/ModeSelector.js";
+import { ResponseCard } from "./components/ResponseCard.js";
 import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
 import { Login } from "./Login.js";
@@ -289,9 +290,29 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   }, [selected, queryClient, client]);
   const transcript = useMemo(() => {
     const items = [...historical, ...(snapshot.data?.transcript ?? [])];
-    return [...new Map(items.map((item) => [item.id, item])).values()].sort(
+    const unique = [...new Map(items.map((item) => [item.id, item])).values()].sort(
       (a, b) => a.sequence - b.sequence,
     );
+    const merged = new Map<string, TranscriptItem>();
+    for (const item of unique) {
+      if (item.role !== "assistant" || !item.runId) {
+        merged.set(item.id, item);
+        continue;
+      }
+      const previous = [...merged.values()].find(
+        (candidate) => candidate.role === "assistant" && candidate.runId === item.runId,
+      );
+      if (!previous) merged.set(item.id, item);
+      else
+        merged.set(previous.id, {
+          ...previous,
+          content: [previous.content, item.content].filter(Boolean).join("\n\n"),
+          status: item.status,
+          updatedAt: item.updatedAt,
+          attachments: [...previous.attachments, ...item.attachments],
+        });
+    }
+    return [...merged.values()].sort((a, b) => a.sequence - b.sequence);
   }, [historical, snapshot.data?.transcript]);
   const transcriptLength = transcript.length;
   const transcriptTail = transcript.at(-1);
@@ -686,6 +707,31 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 }
               />
             ))}
+            {(snapshot.data?.responses ?? [])
+              .filter((response) => response.status !== "completed" || response.attachments.length > 0)
+              .map((response) => (
+                <ResponseCard
+                  key={response.id}
+                  response={response}
+                  {...(response.status === "awaiting_confirmation"
+                    ? {
+                        onConfirm: () => {
+                          void client.confirmPlan(response.runId).then(() => snapshot.refetch());
+                        },
+                      }
+                    : {})}
+                  onDownload={(id) =>
+                    void client.downloadAttachment(id).then((blob) => {
+                      const url = URL.createObjectURL(blob);
+                      const link = document.createElement("a");
+                      link.href = url;
+                      link.download = response.attachments.find((item) => item.id === id)?.name ?? "download";
+                      link.click();
+                      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                    })
+                  }
+                />
+              ))}
             <div aria-hidden="true" />
           </section>
           {showJumpToLatest && (

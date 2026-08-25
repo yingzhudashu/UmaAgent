@@ -721,6 +721,76 @@
   }
 }
 
+.response-card {
+  width: min(100%, 760px);
+  margin: 4px 0 12px 38px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle, #d9dee7);
+  border-radius: 8px;
+  background: var(--surface-raised, #fff);
+}
+.response-card__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--text-secondary, #596273);
+}
+.response-card__status .compact {
+  margin-left: auto;
+  min-height: 30px;
+  padding: 5px 10px;
+}
+.response-files {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+.response-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle, #d9dee7);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.response-file__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.response-file__size {
+  margin-left: auto;
+  color: var(--text-muted, #7a8392);
+  white-space: nowrap;
+}
+.response-file > svg:last-child {
+  flex: 0 0 auto;
+}
+.spin {
+  animation: uma-spin 1s linear infinite;
+}
+@keyframes uma-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 640px) {
+  .response-card {
+    margin-left: 0;
+  }
+  .response-file__size {
+    display: none;
+  }
+}
+
 /* Workbench refresh: dense, calm surfaces with a single interaction accent. */
 .uma-embed {
   --surface-0: #f6f8f7;

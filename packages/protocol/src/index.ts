@@ -1,6 +1,6 @@
 import Type, { type Static } from "typebox";
 
-export const PROTOCOL_VERSION = 13 as const;
+export const PROTOCOL_VERSION = 14 as const;
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Timestamp = Type.Integer({ minimum: 0 });
 const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -72,8 +72,70 @@ export const AttachmentSchema = Strict({
   mimeType: Type.String({ minLength: 1 }),
   size: Type.Integer({ minimum: 0 }),
   createdAt: Timestamp,
+  ownerUserId: Type.Optional(Id),
+  responseId: Type.Optional(Id),
+  sha256: Type.Optional(Type.String({ minLength: 64, maxLength: 64 })),
+  status: Type.Optional(
+    Type.Union([
+      Type.Literal("preparing"),
+      Type.Literal("ready"),
+      Type.Literal("sending"),
+      Type.Literal("sent"),
+      Type.Literal("failed"),
+      Type.Literal("expired"),
+      Type.Literal("revoked"),
+    ]),
+  ),
+  expiresAt: Type.Optional(Timestamp),
 });
 export type Attachment = Static<typeof AttachmentSchema>;
+
+export const ResponseStatusSchema = Type.Union([
+  Type.Literal("queued"),
+  Type.Literal("thinking"),
+  Type.Literal("clarifying"),
+  Type.Literal("planning"),
+  Type.Literal("awaiting_confirmation"),
+  Type.Literal("executing"),
+  Type.Literal("awaiting_approval"),
+  Type.Literal("verifying"),
+  Type.Literal("completed"),
+  Type.Literal("failed"),
+  Type.Literal("cancelled"),
+]);
+export type ResponseStatus = Static<typeof ResponseStatusSchema>;
+
+export const ResponseActivitySchema = Strict({
+  id: Id,
+  responseId: Id,
+  kind: Type.Union([
+    Type.Literal("status"),
+    Type.Literal("text"),
+    Type.Literal("tool"),
+    Type.Literal("approval"),
+    Type.Literal("file"),
+  ]),
+  status: Type.Optional(ResponseStatusSchema),
+  text: Type.Optional(Type.String()),
+  toolName: Type.Optional(Id),
+  attachmentId: Type.Optional(Id),
+  createdAt: Timestamp,
+});
+export type ResponseActivity = Static<typeof ResponseActivitySchema>;
+
+export const ResponseSchema = Strict({
+  id: Id,
+  sessionId: Id,
+  runId: Id,
+  messageId: Id,
+  status: ResponseStatusSchema,
+  content: Type.String(),
+  activities: Type.Array(ResponseActivitySchema),
+  attachments: Type.Array(AttachmentSchema),
+  createdAt: Timestamp,
+  updatedAt: Timestamp,
+});
+export type Response = Static<typeof ResponseSchema>;
 
 export const MessageSourceSchema = Strict({
   adapter: Id,
@@ -108,6 +170,7 @@ export const RunStatusSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("preflight"),
   Type.Literal("awaiting_input"),
+  Type.Literal("awaiting_confirmation"),
   Type.Literal("running"),
   Type.Literal("verifying"),
   Type.Literal("completed"),
@@ -236,6 +299,7 @@ export const SessionSnapshotSchema = Strict({
     oldestMessageSequence: Type.Integer({ minimum: 0 }),
     hasMoreBefore: Type.Boolean(),
   }),
+  responses: Type.Optional(Type.Array(ResponseSchema)),
 });
 export type SessionSnapshot = Static<typeof SessionSnapshotSchema>;
 
@@ -359,6 +423,12 @@ export const EventTypeSchema = Type.Union([
   Type.Literal("message.started"),
   Type.Literal("message.delta"),
   Type.Literal("message.completed"),
+  Type.Literal("response.started"),
+  Type.Literal("response.updated"),
+  Type.Literal("response.delta"),
+  Type.Literal("response.activity"),
+  Type.Literal("response.attachment.updated"),
+  Type.Literal("response.completed"),
   Type.Literal("plan.updated"),
   Type.Literal("tool.started"),
   Type.Literal("tool.completed"),
@@ -437,7 +507,11 @@ export const SendMessageRequestSchema = Strict({
 });
 export type SendMessageRequest = Static<typeof SendMessageRequestSchema>;
 
-export const SendMessageResponseSchema = Strict({ runId: Id, status: RunStatusSchema });
+export const SendMessageResponseSchema = Strict({
+  runId: Id,
+  responseId: Type.Optional(Id),
+  status: RunStatusSchema,
+});
 export type SendMessageResponse = Static<typeof SendMessageResponseSchema>;
 
 export const HealthSchema = Strict({

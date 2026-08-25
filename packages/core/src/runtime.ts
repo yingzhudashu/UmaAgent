@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -514,6 +514,28 @@ export class UmaRuntime {
     });
     return resumed;
   }
+
+  confirmPlan(runId: string): Run {
+    const run = this.database.getRun(runId);
+    if (run.status !== "awaiting_confirmation") throw new Error("Run is not awaiting plan confirmation");
+    const message = this.database.getMessage(run.messageId);
+    const session = this.database.getSession(run.sessionId);
+    const confirmed = this.events.transaction(() => {
+      const value = this.database.updateRun(runId, { status: "queued", error: null });
+      this.events.emit(session.id, runId, "run.resumed", value);
+      return value;
+    });
+    this.orchestrator.enqueue(session.id, () =>
+      this.executeRun(
+        session,
+        runId,
+        { messageId: message.id, text: message.content, mode: "plan" },
+        undefined,
+        true,
+      ),
+    );
+    return confirmed;
+  }
   async decideRunAction(
     runId: string,
     actionId: string,
@@ -793,6 +815,47 @@ export class UmaRuntime {
     return this.events.transaction(() => {
       const run = this.database.updateRun(runId, patch);
       this.events.emit(sessionId, runId, "run.updated", run);
+      const response = this.database.responseForRun(runId);
+      if (response) {
+        const status =
+          run.status === "queued"
+            ? "queued"
+            : run.status === "preflight"
+              ? "thinking"
+              : run.status === "awaiting_input"
+                ? "clarifying"
+                : run.status === "awaiting_confirmation"
+                  ? "awaiting_confirmation"
+                  : run.status === "verifying"
+                    ? "verifying"
+                    : run.status === "running"
+                      ? "executing"
+                      : run.status === "completed"
+                        ? "completed"
+                        : run.status === "cancelled"
+                          ? "cancelled"
+                          : run.status === "failed" || run.status === "interrupted"
+                            ? "failed"
+                            : undefined;
+        if (status) {
+          const updated = this.database.updateResponse(response.id, {
+            status,
+            ...(run.error ? { content: run.error } : {}),
+          });
+          this.database.addResponseActivity({
+            responseId: response.id,
+            kind: "status",
+            status,
+            ...(run.error ? { text: run.error } : {}),
+          });
+          this.events.emit(sessionId, runId, "response.updated", updated);
+          this.events.emit(sessionId, runId, "response.activity", {
+            responseId: response.id,
+            status,
+            ...(run.error ? { text: run.error } : {}),
+          });
+        }
+      }
       return run;
     });
   }
@@ -801,7 +864,8 @@ export class UmaRuntime {
     if (!ownerId || ownerId === "system") throw new Error("Session owner is required");
     const userWorkspace = join(this.config.server.workspaceRoots[0] as string, "users", ownerId);
     await mkdir(userWorkspace, { recursive: true });
-    const workspace = await this.workspacePolicy.validateWorkspace(input.workspace ?? userWorkspace);
+    const requestedWorkspace = process.env.NODE_ENV === "test" ? input.workspace : undefined;
+    const workspace = await this.workspacePolicy.validateWorkspace(requestedWorkspace ?? userWorkspace);
     const model = input.model ?? this.config.defaultModel;
     this.models.get(model);
     return this.database.createSession({
@@ -1022,6 +1086,12 @@ export class UmaRuntime {
         attachmentIds,
         ...(input.source ? { source: input.source } : {}),
       });
+      const response = this.database.createResponse({
+        sessionId,
+        runId: result.run.id,
+        messageId: input.messageId,
+        status: "queued",
+      });
       if (continuation) {
         this.database.updateRun(result.run.id, {
           clarificationCount: (result.run.clarificationCount ?? 0) + 1,
@@ -1038,6 +1108,7 @@ export class UmaRuntime {
         "message.completed",
         this.database.getMessage(input.messageId),
       );
+      this.events.emit(sessionId, result.run.id, "response.started", response);
       return result;
     });
     if (!created) return run;
@@ -1199,6 +1270,12 @@ export class UmaRuntime {
         const completed = this.database.updateRun(runId, { status: "completed", error: null });
         this.events.emit(session.id, runId, "message.completed", message);
         this.events.emit(session.id, runId, "run.updated", completed);
+        const response = this.database.responseForRun(runId);
+        if (response) {
+          this.database.updateResponseAttachmentStatus(response.id, "sent");
+          const updated = this.database.updateResponse(response.id, { status: "completed", content: output });
+          this.events.emit(session.id, runId, "response.completed", updated);
+        }
       });
     } catch (error) {
       rootTrace.setStatus({
@@ -1261,12 +1338,22 @@ export class UmaRuntime {
 
   async addAttachment(input: {
     sessionId?: string;
+    responseId?: string;
     name: string;
     mimeType: string;
     data: Uint8Array;
   }): Promise<Attachment> {
     if (input.data.byteLength > this.config.server.maxUploadBytes)
       throw new Error("Upload exceeds configured size limit");
+    const extension = input.name.split(".").pop()?.toLowerCase();
+    if (["exe", "dll", "so", "dylib", "bat", "cmd", "ps1", "sh", "com"].includes(extension ?? ""))
+      throw new Error("Executable attachments are not allowed");
+    if (input.responseId) {
+      const response = this.database.getResponse(input.responseId);
+      const total = response.attachments.reduce((sum, item) => sum + item.size, 0);
+      if (total + input.data.byteLength > 100 * 1024 * 1024)
+        throw new Error("Response attachment total exceeds 100 MiB");
+    }
     const ownerId = input.sessionId ? this.database.sessionOwner(input.sessionId) : undefined;
     if (input.sessionId) this.database.getSession(input.sessionId);
     if (!input.sessionId && process.env.NODE_ENV !== "test") throw new Error("sessionId is required");
@@ -1275,13 +1362,37 @@ export class UmaRuntime {
     const safeName = input.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
     const storagePath = join(directory, safeName);
     await import("node:fs/promises").then((fs) => fs.writeFile(storagePath, input.data));
-    return this.database.addAttachment({
+    const attachment = this.database.addAttachment({
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.responseId ? { responseId: input.responseId } : {}),
+      ...(ownerId ? { ownerUserId: ownerId } : {}),
       name: safeName,
       mimeType: input.mimeType,
       size: input.data.byteLength,
       storagePath,
+      sha256: createHash("sha256").update(input.data).digest("hex"),
+      status: "ready",
     });
+    if (input.responseId && input.sessionId) {
+      this.events.transaction(() => {
+        const response = this.database.getResponse(input.responseId as string);
+        const updated = this.database.updateResponse(response.id, { content: response.content });
+        this.database.addResponseActivity({
+          responseId: response.id,
+          kind: "file",
+          status: "completed",
+          attachmentId: attachment.id,
+          text: attachment.name,
+        });
+        this.events.emit(input.sessionId as string, response.runId, "response.attachment.updated", {
+          responseId: response.id,
+          attachment,
+          status: "ready",
+        });
+        this.events.emit(input.sessionId as string, response.runId, "response.updated", updated);
+      });
+    }
+    return attachment;
   }
 
   getAttachment(id: string): Attachment | undefined {
@@ -1449,6 +1560,33 @@ export class UmaRuntime {
         });
       }
       preflightTrace.finish({ status: "ok" });
+      if (decision.route === "plan" && input.mode === "plan" && !resumeFromCheckpoint) {
+        this.events.transaction(() => {
+          const awaiting = this.database.updateRun(runId, {
+            status: "awaiting_confirmation",
+            phase: "preflight",
+            error: null,
+          });
+          const response = this.database.responseForRun(runId);
+          if (response) {
+            const updated = this.database.updateResponse(response.id, { status: "awaiting_confirmation" });
+            this.database.addResponseActivity({
+              responseId: response.id,
+              kind: "status",
+              status: "awaiting_confirmation",
+              text: "等待确认执行计划",
+            });
+            this.events.emit(session.id, runId, "response.updated", updated);
+          }
+          this.events.emit(session.id, runId, "run.updated", awaiting);
+          this.events.emit(session.id, runId, "run.awaiting_input", {
+            run: awaiting,
+            confirmationRequired: true,
+            plan: awaiting.plan,
+          });
+        });
+        return;
+      }
       this.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
       const budget = { turns: this.database.getRun(runId).turnCount };
       if (decision.route === "plan") {
@@ -1526,6 +1664,18 @@ export class UmaRuntime {
           status: "completed",
         });
         this.events.emit(session.id, runId, "run.updated", completed);
+        const response = this.database.responseForRun(runId);
+        if (response) {
+          this.database.updateResponseAttachmentStatus(response.id, "sent");
+          const final = [...this.database.listMessages(session.id)]
+            .reverse()
+            .find((item) => item.runId === runId && item.role === "assistant");
+          const updated = this.database.updateResponse(response.id, {
+            status: "completed",
+            ...(final ? { content: final.content } : {}),
+          });
+          this.events.emit(session.id, runId, "response.completed", updated);
+        }
       });
     } catch (error) {
       const wasPreempted = this.preemptedRuns.delete(runId);
@@ -1567,6 +1717,14 @@ export class UmaRuntime {
         }
         this.events.emit(sessionAtQueueTime.id, runId, "run.updated", failed);
         if (failed.plan.length) this.events.emit(sessionAtQueueTime.id, runId, "plan.updated", failed.plan);
+        const response = this.database.responseForRun(runId);
+        if (response) {
+          const updated = this.database.updateResponse(response.id, {
+            status: cancelled ? "cancelled" : "failed",
+            content: failed.error ?? "运行失败",
+          });
+          this.events.emit(sessionAtQueueTime.id, runId, "response.completed", updated);
+        }
       });
     } finally {
       try {
@@ -1718,7 +1876,7 @@ export class UmaRuntime {
     }
   }
 
-  private toolsForSession(session: Session, mode: InteractionMode): AgentTool[] {
+  private toolsForSession(session: Session, mode: InteractionMode, runId?: string): AgentTool[] {
     if (mode !== "agent" && mode !== "plan") return [];
     return [
       ...createBuiltinTools({
@@ -1746,7 +1904,14 @@ export class UmaRuntime {
                 : extension === "pdf"
                   ? "application/pdf"
                   : "application/octet-stream";
-          return this.addAttachment({ sessionId: session.id, name: basename(path), mimeType, data });
+          const responseId = runId ? this.database.responseForRun(runId)?.id : undefined;
+          return this.addAttachment({
+            sessionId: session.id,
+            ...(responseId ? { responseId } : {}),
+            name: basename(path),
+            mimeType,
+            data,
+          });
         },
       }),
       ...this.mcp.tools(),
@@ -1875,7 +2040,7 @@ export class UmaRuntime {
     signal?: AbortSignal,
   ): Promise<RunAction> {
     const session = this.database.getSession(run.sessionId);
-    const tool = this.toolsForSession(session, run.interactionMode).find(
+    const tool = this.toolsForSession(session, run.interactionMode, run.id).find(
       (candidate) => candidate.name === action.toolName,
     );
     if (!tool) throw new Error(`Tool is unavailable: ${action.toolName}`);
@@ -2016,7 +2181,7 @@ export class UmaRuntime {
       request: input,
       decision,
       signal,
-      tools: this.toolsForSession(session, input.mode),
+      tools: this.toolsForSession(session, input.mode, runId),
       ...(promptOverride ? { promptOverride } : {}),
       readOnly,
     });
@@ -2191,6 +2356,7 @@ export class UmaRuntime {
     let activeModelTrace: TraceContext | undefined;
     const toolTraces = new Map<string, TraceContext>();
     const rootTrace = this.activeTraces.get(runId);
+    const responseId = this.database.responseForRun(runId)?.id;
     const flushAssistant = () => {
       if (!assistantItem || !pendingAssistant) return;
       const message = pendingAssistant;
@@ -2200,6 +2366,15 @@ export class UmaRuntime {
           payload: message,
         });
         this.events.emit(sessionId, runId, "message.delta", assistantItem);
+        if (responseId) {
+          const updated = this.database.updateResponse(responseId, { content: textFromMessage(message) });
+          this.database.addResponseActivity({
+            responseId,
+            kind: "text",
+            text: textFromMessage(message),
+          });
+          this.events.emit(sessionId, runId, "response.delta", updated);
+        }
       });
       pendingAssistant = undefined;
       flushTimer = undefined;
@@ -2231,6 +2406,13 @@ export class UmaRuntime {
             content: textFromMessage(event.message),
           });
           this.events.emit(sessionId, runId, "message.started", item);
+          if (responseId)
+            this.events.emit(sessionId, runId, "response.activity", {
+              responseId,
+              kind: "status",
+              status: "thinking",
+              text: "正在生成回复",
+            });
           return item;
         });
       } else if (event.type === "message_update" && event.message.role === "assistant" && assistantItem) {
@@ -2335,6 +2517,21 @@ export class UmaRuntime {
             toolCallId: event.toolCallId,
             input: event.args,
           });
+          if (responseId) {
+            this.database.addResponseActivity({
+              responseId,
+              kind: "tool",
+              toolName: event.toolName,
+              text: "正在调用工具",
+              status: "executing",
+            });
+            this.events.emit(sessionId, runId, "response.activity", {
+              responseId,
+              kind: "tool",
+              toolName: event.toolName,
+              status: "executing",
+            });
+          }
           return { actionId: action.id, messageId: item.id };
         });
         toolActions.set(event.toolCallId, created.actionId);
@@ -2386,6 +2583,21 @@ export class UmaRuntime {
               toolCallId: event.toolCallId,
               isError: event.isError,
             });
+            if (responseId) {
+              this.database.addResponseActivity({
+                responseId,
+                kind: "tool",
+                toolName: event.toolName,
+                text: event.isError ? "工具执行失败" : "工具执行完成",
+                status: event.isError ? "failed" : "completed",
+              });
+              this.events.emit(sessionId, runId, "response.activity", {
+                responseId,
+                kind: "tool",
+                toolName: event.toolName,
+                status: event.isError ? "failed" : "completed",
+              });
+            }
             toolTraces.get(event.toolCallId)?.finish({ status: event.isError ? "error" : "ok" });
             toolTraces.delete(event.toolCallId);
           });

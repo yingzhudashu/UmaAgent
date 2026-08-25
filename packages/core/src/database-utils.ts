@@ -87,6 +87,11 @@ export function toAttachment(value: Row): Attachment {
     mimeType: text(value.mime_type),
     size: integer(value.size),
     createdAt: integer(value.created_at),
+    ...(value.owner_user_id ? { ownerUserId: text(value.owner_user_id) } : {}),
+    ...(value.response_id ? { responseId: text(value.response_id) } : {}),
+    ...(value.sha256 ? { sha256: text(value.sha256) } : {}),
+    ...(value.status ? { status: text(value.status) as NonNullable<Attachment["status"]> } : {}),
+    ...(value.expires_at ? { expiresAt: integer(value.expires_at) } : {}),
   };
 }
 
