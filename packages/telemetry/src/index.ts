@@ -10,8 +10,6 @@ import type {
   TelemetrySpan,
 } from "@earendil-works/pi-telemetry";
 import type { Span, Tracer } from "@opentelemetry/api";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { BatchSpanProcessor, NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 
 export type TelemetryStatus = "active" | "ok" | "error" | "cancelled";
 export type TelemetryEvent = {
@@ -68,8 +66,8 @@ function safeAttributes(attributes: SpanAttributes | undefined): Record<string, 
 
 export class TelemetryStore {
   readonly db: DatabaseSync;
-  private readonly otelProvider?: NodeTracerProvider;
-  private readonly otelTracer?: Tracer;
+  private otelProvider?: { shutdown: () => Promise<void> };
+  private otelTracer?: Tracer;
   private readonly otelSpans = new Map<string, Span>();
   constructor(
     readonly stateDir: string,
@@ -86,13 +84,18 @@ export class TelemetryStore {
       )
       .run(Date.now(), Date.now(), service);
     const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
-    if (endpoint) {
-      const provider = new NodeTracerProvider({
-        spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter({ url: endpoint }))],
-      });
-      this.otelProvider = provider;
-      this.otelTracer = provider.getTracer(`uma-agent/${service}`);
-    }
+    if (endpoint) void this.initializeOtel(endpoint, service);
+  }
+  private async initializeOtel(endpoint: string, service: string): Promise<void> {
+    const [{ OTLPTraceExporter }, { BatchSpanProcessor, NodeTracerProvider }] = await Promise.all([
+      import("@opentelemetry/exporter-trace-otlp-http"),
+      import("@opentelemetry/sdk-trace-node"),
+    ]);
+    const provider = new NodeTracerProvider({
+      spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter({ url: endpoint }))],
+    });
+    this.otelProvider = provider;
+    this.otelTracer = provider.getTracer(`uma-agent/${service}`);
   }
   close(): void {
     void this.otelProvider?.shutdown();
