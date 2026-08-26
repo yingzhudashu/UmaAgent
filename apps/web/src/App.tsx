@@ -16,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BackgroundTaskArea } from "./areas/BackgroundTaskArea.js";
 import { DiagnosticsArea } from "./areas/DiagnosticsArea.js";
 import { EvaluationArea } from "./areas/EvaluationArea.js";
 import { OptimizationArea } from "./areas/OptimizationArea.js";
@@ -46,7 +47,6 @@ import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
 import { Login } from "./Login.js";
 import { buildConversationEntries } from "./responseTurns.js";
-import { displayStatus, taskStatusLabels } from "./statusLabels.js";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -64,7 +64,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [selected, setSelected] = useState<string>();
   const [createSessionError, setCreateSessionError] = useState<string>();
   const [prompt, setPrompt] = useState("");
-  const [taskPrompt, setTaskPrompt] = useState("");
   const [interactionMode, setInteractionMode] = useState<InteractionMode>("agent");
   const [loginRequired, setLoginRequired] = useState<boolean>();
   const [userRole, setUserRole] = useState<"admin" | "user">("user");
@@ -911,68 +910,20 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               {inspectorSection === "settings" && (
                 <section className="inspector-group settings-section">
                   <h3>后台任务</h3>
-                  <div className="operation-list">
-                    <details className="settings-form-disclosure">
-                      <summary>新建后台任务</summary>
-                      <form
-                        className="resource-form"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          if (!taskPrompt.trim()) return;
-                          void client.createTask(taskPrompt.trim(), selected).then(() => {
-                            setTaskPrompt("");
-                            void tasks.refetch();
-                          });
-                        }}
-                      >
-                        <label>
-                          后台任务
-                          <textarea
-                            value={taskPrompt}
-                            onChange={(event) => setTaskPrompt(event.target.value)}
-                          />
-                        </label>
-                        <button type="submit" className="run-action" disabled={offline || !taskPrompt.trim()}>
-                          创建任务
-                        </button>
-                      </form>
-                    </details>
-                    {tasks.data?.map((task) => (
-                      <div key={task.id}>
-                        <strong>{taskStatusLabels[task.status] ?? displayStatus(task.status)}</strong>
-                        <p>{task.prompt}</p>
-                        {task.runId && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelected(task.sessionId);
-                              setInspectorSection("run");
-                            }}
-                          >
-                            打开运行
-                          </button>
-                        )}
-                        {["pending", "running"].includes(task.status) && (
-                          <button
-                            type="button"
-                            disabled={offline}
-                            onClick={() => void client.cancelTask(task.id).then(() => tasks.refetch())}
-                          >
-                            取消
-                          </button>
-                        )}
-                        {!["pending", "running"].includes(task.status) && (
-                          <button
-                            type="button"
-                            disabled={offline}
-                            onClick={() => void client.deleteTask(task.id).then(() => tasks.refetch())}
-                          >
-                            删除记录
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                  <BackgroundTaskArea
+                    tasks={tasks.data ?? []}
+                    disabled={offline}
+                    create={(prompt) => {
+                      if (!selected) return;
+                      void client.createTask(prompt, selected).then(() => tasks.refetch());
+                    }}
+                    cancel={(id) => void client.cancelTask(id).then(() => tasks.refetch())}
+                    remove={(id) => void client.deleteTask(id).then(() => tasks.refetch())}
+                    openRun={(task) => {
+                      setSelected(task.sessionId);
+                      setInspectorSection("run");
+                    }}
+                  />
                 </section>
               )}
               {inspectorSection === "settings" && (
@@ -1033,7 +984,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   <h3>资源</h3>
                   <ResourceArea
                     admin={userRole === "admin"}
-                    skills={skills.data?.available ?? []}
                     packages={skills.data?.packages ?? []}
                     mcp={mcp.data ?? []}
                     knowledge={knowledge.data ?? []}

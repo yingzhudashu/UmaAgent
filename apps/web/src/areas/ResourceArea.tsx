@@ -1,10 +1,9 @@
-import type { KnowledgeSearchHit, KnowledgeSource, SkillPackage, SkillSummary } from "@uma-agent/protocol";
+import type { KnowledgeSearchHit, KnowledgeSource, SkillPackage } from "@uma-agent/protocol";
 import { type FormEvent, useState } from "react";
 import { displayStatus } from "../statusLabels.js";
 
 export function ResourceArea({
   admin,
-  skills,
   packages,
   mcp,
   knowledge,
@@ -19,7 +18,6 @@ export function ResourceArea({
   searchKnowledge,
 }: {
   admin: boolean;
-  skills: SkillSummary[];
   packages: SkillPackage[];
   mcp: Array<{ name: string; connected: boolean }>;
   knowledge: KnowledgeSource[];
@@ -49,103 +47,149 @@ export function ResourceArea({
   return (
     <div className="settings-panel settings-panel--nested">
       {admin && (
-        <>
-          <section className="settings-section settings-section--compact">
-            <strong>Skills</strong>
-            <p>{skills.map((item) => item.name).join(", ") || "-"}</p>
+        <section className="settings-subsection">
+          <div className="settings-subsection__heading">
+            <div>
+              <h4>技能与 MCP</h4>
+              <p>管理已发现的技能包和当前工具连接。</p>
+            </div>
             <button type="button" disabled={disabled} onClick={refreshSkills}>
               刷新
             </button>
-            <form
-              className="resource-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (!skillPath.trim()) return;
-                installSkill(skillPath.trim());
-                setSkillPath("");
-              }}
-            >
-              <label>
-                本地技能目录
-                <input value={skillPath} onChange={(event) => setSkillPath(event.target.value)} />
-              </label>
-              <button type="submit" disabled={disabled || !skillPath.trim()}>
-                暂存并扫描
-              </button>
-            </form>
-            {packages.map((pkg) => (
-              <div key={pkg.id} className="action-card">
-                <strong>
-                  {pkg.name}@{pkg.version}
-                </strong>
-                <small className="operation-meta">
-                  {displayStatus(pkg.status)} · 风险：
-                  {pkg.risk === "high" ? "高" : pkg.risk === "medium" ? "中" : "低"}
-                </small>
-                {pkg.diagnostics.map((item) => (
-                  <p key={item}>{item}</p>
-                ))}
-                <div className="approval-actions">
-                  {pkg.status !== "rejected" && (
-                    <button
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => setSkillStatus(pkg.id, "reject")}
-                    >
-                      拒绝
-                    </button>
-                  )}
-                  {pkg.status === "enabled" ? (
-                    <button
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => setSkillStatus(pkg.id, "disable")}
-                    >
-                      停用
-                    </button>
-                  ) : pkg.status !== "rejected" ? (
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={disabled}
-                      onClick={() => setSkillStatus(pkg.id, "enable")}
-                    >
-                      启用
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            ))}
-          </section>
-          <section className="settings-section settings-section--compact">
-            <strong>MCP</strong>
-            <p>
-              {mcp.map((item) => `${item.name}：${item.connected ? "已连接" : "未连接"}`).join(", ") || "-"}
-            </p>
-          </section>
-        </>
-      )}
-      <section className="settings-section settings-section--compact">
-        <strong>Knowledge</strong>
-        {knowledge.map((item) => (
-          <div key={item.id}>
-            <p>
-              {item.name}（{item.documentCount} 个文档）· {displayStatus(item.status)}
-            </p>
-            {item.error && <small className="error">{item.error}</small>}
-            <button type="button" disabled={disabled} onClick={() => reindexKnowledge(item.id)}>
-              重建索引
-            </button>
-            <button type="button" disabled={disabled} onClick={() => deleteKnowledge(item.id)}>
-              删除
-            </button>
           </div>
-        ))}
-        <button type="button" disabled={disabled} onClick={() => setShowPathForm(true)}>
-          添加目录
-        </button>
+          <form
+            className="settings-form settings-form--compact"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!skillPath.trim()) return;
+              installSkill(skillPath.trim());
+              setSkillPath("");
+            }}
+          >
+            <label>
+              本地技能目录
+              <input value={skillPath} onChange={(event) => setSkillPath(event.target.value)} />
+            </label>
+            <button type="submit" disabled={disabled || !skillPath.trim()}>
+              暂存并扫描
+            </button>
+          </form>
+          {packages.length > 0 && (
+            <div className="settings-list settings-list--stacked">
+              {packages.map((pkg) => (
+                <article key={pkg.id} className="settings-record">
+                  <div className="settings-record__heading">
+                    <strong>
+                      {pkg.name}@{pkg.version}
+                    </strong>
+                    <small>
+                      {displayStatus(pkg.status)} · 风险：
+                      {pkg.risk === "high" ? "高" : pkg.risk === "medium" ? "中" : "低"}
+                    </small>
+                  </div>
+                  {pkg.diagnostics.map((item) => (
+                    <p className="settings-record__content" key={item}>
+                      {item}
+                    </p>
+                  ))}
+                  <div className="settings-record__actions">
+                    {pkg.status !== "rejected" && (
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => setSkillStatus(pkg.id, "reject")}
+                      >
+                        拒绝
+                      </button>
+                    )}
+                    {pkg.status === "enabled" ? (
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => setSkillStatus(pkg.id, "disable")}
+                      >
+                        停用
+                      </button>
+                    ) : pkg.status !== "rejected" ? (
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={disabled}
+                        onClick={() => setSkillStatus(pkg.id, "enable")}
+                      >
+                        启用
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+          {packages.length === 0 && <p className="settings-empty">暂无待管理的技能包。</p>}
+          <div className="settings-connection-list">
+            {mcp.length === 0 ? (
+              <span>暂无 MCP 连接。</span>
+            ) : (
+              mcp.map((item) => (
+                <div key={item.name} className="settings-row">
+                  <span>{item.name}</span>
+                  <strong className={item.connected ? "settings-state settings-state--ok" : "settings-state"}>
+                    {item.connected ? "已连接" : "未连接"}
+                  </strong>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      )}
+      <section className="settings-subsection">
+        <div className="settings-subsection__heading">
+          <div>
+            <h4>知识库</h4>
+            <p>添加、索引和检索当前账号可用的知识源。</p>
+          </div>
+        </div>
+        <div className="settings-list settings-list--stacked">
+          {knowledge.map((item) => (
+            <article key={item.id} className="settings-record">
+              <div className="settings-record__heading">
+                <strong>{item.name}</strong>
+                <small>
+                  {item.documentCount} 个文档 · {displayStatus(item.status)}
+                </small>
+              </div>
+              {item.error && <small className="error">{item.error}</small>}
+              <div className="settings-record__actions">
+                <button type="button" disabled={disabled} onClick={() => reindexKnowledge(item.id)}>
+                  重建索引
+                </button>
+                <button type="button" disabled={disabled} onClick={() => deleteKnowledge(item.id)}>
+                  删除
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+        {knowledge.length === 0 && <p className="settings-empty">暂无知识源。</p>}
+        <div className="settings-actions">
+          <button type="button" disabled={disabled} onClick={() => setShowPathForm(true)}>
+            添加目录
+          </button>
+          <label className="settings-upload">
+            上传知识文件
+            <input
+              type="file"
+              hidden
+              disabled={disabled}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) uploadKnowledge(file);
+              }}
+            />
+          </label>
+        </div>
         {showPathForm && (
-          <form className="resource-form" onSubmit={submitPath}>
+          <form className="settings-form settings-form--compact" onSubmit={submitPath}>
             <label>
               名称
               <input required value={name} onChange={(event) => setName(event.target.value)} />
@@ -164,20 +208,8 @@ export function ResourceArea({
             </div>
           </form>
         )}
-        <label className="run-action">
-          上传知识文件
-          <input
-            type="file"
-            hidden
-            disabled={disabled}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) uploadKnowledge(file);
-            }}
-          />
-        </label>
         <form
-          className="resource-form"
+          className="settings-form settings-form--compact"
           onSubmit={(event) => {
             event.preventDefault();
             void searchKnowledge(knowledgeQuery.trim()).then(setKnowledgeHits);
@@ -191,14 +223,19 @@ export function ResourceArea({
             搜索
           </button>
         </form>
-        {knowledgeHits.map((hit, index) => (
-          <div key={`${hit.sourceId}:${hit.filePath}:${index}`} className="action-card">
-            <strong>
-              {hit.sourceName} · {hit.filePath}
-            </strong>
-            <p>{hit.content}</p>
+        {knowledgeHits.length > 0 && (
+          <div className="settings-list settings-list--stacked">
+            {knowledgeHits.map((hit, index) => (
+              <article key={`${hit.sourceId}:${hit.filePath}:${index}`} className="settings-record">
+                <div className="settings-record__heading">
+                  <strong>{hit.sourceName}</strong>
+                  <small>{hit.filePath}</small>
+                </div>
+                <p className="settings-record__content">{hit.content}</p>
+              </article>
+            ))}
           </div>
-        ))}
+        )}
       </section>
     </div>
   );

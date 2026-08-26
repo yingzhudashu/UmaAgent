@@ -9,7 +9,7 @@ async function register(page: Page): Promise<string> {
   const token = text?.match(/uma_pat_[A-Za-z0-9_-]+/)?.[0];
   if (!token) throw new Error("Registration did not return a personal token");
   await page.getByRole("button", { name: "继续进入" }).click();
-  await expect(page.getByText("Core online")).toBeVisible();
+  await expect(page.getByText("Core 已连接")).toBeVisible();
   return token;
 }
 
@@ -17,7 +17,7 @@ async function login(page: Page, token: string): Promise<void> {
   await page.goto("/");
   await page.getByLabel("访问令牌").fill(token);
   await page.getByRole("button", { name: "登录" }).click();
-  await expect(page.getByText("Core online")).toBeVisible();
+  await expect(page.getByText("Core 已连接")).toBeVisible();
 }
 
 test("two devices converge on one session and offline mode is read-only", async ({ browser }) => {
@@ -142,12 +142,12 @@ test("keeps the workbench fixed while the transcript and settings scroll indepen
   await page.getByRole("button", { name: "会话设置" }).click();
   const settings = page.getByRole("dialog", { name: "会话设置" });
   await expect(settings).toBeVisible();
-  await expect(settings.getByText("当前会话")).toBeVisible();
+  await expect(settings.getByRole("heading", { name: "当前会话" })).toBeVisible();
   await expect(settings.getByText("Agent Profile")).toBeVisible();
   await expect(settings.getByText("应用与诊断")).toBeVisible();
   await expect(settings.getByText("账号操作")).toBeVisible();
 
-  const fontStyles = await settings.locator(".settings-primary").evaluate((button) => {
+  const fontStyles = await settings.getByRole("button", { name: "保存 Profile" }).evaluate((button) => {
     const style = getComputedStyle(button);
     return {
       family: style.fontFamily,

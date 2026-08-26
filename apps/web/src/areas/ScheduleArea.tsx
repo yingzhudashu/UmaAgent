@@ -41,11 +41,13 @@ export function ScheduleArea({
   };
   return (
     <div className="settings-panel settings-panel--nested">
-      <button type="button" className="run-action" disabled={disabled} onClick={() => setShowForm(true)}>
-        新建调度
-      </button>
-      {showForm && (
-        <form className="resource-form" onSubmit={submit}>
+      <details
+        className="settings-form-disclosure"
+        open={showForm}
+        onToggle={(event) => setShowForm(event.currentTarget.open)}
+      >
+        <summary>新建调度</summary>
+        <form className="settings-form settings-form--compact" onSubmit={submit}>
           <label>
             名称
             <input required value={name} onChange={(event) => setName(event.target.value)} />
@@ -94,53 +96,78 @@ export function ScheduleArea({
             </button>
           </div>
         </form>
-      )}
-      {schedules.map((item) => (
-        <div key={item.id} className="settings-section settings-section--compact">
-          <strong>{item.name}</strong>
-          <p>{item.prompt}</p>
-          <small className="operation-meta">
-            {scheduleKindLabels[item.schedule.kind] ?? item.schedule.kind} ·{" "}
-            {item.enabled ? "已启用" : "已停用"} · 下次运行{" "}
-            {item.nextRunAt ? new Date(item.nextRunAt).toLocaleString() : "-"}
-          </small>
-          <div className="approval-actions">
-            <button type="button" disabled={disabled} onClick={() => run(item.id)}>
-              立即运行
-            </button>
-            <button type="button" disabled={disabled} onClick={() => toggle(item.id, !item.enabled)}>
-              {item.enabled ? "停用" : "启用"}
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                void loadRuns(item.id).then((runs) =>
-                  setHistory((current) => ({ ...current, [item.id]: runs })),
-                )
-              }
-            >
-              历史
-            </button>
-            <button type="button" disabled={disabled} onClick={() => remove(item.id)}>
-              删除
-            </button>
-          </div>
-          {history[item.id]?.map((entry) => (
-            <div className="schedule-run" key={entry.id}>
-              <small>
-                {entry.trigger} · {scheduleRunStatusLabels[entry.status] ?? displayStatus(entry.status)} ·{" "}
-                {new Date(entry.scheduledFor).toLocaleString()}
-              </small>
-              {entry.status === "awaiting_resume" && <span> · 需要恢复确认</span>}
-              {["claimed", "running", "awaiting_resume"].includes(entry.status) && (
-                <button type="button" disabled={disabled} onClick={() => cancelRun(entry.id)}>
-                  取消
-                </button>
-              )}
-            </div>
-          ))}
+      </details>
+      {schedules.length === 0 ? (
+        <p className="settings-empty">暂无调度任务。</p>
+      ) : (
+        <div className="settings-list settings-list--stacked">
+          {schedules.map((item) => {
+            const runs = history[item.id];
+            return (
+              <article key={item.id} className="settings-record">
+                <div className="settings-record__heading">
+                  <strong>{item.name}</strong>
+                  <small>{item.enabled ? "已启用" : "已停用"}</small>
+                </div>
+                <p className="settings-record__content">{item.prompt}</p>
+                <dl className="settings-record__meta">
+                  <div>
+                    <dt>频率</dt>
+                    <dd>{scheduleKindLabels[item.schedule.kind] ?? item.schedule.kind}</dd>
+                  </div>
+                  <div>
+                    <dt>下次运行</dt>
+                    <dd>{item.nextRunAt ? new Date(item.nextRunAt).toLocaleString() : "-"}</dd>
+                  </div>
+                </dl>
+                <div className="settings-record__actions">
+                  <button type="button" disabled={disabled} onClick={() => run(item.id)}>
+                    立即运行
+                  </button>
+                  <button type="button" disabled={disabled} onClick={() => toggle(item.id, !item.enabled)}>
+                    {item.enabled ? "停用" : "启用"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void loadRuns(item.id).then((runs) =>
+                        setHistory((current) => ({ ...current, [item.id]: runs })),
+                      )
+                    }
+                  >
+                    历史
+                  </button>
+                  <button type="button" disabled={disabled} onClick={() => remove(item.id)}>
+                    删除
+                  </button>
+                </div>
+                {runs && (
+                  <div className="settings-record__history">
+                    {runs.length === 0 ? (
+                      <small>暂无运行记录。</small>
+                    ) : (
+                      runs.map((entry) => (
+                        <div key={entry.id}>
+                          <small>
+                            {entry.trigger} ·{" "}
+                            {scheduleRunStatusLabels[entry.status] ?? displayStatus(entry.status)} ·{" "}
+                            {new Date(entry.scheduledFor).toLocaleString()}
+                          </small>
+                          {["claimed", "running", "awaiting_resume"].includes(entry.status) && (
+                            <button type="button" disabled={disabled} onClick={() => cancelRun(entry.id)}>
+                              取消
+                            </button>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </div>
-      ))}
+      )}
     </div>
   );
 }

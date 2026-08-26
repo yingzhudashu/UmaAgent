@@ -64,6 +64,7 @@ import {
   toScheduledTaskRun,
 } from "./database-utils.js";
 import { MessageRepository } from "./message-repository.js";
+import { migrateSchemaOrClose } from "./schema-migrations.js";
 import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
@@ -87,12 +88,7 @@ export class UmaDatabase {
     const version = integer(row(this.db.prepare("PRAGMA user_version"))?.user_version);
     if (version === 0) {
       this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
-    } else if (version !== SCHEMA_VERSION) {
-      this.db.close();
-      throw new Error(
-        `Unsupported database schema ${version}; expected ${SCHEMA_VERSION}. Reset state explicitly.`,
-      );
-    }
+    } else if (version !== SCHEMA_VERSION) migrateSchemaOrClose(this.db, version, SCHEMA_VERSION);
     validateSchema(this.db);
     this.auditEvaluations = new AuditEvaluationRepository(this.db, (operation) =>
       this.withTransaction(operation),

@@ -184,8 +184,8 @@ describe("RunPreflight.complete", () => {
     };
   }
 
-  it("retries transient public-free responses and records every model lifecycle", async () => {
-    const transient = errorResponse("HTTP 429 rate limit");
+  it("honours a bounded 60 second retry-after for transient 502 responses", async () => {
+    const transient = errorResponse("HTTP 502 bad gateway; Retry-After: 60");
     const completeSimple = vi
       .fn()
       .mockResolvedValueOnce(transient)
@@ -195,7 +195,7 @@ describe("RunPreflight.complete", () => {
       preflight.complete("run", "fast", "system", "prompt", new AbortController().signal),
     ).resolves.toMatchObject({ stopReason: "stop" });
     expect(completeSimple).toHaveBeenCalledTimes(2);
-    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ maxRetries: 2, maxRetryDelayMs: 30_000 });
+    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ maxRetries: 2, maxRetryDelayMs: 60_000 });
     expect(database.startModelCall).toHaveBeenCalledTimes(2);
     expect(database.finishModelCall).toHaveBeenCalledTimes(2);
   });
