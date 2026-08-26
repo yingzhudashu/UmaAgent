@@ -67,12 +67,20 @@ test("two devices converge on one session and offline mode is read-only", async 
   await expect(settings.getByRole("heading", { name: "知识库" })).toBeVisible();
   await expect(settings.locator(".settings-section--operation")).toHaveCount(4);
   await expect(settings.locator(".settings-section--operation .settings-panel--nested")).toHaveCount(0);
-  const widths = await settings
-    .locator(".settings-section--operation")
-    .evaluateAll((sections) =>
-      sections.map((section) => ({ scrollWidth: section.scrollWidth, clientWidth: section.clientWidth })),
-    );
+  const widths = await settings.locator(".settings-section--operation").evaluateAll((sections) =>
+    sections.map((section) => {
+      const style = getComputedStyle(section);
+      return {
+        scrollWidth: section.scrollWidth,
+        clientWidth: section.clientWidth,
+        padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].map(
+          Number.parseFloat,
+        ),
+      };
+    }),
+  );
   expect(widths.every(({ scrollWidth, clientWidth }) => scrollWidth <= clientWidth)).toBe(true);
+  expect(widths.every(({ padding }) => padding.every((value) => value >= 12))).toBe(true);
   first.once("dialog", (dialog) => dialog.accept());
   await settings.getByRole("button", { name: "退出登录" }).click();
   await expect(first.getByLabel("访问令牌")).toBeVisible();

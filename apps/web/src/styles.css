@@ -2593,15 +2593,8 @@
 .uma-embed .settings-section.settings-section--operation {
   gap: 10px;
   min-width: 0;
-  padding: 16px 0 18px;
+  padding: 16px;
   border-bottom: 1px solid var(--line);
-}
-.uma-embed .settings-section.settings-section--operation:first-child {
-  padding-top: 0;
-}
-.uma-embed .settings-section.settings-section--operation:last-child {
-  padding-bottom: 0;
-  border-bottom: 0;
 }
 .uma-embed .settings-list.settings-list--operation {
   display: grid;
@@ -2757,7 +2750,7 @@
 }
 @media (max-width: 700px) {
   .uma-embed .settings-section.settings-section--operation {
-    padding: 14px 0 16px;
+    padding: 14px;
   }
   .uma-embed .settings-record__heading {
     align-items: flex-start;
