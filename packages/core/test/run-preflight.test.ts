@@ -76,6 +76,7 @@ describe("RunPreflight.decide", () => {
     expect(result).toMatchObject({ taskClass: "complex", route: "plan", steps: ["ship it"] });
     expect(database.searchMemory).toHaveBeenCalledWith("session", "build feature", 5);
     expect(complete.mock.calls.some((call) => String(call[3]).includes("Prefers TypeScript"))).toBe(true);
+    expect(complete.mock.calls.some((call) => String(call[2]).includes("范围/输入："))).toBe(true);
     expect(database.addAudit).toHaveBeenCalledOnce();
   });
 

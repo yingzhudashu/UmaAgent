@@ -1,4 +1,4 @@
-import type { Response, ResponseStatus, Run, TranscriptItem } from "@uma-agent/protocol";
+import type { Response, Run, TranscriptItem } from "@uma-agent/protocol";
 
 export type ConversationEntry =
   | { kind: "message"; item: TranscriptItem }
@@ -8,6 +8,7 @@ export type ConversationEntry =
       response: Response;
       run: Run | undefined;
       items: TranscriptItem[];
+      isCurrentSegment: boolean;
     };
 
 function responseForItem(
@@ -44,13 +45,13 @@ export function buildConversationEntries(
     const hasLaterUser = (itemsByRun.get(response.runId) ?? []).some(
       (item) => item.role === "user" && item.sequence > (firstUser?.sequence ?? 0),
     );
-    const status: ResponseStatus = hasLaterUser ? "clarifying" : response.status;
     entries.push({
       kind: "response",
       id: segmentId,
-      response: status === response.status ? response : { ...response, status },
+      response,
       run,
       items: segment,
+      isCurrentSegment: !hasLaterUser,
     });
   };
   for (const item of transcript) {

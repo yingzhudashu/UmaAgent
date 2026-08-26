@@ -700,13 +700,14 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   response={entry.response}
                   run={entry.run}
                   items={entry.items}
+                  isCurrentSegment={entry.isCurrentSegment}
                   onReview={(messageId) =>
                     void client.reviewMessage(messageId).then(() => snapshot.refetch())
                   }
                   onImprove={(messageId) =>
                     void client.improveMessage(messageId).then(() => snapshot.refetch())
                   }
-                  {...(entry.response.status === "awaiting_confirmation"
+                  {...(entry.response.status === "awaiting_confirmation" && entry.isCurrentSegment
                     ? {
                         onConfirm: () =>
                           void client.confirmPlan(entry.response.runId).then(() => snapshot.refetch()),

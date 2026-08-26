@@ -132,7 +132,7 @@ export class RunPreflight {
       this.complete(
         runId,
         "reasoning",
-        "Specify the request execution contract. Return JSON only with taskClass (standard|complex), goal, reasoningSummary (one public sentence), successCriteria (string[]), assumptions (string[]), questions (string[]), and steps (string[]). Put a question only when missing information blocks safe work. For non-blocking uncertainty choose the safest reversible default and record it in assumptions. Never include chain-of-thought or an execution route; the server derives the route from the user's mode.",
+        "Specify the request execution contract. Return JSON only with taskClass (standard|complex), goal, reasoningSummary (one public sentence), successCriteria (string[]), assumptions (string[]), questions (string[]), and steps (string[]). Put a question only when missing information blocks safe work. For non-blocking uncertainty choose the safest reversible default and record it in assumptions. Never include chain-of-thought or an execution route; the server derives the route from the user's mode. Each step must be an actionable, verifiable plan item under 500 characters: first line is a concise action title, followed by short lines labelled '范围/输入：', '预期产出：', and '验证：'. Describe concrete scope, inputs, output, and completion check; avoid vague summaries, duplicate work, and internal reasoning.",
         repair ?? controlPrompt,
         signal,
       );

@@ -28,6 +28,8 @@ function toolLabel(name?: string): string {
     read: "读取文件",
     write: "写入文件",
     edit: "编辑文件",
+    shell: "执行命令",
+    skill_read: "读取技能说明",
     http_get: "获取网页",
     search: "搜索",
     mcp_browser_open: "打开网页",
@@ -40,6 +42,16 @@ function toolLabel(name?: string): string {
   return labels[name ?? ""] ?? name ?? "工具";
 }
 
+function planStepParts(title: string): { summary: string; details: string } {
+  const lines = title
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const summary = lines[0] ?? title;
+  const details = lines.slice(1).join("\n").trim() || title;
+  return { summary, details };
+}
+
 export function ResponseCard({
   response,
   run,
@@ -48,6 +60,7 @@ export function ResponseCard({
   onConfirm,
   onReview,
   onImprove,
+  isCurrentSegment = true,
 }: {
   response: Response;
   run: Run | undefined;
@@ -56,6 +69,7 @@ export function ResponseCard({
   onConfirm?: () => void;
   onReview?: (messageId: string) => void;
   onImprove?: (messageId: string) => void;
+  isCurrentSegment?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const assistantItems = items.filter((item) => item.role === "assistant");
@@ -103,10 +117,12 @@ export function ResponseCard({
           <time dateTime={new Date(updatedAt).toISOString()}>
             {new Date(updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </time>
-          {!terminal && <LoaderCircle size={14} className="spin" aria-hidden="true" />}
-          <span className={response.status === "failed" ? "message-status error-text" : "streaming"}>
-            {responseStatusLabels[response.status]}
-          </span>
+          {!terminal && isCurrentSegment && <LoaderCircle size={14} className="spin" aria-hidden="true" />}
+          {isCurrentSegment && (
+            <span className={response.status === "failed" ? "message-status error-text" : "streaming"}>
+              {responseStatusLabels[response.status]}
+            </span>
+          )}
           {response.status === "awaiting_confirmation" && onConfirm && (
             <button type="button" className="primary compact" onClick={onConfirm}>
               确认执行
@@ -124,27 +140,37 @@ export function ResponseCard({
             <div className="response-steps__body">
               {timeline.map((entry) =>
                 entry.kind === "plan" ? (
-                  <div
+                  <details
                     className="response-step response-plan-step"
                     key={entry.id}
                     data-status={entry.step.status}
                   >
-                    <span className="response-plan__marker">
-                      {entry.step.status === "completed" ? (
-                        <Check size={13} />
-                      ) : (
-                        <span className="step-dot" />
-                      )}
-                    </span>
-                    <span className="response-plan__title">{entry.step.title}</span>
-                    <span className="response-step-status">
-                      {entry.step.status === "completed"
-                        ? "已完成"
-                        : entry.step.status === "running"
-                          ? "进行中"
-                          : "待执行"}
-                    </span>
-                  </div>
+                    <summary>
+                      <ChevronRight size={14} className="response-step-chevron" aria-hidden="true" />
+                      <span className="response-plan__marker" aria-hidden="true">
+                        {entry.step.status === "completed" ? (
+                          <Check size={13} />
+                        ) : (
+                          <span className="step-dot" />
+                        )}
+                      </span>
+                      <span className="response-plan__index">步骤 {entry.position + 1}</span>
+                      <span className="response-plan__title">{planStepParts(entry.step.title).summary}</span>
+                      <span className="response-step-status">
+                        {entry.step.status === "completed"
+                          ? "已完成"
+                          : entry.step.status === "failed"
+                            ? "执行失败"
+                            : entry.step.status === "running"
+                              ? "进行中"
+                              : "待执行"}
+                      </span>
+                    </summary>
+                    <div className="response-plan-step__body">
+                      <Markdown content={planStepParts(entry.step.title).details} />
+                      {entry.step.error && <p className="error-text">{entry.step.error}</p>}
+                    </div>
+                  </details>
                 ) : entry.item.role === "tool" ? (
                   <details className="tool-details response-step" key={entry.id}>
                     <summary>
@@ -162,7 +188,6 @@ export function ResponseCard({
                   </details>
                 ) : (
                   <div className="response-step response-step--assistant" key={entry.id}>
-                    <div className="response-stage-label">阶段回复</div>
                     <Markdown content={entry.item.content} />
                   </div>
                 ),

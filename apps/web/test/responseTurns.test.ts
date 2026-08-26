@@ -123,6 +123,11 @@ describe("buildConversationEntries", () => {
       [run("run-1")],
     );
     expect(entries.map((entry) => entry.kind)).toEqual(["message", "response", "message", "response"]);
-    expect(entries.filter((entry) => entry.kind === "response")).toHaveLength(2);
+    const responseEntries = entries.filter((entry) => entry.kind === "response");
+    expect(responseEntries).toHaveLength(2);
+    if (responseEntries[0]?.kind === "response" && responseEntries[1]?.kind === "response") {
+      expect(responseEntries[0].isCurrentSegment).toBe(false);
+      expect(responseEntries[1].isCurrentSegment).toBe(true);
+    }
   });
 });
