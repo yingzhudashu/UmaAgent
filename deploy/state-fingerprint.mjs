@@ -12,6 +12,10 @@ const rows = db
   )
   .all();
 const tokenFingerprint = createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+const tokenIdentityRows = db
+  .prepare("SELECT id,user_id,token_hash,label,scopes_json,revoked_at FROM auth_tokens ORDER BY id")
+  .all();
+const tokenIdentityFingerprint = createHash("sha256").update(JSON.stringify(tokenIdentityRows)).digest("hex");
 const integrity = db.prepare("PRAGMA integrity_check").get().integrity_check;
 const foreignKeyViolations = db.prepare("PRAGMA foreign_key_check").all().length;
 const userVersion = Number(db.prepare("PRAGMA user_version").get().user_version);
@@ -22,6 +26,7 @@ console.log(
     integrity,
     foreignKeyViolations,
     tokenFingerprint,
+    tokenIdentityFingerprint,
     counts: Object.fromEntries(
       ["users", "auth_tokens", "sessions", "messages", "attachments", "knowledge_sources"].map((table) => [
         table,

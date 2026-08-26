@@ -315,7 +315,7 @@ docker run --rm \
 
 原生部署从新版本开始时，使用 release 中的 `deploy/reset-native-state.sh --apply`。脚本只处理 UmaAgent Core、工作区、Browser Worker 和 Feishu 独立 state，并先移动到 `/srv/backups/uma-agent/reset-<UTC>`；不会读取、删除或移动 `/home/ubuntu/miniagent`。
 
-数据库只允许通过已测试的相邻事务迁移升级，不提供旧 DTO 或 schema fallback。schema 19 会迁移到 schema 20；其他不受支持的版本会拒绝启动。升级前必须备份，回滚时部署原版本并恢复原版本生成的备份。
+数据库只允许通过已测试的相邻事务迁移升级，不提供旧 DTO 或 schema fallback。schema 19 会迁移到 schema 20，并将现有个人令牌的到期字段清空为永久有效；令牌身份指纹和其他业务数据必须保持不变。其他不受支持的版本会拒绝启动。升级前必须备份，回滚时部署原版本并恢复原版本生成的备份。
 
 ## 9. Trace、资源报告与真实 API 验证
 
