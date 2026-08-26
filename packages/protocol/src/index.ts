@@ -446,7 +446,7 @@ export const EventTypeSchema = Type.Union([
   Type.Literal("knowledge.updated"),
 ]);
 export type AgentEventType = Static<typeof EventTypeSchema>;
-
+export type MessageDelta = { messageId: string; responseId?: string; append: string; updatedAt: number };
 export const AgentEventEnvelopeSchema = Strict({
   protocolVersion: Type.Literal(PROTOCOL_VERSION),
   sessionId: Id,

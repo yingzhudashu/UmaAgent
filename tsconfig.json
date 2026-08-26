@@ -4,6 +4,7 @@
     { "path": "packages/protocol" },
     { "path": "packages/channel-adapter" },
     { "path": "packages/client" },
+    { "path": "packages/telemetry" },
     { "path": "packages/core" },
     { "path": "apps/server" },
     { "path": "apps/cli" },

@@ -235,6 +235,7 @@ export class UmaRuntime {
     await this.orchestrator.drain();
     await this.scheduler.drain();
     await this.mcp.close();
+    this.trace.store.close();
     this.database.close();
     this.stateLock.release();
     this.started = false;
@@ -280,6 +281,7 @@ export class UmaRuntime {
         queuedRuns,
       };
       this.database.insertResourceSnapshot(snapshot);
+      this.trace.store.recordResource(snapshot);
       this.eventLoopDelay.reset();
     } catch (error) {
       process.emitWarning(
@@ -748,23 +750,18 @@ export class UmaRuntime {
   refreshSkills(): Promise<SkillSummary[]> {
     return this.resources.refreshSkills();
   }
-
   listSkillPackages(): SkillPackage[] {
     return this.resources.listSkillPackages();
   }
-
   searchSkills(query: string): Promise<Array<Record<string, unknown>>> {
     return this.resources.searchSkills(query);
   }
-
   installSkill(input: SkillInstallRequest): Promise<SkillPackage> {
     return this.resources.installSkill(input);
   }
-
   setSkillStatus(id: string, status: "enabled" | "disabled" | "rejected"): Promise<SkillPackage> {
     return this.resources.setSkillStatus(id, status);
   }
-
   getAgentProfile(userId = "system"): AgentProfile {
     return this.resources.getAgentProfile(userId);
   }
@@ -772,11 +769,9 @@ export class UmaRuntime {
   updateAgentProfile(content: string, userId = "system"): AgentProfile {
     return this.resources.updateAgentProfile(content, userId);
   }
-
   searchHistory(sessionId: string, query: string, limit?: number): TranscriptItem[] {
     return this.resources.searchHistory(sessionId, query, limit);
   }
-
   listActivity(sessionId: string, limit?: number): Array<Record<string, unknown>> {
     return this.resources.listActivity(sessionId, limit);
   }
@@ -784,11 +779,9 @@ export class UmaRuntime {
   listOptimizationProposals(): OptimizationProposal[] {
     return this.resources.listOptimizationProposals();
   }
-
   generateOptimizationProposals(from = 0, to = Date.now()): OptimizationProposal[] {
     return this.resources.generateOptimizationProposals(from, to);
   }
-
   decideOptimizationProposal(id: string, status: "accepted" | "rejected"): OptimizationProposal {
     return this.resources.decideOptimizationProposal(id, status);
   }
@@ -2335,8 +2328,12 @@ export class UmaRuntime {
     if (!final || final.content.includes("执行假设：")) return;
     const content = `${final.content}\n\n执行假设：\n${assumptions.map((item) => `- ${item}`).join("\n")}`;
     this.events.transaction(() => {
-      const updated = this.database.updateMessage(final.id, { content });
-      this.events.emit(sessionId, runId, "message.delta", updated);
+      this.database.updateMessage(final.id, { content });
+      this.events.emit(sessionId, runId, "message.delta", {
+        messageId: final.id,
+        append: content.slice(final.content.length),
+        updatedAt: Date.now(),
+      });
     });
   }
 
@@ -2347,9 +2344,9 @@ export class UmaRuntime {
     turnCount: () => number = () => 0,
     loopGuard?: ToolLoopGuard,
   ): void {
-    let assistantItem: TranscriptItem | undefined;
-    let pendingAssistant: AssistantMessage | undefined;
+    let assistantItem: TranscriptItem | undefined, pendingAssistant: AssistantMessage | undefined;
     let flushTimer: NodeJS.Timeout | undefined;
+    let streamedLength = 0;
     const toolMessages = new Map<string, string>();
     const toolActions = new Map<string, string>();
     let activeModelCall: { id: string; startedAt: number } | undefined;
@@ -2360,24 +2357,20 @@ export class UmaRuntime {
     const flushAssistant = () => {
       if (!assistantItem || !pendingAssistant) return;
       const message = pendingAssistant;
-      this.events.transaction(() => {
-        assistantItem = this.database.updateMessage(assistantItem?.id as string, {
-          content: textFromMessage(message),
-          payload: message,
-        });
-        this.events.emit(sessionId, runId, "message.delta", assistantItem);
-        if (responseId) {
-          const updated = this.database.updateResponse(responseId, { content: textFromMessage(message) });
-          this.database.addResponseActivity({
-            responseId,
-            kind: "text",
-            text: textFromMessage(message),
-          });
-          this.events.emit(sessionId, runId, "response.delta", updated);
-        }
-      });
+      const content = textFromMessage(message);
+      const append = content.slice(streamedLength);
+      streamedLength = content.length;
       pendingAssistant = undefined;
       flushTimer = undefined;
+      if (!append) return;
+      this.events.transaction(() => {
+        this.events.emit(sessionId, runId, "message.delta", {
+          messageId: assistantItem?.id as string,
+          ...(responseId ? { responseId } : {}),
+          append,
+          updatedAt: Date.now(),
+        });
+      });
     };
     agent.subscribe((event: AgentEvent) => {
       if (event.type === "turn_start") {
@@ -2405,6 +2398,7 @@ export class UmaRuntime {
             status: "streaming",
             content: textFromMessage(event.message),
           });
+          streamedLength = item.content.length;
           this.events.emit(sessionId, runId, "message.started", item);
           if (responseId)
             this.events.emit(sessionId, runId, "response.activity", {
@@ -2470,7 +2464,11 @@ export class UmaRuntime {
             contextSummarySequence: this.database.getContextSummary(sessionId)?.throughSequence,
             safeToResume: true,
           });
-          this.events.emit(sessionId, runId, "message.completed", item);
+          this.events.emit(sessionId, runId, "message.completed", {
+            messageId: item.id,
+            status: item.status,
+            updatedAt: item.updatedAt,
+          });
         });
         injectRuntimeFault("model.completed");
         activeModelCall = undefined;
@@ -2579,9 +2577,11 @@ export class UmaRuntime {
               safeToResume: !event.isError,
             });
             this.events.emit(sessionId, runId, "tool.completed", {
-              item,
+              messageId: item.id,
               toolCallId: event.toolCallId,
+              toolName: event.toolName,
               isError: event.isError,
+              ...(event.isError ? { errorCategory: "tool_execution" } : {}),
             });
             if (responseId) {
               this.database.addResponseActivity({

@@ -15,7 +15,7 @@ case "$release_real" in
   *) echo "release resolves outside /opt/uma-agent/releases: $release_real" >&2; exit 1 ;;
 esac
 
-for package in browser-worker channel-adapter cli client core eval-runner feishu-adapter feishu-mcp protocol server skill-worker web xianyu-adapter; do
+for package in browser-worker channel-adapter cli client core eval-runner feishu-adapter feishu-mcp protocol server skill-worker telemetry web xianyu-adapter; do
   case "$package" in
     browser-worker|cli|eval-runner|feishu-adapter|feishu-mcp|server|skill-worker|xianyu-adapter) parent=apps ;;
     *) parent=packages ;;

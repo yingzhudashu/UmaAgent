@@ -28,6 +28,7 @@ const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
     ...process.env,
     UMA_FAUX_PORT: String(port),
     UMA_FAUX_TOKEN: tokenSecret,
+    UMA_FAUX_STATE: stateDir,
     UMA_FAUX_RESET_STATE: "1",
   },
   stdio: ["ignore", "pipe", "pipe"],

@@ -48,6 +48,7 @@ import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
 import { Login } from "./Login.js";
 import { buildConversationEntries } from "./responseTurns.js";
+import { applyStreamingEvent } from "./streaming.js";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -281,9 +282,15 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               setApprovals((items) => items.filter((item) => item.id !== (event.payload as Approval).id));
             if (event.type === "session.snapshot")
               queryClient.setQueryData(["snapshot", selected], event.payload as SessionSnapshot);
-            if (event.type === "session.snapshot") void cacheSnapshot(event.payload as SessionSnapshot);
-            else void queryClient.invalidateQueries({ queryKey: ["snapshot", selected] });
-            void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+            if (event.type === "session.snapshot") {
+              void cacheSnapshot(event.payload as SessionSnapshot);
+            } else if (event.type === "message.delta") {
+              applyStreamingEvent(queryClient, selected, event);
+            } else {
+              void queryClient.invalidateQueries({ queryKey: ["snapshot", selected] });
+            }
+            if (event.type !== "message.delta")
+              void queryClient.invalidateQueries({ queryKey: ["sessions"] });
           },
         );
       });

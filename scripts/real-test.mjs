@@ -13,32 +13,20 @@ if (!["smoke", "eval", "perf", "soak"].includes(mode))
 if (process.env.UMA_REAL_API !== "1")
   throw new Error("Real API tests are disabled. Set UMA_REAL_API=1 to authorize external requests.");
 
-const miniConfigPath =
-  process.env.UMA_REAL_CONFIG?.trim() ||
-  process.env.UMA_MINIAGENT_CONFIG?.trim() ||
-  "D:\\AIhub\\miniagent-python\\config.user.json";
-const mini = JSON.parse(await readFile(miniConfigPath, "utf8"));
-const providerEntries = Object.entries(mini.llm?.providers ?? {});
-const modelEntries = Object.entries(mini.llm?.models ?? {});
-if (providerEntries.length === 0 || modelEntries.length === 0)
-  throw new Error(`MiniAgent config has no LLM provider/model: ${miniConfigPath}`);
-const [providerId, provider] = providerEntries[0];
-const [configuredModelKey, model] =
-  modelEntries.find(([, value]) => value.provider === providerId) ?? modelEntries[0];
-const modelKey = String(model.model ?? configuredModelKey);
-const apiKeyEnv = String(provider.api_key_env ?? "OPENAI_API_KEY");
-if (!process.env[apiKeyEnv]?.trim()) {
-  const credential = String(provider.credential ?? providerId);
-  const configuredKey =
-    credential === "openai"
-      ? mini.secrets?.llm?.openai?.api_key
-      : (mini.secrets?.[credential]?.api_key ?? mini.secrets?.[`${credential}_api_key`]);
-  if (typeof configuredKey === "string" && configuredKey.trim()) process.env[apiKeyEnv] = configuredKey;
-}
-if (!process.env[apiKeyEnv]?.trim())
-  throw new Error(
-    `Missing API key ${apiKeyEnv} in the environment and MiniAgent config; no Faux fallback is used.`,
-  );
+const providerId = process.env.UMA_REAL_PROVIDER?.trim();
+const modelKey = process.env.UMA_REAL_MODEL?.trim();
+const baseUrl = process.env.UMA_REAL_BASE_URL?.trim();
+const apiKeyEnv = process.env.UMA_REAL_API_KEY_ENV?.trim() || "OPENAI_API_KEY";
+if (!providerId || !modelKey || !baseUrl)
+  throw new Error("UMA_REAL_PROVIDER, UMA_REAL_MODEL and UMA_REAL_BASE_URL are required");
+if (!process.env[apiKeyEnv]?.trim()) throw new Error(`Missing API key ${apiKeyEnv} in the environment`);
+const model = {
+  model: modelKey,
+  api: process.env.UMA_REAL_API?.trim() || "openai_responses",
+  contextWindow: Number(process.env.UMA_REAL_CONTEXT_WINDOW ?? 100_000),
+  maxOutputTokens: Number(process.env.UMA_REAL_MAX_OUTPUT_TOKENS ?? 4_096),
+  capabilities: {},
+};
 
 const port = Number(process.env.UMA_REAL_PORT ?? (mode === "soak" ? 3213 : mode === "perf" ? 3212 : 3211));
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("UMA_REAL_PORT is invalid");
@@ -60,18 +48,18 @@ const config = {
   auth: { webSessionHours: 24 },
   providers: {
     [providerId]: {
-      baseUrl: String(provider.base_url).replace(/\/$/, ""),
+      baseUrl: baseUrl.replace(/\/$/, ""),
       apiKeyEnv,
     },
   },
   models: {
     [modelKey]: {
       provider: providerId,
-      name: String(model.model ?? modelKey),
+      name: modelKey,
       api,
-      contextWindow: Number(model.context_window),
-      maxOutputTokens: Number(model.max_output_tokens),
-      capabilities: model.capabilities ?? {},
+      contextWindow: model.contextWindow,
+      maxOutputTokens: model.maxOutputTokens,
+      capabilities: model.capabilities,
     },
   },
   defaultThinkingLevel: String(model.defaults?.thinking_level ?? mini.default_thinking_level ?? "medium"),
@@ -83,9 +71,9 @@ const config = {
   ),
   embedding: {
     enabled: false,
-    baseUrl: String(mini.embedding?.base_url ?? "https://api.siliconflow.cn/v1").replace(/\/$/, ""),
-    model: String(mini.embedding?.model ?? "BAAI/bge-m3"),
-    apiKeyEnv: String(mini.secrets?.embed_api_key_env ?? "EMBEDDING_API_KEY"),
+    baseUrl: "http://127.0.0.1:9/v1",
+    model: "disabled",
+    apiKeyEnv: "UMA_EMBEDDING_DISABLED",
   },
 };
 await writeFile(configPath, JSON.stringify(config, null, 2));

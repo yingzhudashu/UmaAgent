@@ -88,6 +88,13 @@ export interface UmaAuthMe {
 
 type Listener = (event: AgentEventEnvelope) => void;
 type ResourceListener = (event: ResourceInvalidated | ResourceResyncRequired) => void;
+function traceparent(): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  const traceId = [...bytes.slice(0, 16)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  const spanId = [...bytes.slice(16)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  return `00-${traceId}-${spanId}-01`;
+}
 export type EventConnectionState = "disconnected" | "connecting" | "connected";
 export type SessionSubscription = { id: string; lastSequence?: number };
 
@@ -120,6 +127,7 @@ export class UmaClient {
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
+    headers.set("traceparent", traceparent());
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
     const response = await this.fetchFn(`${this.baseUrl}/api/v14${path}`, {

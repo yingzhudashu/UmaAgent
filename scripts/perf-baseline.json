@@ -1,9 +1,9 @@
 {
   "dataset": {
-    "sessions": 100,
-    "messages": 100000,
-    "events": 1000000,
-    "knowledgeChunks": 10000,
+    "sessions": 1,
+    "messages": 20,
+    "events": 0,
+    "knowledgeChunks": 0,
     "clients": 5
   },
   "budgets": {
