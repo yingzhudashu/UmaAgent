@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 
 const root = resolve(".");
 const files = execFileSync("git", ["ls-files", "*.ts", "*.tsx", "*.mjs", "*.js"], { encoding: "utf8" })
