@@ -6,6 +6,7 @@ import {
   type ScheduledTask,
   type Session,
 } from "@uma-agent/protocol";
+import { displayStatus, resourceStatusLabels, taskStatusLabels } from "../statusLabels.js";
 
 export async function executeShortcutCommand(
   command: string,
@@ -46,18 +47,26 @@ export async function executeShortcutCommand(
     return input.selectedSnapshot ? `队列模式：${input.selectedSnapshot.session.queueMode}` : "暂无会话";
   if (command === "/btw status")
     return (
-      input.tasks?.map((item) => `${item.id} · ${item.status} · ${item.prompt}`).join("\n") || "暂无后台任务"
+      input.tasks
+        ?.map(
+          (item) =>
+            `${item.id} · ${taskStatusLabels[item.status] ?? displayStatus(item.status)} · ${item.prompt}`,
+        )
+        .join("\n") || "暂无后台任务"
     );
   if (command === "/schedule list")
     return (
       input.schedules
-        ?.map((item) => `${item.id} · ${item.name} · ${item.enabled ? "enabled" : "disabled"}`)
+        ?.map((item) => `${item.id} · ${item.name} · ${item.enabled ? "已启用" : "已停用"}`)
         .join("\n") || "暂无调度"
     );
   if (command === "/kb list")
     return (
       input.knowledge
-        ?.map((item) => `${item.name} · ${item.status} · ${item.documentCount} documents`)
+        ?.map(
+          (item) =>
+            `${item.name} · ${resourceStatusLabels[item.status] ?? displayStatus(item.status)} · ${item.documentCount} 个文档`,
+        )
         .join("\n") || "暂无知识库"
     );
   if (command === "/memory status") return `候选记忆：${input.memoryCount} 条`;

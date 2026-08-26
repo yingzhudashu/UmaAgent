@@ -1,5 +1,6 @@
 import type { KnowledgeSearchHit, KnowledgeSource, SkillPackage, SkillSummary } from "@uma-agent/protocol";
 import { type FormEvent, useState } from "react";
+import { displayStatus } from "../statusLabels.js";
 
 export function ResourceArea({
   admin,
@@ -46,10 +47,10 @@ export function ResourceArea({
     setPath("");
   };
   return (
-    <div className="operation-list">
+    <div className="settings-panel settings-panel--nested">
       {admin && (
         <>
-          <div>
+          <section className="settings-section settings-section--compact">
             <strong>Skills</strong>
             <p>{skills.map((item) => item.name).join(", ") || "-"}</p>
             <button type="button" disabled={disabled} onClick={refreshSkills}>
@@ -78,7 +79,8 @@ export function ResourceArea({
                   {pkg.name}@{pkg.version}
                 </strong>
                 <small className="operation-meta">
-                  {pkg.status} · {pkg.risk}
+                  {displayStatus(pkg.status)} · 风险：
+                  {pkg.risk === "high" ? "高" : pkg.risk === "medium" ? "中" : "低"}
                 </small>
                 {pkg.diagnostics.map((item) => (
                   <p key={item}>{item}</p>
@@ -114,21 +116,21 @@ export function ResourceArea({
                 </div>
               </div>
             ))}
-          </div>
-          <div>
+          </section>
+          <section className="settings-section settings-section--compact">
             <strong>MCP</strong>
             <p>
-              {mcp.map((item) => `${item.name}:${item.connected ? "online" : "offline"}`).join(", ") || "-"}
+              {mcp.map((item) => `${item.name}：${item.connected ? "已连接" : "未连接"}`).join(", ") || "-"}
             </p>
-          </div>
+          </section>
         </>
       )}
-      <div>
+      <section className="settings-section settings-section--compact">
         <strong>Knowledge</strong>
         {knowledge.map((item) => (
           <div key={item.id}>
             <p>
-              {item.name} ({item.documentCount}) · {item.status}
+              {item.name}（{item.documentCount} 个文档）· {displayStatus(item.status)}
             </p>
             {item.error && <small className="error">{item.error}</small>}
             <button type="button" disabled={disabled} onClick={() => reindexKnowledge(item.id)}>
@@ -197,7 +199,7 @@ export function ResourceArea({
             <p>{hit.content}</p>
           </div>
         ))}
-      </div>
+      </section>
     </div>
   );
 }

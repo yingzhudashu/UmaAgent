@@ -1,5 +1,6 @@
 import type { CreateScheduledTaskRequest, ScheduledTask, ScheduledTaskRun } from "@uma-agent/protocol";
 import { type FormEvent, useState } from "react";
+import { displayStatus, scheduleKindLabels, scheduleRunStatusLabels } from "../statusLabels.js";
 
 export function ScheduleArea({
   schedules,
@@ -39,7 +40,7 @@ export function ScheduleArea({
     setPrompt("");
   };
   return (
-    <div className="operation-list">
+    <div className="settings-panel settings-panel--nested">
       <button type="button" className="run-action" disabled={disabled} onClick={() => setShowForm(true)}>
         新建调度
       </button>
@@ -69,9 +70,9 @@ export function ScheduleArea({
                 );
               }}
             >
-              <option value="once">once</option>
-              <option value="interval">interval</option>
-              <option value="cron">cron</option>
+              <option value="once">一次性</option>
+              <option value="interval">按间隔</option>
+              <option value="cron">Cron</option>
             </select>
           </label>
           <label>
@@ -95,11 +96,13 @@ export function ScheduleArea({
         </form>
       )}
       {schedules.map((item) => (
-        <div key={item.id}>
+        <div key={item.id} className="settings-section settings-section--compact">
           <strong>{item.name}</strong>
           <p>{item.prompt}</p>
           <small className="operation-meta">
-            {item.schedule.kind} · {item.enabled ? "enabled" : "disabled"} · next {item.nextRunAt ?? "-"}
+            {scheduleKindLabels[item.schedule.kind] ?? item.schedule.kind} ·{" "}
+            {item.enabled ? "已启用" : "已停用"} · 下次运行{" "}
+            {item.nextRunAt ? new Date(item.nextRunAt).toLocaleString() : "-"}
           </small>
           <div className="approval-actions">
             <button type="button" disabled={disabled} onClick={() => run(item.id)}>
@@ -125,7 +128,8 @@ export function ScheduleArea({
           {history[item.id]?.map((entry) => (
             <div className="schedule-run" key={entry.id}>
               <small>
-                {entry.trigger} · {entry.status} · {new Date(entry.scheduledFor).toLocaleString()}
+                {entry.trigger} · {scheduleRunStatusLabels[entry.status] ?? displayStatus(entry.status)} ·{" "}
+                {new Date(entry.scheduledFor).toLocaleString()}
               </small>
               {entry.status === "awaiting_resume" && <span> · 需要恢复确认</span>}
               {["claimed", "running", "awaiting_resume"].includes(entry.status) && (

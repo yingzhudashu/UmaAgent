@@ -37,7 +37,7 @@ export function MessageBubble({
           <time dateTime={new Date(item.createdAt).toISOString()}>
             {new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </time>
-          {item.status === "streaming" && <span className="streaming">生成中</span>}
+          {item.status === "streaming" && <span className="streaming">正在生成</span>}
           {item.status === "error" && <span className="message-status error-text">失败</span>}
         </div>
         <div className={`message-body ${isUser ? "user-bubble" : isTool ? "tool-output" : "assistant-body"}`}>
@@ -53,7 +53,10 @@ export function MessageBubble({
           ) : isUser ? (
             <p>{item.content}</p>
           ) : (
-            <Markdown content={item.content} />
+            <Markdown
+              content={item.content}
+              {...(onAttachment ? { onAttachmentDownload: onAttachment } : {})}
+            />
           )}
           {item.status === "streaming" && <output className="stream-caret" aria-label="正在生成" />}
         </div>

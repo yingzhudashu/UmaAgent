@@ -37,7 +37,7 @@ export function SettingsArea({
       <div>
         <strong>Core</strong>
         <p>
-          {health?.status ?? "offline"} · v{health?.version ?? "-"} · protocol{" "}
+          {health?.status === "ok" ? "已连接" : "未连接"} · v{health?.version ?? "-"} · 协议{" "}
           {health?.protocolVersion ?? "-"}
         </p>
       </div>
@@ -45,22 +45,22 @@ export function SettingsArea({
         <strong>近 7 天运行</strong>
         <p>
           {report
-            ? `${report.runs.completed}/${report.runs.total} completed · ${report.model.totalTokens} tokens · ${report.tools.failed} tool failures`
+            ? `${report.runs.completed}/${report.runs.total} 次完成 · ${report.model.totalTokens} tokens · ${report.tools.failed} 次工具失败`
             : "-"}
         </p>
       </div>
       <div>
-        <strong>Session</strong>
+        <strong>会话</strong>
         <p>{session ? `${session.model.provider}/${session.model.id}` : "-"}</p>
       </div>
       <div>
         <strong>有效配置</strong>
         <p>
           {publicConfig
-            ? `${publicConfig.defaultModel.provider}/${publicConfig.defaultModel.id} · ${publicConfig.models.length} models · ${publicConfig.skills.length} skills`
+            ? `${publicConfig.defaultModel.provider}/${publicConfig.defaultModel.id} · ${publicConfig.models.length} 个模型 · ${publicConfig.skills.length} 个技能`
             : "-"}
         </p>
-        {publicConfig && <small className="operation-meta">revision {publicConfig.revision}</small>}
+        {publicConfig && <small className="operation-meta">配置版本 {publicConfig.revision}</small>}
       </div>
       <form className="resource-form" onSubmit={submit}>
         <label>

@@ -46,6 +46,7 @@ import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
 import { Login } from "./Login.js";
 import { buildConversationEntries } from "./responseTurns.js";
+import { displayStatus, taskStatusLabels } from "./statusLabels.js";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -908,34 +909,37 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 />
               )}
               {inspectorSection === "settings" && (
-                <section className="inspector-group">
+                <section className="inspector-group settings-section">
                   <h3>后台任务</h3>
                   <div className="operation-list">
-                    <form
-                      className="resource-form"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        if (!taskPrompt.trim()) return;
-                        void client.createTask(taskPrompt.trim(), selected).then(() => {
-                          setTaskPrompt("");
-                          void tasks.refetch();
-                        });
-                      }}
-                    >
-                      <label>
-                        后台任务
-                        <textarea
-                          value={taskPrompt}
-                          onChange={(event) => setTaskPrompt(event.target.value)}
-                        />
-                      </label>
-                      <button type="submit" className="run-action" disabled={offline || !taskPrompt.trim()}>
-                        新建后台任务
-                      </button>
-                    </form>
+                    <details className="settings-form-disclosure">
+                      <summary>新建后台任务</summary>
+                      <form
+                        className="resource-form"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          if (!taskPrompt.trim()) return;
+                          void client.createTask(taskPrompt.trim(), selected).then(() => {
+                            setTaskPrompt("");
+                            void tasks.refetch();
+                          });
+                        }}
+                      >
+                        <label>
+                          后台任务
+                          <textarea
+                            value={taskPrompt}
+                            onChange={(event) => setTaskPrompt(event.target.value)}
+                          />
+                        </label>
+                        <button type="submit" className="run-action" disabled={offline || !taskPrompt.trim()}>
+                          创建任务
+                        </button>
+                      </form>
+                    </details>
                     {tasks.data?.map((task) => (
                       <div key={task.id}>
-                        <strong>{task.status}</strong>
+                        <strong>{taskStatusLabels[task.status] ?? displayStatus(task.status)}</strong>
                         <p>{task.prompt}</p>
                         {task.runId && (
                           <button
@@ -1008,7 +1012,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 </section>
               )}
               {inspectorSection === "settings" && (
-                <section className="inspector-group">
+                <section className="inspector-group settings-section">
                   <h3>调度</h3>
                   <ScheduleArea
                     schedules={schedules.data ?? []}
@@ -1025,7 +1029,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 </section>
               )}
               {inspectorSection === "settings" && (
-                <section className="inspector-group">
+                <section className="inspector-group settings-section">
                   <h3>资源</h3>
                   <ResourceArea
                     admin={userRole === "admin"}

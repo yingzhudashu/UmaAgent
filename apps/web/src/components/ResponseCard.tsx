@@ -2,20 +2,7 @@ import type { Response, ResponseStatus, Run, TranscriptItem } from "@uma-agent/p
 import { Bot, Check, ChevronRight, Copy, Download, FileText, LoaderCircle, Wrench } from "lucide-react";
 import { useState } from "react";
 import { Markdown } from "../Markdown.js";
-
-export const responseStatusLabels: Record<ResponseStatus, string> = {
-  queued: "正在回复",
-  thinking: "正在分析",
-  clarifying: "等待补充信息",
-  planning: "正在制定计划",
-  awaiting_confirmation: "等待确认执行计划",
-  executing: "正在执行",
-  awaiting_approval: "等待审批",
-  verifying: "正在验证",
-  completed: "已完成",
-  failed: "执行失败",
-  cancelled: "已取消",
-};
+import { responseStatusLabels } from "../statusLabels.js";
 
 function toolStatus(item: TranscriptItem): string {
   if (item.status === "error") return "执行失败";
@@ -85,19 +72,16 @@ export function ResponseCard({
     position: step.position,
     step,
   }));
-  const timeline = [
-    ...planItems,
-    ...intermediateItems.map((item) => ({
+  const timeline = intermediateItems
+    .map((item) => ({
       kind: "transcript" as const,
       id: item.id,
       sequence: item.sequence,
       item,
-    })),
-  ].sort(
-    (a, b) =>
-      a.sequence - b.sequence || (a.kind === "plan" ? a.position : 0) - (b.kind === "plan" ? b.position : 0),
-  );
+    }))
+    .sort((a, b) => a.sequence - b.sequence);
   const hasSteps = timeline.length > 0;
+  const hasPlan = planItems.length > 0 && run?.interactionMode === "plan";
   const terminal = (["completed", "failed", "cancelled"] as ResponseStatus[]).includes(response.status);
   const copy = async () => {
     await navigator.clipboard?.writeText(finalContent);
@@ -130,31 +114,20 @@ export function ResponseCard({
           )}
         </div>
 
-        {hasSteps && (
-          <details className="response-steps">
-            <summary>
-              <ChevronRight size={14} aria-hidden="true" />
-              <span>执行步骤</span>
-              <small>{intermediateItems.length + (run?.plan.length ?? 0)} 项</small>
-            </summary>
-            <div className="response-steps__body">
-              {timeline.map((entry) =>
-                entry.kind === "plan" ? (
-                  <details
-                    className="response-step response-plan-step"
-                    key={entry.id}
-                    data-status={entry.step.status}
-                  >
+        {hasPlan && (
+          <section className="response-plan-box">
+            <div className="response-plan-box__heading">
+              <strong>执行计划</strong>
+              <small>{planItems.length} 步</small>
+            </div>
+            <div className="response-plan-box__body">
+              {planItems
+                .sort((a, b) => a.position - b.position)
+                .map((entry) => (
+                  <details className="response-plan-step" key={entry.id} data-status={entry.step.status}>
                     <summary>
                       <ChevronRight size={14} className="response-step-chevron" aria-hidden="true" />
-                      <span className="response-plan__marker" aria-hidden="true">
-                        {entry.step.status === "completed" ? (
-                          <Check size={13} />
-                        ) : (
-                          <span className="step-dot" />
-                        )}
-                      </span>
-                      <span className="response-plan__index">步骤 {entry.position + 1}</span>
+                      <span className="response-plan__index">{entry.position + 1}</span>
                       <span className="response-plan__title">{planStepParts(entry.step.title).summary}</span>
                       <span className="response-step-status">
                         {entry.step.status === "completed"
@@ -167,11 +140,28 @@ export function ResponseCard({
                       </span>
                     </summary>
                     <div className="response-plan-step__body">
-                      <Markdown content={planStepParts(entry.step.title).details} />
+                      <Markdown
+                        content={planStepParts(entry.step.title).details}
+                        onAttachmentDownload={onDownload}
+                      />
                       {entry.step.error && <p className="error-text">{entry.step.error}</p>}
                     </div>
                   </details>
-                ) : entry.item.role === "tool" ? (
+                ))}
+            </div>
+          </section>
+        )}
+
+        {hasSteps && (
+          <details className="response-steps">
+            <summary>
+              <ChevronRight size={14} aria-hidden="true" />
+              <span>执行步骤</span>
+              <small>{intermediateItems.length} 项</small>
+            </summary>
+            <div className="response-steps__body">
+              {timeline.map((entry) =>
+                entry.item.role === "tool" ? (
                   <details className="tool-details response-step" key={entry.id}>
                     <summary>
                       <ChevronRight size={14} aria-hidden="true" />
@@ -188,7 +178,7 @@ export function ResponseCard({
                   </details>
                 ) : (
                   <div className="response-step response-step--assistant" key={entry.id}>
-                    <Markdown content={entry.item.content} />
+                    <Markdown content={entry.item.content} onAttachmentDownload={onDownload} />
                   </div>
                 ),
               )}
@@ -198,7 +188,7 @@ export function ResponseCard({
 
         <div className="message-body assistant-body response-card__content">
           {finalContent ? (
-            <Markdown content={finalContent} />
+            <Markdown content={finalContent} onAttachmentDownload={onDownload} />
           ) : (
             <span className="response-card__placeholder">正在准备回复…</span>
           )}

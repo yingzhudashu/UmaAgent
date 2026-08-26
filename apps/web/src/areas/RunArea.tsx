@@ -1,18 +1,6 @@
-import type { Approval, Run, RunAction, RunCheckpoint, RunStatus } from "@uma-agent/protocol";
+import type { Approval, Run, RunAction, RunCheckpoint } from "@uma-agent/protocol";
 import { Check, ChevronRight, RotateCcw, X } from "lucide-react";
-
-const runStatusLabels: Record<RunStatus, string> = {
-  queued: "正在回复",
-  preflight: "正在分析",
-  awaiting_input: "等待补充信息",
-  awaiting_confirmation: "等待确认执行计划",
-  running: "正在执行",
-  verifying: "正在验证",
-  completed: "已完成",
-  failed: "执行失败",
-  cancelled: "已取消",
-  interrupted: "已中断",
-};
+import { runStatusLabels } from "../statusLabels.js";
 
 export function RunPanel({
   run,

@@ -1,4 +1,5 @@
 import type { OptimizationProposal } from "@uma-agent/protocol";
+import { displayStatus } from "../statusLabels.js";
 
 export function OptimizationArea({
   proposals,
@@ -20,7 +21,8 @@ export function OptimizationArea({
         <div key={item.id} className="action-card">
           <strong>{item.title}</strong>
           <small className="operation-meta">
-            {item.status} · {item.risk}
+            {displayStatus(item.status)} · 风险：
+            {item.risk === "high" ? "高" : item.risk === "medium" ? "中" : "低"}
           </small>
           <p>{item.recommendation}</p>
           {item.evidence.map((value) => (

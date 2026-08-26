@@ -69,7 +69,7 @@ export function SessionArea({
       </nav>
       <div className="sidebar-footer">
         <span className={`health-dot ${online ? "online" : "offline"}`} />
-        Core {online ? "online" : "offline"}
+        Core {online ? "已连接" : "未连接"}
         {installable && (
           <button type="button" onClick={install}>
             安装应用
