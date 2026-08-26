@@ -31,10 +31,20 @@ const gateway: FeishuBusinessGateway = {
   },
 };
 const core = new UmaClient({ baseUrl: user.core.serverUrl, token: user.core.token });
-const mcp = createFeishuMcp({ gateway, core });
-const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID } as never);
-transport.onerror = (error) => console.error("MCP transport error", error);
-await mcp.connect(transport as Parameters<typeof mcp.connect>[0]);
+type FeishuMcp = ReturnType<typeof createFeishuMcp>;
+type McpSession = { server: FeishuMcp; transport: StreamableHTTPServerTransport };
+const sessions = new Map<string, McpSession>();
+const createSession = async (): Promise<McpSession> => {
+  const server = createFeishuMcp({ gateway, core });
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID } as never);
+  transport.onerror = (error) => console.error("feishu.mcp.error", { error: error.message });
+  const session = { server, transport };
+  transport.onclose = () => {
+    if (transport.sessionId) sessions.delete(transport.sessionId);
+  };
+  await server.connect(transport as Parameters<FeishuMcp["connect"]>[0]);
+  return session;
+};
 const host = user.feishu.mcpHost;
 const port = user.feishu.mcpPort;
 const token = process.env.FEISHU_MCP_TOKEN?.trim();
@@ -56,16 +66,31 @@ app.all("/mcp", async (request: Request, response: Response) => {
     return;
   }
   try {
-    await transport.handleRequest(request, response, request.body);
+    const rawSessionId = request.headers["mcp-session-id"];
+    const sessionId = Array.isArray(rawSessionId) ? rawSessionId[0] : rawSessionId;
+    const session = sessionId
+      ? sessions.get(sessionId)
+      : request.method === "POST"
+        ? await createSession()
+        : undefined;
+    if (!session) {
+      response.status(400).json({ error: "MCP session is missing or expired" });
+      return;
+    }
+    await session.transport.handleRequest(request, response, request.body);
+    if (session.transport.sessionId) sessions.set(session.transport.sessionId, session);
   } catch (error) {
-    console.error("MCP request failed", error);
+    console.error("feishu.mcp.failed", {
+      error: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+    });
     if (!response.headersSent) response.status(500).end();
   }
 });
 const server = app.listen(port, host);
 const stop = async () => {
   core.close();
-  await transport.close();
+  await Promise.allSettled([...sessions.values()].map(({ transport }) => transport.close()));
+  sessions.clear();
   server.close();
 };
 process.once("SIGINT", () => void stop());
