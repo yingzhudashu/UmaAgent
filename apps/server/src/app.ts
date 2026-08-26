@@ -184,9 +184,7 @@ export async function createServer(
       crossOrigin: crossOrigin(origin, request.headers.host),
       secure: secureOrigin(origin),
     });
-    return reply
-      .code(201)
-      .send({ userId: issued.userId, token: issued.token, tokenId: issued.id, expiresAt: issued.expiresAt });
+    return reply.code(201).send({ userId: issued.userId, token: issued.token, tokenId: issued.id });
   });
   app.get("/api/v14/auth/me", async (request) => {
     const principal = userPrincipal(auth, request);
@@ -206,10 +204,10 @@ export async function createServer(
     }));
     return { user: { id: principal.userId, role: principal.role }, sessions, serverTime: Date.now() };
   });
-  app.post<{ Body: { label?: string; expiresInDays?: number } }>("/api/v14/auth/tokens", async (request) => {
+  app.post<{ Body: { label?: string } }>("/api/v14/auth/tokens", async (request) => {
     const principal = userPrincipal(auth, request);
-    const issued = auth.issueToken(principal.userId, request.body?.label, request.body?.expiresInDays);
-    return { token: issued.token, tokenId: issued.id, expiresAt: issued.expiresAt };
+    const issued = auth.issueToken(principal.userId, request.body?.label);
+    return { token: issued.token, tokenId: issued.id };
   });
   app.delete<{ Params: { id: string } }>("/api/v14/auth/tokens/:id", async (request, reply) => {
     const principal = userPrincipal(auth, request);

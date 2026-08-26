@@ -55,7 +55,11 @@ describe("multi-user authentication", () => {
     database.createBackgroundTask({ id: "task-b", sessionId: sessionB.id, prompt: "private B" });
     expect(database.listBackgroundTasks(first.userId).map((task) => task.id)).toEqual(["task-a"]);
     expect(database.listBackgroundTasks(second.userId).map((task) => task.id)).toEqual(["task-b"]);
-    expect(database.listAuthTokens(first.userId)).toHaveLength(1);
+    const [listedToken] = database.listAuthTokens(first.userId);
+    expect(listedToken).toBeDefined();
+    expect(listedToken).not.toHaveProperty("expiresAt");
+    database.db.prepare("UPDATE auth_tokens SET expires_at=1 WHERE id=?").run(first.id);
+    expect(auth.principalFromRequest(firstRequest)).toBeDefined();
     expect(database.revokeAuthToken(first.userId, first.id)).toBe(true);
     expect(auth.principalFromRequest(firstRequest)).toBeUndefined();
     process.env.UMA_OAUTH_REDIRECTS = "uma-mobile|com.example.uma:/oauth/callback";

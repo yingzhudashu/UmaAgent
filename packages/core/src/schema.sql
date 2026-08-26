@@ -18,7 +18,7 @@ CREATE TABLE auth_tokens (
   token_hash TEXT NOT NULL UNIQUE,
   label TEXT NOT NULL,
   scopes_json TEXT NOT NULL DEFAULT '["user"]',
-  expires_at INTEGER NOT NULL,
+  expires_at INTEGER,
   revoked_at INTEGER,
   created_at INTEGER NOT NULL,
   last_used_at INTEGER
@@ -533,4 +533,4 @@ CREATE TABLE resource_snapshots (
 );
 CREATE INDEX resource_snapshots_captured ON resource_snapshots(captured_at DESC);
 
-PRAGMA user_version = 19;
+PRAGMA user_version = 20;

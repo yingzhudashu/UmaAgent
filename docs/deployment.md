@@ -1,6 +1,6 @@
 # UmaAgent 服务器部署与验收
 
-本文档面向 UmaAgent `1.3.0`、Protocol v14、SQLite schema 19。Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
+本文档面向 UmaAgent `1.3.0`、Protocol v14、SQLite schema 20。Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
 
 ## 1. 部署前确认
 
@@ -315,13 +315,13 @@ docker run --rm \
 
 原生部署从新版本开始时，使用 release 中的 `deploy/reset-native-state.sh --apply`。脚本只处理 UmaAgent Core、工作区、Browser Worker 和 Feishu 独立 state，并先移动到 `/srv/backups/uma-agent/reset-<UTC>`；不会读取、删除或移动 `/home/ubuntu/miniagent`。
 
-本项目不提供 migration、旧 DTO 或 schema fallback。数据库 `PRAGMA user_version` 与当前 schema 不匹配时会拒绝启动。升级前必须备份；如果新版本升级了 schema，应按该版本的发布说明显式重置，不能把旧数据库强行交给新版本。回滚时部署原版本并恢复原版本生成的备份。
+数据库只允许通过已测试的相邻事务迁移升级，不提供旧 DTO 或 schema fallback。schema 19 会迁移到 schema 20；其他不受支持的版本会拒绝启动。升级前必须备份，回滚时部署原版本并恢复原版本生成的备份。
 
 ## 9. Trace、资源报告与真实 API 验证
 
-Core 使用 SQLite schema 19 持久化 Trace。Run、queue、preflight、model、tool、command、approval 和终态会形成一棵有父子关系的 Span 树；查询入口为 `GET /api/v14/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。资源快照和诊断报告分别通过 `/api/v14/reports/resources` 与 `/api/v14/reports/diagnostics` 读取，均只允许管理员。
+Core 使用 SQLite schema 20 持久化 Trace。Run、queue、preflight、model、tool、command、approval 和终态会形成一棵有父子关系的 Span 树；查询入口为 `GET /api/v14/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。资源快照和诊断报告分别通过 `/api/v14/reports/resources` 与 `/api/v14/reports/diagnostics` 读取，均只允许管理员。
 
-真实测试默认读取 `D:\AIhub\miniagent-python\config.user.json` 的 Provider、模型、API 类型和能力字段，在临时目录生成 Uma 配置和 schema 19 状态库。执行时优先使用配置声明的环境变量；若环境变量为空，且 `UMA_REAL_API=1` 已明确授权，脚本才会从该配置的对应 credential 读取 API key，并仅注入当前 Node 进程，不写入临时配置、数据库、Trace、日志或测试报告。缺少授权或密钥时命令直接失败，不切换 Faux：
+真实测试默认读取 `D:\AIhub\miniagent-python\config.user.json` 的 Provider、模型、API 类型和能力字段，在临时目录生成 Uma 配置和 schema 20 状态库。执行时优先使用配置声明的环境变量；若环境变量为空，且 `UMA_REAL_API=1` 已明确授权，脚本才会从该配置的对应 credential 读取 API key，并仅注入当前 Node 进程，不写入临时配置、数据库、Trace、日志或测试报告。缺少授权或密钥时命令直接失败，不切换 Faux：
 
 ```powershell
 $env:UMA_REAL_API = "1"
@@ -370,4 +370,4 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] Feishu 白名单、消息去重、重启恢复和可选卡片回调通过。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v14 和 schema 19，保留可回滚 release 与同版本备份。
+- [ ] 确认当前应用版本、Protocol v14 和 schema 20，保留可回滚 release 与同版本备份。

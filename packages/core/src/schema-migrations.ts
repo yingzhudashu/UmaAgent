@@ -8,7 +8,35 @@ export type SchemaMigration = {
 
 // Schema 19 is the first version managed by this forward-only migration path.
 // Add one adjacent migration here whenever SCHEMA_VERSION increases.
-const migrations: readonly SchemaMigration[] = [];
+const migrations: readonly SchemaMigration[] = [
+  {
+    from: 19,
+    to: 20,
+    apply: (db) => {
+      db.exec(`
+        CREATE TABLE auth_tokens_v20 (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash TEXT NOT NULL UNIQUE,
+          label TEXT NOT NULL,
+          scopes_json TEXT NOT NULL DEFAULT '["user"]',
+          expires_at INTEGER,
+          revoked_at INTEGER,
+          created_at INTEGER NOT NULL,
+          last_used_at INTEGER
+        );
+        INSERT INTO auth_tokens_v20(
+          id,user_id,token_hash,label,scopes_json,expires_at,revoked_at,created_at,last_used_at
+        )
+        SELECT id,user_id,token_hash,label,scopes_json,NULL,revoked_at,created_at,last_used_at
+        FROM auth_tokens;
+        DROP TABLE auth_tokens;
+        ALTER TABLE auth_tokens_v20 RENAME TO auth_tokens;
+        CREATE INDEX auth_tokens_user_active ON auth_tokens(user_id, revoked_at, expires_at);
+      `);
+    },
+  },
+];
 
 export function migrateSchema(db: DatabaseSync, currentVersion: number, targetVersion: number): void {
   if (currentVersion > targetVersion)

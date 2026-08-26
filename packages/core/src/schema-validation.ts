@@ -53,6 +53,13 @@ export function validateSchema(db: DatabaseSync): void {
     "updated_at",
   ])
     if (!byName.has(name)) throw new Error(`schema_mismatch: sessions.${name} is missing`);
+  const tokenColumns = db.prepare("PRAGMA table_info(auth_tokens)").all() as Array<{
+    name?: unknown;
+    notnull?: unknown;
+  }>;
+  const expiresAt = tokenColumns.find((column) => String(column.name ?? "") === "expires_at");
+  if (!expiresAt || Number(expiresAt.notnull) !== 0)
+    throw new Error("schema_mismatch: auth_tokens.expires_at must be nullable");
   const integrity = db.prepare("PRAGMA integrity_check").get() as { integrity_check?: unknown };
   if (String(integrity?.integrity_check ?? "") !== "ok")
     throw new Error("schema_mismatch: integrity_check failed");

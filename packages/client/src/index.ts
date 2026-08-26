@@ -68,7 +68,6 @@ export interface UmaRegistration {
   userId: string;
   token: string;
   tokenId: string;
-  expiresAt: number;
 }
 
 export interface UmaAuthMe {
@@ -80,7 +79,7 @@ export interface UmaAuthMe {
     id: string;
     label: string;
     scopes: string[];
-    expiresAt: number;
+    expiresAt?: number;
     revokedAt?: number;
     createdAt: number;
     lastUsedAt?: number;
@@ -172,13 +171,10 @@ export class UmaClient {
     return this.request("/sync/bootstrap", { method: "POST" });
   }
 
-  createToken(
-    label = "token",
-    expiresInDays = 90,
-  ): Promise<{ token: string; tokenId: string; expiresAt: number }> {
+  createToken(label = "token"): Promise<{ token: string; tokenId: string }> {
     return this.request("/auth/tokens", {
       method: "POST",
-      body: JSON.stringify({ label, expiresInDays }),
+      body: JSON.stringify({ label }),
     });
   }
 
@@ -203,7 +199,7 @@ export class UmaClient {
     clientId: string,
     redirectUri: string,
     codeVerifier: string,
-  ): Promise<{ token: string; id: string; expiresAt: number }> {
+  ): Promise<{ token: string; id: string }> {
     return this.request("/auth/token", {
       method: "POST",
       body: JSON.stringify({ code, clientId, redirectUri, codeVerifier }),

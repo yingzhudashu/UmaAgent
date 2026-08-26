@@ -69,7 +69,7 @@ import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 20;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   readonly stateDir: string;
@@ -247,21 +247,12 @@ export class UmaDatabase {
     tokenHash: string;
     label: string;
     scopes: string[];
-    expiresAt: number;
   }): void {
     this.db
       .prepare(
-        "INSERT INTO auth_tokens(id,user_id,token_hash,label,scopes_json,expires_at,created_at) VALUES(?,?,?,?,?,?,?)",
+        "INSERT INTO auth_tokens(id,user_id,token_hash,label,scopes_json,expires_at,created_at) VALUES(?,?,?,?,?,NULL,?)",
       )
-      .run(
-        input.id,
-        input.userId,
-        input.tokenHash,
-        input.label,
-        JSON.stringify(input.scopes),
-        input.expiresAt,
-        Date.now(),
-      );
+      .run(input.id, input.userId, input.tokenHash, input.label, JSON.stringify(input.scopes), Date.now());
   }
 
   findAuthToken(
@@ -278,8 +269,7 @@ export class UmaDatabase {
     if (
       !value ||
       text(value.status) !== "active" ||
-      (value.revoked_at !== null && value.revoked_at !== undefined) ||
-      integer(value.expires_at) <= Date.now()
+      (value.revoked_at !== null && value.revoked_at !== undefined)
     )
       return undefined;
     this.db.prepare("UPDATE auth_tokens SET last_used_at=? WHERE id=?").run(Date.now(), id);
@@ -295,7 +285,7 @@ export class UmaDatabase {
     id: string;
     label: string;
     scopes: string[];
-    expiresAt: number;
+    expiresAt?: number;
     revokedAt?: number;
     createdAt: number;
     lastUsedAt?: number;
@@ -309,7 +299,9 @@ export class UmaDatabase {
       id: text(value.id),
       label: text(value.label),
       scopes: parseJson<string[]>(value.scopes_json, ["user"]),
-      expiresAt: integer(value.expires_at),
+      ...(value.expires_at !== null && value.expires_at !== undefined
+        ? { expiresAt: integer(value.expires_at) }
+        : {}),
       ...(value.revoked_at ? { revokedAt: integer(value.revoked_at) } : {}),
       createdAt: integer(value.created_at),
       ...(value.last_used_at ? { lastUsedAt: integer(value.last_used_at) } : {}),

@@ -12,7 +12,7 @@ export type AuthPrincipal = {
   scopes: string[];
 };
 
-export type IssuedToken = { token: string; id: string; expiresAt: number };
+export type IssuedToken = { token: string; id: string };
 
 function parsePersonalToken(value: string): { id: string; secret: string } | undefined {
   const match = /^uma_pat_([0-9a-f-]{36})_([A-Za-z0-9_-]{32,})$/.exec(value);
@@ -99,19 +99,17 @@ export class AuthService {
     return { ...issued, userId: user.id };
   }
 
-  issueToken(userId: string, label = "token", expiresInDays = 90): IssuedToken {
+  issueToken(userId: string, label = "token"): IssuedToken {
     const id = randomUUID();
     const secret = randomBytes(32).toString("base64url");
-    const expiresAt = Date.now() + Math.min(365, Math.max(1, expiresInDays)) * 86_400_000;
     this.runtime.database.putAuthToken({
       id,
       userId,
       tokenHash: hash(secret),
       label: label.trim().slice(0, 80) || "token",
       scopes: ["user"],
-      expiresAt,
     });
-    return { token: `uma_pat_${id}_${secret}`, id, expiresAt };
+    return { token: `uma_pat_${id}_${secret}`, id };
   }
 
   private redirectAllowed(clientId: string, redirectUri: string): boolean {
@@ -159,7 +157,7 @@ export class AuthService {
       throw new Error("Invalid authorization code");
     const challenge = createHash("sha256").update(input.codeVerifier).digest("base64url");
     if (challenge !== record.codeChallenge) throw new Error("Invalid PKCE verifier");
-    return this.issueToken(record.userId, `oauth:${input.clientId}`, 30);
+    return this.issueToken(record.userId, `oauth:${input.clientId}`);
   }
 
   createWebSession(
