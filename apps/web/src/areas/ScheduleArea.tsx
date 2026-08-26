@@ -1,4 +1,5 @@
 import type { CreateScheduledTaskRequest, ScheduledTask, ScheduledTaskRun } from "@uma-agent/protocol";
+import { Clock3, History, Play, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { displayStatus, scheduleKindLabels, scheduleRunStatusLabels } from "../statusLabels.js";
 
@@ -40,13 +41,21 @@ export function ScheduleArea({
     setPrompt("");
   };
   return (
-    <div className="settings-panel settings-panel--nested">
+    <section className="settings-section settings-section--operation">
+      <div className="settings-section-heading">
+        <div>
+          <h3>调度</h3>
+          <p>按设定时间执行当前账号的自动化任务。</p>
+        </div>
+      </div>
       <details
-        className="settings-form-disclosure"
+        className="settings-disclosure"
         open={showForm}
         onToggle={(event) => setShowForm(event.currentTarget.open)}
       >
-        <summary>新建调度</summary>
+        <summary>
+          <Plus size={14} aria-hidden="true" /> 新建调度
+        </summary>
         <form className="settings-form settings-form--compact" onSubmit={submit}>
           <label>
             名称
@@ -87,11 +96,11 @@ export function ScheduleArea({
               <input required value={timezone} onChange={(event) => setTimezone(event.target.value)} />
             </label>
           )}
-          <div className="approval-actions">
+          <div className="settings-form-actions">
             <button type="button" onClick={() => setShowForm(false)}>
               取消
             </button>
-            <button className="primary" type="submit" disabled={disabled}>
+            <button className="primary settings-primary" type="submit" disabled={disabled}>
               创建
             </button>
           </div>
@@ -100,7 +109,7 @@ export function ScheduleArea({
       {schedules.length === 0 ? (
         <p className="settings-empty">暂无调度任务。</p>
       ) : (
-        <div className="settings-list settings-list--stacked">
+        <div className="settings-list settings-list--operation">
           {schedules.map((item) => {
             const runs = history[item.id];
             return (
@@ -121,24 +130,48 @@ export function ScheduleArea({
                   </div>
                 </dl>
                 <div className="settings-record__actions">
-                  <button type="button" disabled={disabled} onClick={() => run(item.id)}>
-                    立即运行
-                  </button>
-                  <button type="button" disabled={disabled} onClick={() => toggle(item.id, !item.enabled)}>
-                    {item.enabled ? "停用" : "启用"}
+                  <button
+                    type="button"
+                    className="settings-icon-button"
+                    title="立即运行"
+                    aria-label="立即运行"
+                    disabled={disabled}
+                    onClick={() => run(item.id)}
+                  >
+                    <Play size={14} aria-hidden="true" />
                   </button>
                   <button
                     type="button"
+                    className="settings-icon-button"
+                    title={item.enabled ? "停用调度" : "启用调度"}
+                    aria-label={item.enabled ? "停用调度" : "启用调度"}
+                    disabled={disabled}
+                    onClick={() => toggle(item.id, !item.enabled)}
+                  >
+                    <Clock3 size={14} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-icon-button"
+                    title="查看运行历史"
+                    aria-label="查看运行历史"
                     onClick={() =>
                       void loadRuns(item.id).then((runs) =>
                         setHistory((current) => ({ ...current, [item.id]: runs })),
                       )
                     }
                   >
-                    历史
+                    <History size={14} aria-hidden="true" />
                   </button>
-                  <button type="button" disabled={disabled} onClick={() => remove(item.id)}>
-                    删除
+                  <button
+                    type="button"
+                    className="settings-icon-button"
+                    title="删除调度"
+                    aria-label="删除调度"
+                    disabled={disabled}
+                    onClick={() => remove(item.id)}
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
                   </button>
                 </div>
                 {runs && (
@@ -154,7 +187,12 @@ export function ScheduleArea({
                             {new Date(entry.scheduledFor).toLocaleString()}
                           </small>
                           {["claimed", "running", "awaiting_resume"].includes(entry.status) && (
-                            <button type="button" disabled={disabled} onClick={() => cancelRun(entry.id)}>
+                            <button
+                              type="button"
+                              className="text-action"
+                              disabled={disabled}
+                              onClick={() => cancelRun(entry.id)}
+                            >
                               取消
                             </button>
                           )}
@@ -168,6 +206,6 @@ export function ScheduleArea({
           })}
         </div>
       )}
-    </div>
+    </section>
   );
 }

@@ -1343,6 +1343,7 @@
     padding: 13px;
   }
 }
+
 .uma-embed .sidebar {
   background: var(--surface-0);
   border-color: var(--line);
@@ -2585,5 +2586,190 @@
   }
   .uma-embed .settings-primary {
     flex: 1 1 100%;
+  }
+}
+
+/* Final operation-area cascade: shared settings hierarchy, without nested panels. */
+.uma-embed .settings-section.settings-section--operation {
+  gap: 10px;
+  min-width: 0;
+  padding: 16px 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+.uma-embed .settings-section.settings-section--operation:first-child {
+  padding-top: 0;
+}
+.uma-embed .settings-section.settings-section--operation:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.uma-embed .settings-list.settings-list--operation {
+  display: grid;
+  overflow: visible;
+  min-width: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+.uma-embed .settings-list.settings-list--operation .settings-record {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.uma-embed .settings-list.settings-list--operation .settings-connection-row {
+  display: flex;
+}
+.uma-embed .settings-list.settings-list--operation .settings-record__heading strong,
+.uma-embed .settings-list.settings-list--operation .settings-record__heading small,
+.uma-embed .settings-connection-row > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.uma-embed .settings-list.settings-list--operation .settings-record__heading {
+  gap: 10px;
+}
+.uma-embed .settings-list.settings-list--operation .settings-record__heading small {
+  flex: 0 1 auto;
+}
+.uma-embed .settings-icon-button {
+  display: inline-grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-1);
+  color: var(--ink-muted);
+}
+.uma-embed .settings-icon-button:hover:not(:disabled),
+.uma-embed .settings-inline-command:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.uma-embed .settings-icon-button:focus-visible,
+.uma-embed .settings-inline-command:focus-visible,
+.uma-embed .settings-disclosure > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.uma-embed .settings-inline-actions,
+.uma-embed .settings-record__actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.uma-embed .settings-inline-command {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-1);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.uma-embed .settings-disclosure {
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+.uma-embed .settings-disclosure > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+.uma-embed .settings-disclosure > summary::-webkit-details-marker,
+.uma-embed .settings-disclosure > summary::marker {
+  display: none;
+  content: "";
+}
+.uma-embed .settings-disclosure[open] > summary {
+  margin-bottom: 10px;
+}
+.uma-embed .settings-disclosure .settings-form {
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.uma-embed .settings-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 0 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink-muted);
+}
+.uma-embed .settings-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink-strong);
+}
+.uma-embed .settings-search button {
+  align-self: stretch;
+  min-width: 50px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0 6px 6px 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+.uma-embed .tool-details > pre {
+  min-width: 0;
+  max-inline-size: 100%;
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-x: clip;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.uma-embed .markdown pre {
+  max-inline-size: 100%;
+  overflow-x: auto;
+}
+@media (max-width: 700px) {
+  .uma-embed .settings-section.settings-section--operation {
+    padding: 14px 0 16px;
+  }
+  .uma-embed .settings-record__heading {
+    align-items: flex-start;
+  }
+  .uma-embed .settings-record__heading small {
+    margin-left: 0;
+    text-align: left;
+  }
+  .uma-embed .settings-record__meta {
+    grid-template-columns: 1fr;
+  }
+  .uma-embed .settings-search button {
+    min-width: 46px;
   }
 }

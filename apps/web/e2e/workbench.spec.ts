@@ -57,6 +57,27 @@ test("two devices converge on one session and offline mode is read-only", async 
   await secondContext.setOffline(true);
   await expect(second.getByPlaceholder("向 UmaAgent 发送消息")).toBeDisabled();
   await expect(second.getByText("Faux Core received: multi device hello")).toBeVisible();
+
+  await first.setViewportSize({ width: 390, height: 844 });
+  await first.getByRole("button", { name: "会话设置" }).click();
+  const settings = first.getByRole("dialog", { name: "会话设置" });
+  await expect(settings.getByRole("heading", { name: "后台任务" })).toBeVisible();
+  await expect(settings.getByRole("heading", { name: "记忆" })).toBeVisible();
+  await expect(settings.getByRole("heading", { name: "调度" })).toBeVisible();
+  await expect(settings.getByRole("heading", { name: "知识库" })).toBeVisible();
+  await expect(settings.locator(".settings-section--operation")).toHaveCount(4);
+  await expect(settings.locator(".settings-section--operation .settings-panel--nested")).toHaveCount(0);
+  const widths = await settings
+    .locator(".settings-section--operation")
+    .evaluateAll((sections) =>
+      sections.map((section) => ({ scrollWidth: section.scrollWidth, clientWidth: section.clientWidth })),
+    );
+  expect(widths.every(({ scrollWidth, clientWidth }) => scrollWidth <= clientWidth)).toBe(true);
+  first.once("dialog", (dialog) => dialog.accept());
+  await settings.getByRole("button", { name: "退出登录" }).click();
+  await expect(first.getByLabel("访问令牌")).toBeVisible();
+  await expect(first.getByPlaceholder("向 UmaAgent 发送消息")).toHaveCount(0);
+
   await firstContext.close();
   await secondContext.close();
 });
@@ -188,4 +209,22 @@ test("keeps tool output collapsed until requested", async ({ page }) => {
   await expect(tool).not.toHaveAttribute("open", "");
   await tool.locator("summary").click();
   await expect(tool).toHaveAttribute("open", "");
+  const toolOutput = tool.locator("pre");
+  await toolOutput.evaluate((element) => {
+    element.textContent = `web_search result https://example.com/${"unbroken-result-".repeat(90)}`;
+  });
+  await expect
+    .poll(() => toolOutput.evaluate((element) => element.scrollWidth <= element.clientWidth))
+    .toBe(true);
+  const markdownCodeOverflow = await page.evaluate(() => {
+    const container = document.createElement("div");
+    container.className = "markdown";
+    const code = document.createElement("pre");
+    container.append(code);
+    document.querySelector(".uma-embed")?.append(container);
+    const overflowX = getComputedStyle(code).overflowX;
+    container.remove();
+    return overflowX;
+  });
+  expect(markdownCodeOverflow).toBe("auto");
 });

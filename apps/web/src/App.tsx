@@ -19,6 +19,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import { BackgroundTaskArea } from "./areas/BackgroundTaskArea.js";
 import { DiagnosticsArea } from "./areas/DiagnosticsArea.js";
 import { EvaluationArea } from "./areas/EvaluationArea.js";
+import { MemoryArea } from "./areas/MemoryArea.js";
 import { OptimizationArea } from "./areas/OptimizationArea.js";
 import { ResourceArea } from "./areas/ResourceArea.js";
 import { ApprovalBar, RunPanel } from "./areas/RunArea.js";
@@ -87,6 +88,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
 
   const sessions = useQuery({
     queryKey: ["sessions"],
+    enabled: loginRequired !== true,
     queryFn: async () => {
       try {
         const bootstrap = await client.syncBootstrap();
@@ -226,6 +228,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     };
   }, []);
   useEffect(() => {
+    if (loginRequired === true) return;
     const authError = Number((sessions.error as { status?: unknown } | null)?.status) === 401;
     if (authError) {
       setLoginRequired(true);
@@ -238,7 +241,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       if (selected && !available.some((session) => session.id === selected)) setSelected(undefined);
       if (!selected && available[0]) setSelected(available[0].id);
     }
-  }, [sessions.error, sessions.data, sessions.isSuccess, selected, client]);
+  }, [sessions.error, sessions.data, sessions.isSuccess, selected, client, loginRequired]);
   useEffect(() => {
     if (authenticated) client.connectEvents();
   }, [authenticated, client]);
@@ -483,6 +486,25 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     void client
       .sendMessage(selected, item.content, { mode, ...(ids.length ? { attachmentIds: ids } : {}) })
       .then(() => queryClient.invalidateQueries({ queryKey: ["snapshot", selected] }));
+  };
+  const signOut = () => {
+    const logout = client.logout();
+    setLoginRequired(true);
+    client.close();
+    setInteractionMode("agent");
+    setSelected(undefined);
+    setPrompt("");
+    setApprovals([]);
+    setAttachmentIds([]);
+    setHistorical([]);
+    setHistoryHasMore(undefined);
+    setInspectorSection(undefined);
+    setSidebarOpen(false);
+    setUserRole("user");
+    void queryClient.cancelQueries();
+    queryClient.clear();
+    void clearCacheNamespace();
+    void logout.catch(() => undefined);
   };
   if (loginRequired === undefined)
     return (
@@ -908,112 +930,73 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 />
               )}
               {inspectorSection === "settings" && (
-                <section className="inspector-group settings-section">
-                  <h3>后台任务</h3>
-                  <BackgroundTaskArea
-                    tasks={tasks.data ?? []}
-                    disabled={offline}
-                    create={(prompt) => {
-                      if (!selected) return;
-                      void client.createTask(prompt, selected).then(() => tasks.refetch());
-                    }}
-                    cancel={(id) => void client.cancelTask(id).then(() => tasks.refetch())}
-                    remove={(id) => void client.deleteTask(id).then(() => tasks.refetch())}
-                    openRun={(task) => {
-                      setSelected(task.sessionId);
-                      setInspectorSection("run");
-                    }}
-                  />
-                </section>
+                <BackgroundTaskArea
+                  tasks={tasks.data ?? []}
+                  disabled={offline}
+                  create={(prompt) => {
+                    if (!selected) return;
+                    void client.createTask(prompt, selected).then(() => tasks.refetch());
+                  }}
+                  cancel={(id) => void client.cancelTask(id).then(() => tasks.refetch())}
+                  remove={(id) => void client.deleteTask(id).then(() => tasks.refetch())}
+                  openRun={(task) => {
+                    setSelected(task.sessionId);
+                    setInspectorSection("run");
+                  }}
+                />
               )}
               {inspectorSection === "settings" && (
-                <section className="inspector-group">
-                  <h3>记忆</h3>
-                  <div className="operation-list">
-                    {memories.data?.map((fact) => (
-                      <div key={fact.id}>
-                        <p>
-                          {fact.key} = {fact.value}
-                        </p>
-                        <small className="operation-meta">{fact.confidence.toFixed(2)}</small>
-                        <div className="approval-actions">
-                          <button
-                            type="button"
-                            disabled={offline}
-                            onClick={() =>
-                              void client.reviewMemoryFact(fact.id, "rejected").then(() => memories.refetch())
-                            }
-                          >
-                            拒绝
-                          </button>
-                          <button
-                            type="button"
-                            className="primary"
-                            disabled={offline}
-                            onClick={() =>
-                              void client.reviewMemoryFact(fact.id, "active").then(() => memories.refetch())
-                            }
-                          >
-                            保留
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
+                <MemoryArea
+                  facts={memories.data ?? []}
+                  disabled={offline}
+                  reject={(id) => void client.reviewMemoryFact(id, "rejected").then(() => memories.refetch())}
+                  accept={(id) => void client.reviewMemoryFact(id, "active").then(() => memories.refetch())}
+                />
               )}
               {inspectorSection === "settings" && (
-                <section className="inspector-group settings-section">
-                  <h3>调度</h3>
-                  <ScheduleArea
-                    schedules={schedules.data ?? []}
-                    disabled={offline}
-                    create={(input) => void client.createSchedule(input).then(() => schedules.refetch())}
-                    toggle={(id, enabled) =>
-                      void client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
-                    }
-                    run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
-                    remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
-                    loadRuns={(id) => client.listScheduleRuns(id)}
-                    cancelRun={(id) => void client.cancelScheduleRun(id).then(() => schedules.refetch())}
-                  />
-                </section>
+                <ScheduleArea
+                  schedules={schedules.data ?? []}
+                  disabled={offline}
+                  create={(input) => void client.createSchedule(input).then(() => schedules.refetch())}
+                  toggle={(id, enabled) =>
+                    void client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
+                  }
+                  run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
+                  remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
+                  loadRuns={(id) => client.listScheduleRuns(id)}
+                  cancelRun={(id) => void client.cancelScheduleRun(id).then(() => schedules.refetch())}
+                />
               )}
               {inspectorSection === "settings" && (
-                <section className="inspector-group settings-section">
-                  <h3>资源</h3>
-                  <ResourceArea
-                    admin={userRole === "admin"}
-                    packages={skills.data?.packages ?? []}
-                    mcp={mcp.data ?? []}
-                    knowledge={knowledge.data ?? []}
-                    disabled={offline}
-                    refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
-                    installSkill={(reference) =>
-                      void client.installSkill({ source: "local", reference }).then(() => skills.refetch())
-                    }
-                    setSkillStatus={(id, action) =>
-                      void client.setSkillStatus(id, action).then(() => skills.refetch())
-                    }
-                    addKnowledgePath={(name, path) =>
-                      void client.indexKnowledge(name, path).then(() => knowledge.refetch())
-                    }
-                    uploadKnowledge={(file) =>
-                      void client
-                        .upload(file, file.name, selected)
-                        .then((attachment) => {
-                          if (!selected) throw new Error("Select a session before uploading knowledge");
-                          return client.indexKnowledgeAttachment(file.name, attachment.id, selected);
-                        })
-                        .then(() => knowledge.refetch())
-                    }
-                    deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
-                    reindexKnowledge={(id) =>
-                      void client.reindexKnowledge(id).then(() => knowledge.refetch())
-                    }
-                    searchKnowledge={(query, sourceId) => client.searchKnowledge(query, sourceId)}
-                  />
-                </section>
+                <ResourceArea
+                  admin={userRole === "admin"}
+                  packages={skills.data?.packages ?? []}
+                  mcp={mcp.data ?? []}
+                  knowledge={knowledge.data ?? []}
+                  disabled={offline}
+                  refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
+                  installSkill={(reference) =>
+                    void client.installSkill({ source: "local", reference }).then(() => skills.refetch())
+                  }
+                  setSkillStatus={(id, action) =>
+                    void client.setSkillStatus(id, action).then(() => skills.refetch())
+                  }
+                  addKnowledgePath={(name, path) =>
+                    void client.indexKnowledge(name, path).then(() => knowledge.refetch())
+                  }
+                  uploadKnowledge={(file) =>
+                    void client
+                      .upload(file, file.name, selected)
+                      .then((attachment) => {
+                        if (!selected) throw new Error("Select a session before uploading knowledge");
+                        return client.indexKnowledgeAttachment(file.name, attachment.id, selected);
+                      })
+                      .then(() => knowledge.refetch())
+                  }
+                  deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
+                  reindexKnowledge={(id) => void client.reindexKnowledge(id).then(() => knowledge.refetch())}
+                  searchKnowledge={(query, sourceId) => client.searchKnowledge(query, sourceId)}
+                />
               )}
               {inspectorSection === "settings" && userRole === "admin" && (
                 <section className="inspector-group">
@@ -1057,15 +1040,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                       await client.updateAgentProfile(content);
                       await profile.refetch();
                     }}
-                    logout={() => {
-                      void client.logout().finally(() => {
-                        setInteractionMode("agent");
-                        setSelected(undefined);
-                        setLoginRequired(true);
-                        void clearCacheNamespace();
-                        queryClient.clear();
-                      });
-                    }}
+                    logout={signOut}
                     reloadConfig={() =>
                       void client.reloadConfig().then(() => queryClient.invalidateQueries())
                     }
