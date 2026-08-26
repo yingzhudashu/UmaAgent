@@ -195,6 +195,7 @@ describe("RunPreflight.complete", () => {
       preflight.complete("run", "fast", "system", "prompt", new AbortController().signal),
     ).resolves.toMatchObject({ stopReason: "stop" });
     expect(completeSimple).toHaveBeenCalledTimes(2);
+    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ maxRetries: 2, maxRetryDelayMs: 30_000 });
     expect(database.startModelCall).toHaveBeenCalledTimes(2);
     expect(database.finishModelCall).toHaveBeenCalledTimes(2);
   });

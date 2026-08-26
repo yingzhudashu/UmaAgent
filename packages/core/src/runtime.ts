@@ -47,6 +47,7 @@ import { EmbeddingService } from "./embedding.js";
 import { EventHub, type EventListener, type ResourceListener } from "./events.js";
 import { KnowledgeService } from "./knowledge.js";
 import { McpManager } from "./mcp.js";
+import { transientModelOptions, transientModelRetry } from "./model-retry.js";
 import { ModelRegistry } from "./models.js";
 import { PermissionPolicy } from "./permissions.js";
 import { RunApprovals } from "./run-approvals.js";
@@ -78,7 +79,6 @@ import { createBuiltinTools } from "./tools.js";
 import { type TraceContext, TraceService } from "./trace.js";
 import type { PreflightDecision, RuntimeHealth, UmaConfig } from "./types.js";
 import { WorkspacePolicy } from "./workspace.js";
-
 export class UmaRuntime {
   readonly database: UmaDatabase;
   readonly knowledge: KnowledgeService;
@@ -116,7 +116,6 @@ export class UmaRuntime {
   private started = false;
   private stopping = false;
   private stopPromise: Promise<void> | undefined;
-
   config: UmaConfig;
 
   constructor(config: UmaConfig) {
@@ -1807,7 +1806,7 @@ export class UmaRuntime {
             systemPrompt,
             messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
           },
-          { signal, temperature: 0, headers: { "user-agent": "UmaAgent/1.0", accept: "application/json" } },
+          transientModelOptions(signal),
         );
         this.database.finishModelCall(callId, {
           status:
@@ -2202,6 +2201,7 @@ export class UmaRuntime {
         this.models.models.streamSimple(model, modelContext, {
           ...options,
           headers: { ...(options?.headers ?? {}), "user-agent": "UmaAgent/1.0", accept: "application/json" },
+          ...transientModelRetry,
         }),
       toolExecution: "parallel",
       shouldStopAfterTurn: () => {

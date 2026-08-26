@@ -2,6 +2,7 @@ import { type AssistantMessage, contentText } from "@earendil-works/pi-ai";
 import type { SendMessageRequest, Session } from "@uma-agent/protocol";
 import Value from "typebox/value";
 import type { UmaDatabase } from "./database.js";
+import { transientModelOptions } from "./model-retry.js";
 import type { ModelRegistry } from "./models.js";
 import {
   decisionFrom,
@@ -42,7 +43,7 @@ export class RunPreflight {
         const response = await this.models.models.completeSimple(
           model,
           { systemPrompt, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
-          { signal, temperature: 0, headers: { "user-agent": "UmaAgent/1.0", accept: "application/json" } },
+          transientModelOptions(signal),
         );
         const retryable =
           allowTransientRetries &&
