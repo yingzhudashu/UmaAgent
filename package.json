@@ -14,6 +14,7 @@
     "build": "npm run build --workspace=@uma-agent/protocol && npm run build --workspace=@uma-agent/channel-adapter && npm run build --workspace=@uma-agent/client && npm run build --workspace=@uma-agent/telemetry && npm run build --workspace=@uma-agent/core && npm run build --workspace=@uma-agent/server && npm run build --workspace=@uma-agent/eval-runner && npm run build --workspace=@uma-agent/cli && npm run build --workspace=@uma-agent/web && npm run build --workspace=@uma-agent/feishu-adapter && npm run build --workspace=@uma-agent/xianyu-adapter && npm run build --workspace=@uma-agent/browser-worker && npm run build --workspace=@uma-agent/feishu-mcp && npm run build --workspace=@uma-agent/skill-worker",
     "check": "npm run check:architecture && biome check . && tsc -b",
     "check:architecture": "node scripts/check-architecture.mjs",
+    "audit:source": "node scripts/audit-source.mjs",
     "dev": "npm run dev --workspace=@uma-agent/server",
     "dev:faux": "npm run build && node scripts/faux-server.mjs",
     "test": "vitest run",
