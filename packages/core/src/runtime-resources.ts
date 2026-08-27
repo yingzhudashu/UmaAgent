@@ -19,7 +19,6 @@ import type {
   SkillInstallRequest,
   SkillPackage,
   SkillSummary,
-  TraceQuery,
   TranscriptItem,
   UpdateScheduledTaskRequest,
 } from "@uma-agent/protocol";
@@ -180,10 +179,6 @@ export class RuntimeResourceService {
 
   audit(runId: string) {
     return this.deps.database.listAudit(runId);
-  }
-
-  listTrace(query: TraceQuery) {
-    return this.deps.database.listTrace(query);
   }
 
   listSkills(): SkillSummary[] {

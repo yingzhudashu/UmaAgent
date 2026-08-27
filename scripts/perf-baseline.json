@@ -1,11 +1,4 @@
 {
-  "dataset": {
-    "sessions": 1,
-    "messages": 20,
-    "events": 0,
-    "knowledgeChunks": 0,
-    "clients": 5
-  },
   "budgets": {
     "apiP95Ms": 150,
     "eventP95Ms": 500,

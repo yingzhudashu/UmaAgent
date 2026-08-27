@@ -1,5 +1,5 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
     callTool: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   }>,
+  httpOptions: [] as Array<{ fetch?: (url: string | URL, init?: RequestInit) => Promise<Response> }>,
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
@@ -35,7 +36,12 @@ vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
 }));
 vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: class {
-    constructor(readonly url: URL) {}
+    constructor(
+      readonly url: URL,
+      readonly options: { fetch?: (url: string | URL, init?: RequestInit) => Promise<Response> },
+    ) {
+      state.httpOptions.push(options);
+    }
   },
 }));
 
@@ -48,7 +54,9 @@ async function execute(tool: AgentTool, signal?: AbortSignal) {
 describe("McpManager", () => {
   beforeEach(() => {
     state.instances.length = 0;
+    state.httpOptions.length = 0;
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it("connects stdio and HTTP servers, namespaces tools, invokes them and closes clients", async () => {
     const manager = new McpManager();
@@ -116,5 +124,29 @@ describe("McpManager", () => {
       { name: "broken", connected: false, toolCount: 0, error: "connection failed" },
       { name: "working", connected: true, toolCount: 2 },
     ]);
+  });
+
+  it("propagates the active W3C trace only within its asynchronous MCP operation", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+    const manager = new McpManager();
+    await manager.connect([{ name: "remote", transport: "http", url: "https://mcp.example" }], 100);
+    const tracedFetch = state.httpOptions[0]?.fetch;
+    expect(tracedFetch).toBeTypeOf("function");
+    await manager.withTrace(
+      {
+        traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+        spanId: "00f067aa0ba902b7",
+        traceFlags: 1,
+      },
+      () =>
+        tracedFetch?.("https://mcp.example", {
+          headers: { accept: "application/json" },
+        }) as Promise<Response>,
+    );
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("traceparent")).toBe(
+      "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+    );
+    await tracedFetch?.("https://mcp.example");
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).has("traceparent")).toBe(false);
   });
 });

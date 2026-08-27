@@ -1,7 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { parseTraceparent, TelemetryStore, TraceService, type TraceSpanContext } from "@uma-agent/telemetry";
 import type { Request, Response } from "express";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
 import { z } from "zod";
@@ -11,15 +13,39 @@ type Handle = { context: BrowserContext; page: Page; expiresAt: number };
 const handles = new Map<string, Handle>();
 let browser: Browser | undefined;
 const proxy = await createValidatingProxy();
+const telemetryDir = process.env.UMA_TELEMETRY_DIR?.trim();
+if (!telemetryDir) throw new Error("UMA_TELEMETRY_DIR is required");
+const telemetryStore = new TelemetryStore(telemetryDir, "browser-worker");
+const trace = new TraceService(telemetryStore, "browser-worker");
+const activeTrace = new AsyncLocalStorage<TraceSpanContext>();
+
+async function traced<T>(name: string, kind: string, operation: () => Promise<T>): Promise<T> {
+  const parent = activeTrace.getStore();
+  if (!parent) return operation();
+  const span = parent.child(name, kind);
+  try {
+    const result = await operation();
+    span.finish({ status: "ok" });
+    return result;
+  } catch (error) {
+    span.finish({
+      status: "error",
+      error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+    });
+    throw error;
+  }
+}
 
 async function browserInstance(): Promise<Browser> {
   if (!browser) {
     try {
-      browser = await chromium.launch({
-        channel: "chromium",
-        headless: true,
-        args: [`--proxy-server=${proxy.url}`],
-      });
+      browser = await traced("browser.launch", "browser", () =>
+        chromium.launch({
+          channel: "chromium",
+          headless: true,
+          args: [`--proxy-server=${proxy.url}`],
+        }),
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("browser.execution.failed", { phase: "launch", error: message.slice(0, 300) });
@@ -47,20 +73,22 @@ function registerTools(mcp: McpServer): void {
     "open",
     { description: "Open a public HTTP(S) page.", inputSchema: { url: z.url() } },
     async ({ url }) => {
-      await assertPublicUrl(url);
+      await traced("browser.dns", "dns", () => assertPublicUrl(url));
       for (const [id, handle] of handles) if (handle.expiresAt <= Date.now()) await closeHandle(id);
       if (handles.size >= 4) throw new Error("Browser context limit reached");
       const context = await (await browserInstance()).newContext();
       await context.route(/^https?:\/\//, async (route) => {
         try {
-          await assertPublicUrl(route.request().url());
+          await traced("browser.redirect.dns", "dns", () => assertPublicUrl(route.request().url()));
           await route.continue();
         } catch {
           await route.abort("blockedbyclient");
         }
       });
       const page = await context.newPage();
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await traced("browser.navigation", "browser", () =>
+        page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }),
+      );
       const handle = randomUUID();
       handles.set(handle, { context, page, expiresAt: Date.now() + 15 * 60_000 });
       return {
@@ -81,9 +109,11 @@ function registerTools(mcp: McpServer): void {
     },
     async ({ handle, selector }) => {
       const page = getHandle(handle).page;
-      const text = selector
-        ? await page.locator(selector).innerText({ timeout: 10_000 })
-        : await page.locator("body").innerText({ timeout: 10_000 });
+      const text = await traced("browser.extract", "browser", () =>
+        selector
+          ? page.locator(selector).innerText({ timeout: 10_000 })
+          : page.locator("body").innerText({ timeout: 10_000 }),
+      );
       return { content: [{ type: "text", text: text.slice(0, 100_000) }] };
     },
   );
@@ -91,7 +121,9 @@ function registerTools(mcp: McpServer): void {
     "click",
     { description: "Click an element.", inputSchema: { handle: z.string(), selector: z.string() } },
     async ({ handle, selector }) => {
-      await getHandle(handle).page.locator(selector).click({ timeout: 10_000 });
+      await traced("browser.click", "browser", () =>
+        getHandle(handle).page.locator(selector).click({ timeout: 10_000 }),
+      );
       return { content: [{ type: "text", text: "Clicked" }] };
     },
   );
@@ -102,7 +134,9 @@ function registerTools(mcp: McpServer): void {
       inputSchema: { handle: z.string(), selector: z.string(), value: z.string() },
     },
     async ({ handle, selector, value }) => {
-      await getHandle(handle).page.locator(selector).fill(value, { timeout: 10_000 });
+      await traced("browser.fill", "browser", () =>
+        getHandle(handle).page.locator(selector).fill(value, { timeout: 10_000 }),
+      );
       return { content: [{ type: "text", text: "Filled" }] };
     },
   );
@@ -110,7 +144,9 @@ function registerTools(mcp: McpServer): void {
     "screenshot",
     { description: "Capture a PNG screenshot.", inputSchema: { handle: z.string() } },
     async ({ handle }) => {
-      const data = await getHandle(handle).page.screenshot({ type: "png", fullPage: false });
+      const data = await traced("browser.screenshot", "browser", () =>
+        getHandle(handle).page.screenshot({ type: "png", fullPage: false }),
+      );
       return { content: [{ type: "image", data: data.toString("base64"), mimeType: "image/png" }] };
     },
   );
@@ -118,7 +154,7 @@ function registerTools(mcp: McpServer): void {
     "close",
     { description: "Close a browser handle.", inputSchema: { handle: z.string() } },
     async ({ handle }) => {
-      await closeHandle(handle);
+      await traced("browser.close", "browser", () => closeHandle(handle));
       return { content: [{ type: "text", text: "Closed" }] };
     },
   );
@@ -151,6 +187,35 @@ const authenticated = (authorization: string | undefined): boolean => {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 };
 const app = createMcpExpressApp({ host });
+app.use((request: Request, response: Response, next) => {
+  const path = request.path;
+  const parent = parseTraceparent(request.header("traceparent"));
+  const span = trace.startRoot(
+    undefined,
+    undefined,
+    `${request.method} ${path}`,
+    {
+      method: request.method,
+      path,
+    },
+    parent,
+    "server.http",
+  );
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    const failed = response.statusCode >= 500;
+    span.finish(
+      failed
+        ? { status: "error", error: { name: `HTTP${response.statusCode}`, message: "HTTP request failed" } }
+        : { status: "ok" },
+    );
+  };
+  response.once("finish", finish);
+  response.once("close", finish);
+  activeTrace.run(span, next);
+});
 app.get("/health", (_request: Request, response: Response) => {
   response.json({ status: "ok", service: "browser-worker" });
 });
@@ -191,7 +256,8 @@ const stop = async () => {
   await proxy.close();
   await Promise.allSettled([...sessions.values()].map(({ transport }) => transport.close()));
   sessions.clear();
-  server.close();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await telemetryStore.close();
 };
 process.once("SIGINT", () => void stop());
 process.once("SIGTERM", () => void stop());

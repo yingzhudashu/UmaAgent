@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.3.0`，协议版本为 `13`，SQLite schema 为 `18`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.3.0`，协议版本为 `14`，SQLite schema 为 `20`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -9,7 +9,7 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 - Pi `0.84.2` 的多模型流式 Agent loop，支持 OpenAI Responses 与兼容 Chat Completions 端点
 - 自适应预检：直接执行、澄清或显示计划；计划任务结束后执行一次结果验证
 - SQLite WAL 会话、运行、transcript、工具、审批、附件、记忆和 FTS5 知识库
-- 服务器工作区边界、符号链接逃逸检查、HTTP SSRF 基础防护、shell/MCP 审批
+- 服务器工作区边界、符号链接逃逸检查、HTTP SSRF 防护，以及 shell/不可控外部副作用审批
 - `SKILL.md` 发现以及 MCP stdio/Streamable HTTP 工具
 - 共享 `@uma-agent/client`、行式 CLI、响应式 Web 工作台
 - Snapshot + 永久事件游标同步、运行检查点和显式副作用恢复决策
@@ -195,7 +195,7 @@ Core 仅向上下文注入 Profile、active 事实和相关历史 rollup。事�
 
 ## 浏览器 Worker 与评测
 
-Browser Worker 是独立 MCP Streamable HTTP 服务，原生启动默认只监听 `127.0.0.1:3230`；Compose 中监听容器网络但不发布宿主机端口。它不挂载 Core state 或 workspace。所有页面请求和重定向都执行公网地址校验；Core 端仍把其工具视为 MCP 副作用并要求审批。原生启动后在 `mcpServers` 中配置 `http://127.0.0.1:3230/mcp`：
+Browser Worker 是独立 MCP Streamable HTTP 服务，原生启动默认只监听 `127.0.0.1:3230`；Compose 中监听容器网络但不发布宿主机端口。它不挂载 Core 业务 state 或 workspace，只共享独立 telemetry 目录。所有页面请求和重定向都执行公网地址校验；普通浏览器 MCP 操作自动执行，只有被权限策略判定为不可控高风险的动作才要求审批。原生启动后在 `mcpServers` 中配置 `http://127.0.0.1:3230/mcp`：
 
 ```powershell
 npm run build --workspace=@uma-agent/browser-worker
@@ -271,7 +271,7 @@ npx playwright install chromium
 npm run test:web:e2e
 npm run test:eval:faux
 npm run test:soak:faux # 默认 4 小时；可用 UMA_SOAK_HOURS=8 延长
-npm run test:real:smoke # 需 UMA_REAL_API=1；默认读取 MiniAgent 配置中的对应模型密钥
+npm run test:real:smoke # 需 UMA_REAL_API=1，并显式提供 UMA_REAL_* 配置
 npm run test:real:eval
 npm run test:real:perf
 npm run test:real:soak

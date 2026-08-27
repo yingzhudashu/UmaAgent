@@ -941,7 +941,7 @@
   color: var(--text-primary, #26302d);
   font-size: 12px;
 }
-.response-plan-box__heading small {
+.response-plan-box .response-plan-box__heading small {
   color: var(--text-muted, #7a8392);
   font-size: 11px;
 }
@@ -950,7 +950,7 @@
   gap: 6px;
   margin-top: 8px;
 }
-.response-steps > summary {
+.message-bubble .response-steps > summary {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -1035,7 +1035,7 @@
   padding: 0;
   overflow: hidden;
 }
-.response-plan-step > summary {
+.response-plan-box .response-plan-step > summary {
   display: grid;
   grid-template-columns: auto auto auto minmax(0, 1fr) auto;
   gap: 7px;
@@ -1084,7 +1084,7 @@
   font-weight: 500;
   overflow-wrap: anywhere;
 }
-.tool-details > summary {
+.response-timeline .tool-details > summary {
   min-width: 0;
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto auto;

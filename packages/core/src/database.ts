@@ -40,12 +40,9 @@ import type {
   SessionHistoryPage,
   SessionSnapshot,
   SkillPackage,
-  TraceQuery,
-  TraceQueryPage,
-  TraceSpan,
   TranscriptItem,
 } from "@uma-agent/protocol";
-import { type AgentEventEnvelope, type AgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
+import { type AgentEventEnvelope, type DurableAgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
 import { AuditEvaluationRepository } from "./audit-evaluation-repository.js";
 import {
   ftsQuery,
@@ -64,7 +61,6 @@ import {
   toScheduledTaskRun,
 } from "./database-utils.js";
 import { MessageRepository } from "./message-repository.js";
-import { migrateSchemaOrClose } from "./schema-migrations.js";
 import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
@@ -88,7 +84,12 @@ export class UmaDatabase {
     const version = integer(row(this.db.prepare("PRAGMA user_version"))?.user_version);
     if (version === 0) {
       this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
-    } else if (version !== SCHEMA_VERSION) migrateSchemaOrClose(this.db, version, SCHEMA_VERSION);
+    } else if (version !== SCHEMA_VERSION) {
+      // schema 20 是唯一支持的持久化格式。启动阶段拒绝旧/未来版本，
+      // 避免未经发布验证的隐式改写影响会话、附件或认证令牌。
+      this.db.close();
+      throw new Error(`Unsupported database schema ${version}; expected ${SCHEMA_VERSION}.`);
+    }
     validateSchema(this.db);
     this.auditEvaluations = new AuditEvaluationRepository(this.db, (operation) =>
       this.withTransaction(operation),
@@ -1112,7 +1113,7 @@ export class UmaDatabase {
   appendEvent(
     sessionId: string,
     runId: string | undefined,
-    type: AgentEventType,
+    type: DurableAgentEventType,
     payload: unknown,
   ): AgentEventEnvelope {
     return this.withTransaction(() => {
@@ -1168,7 +1169,7 @@ export class UmaDatabase {
         ...(value.run_id ? { runId: text(value.run_id) } : {}),
         sequence: integer(value.sequence),
         timestamp: integer(value.created_at),
-        type: text(value.type) as AgentEventType,
+        type: text(value.type) as DurableAgentEventType,
         payload: parseJson(value.payload_json, null),
       }),
     );
@@ -2464,29 +2465,6 @@ export class UmaDatabase {
     return this.auditEvaluations.diagnosticsReport(from, to);
   }
 
-  insertTraceSpan(span: TraceSpan): void {
-    this.db
-      .prepare(
-        "INSERT INTO trace_spans(trace_id,span_id,parent_span_id,run_id,session_id,name,kind,status,started_at,duration_ms,attributes_json,error_type,error_message,ended_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        span.traceId,
-        span.spanId,
-        span.parentSpanId ?? null,
-        span.runId,
-        span.sessionId,
-        span.name,
-        span.kind,
-        span.status,
-        span.startedAt,
-        span.durationMs,
-        JSON.stringify(span.attributes),
-        span.errorType ?? null,
-        span.errorMessage ?? null,
-        span.endedAt,
-      );
-  }
-
   insertResourceSnapshot(snapshot: ResourceSnapshot): void {
     this.db
       .prepare(
@@ -2532,81 +2510,6 @@ export class UmaDatabase {
       activeRuns: integer(value.active_runs),
       queuedRuns: integer(value.queued_runs),
     }));
-  }
-
-  listTrace(query: TraceQuery): TraceQueryPage {
-    if (
-      !query.runId &&
-      !query.traceId &&
-      query.from === undefined &&
-      query.to === undefined &&
-      !query.name &&
-      !query.status
-    )
-      throw new Error("Trace query requires a filter");
-    const safeOffset = Math.max(0, Math.floor(query.offset ?? 0));
-    const safeLimit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 500)));
-    const clauses: string[] = [];
-    const params: Array<string | number> = [];
-    if (query.runId) {
-      clauses.push("run_id=?");
-      params.push(query.runId);
-    }
-    if (query.traceId) {
-      clauses.push("trace_id=?");
-      params.push(query.traceId);
-    }
-    if (query.from !== undefined) {
-      clauses.push("started_at>=?");
-      params.push(query.from);
-    }
-    if (query.to !== undefined) {
-      clauses.push("started_at<=?");
-      params.push(query.to);
-    }
-    if (query.status) {
-      clauses.push("status=?");
-      params.push(query.status);
-    }
-    if (query.name) {
-      clauses.push("name LIKE ?");
-      params.push(`%${query.name}%`);
-    }
-    const values = rows(
-      this.db.prepare(
-        `SELECT * FROM trace_spans WHERE ${clauses.join(" AND ")} ORDER BY started_at,span_id LIMIT ? OFFSET ?`,
-      ),
-      ...params,
-      safeLimit + 1,
-      safeOffset,
-    );
-    const hasMore = values.length > safeLimit;
-    const spans = values.slice(0, safeLimit).map(
-      (value): TraceSpan => ({
-        traceId: text(value.trace_id),
-        spanId: text(value.span_id),
-        ...(value.parent_span_id ? { parentSpanId: text(value.parent_span_id) } : {}),
-        runId: text(value.run_id),
-        sessionId: text(value.session_id),
-        name: text(value.name),
-        kind: text(value.kind),
-        status: text(value.status) as TraceSpan["status"],
-        startedAt: integer(value.started_at),
-        durationMs: integer(value.duration_ms),
-        attributes: parseJson(value.attributes_json, {}),
-        ...(value.error_type ? { errorType: text(value.error_type) } : {}),
-        ...(value.error_message ? { errorMessage: text(value.error_message) } : {}),
-        endedAt: integer(value.ended_at),
-      }),
-    );
-    return {
-      traceId: spans[0]?.traceId ?? "",
-      ...(query.runId ? { runId: query.runId } : {}),
-      ...(spans[0]?.sessionId ? { sessionId: spans[0].sessionId } : {}),
-      spans,
-      hasMore,
-      nextOffset: safeOffset + spans.length,
-    };
   }
 
   recoverScheduledTaskRuns(): ScheduledTaskRun[] {

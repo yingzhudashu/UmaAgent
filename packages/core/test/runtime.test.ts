@@ -166,6 +166,37 @@ describe("UmaRuntime preflight", () => {
     expect(snapshot.transcript.at(-1)?.content).toBe("finished");
   });
 
+  it("continues the HTTP trace and records queue wait before execution", async () => {
+    const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("finished")]);
+    const session = await runtime.createSession();
+    const terminal = waitForTerminal(runtime, session.id);
+    const run = runtime.sendMessage(
+      session.id,
+      { messageId: "traced-message", text: "do it", mode: "agent" },
+      {
+        traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+        spanId: "00f067aa0ba902b7",
+        traceFlags: 1,
+      },
+    );
+    expect((await terminal).status).toBe("completed");
+    expect(runtime.listTrace({ runId: run.id }).spans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+          parentSpanId: "00f067aa0ba902b7",
+          name: "run",
+        }),
+        expect.objectContaining({
+          traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+          name: "queue.wait",
+          kind: "queue",
+          status: "ok",
+        }),
+      ]),
+    );
+  });
+
   it("persists and discloses non-sensitive execution assumptions", async () => {
     const runtime = await runtimeWith([
       classification("standard"),
@@ -1023,7 +1054,7 @@ describe("UmaRuntime preflight", () => {
     runtime.database.updateRun(source.id, { status: "completed" });
     const review = runtime.reviewMessage("quality-answer", "Check completeness");
     expect((await waitForRunTerminal(runtime, review.id)).status).toBe("completed");
-    expect(runtime.database.listTrace({ runId: review.id }).spans).toEqual(
+    expect(runtime.listTrace({ runId: review.id }).spans).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "review", kind: "run", status: "ok", runId: review.id }),
         expect.objectContaining({ name: "model.review", kind: "model", status: "ok", runId: review.id }),
@@ -1036,7 +1067,7 @@ describe("UmaRuntime preflight", () => {
     });
     const improve = runtime.improveMessage("quality-answer");
     expect((await waitForRunTerminal(runtime, improve.id)).status).toBe("completed");
-    expect(runtime.database.listTrace({ runId: improve.id }).spans).toEqual(
+    expect(runtime.listTrace({ runId: improve.id }).spans).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "improve", kind: "run", status: "ok", runId: improve.id }),
         expect.objectContaining({ name: "model.improve", kind: "model", status: "ok", runId: improve.id }),

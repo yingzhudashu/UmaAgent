@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { UmaDatabase } from "../src/database.js";
 import { safeFetch } from "../src/tools.js";
@@ -62,13 +63,16 @@ describe("UmaDatabase", () => {
     reopened.close();
   });
 
-  it.each([15, 16])("rejects unsupported schema version %s", async (version) => {
+  it.each([18, 19, 21, 99])("rejects unsupported schema version %s without rewriting it", async (version) => {
     const root = await mkdtemp(join(tmpdir(), "uma-schema-"));
     temporary.push(root);
     const db = testDatabase(root);
     db.db.exec(`PRAGMA user_version = ${version}`);
     db.close();
-    expect(() => new UmaDatabase(root)).toThrow("Unsupported database schema");
+    expect(() => new UmaDatabase(root)).toThrow(`Unsupported database schema ${version}`);
+    const reopened = new DatabaseSync(join(root, "state.db"));
+    expect(Number(reopened.prepare("PRAGMA user_version").get().user_version)).toBe(version);
+    reopened.close();
   });
 
   it("initializes the current schema directly at version 20", async () => {
@@ -76,51 +80,6 @@ describe("UmaDatabase", () => {
     temporary.push(root);
     const db = testDatabase(root);
     expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(20);
-    db.close();
-  });
-
-  it("persists trace spans with parent relationships and redacted bounded attributes", async () => {
-    const root = await mkdtemp(join(tmpdir(), "uma-trace-"));
-    temporary.push(root);
-    const db = testDatabase(root);
-    const session = db.createSession({
-      title: "trace",
-      workspace: root,
-      model: { provider: "test", id: "model" },
-      thinkingLevel: "off",
-    });
-    const run = db.createRun(session.id, "trace-message", modelSnapshot, "off", "agent", "agent").run;
-    db.insertTraceSpan({
-      traceId: "trace-1",
-      spanId: "span-1",
-      runId: run.id,
-      sessionId: session.id,
-      name: "run",
-      kind: "run",
-      status: "ok",
-      startedAt: 1,
-      durationMs: 2,
-      attributes: { route: "direct" },
-      endedAt: 3,
-    });
-    db.insertTraceSpan({
-      traceId: "trace-1",
-      spanId: "span-2",
-      parentSpanId: "span-1",
-      runId: run.id,
-      sessionId: session.id,
-      name: "model",
-      kind: "model",
-      status: "ok",
-      startedAt: 2,
-      durationMs: 1,
-      attributes: {},
-      endedAt: 3,
-    });
-    const page = db.listTrace({ runId: run.id });
-    expect(page.traceId).toBe("trace-1");
-    expect(page.spans).toHaveLength(2);
-    expect(page.spans[1].parentSpanId).toBe("span-1");
     db.close();
   });
 

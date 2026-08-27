@@ -63,6 +63,22 @@ describe("EventHub", () => {
     database.close();
   });
 
+  it("broadcasts message fragments without advancing the durable cursor", async () => {
+    const { database, session, hub } = await fixture();
+    const listener = vi.fn();
+    hub.subscribe(listener);
+    hub.emitTransientDelta(session.id, "run-1", {
+      messageId: "message-1",
+      append: "chunk",
+      updatedAt: 1,
+    });
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "message.delta", transient: true, sequence: 0 }),
+    );
+    expect(database.listEvents(session.id, 0).events).toHaveLength(0);
+    database.close();
+  });
+
   it("requires transactions for resource invalidation and broadcasts each committed resource once", async () => {
     const { database, hub } = await fixture();
     expect(() => hub.invalidate("tasks")).toThrow("inside");

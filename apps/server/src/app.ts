@@ -84,10 +84,11 @@ export async function createServer(
     bodyLimit: runtime.config.server.maxUploadBytes + 1024,
   });
   const stopRuntimeLogging = installRuntimeLogging(runtime, app);
-  const stopHttpTelemetry = installHttpTelemetry(app, runtime.config.server.stateDir);
+  const httpTelemetry = installHttpTelemetry(app, runtime.config.server.stateDir);
+  const requestTrace = httpTelemetry.contextFor;
   app.addHook("onClose", async () => {
     stopRuntimeLogging();
-    stopHttpTelemetry();
+    await httpTelemetry.close();
   });
   const auth = new AuthService(runtime);
   await app.register(cookie);
@@ -348,7 +349,7 @@ export async function createServer(
   app.post<{ Params: { id: string } }>("/api/v14/sessions/:id/messages", async (request, reply) => {
     if (!Value.Check(SendMessageRequestSchema, request.body)) throw new Error("Invalid message request");
     requireSessionOwner(request, request.params.id);
-    const run = runtime.sendMessage(request.params.id, request.body);
+    const run = runtime.sendMessage(request.params.id, request.body, requestTrace(request));
     return reply.code(202).send({
       runId: run.id,
       responseId: runtime.database.responseForRun(run.id)?.id,
@@ -360,7 +361,12 @@ export async function createServer(
     async (request, reply) => {
       if (!Value.Check(CommandRequestSchema, request.body)) throw new Error("Invalid command request");
       requireSessionOwner(request, request.params.id);
-      const run = runtime.sendCommand(request.params.id, request.body.command, request.body.messageId);
+      const run = runtime.sendCommand(
+        request.params.id,
+        request.body.command,
+        request.body.messageId,
+        requestTrace(request),
+      );
       return reply.code(202).send({ runId: run.id, status: run.status });
     },
   );
@@ -700,7 +706,7 @@ export async function createServer(
       const to = Number(request.query.to ?? Date.now());
       if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < from)
         throw new Error("Invalid diagnostics report range");
-      return runtime.database.diagnosticsReport(from, to);
+      return runtime.diagnosticsReport(from, to);
     },
   );
   app.get("/api/v14/optimization-proposals", async (request) =>
@@ -829,7 +835,11 @@ export async function createServer(
       if (!Value.Check(ReviewMessageRequestSchema, request.body ?? {}))
         throw new Error("Invalid review request");
       requireOwned(request, runtime.database.messageOwner(request.params.id));
-      const run = runtime.reviewMessage(request.params.id, request.body?.feedback ?? "");
+      const run = runtime.reviewMessage(
+        request.params.id,
+        request.body?.feedback ?? "",
+        requestTrace(request),
+      );
       return reply.code(202).send({ runId: run.id, status: run.status });
     },
   );
@@ -839,7 +849,7 @@ export async function createServer(
       if (!Value.Check(ImproveMessageRequestSchema, request.body ?? {}))
         throw new Error("Invalid improve request");
       requireOwned(request, runtime.database.messageOwner(request.params.id));
-      const run = runtime.improveMessage(request.params.id, request.body ?? {});
+      const run = runtime.improveMessage(request.params.id, request.body ?? {}, requestTrace(request));
       return reply.code(202).send({ runId: run.id, status: run.status });
     },
   );
@@ -1030,7 +1040,7 @@ export async function createServer(
         errorBody(
           request.id,
           isCurrentVersion ? "not_found" : "unsupported_api_version",
-          isCurrentVersion ? "API route not found" : "Only API v12 is supported",
+          isCurrentVersion ? "API route not found" : "Only API v14 is supported",
         ),
       );
   });

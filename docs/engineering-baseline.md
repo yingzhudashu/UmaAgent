@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本为 UmaAgent 1.3.0、Protocol v14 和 SQLite schema 20。数据库通过相邻、事务化迁移从 schema 19 升级；更旧或更高版本仍拒绝启动。
+当前版本为 UmaAgent 1.3.0、Protocol v14 和 SQLite schema 20。schema 20 是唯一支持格式；更旧或更高版本直接拒绝启动，不执行隐式迁移。
 
 ## 已落地的边界
 
@@ -19,6 +19,7 @@
 - 空闲 Core RSS < 256 MiB
 - WAL < 256 MiB
 - soak 期间 RSS 增长 < 10%
+- 分支覆盖率采用只升不降的实测 ratchet；目标为各一方包至少 80%，不得通过排除生产文件或降低既有基线通过 CI。
 - Trace Span 必须有完整父子关系，Run 终态不得遗留未结束 Span
 
 ## 验证入口

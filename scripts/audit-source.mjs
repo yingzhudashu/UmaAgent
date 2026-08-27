@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const root = resolve(".");
@@ -9,6 +9,11 @@ const files = execFileSync("git", ["ls-files", "*.ts", "*.tsx", "*.mjs", "*.js"]
   .filter(Boolean);
 const findings = [];
 for (const file of files) {
+  try {
+    await access(resolve(root, file));
+  } catch {
+    continue;
+  }
   const content = await readFile(resolve(root, file), "utf8");
   const lines = content.split(/\r?\n/);
   findings.push({
@@ -21,9 +26,5 @@ for (const file of files) {
     testCoverage: /(?:test|spec)\./u.test(file),
   });
 }
-await mkdir(resolve(root, "docs"), { recursive: true });
-await writeFile(
-  resolve(root, "docs/performance-audit.json"),
-  `${JSON.stringify({ generatedAt: new Date().toISOString(), files: findings }, null, 2)}\n`,
-);
-console.log(JSON.stringify({ files: findings.length, output: "docs/performance-audit.json" }));
+// 审计结果是一次性诊断输出，不写入仓库，避免把机器生成的过程文件当成质量结论。
+console.log(JSON.stringify({ generatedAt: new Date().toISOString(), files: findings }, null, 2));

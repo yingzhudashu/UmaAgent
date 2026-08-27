@@ -58,6 +58,42 @@ const response = (body: unknown) =>
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("UmaClient", () => {
+  it("delivers transient message fragments without advancing the durable cursor", async () => {
+    const fetchMock = vi.fn(() => response(snapshot));
+    const socket = new FakeSocket();
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: fetchMock as typeof fetch,
+      webSocketFactory: () => socket as unknown as WebSocket,
+    });
+    const received: AgentEventEnvelope[] = [];
+    client.subscribeSessions([{ id: "session-1", lastSequence: 0 }], (value) => received.push(value));
+    client.connectEvents();
+    socket.open();
+    socket.message({
+      protocolVersion: 14,
+      sessionId: "session-1",
+      runId: "run-1",
+      sequence: 0,
+      timestamp: 1,
+      transient: true,
+      type: "message.delta",
+      payload: { messageId: "message-1", append: "chunk", updatedAt: 1 },
+    });
+    socket.message({
+      protocolVersion: 14,
+      sessionId: "session-1",
+      runId: "run-1",
+      sequence: 1,
+      timestamp: 2,
+      type: "message.completed",
+      payload: {},
+    });
+    expect(received.map((event) => event.type)).toEqual(["message.delta", "message.completed"]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    client.close();
+  });
+
   it("posts structured shortcut commands to the session endpoint", async () => {
     const fetchMock = vi.fn(() => response({ command: "/status", output: "ok" }));
     const client = new UmaClient({ baseUrl: "http://localhost:3210", fetch: fetchMock as typeof fetch });
@@ -435,6 +471,16 @@ describe("UmaClient", () => {
     controller.abort();
     await expect(client.waitForRun("run-2", { signal: controller.signal })).rejects.toMatchObject({
       name: "AbortError",
+    });
+  });
+
+  it("returns when a run requires plan confirmation", async () => {
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      fetch: (() => response({ id: "run-1", status: "awaiting_confirmation" })) as typeof fetch,
+    });
+    await expect(client.waitForRun("run-1", { pollMs: 0 })).resolves.toMatchObject({
+      status: "awaiting_confirmation",
     });
   });
 

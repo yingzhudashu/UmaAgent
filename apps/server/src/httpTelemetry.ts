@@ -1,32 +1,41 @@
-import { randomUUID } from "node:crypto";
-import { TelemetryStore, TraceSpanContext } from "@uma-agent/telemetry";
+import {
+  parseTraceparent,
+  TelemetryStore,
+  type TraceParent,
+  TraceService,
+  type TraceSpanContext,
+  telemetryDirectory,
+} from "@uma-agent/telemetry";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
-export function installHttpTelemetry(app: FastifyInstance, stateDir: string): () => void {
-  const telemetry = new TelemetryStore(stateDir, "server");
+export type HttpTelemetry = {
+  contextFor(request: FastifyRequest): TraceParent | undefined;
+  close(): Promise<void>;
+};
+
+export function installHttpTelemetry(app: FastifyInstance, stateDir: string): HttpTelemetry {
+  const telemetry = new TelemetryStore(telemetryDirectory(stateDir), "server");
+  const trace = new TraceService(telemetry, "server");
   const spans = new WeakMap<FastifyRequest, TraceSpanContext>();
+  const traceFlags = new WeakMap<FastifyRequest, number>();
   app.addHook("onRequest", async (request) => {
-    const parts =
-      typeof request.headers.traceparent === "string" ? request.headers.traceparent.split("-") : [];
-    const traceCandidate = parts[1];
-    const traceId =
-      traceCandidate && /^[0-9a-f]{32}$/i.test(traceCandidate)
-        ? traceCandidate
-        : randomUUID().replaceAll("-", "");
-    const parent = /^[0-9a-f]{16}$/i.test(parts[2] ?? "") ? parts[2] : undefined;
+    const path = request.url.split("?")[0] as string;
+    const parent = parseTraceparent(
+      typeof request.headers.traceparent === "string" ? request.headers.traceparent : undefined,
+    );
+    traceFlags.set(request, parent?.traceFlags ?? 1);
     spans.set(
       request,
-      new TraceSpanContext(
-        telemetry,
-        traceId,
-        randomUUID().replaceAll("-", ""),
+      trace.startRoot(
+        undefined,
+        undefined,
+        `${request.method} ${path}`,
+        {
+          method: request.method,
+          path,
+        },
         parent,
-        undefined,
-        undefined,
-        `${request.method} ${request.url.split("?")[0]}`,
         "server.http",
-        "server",
-        { method: request.method, path: request.url.split("?")[0] },
       ),
     );
   });
@@ -37,5 +46,13 @@ export function installHttpTelemetry(app: FastifyInstance, stateDir: string): ()
       ...(failed ? { error: { name: `HTTP${reply.statusCode}`, message: "HTTP request failed" } } : {}),
     });
   });
-  return () => telemetry.close();
+  return {
+    contextFor(request) {
+      const span = spans.get(request);
+      return span
+        ? { traceId: span.traceId, spanId: span.spanId, traceFlags: traceFlags.get(request) ?? 1 }
+        : undefined;
+    },
+    close: () => telemetry.close(),
+  };
 }

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,9 +9,14 @@ import type {
   TelemetryContext,
   TelemetrySpan,
 } from "@earendil-works/pi-telemetry";
-import type { Span, Tracer } from "@opentelemetry/api";
+import { context, trace as otelTrace, type Span, TraceFlags, type Tracer } from "@opentelemetry/api";
 
 export type TelemetryStatus = "active" | "ok" | "error" | "cancelled";
+export type TraceParent = {
+  traceId: string;
+  spanId: string;
+  traceFlags: number;
+};
 export type TelemetryEvent = {
   name: string;
   occurredAt: number;
@@ -35,6 +40,26 @@ export type TelemetrySpanRecord = {
   errorMessage?: string;
   events: TelemetryEvent[];
 };
+export type TelemetrySpanQuery = {
+  runId?: string;
+  traceId?: string;
+  from?: number;
+  to?: number;
+  status?: Exclude<TelemetryStatus, "active">;
+  name?: string;
+  offset?: number;
+  limit?: number;
+};
+export type TelemetrySpanPage = {
+  spans: TelemetrySpanRecord[];
+  hasMore: boolean;
+  nextOffset: number;
+};
+export type TelemetrySummary = {
+  spans: number;
+  incomplete: number;
+  latencyMs: { p50: number; p95: number; p99: number };
+};
 export type ResourceSample = {
   id: string;
   capturedAt: number;
@@ -52,6 +77,38 @@ export type ResourceSample = {
 
 const REDACTED = "[REDACTED]";
 const sensitive = /(authorization|cookie|api[_-]?key|password|secret|token|prompt|completion|body)/i;
+const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
+
+export function parseTraceparent(value: string | undefined): TraceParent | undefined {
+  if (!value) return undefined;
+  const match = TRACEPARENT.exec(value.trim());
+  if (!match || /^0+$/.test(match[1] as string) || /^0+$/.test(match[2] as string)) return undefined;
+  return {
+    traceId: (match[1] as string).toLowerCase(),
+    spanId: (match[2] as string).toLowerCase(),
+    traceFlags: Number.parseInt(match[3] as string, 16),
+  };
+}
+
+export function formatTraceparent(parent: TraceParent): string {
+  const normalized = parseTraceparent(
+    `00-${parent.traceId}-${parent.spanId}-${parent.traceFlags.toString(16).padStart(2, "0")}`,
+  );
+  if (!normalized) throw new Error("Invalid W3C trace context");
+  return `00-${normalized.traceId}-${normalized.spanId}-${normalized.traceFlags.toString(16).padStart(2, "0")}`;
+}
+
+function traceId(): string {
+  return randomBytes(16).toString("hex");
+}
+
+function spanId(): string {
+  return randomBytes(8).toString("hex");
+}
+
+export function telemetryDirectory(defaultDirectory: string): string {
+  return process.env.UMA_TELEMETRY_DIR?.trim() || defaultDirectory;
+}
 function safeAttributes(attributes: SpanAttributes | undefined): Record<string, string | number | boolean> {
   const result: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(attributes ?? {}).slice(0, 32)) {
@@ -68,6 +125,10 @@ export class TelemetryStore {
   readonly db: DatabaseSync;
   private otelProvider?: { shutdown: () => Promise<void> };
   private otelTracer?: Tracer;
+  private otelInitialization?: Promise<void>;
+  private closePromise?: Promise<void>;
+  private closed = false;
+  private otlpExportFailures = 0;
   private readonly otelSpans = new Map<string, Span>();
   constructor(
     readonly stateDir: string,
@@ -84,28 +145,82 @@ export class TelemetryStore {
       )
       .run(Date.now(), Date.now(), service);
     const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
-    if (endpoint) void this.initializeOtel(endpoint, service);
+    if (endpoint)
+      this.otelInitialization = this.initializeOtel(endpoint, service).catch(() => {
+        this.otlpExportFailures += 1;
+      });
   }
   private async initializeOtel(endpoint: string, service: string): Promise<void> {
     const [{ OTLPTraceExporter }, { BatchSpanProcessor, NodeTracerProvider }] = await Promise.all([
       import("@opentelemetry/exporter-trace-otlp-http"),
       import("@opentelemetry/sdk-trace-node"),
     ]);
+    const exporter = new OTLPTraceExporter({ url: endpoint });
     const provider = new NodeTracerProvider({
-      spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter({ url: endpoint }))],
+      spanProcessors: [
+        new BatchSpanProcessor({
+          export: (spans, callback) =>
+            exporter.export(spans, (result) => {
+              if (result.code !== 0) this.otlpExportFailures += 1;
+              callback(result);
+            }),
+          shutdown: () => exporter.shutdown(),
+        }),
+      ],
     });
-    this.otelProvider = provider;
-    this.otelTracer = provider.getTracer(`uma-agent/${service}`);
+    if (this.closed) {
+      await provider.shutdown().catch(() => undefined);
+    } else {
+      this.otelProvider = provider;
+      this.otelTracer = provider.getTracer(`uma-agent/${service}`);
+    }
   }
-  close(): void {
-    void this.otelProvider?.shutdown();
-    this.db.close();
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    this.closePromise = (async () => {
+      await this.otelInitialization;
+      await this.otelProvider?.shutdown().catch(() => undefined);
+      this.db.close();
+    })();
+    return this.closePromise;
+  }
+  otlpStatus(): { configured: boolean; initialized: boolean; exportFailures: number } {
+    return {
+      configured: Boolean(process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim()),
+      initialized: Boolean(this.otelTracer),
+      exportFailures: this.otlpExportFailures,
+    };
   }
   start(record: Omit<TelemetrySpanRecord, "status" | "events">): void {
     if (this.otelTracer) {
-      const span = this.otelTracer.startSpan(record.name, {
-        attributes: safeAttributes(record.attributes),
-      });
+      let parentContext = context.active();
+      const localParent = record.parentSpanId ? this.otelSpans.get(record.parentSpanId) : undefined;
+      if (localParent) parentContext = otelTrace.setSpan(parentContext, localParent);
+      else if (
+        record.parentSpanId &&
+        /^[0-9a-f]{32}$/.test(record.traceId) &&
+        /^[0-9a-f]{16}$/.test(record.parentSpanId)
+      ) {
+        parentContext = otelTrace.setSpanContext(parentContext, {
+          traceId: record.traceId,
+          spanId: record.parentSpanId,
+          traceFlags:
+            Number(record.attributes["trace.flags"] ?? 1) & 1 ? TraceFlags.SAMPLED : TraceFlags.NONE,
+          isRemote: true,
+        });
+      }
+      const span = this.otelTracer.startSpan(
+        record.name,
+        {
+          attributes: {
+            ...safeAttributes(record.attributes),
+            "uma.trace_id": record.traceId,
+            "uma.span_id": record.spanId,
+          },
+        },
+        parentContext,
+      );
       this.otelSpans.set(record.spanId, span);
     }
     try {
@@ -221,42 +336,149 @@ export class TelemetryStore {
       /* ignore telemetry failure */
     }
   }
+  listSpans(query: TelemetrySpanQuery): TelemetrySpanPage {
+    if (
+      !query.runId &&
+      !query.traceId &&
+      query.from === undefined &&
+      query.to === undefined &&
+      !query.name &&
+      !query.status
+    )
+      throw new Error("Trace query requires a filter");
+    const offset = Math.max(0, Math.floor(query.offset ?? 0));
+    const limit = Math.max(1, Math.min(500, Math.floor(query.limit ?? 500)));
+    const clauses = ["status <> 'active'"];
+    const params: Array<string | number> = [];
+    if (query.runId) {
+      clauses.push("(run_id=? OR trace_id IN (SELECT trace_id FROM run_trace_links WHERE run_id=?))");
+      params.push(query.runId, query.runId);
+    }
+    if (query.traceId) {
+      clauses.push("trace_id=?");
+      params.push(query.traceId);
+    }
+    if (query.from !== undefined) {
+      clauses.push("started_at>=?");
+      params.push(query.from);
+    }
+    if (query.to !== undefined) {
+      clauses.push("started_at<=?");
+      params.push(query.to);
+    }
+    if (query.status) {
+      clauses.push("status=?");
+      params.push(query.status);
+    }
+    if (query.name) {
+      clauses.push("instr(name,?) > 0");
+      params.push(query.name);
+    }
+    const values = this.db
+      .prepare(
+        `SELECT * FROM spans WHERE ${clauses.join(" AND ")} ORDER BY started_at,span_id LIMIT ? OFFSET ?`,
+      )
+      .all(...params, limit + 1, offset) as Array<Record<string, unknown>>;
+    const selected = values.slice(0, limit);
+    const eventsBySpan = new Map<string, TelemetryEvent[]>();
+    if (selected.length) {
+      const spanIds = selected.map((value) => String(value.span_id));
+      const eventRows = this.db
+        .prepare(
+          `SELECT span_id,name,occurred_at,attributes_json FROM span_events
+           WHERE span_id IN (${spanIds.map(() => "?").join(",")}) ORDER BY span_id,event_no`,
+        )
+        .all(...spanIds) as Array<Record<string, unknown>>;
+      for (const event of eventRows) {
+        const id = String(event.span_id);
+        const current = eventsBySpan.get(id) ?? [];
+        let attributes: Record<string, string | number | boolean> = {};
+        try {
+          attributes = JSON.parse(String(event.attributes_json ?? "{}"));
+        } catch {
+          // Corrupt diagnostic attributes do not make the business trace unreadable.
+        }
+        current.push({ name: String(event.name), occurredAt: Number(event.occurred_at), attributes });
+        eventsBySpan.set(id, current);
+      }
+    }
+    return {
+      spans: selected.map((value) => ({
+        traceId: String(value.trace_id),
+        spanId: String(value.span_id),
+        ...(value.parent_span_id ? { parentSpanId: String(value.parent_span_id) } : {}),
+        service: String(value.service),
+        ...(value.run_id ? { runId: String(value.run_id) } : {}),
+        ...(value.session_id ? { sessionId: String(value.session_id) } : {}),
+        name: String(value.name),
+        kind: String(value.kind),
+        status: String(value.status) as TelemetryStatus,
+        startedAt: Number(value.started_at),
+        ...(value.ended_at == null ? {} : { endedAt: Number(value.ended_at) }),
+        ...(value.duration_ms == null ? {} : { durationMs: Number(value.duration_ms) }),
+        attributes: (() => {
+          try {
+            return JSON.parse(String(value.attributes_json ?? "{}"));
+          } catch {
+            return {};
+          }
+        })(),
+        ...(value.error_type ? { errorType: String(value.error_type) } : {}),
+        ...(value.error_message ? { errorMessage: String(value.error_message) } : {}),
+        events: eventsBySpan.get(String(value.span_id)) ?? [],
+      })),
+      hasMore: values.length > limit,
+      nextOffset: offset + selected.length,
+    };
+  }
+  summarize(from: number, to: number): TelemetrySummary {
+    const summary = this.db
+      .prepare(
+        "SELECT COUNT(*) AS spans,SUM(CASE WHEN error_type='IncompleteSpan' THEN 1 ELSE 0 END) AS incomplete FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ?",
+      )
+      .get(from, to) as Record<string, unknown>;
+    const spans = Number(summary.spans ?? 0);
+    const durationAt = (percentile: number) => {
+      if (!spans) return 0;
+      const offset = Math.min(spans - 1, Math.max(0, Math.ceil((percentile / 100) * spans) - 1));
+      const value = this.db
+        .prepare(
+          "SELECT duration_ms FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ? ORDER BY duration_ms LIMIT 1 OFFSET ?",
+        )
+        .get(from, to, offset) as Record<string, unknown> | undefined;
+      return Number(value?.duration_ms ?? 0);
+    };
+    return {
+      spans,
+      incomplete: Number(summary.incomplete ?? 0),
+      latencyMs: { p50: durationAt(50), p95: durationAt(95), p99: durationAt(99) },
+    };
+  }
   maintain(now = Date.now()): void {
     try {
       this.db.exec("BEGIN IMMEDIATE");
       const cutoff = now - 90 * 86_400_000;
-      const raw = this.db
+      // 让 SQLite 在库内完成分组，避免维护任务把数月 Span 全量加载进 Node 堆。
+      this.db
         .prepare(
-          "SELECT service,name,status,started_at,duration_ms FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?",
+          `INSERT INTO span_aggregates(bucket_start,bucket_ms,service,name,status,count,total_duration_ms,min_duration_ms,max_duration_ms)
+           SELECT CAST(started_at / 3600000 AS INTEGER) * 3600000,3600000,service,name,status,
+                  COUNT(*),SUM(MAX(0,duration_ms)),MIN(MAX(0,duration_ms)),MAX(MAX(0,duration_ms))
+           FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?
+           GROUP BY CAST(started_at / 3600000 AS INTEGER),service,name,status
+           ON CONFLICT(bucket_start,bucket_ms,service,name,status) DO UPDATE SET
+             count=count+excluded.count,
+             total_duration_ms=total_duration_ms+excluded.total_duration_ms,
+             min_duration_ms=MIN(min_duration_ms,excluded.min_duration_ms),
+             max_duration_ms=MAX(max_duration_ms,excluded.max_duration_ms)`,
         )
-        .all(cutoff) as Array<Record<string, unknown>>;
-      const aggregate = this.db.prepare(
-        "INSERT INTO span_aggregates(bucket_start,bucket_ms,service,name,status,count,total_duration_ms,min_duration_ms,max_duration_ms) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(bucket_start,bucket_ms,service,name,status) DO UPDATE SET count=count+excluded.count,total_duration_ms=total_duration_ms+excluded.total_duration_ms,min_duration_ms=MIN(min_duration_ms,excluded.min_duration_ms),max_duration_ms=MAX(max_duration_ms,excluded.max_duration_ms)",
-      );
-      for (const row of raw) {
-        const bucketMs = 3_600_000;
-        const bucket = Math.floor(Number(row.started_at) / bucketMs) * bucketMs;
-        const duration = Math.max(0, Number(row.duration_ms ?? 0));
-        aggregate.run(
-          bucket,
-          bucketMs,
-          String(row.service),
-          String(row.name),
-          String(row.status),
-          1,
-          duration,
-          duration,
-          duration,
-        );
-      }
+        .run(cutoff);
       this.db
         .prepare(
           "DELETE FROM span_events WHERE span_id IN (SELECT span_id FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?)",
         )
-        .run(now - 90 * 86_400_000);
-      this.db
-        .prepare("DELETE FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?")
-        .run(now - 90 * 86_400_000);
+        .run(cutoff);
+      this.db.prepare("DELETE FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?").run(cutoff);
       this.db.prepare("DELETE FROM resource_samples WHERE captured_at < ?").run(now - 30 * 86_400_000);
       this.db.prepare("DELETE FROM span_aggregates WHERE bucket_start < ?").run(now - 365 * 86_400_000);
       this.db.exec("COMMIT");
@@ -281,8 +503,8 @@ export class TraceSpanContext implements TelemetryContext {
   private readonly children = new Set<TraceSpanContext>();
   constructor(
     private readonly store: TelemetryStore,
-    private readonly traceId: string,
-    private readonly spanId: string,
+    readonly traceId: string,
+    readonly spanId: string,
     private readonly parentSpanId: string | undefined,
     private readonly runId: string | undefined,
     private readonly sessionId: string | undefined,
@@ -336,7 +558,7 @@ export class TraceSpanContext implements TelemetryContext {
     const child = new TraceSpanContext(
       this.store,
       this.traceId,
-      randomUUID(),
+      spanId(),
       this.spanId,
       this.runId,
       this.sessionId,
@@ -399,21 +621,28 @@ export class TraceService {
     protected readonly store: TelemetryStore,
     protected readonly service: string,
   ) {}
-  startRoot(runId?: string, sessionId?: string, name = "run", attributes?: SpanAttributes): TraceSpanContext {
-    const traceId = randomUUID();
+  startRoot(
+    runId?: string,
+    sessionId?: string,
+    name = "run",
+    attributes?: SpanAttributes,
+    parent?: TraceParent,
+    kind = "run",
+  ): TraceSpanContext {
+    const rootTraceId = parent?.traceId ?? traceId();
     const span = new TraceSpanContext(
       this.store,
-      traceId,
-      randomUUID(),
-      undefined,
+      rootTraceId,
+      spanId(),
+      parent?.spanId,
       runId,
       sessionId,
       name,
-      "run",
+      kind,
       this.service,
-      attributes,
+      { ...attributes, "trace.flags": parent?.traceFlags ?? 1 },
     );
-    if (runId) this.store.linkRun(runId, traceId);
+    if (runId) this.store.linkRun(runId, rootTraceId);
     return span;
   }
 }

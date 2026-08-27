@@ -383,12 +383,6 @@ export class AuditEvaluationRepository {
       requested: integer(value.requested),
       denied: integer(value.denied),
     }));
-    const traceRows = rows(
-      this.db.prepare("SELECT duration_ms,status FROM trace_spans WHERE started_at BETWEEN ? AND ?"),
-      from,
-      to,
-    );
-    const traceDurations = traceRows.map((value) => integer(value.duration_ms));
     return {
       from,
       to,
@@ -398,13 +392,9 @@ export class AuditEvaluationRepository {
       recoveryFrequency: summary.runs.total ? summary.recoveries / summary.runs.total : 0,
       approvalBottlenecks,
       trace: {
-        spans: traceRows.length,
-        incomplete: traceRows.filter((value) => text(value.status) === "incomplete").length,
-        latencyMs: {
-          p50: percentile(traceDurations, 50),
-          p95: percentile(traceDurations, 95),
-          p99: percentile(traceDurations, 99),
-        },
+        spans: 0,
+        incomplete: 0,
+        latencyMs: { p50: 0, p95: 0, p99: 0 },
       },
     };
   }

@@ -28,6 +28,7 @@ export interface EvalClient {
     input: { mode: NonNullable<EvalCase["mode"]> },
   ): Promise<{ runId: string }>;
   waitForRun(runId: string, options: { pollMs: number }): Promise<Run>;
+  confirmPlan(runId: string): Promise<Run>;
   getSession(id: string): Promise<SessionSnapshot>;
   listAudit(runId: string): Promise<AuditRecord[]>;
   listRunActions(runId: string): Promise<RunAction[]>;
@@ -54,7 +55,11 @@ export async function evaluateSuite(client: EvalClient, cases: EvalCase[]): Prom
       const accepted = await client.sendMessage(session.id, item.prompt, {
         mode: item.mode ?? "agent",
       });
-      const run = await client.waitForRun(accepted.runId, { pollMs: 50 });
+      let run = await client.waitForRun(accepted.runId, { pollMs: 50 });
+      if (run.status === "awaiting_confirmation" && item.expectedStatus !== "awaiting_confirmation") {
+        await client.confirmPlan(run.id);
+        run = await client.waitForRun(run.id, { pollMs: 50 });
+      }
       const snapshot = await client.getSession(session.id);
       const audit = await client.listAudit(run.id);
       const actions = await client.listRunActions(run.id);

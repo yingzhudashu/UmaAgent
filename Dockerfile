@@ -14,6 +14,7 @@ COPY apps/server/package.json ./apps/server/package.json
 COPY packages/client/package.json ./packages/client/package.json
 COPY packages/core/package.json ./packages/core/package.json
 COPY packages/protocol/package.json ./packages/protocol/package.json
+COPY packages/telemetry/package.json ./packages/telemetry/package.json
 RUN npm ci --omit=dev --ignore-scripts \
   --workspace=@uma-agent/server \
   --workspace=@uma-agent/client
@@ -32,9 +33,11 @@ COPY --from=build /app/packages/core/package.json ./packages/core/package.json
 COPY --from=build /app/packages/core/dist ./packages/core/dist
 COPY --from=build /app/packages/protocol/package.json ./packages/protocol/package.json
 COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
+COPY --from=build /app/packages/telemetry/package.json ./packages/telemetry/package.json
+COPY --from=build /app/packages/telemetry/dist ./packages/telemetry/dist
 COPY docker/uma.config.json ./uma.config.json
-RUN mkdir -p /data/state /data/workspace
-VOLUME ["/data/state", "/data/workspace"]
+RUN mkdir -p /data/state /data/telemetry /data/workspace
+VOLUME ["/data/state", "/data/telemetry", "/data/workspace"]
 EXPOSE 3210
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:3210/api/v14/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

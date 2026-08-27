@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Run, Session, TranscriptItem } from "@uma-agent/protocol";
+import type { TraceParent } from "@uma-agent/telemetry";
 import type { UmaDatabase } from "./database.js";
 import type { EventHub } from "./events.js";
 import type { ModelRegistry } from "./models.js";
 import type { RunOrchestrator } from "./run-orchestrator.js";
 import type { RunQualityService } from "./run-quality.js";
-import type { TraceService } from "./trace.js";
+import type { TraceContext, TraceService } from "./trace.js";
 
 export interface QualityRunOptions {
   feedback?: string;
@@ -28,7 +29,12 @@ interface RuntimeQualityDependencies {
 export class RuntimeQualityOperations {
   constructor(private readonly dependencies: RuntimeQualityDependencies) {}
 
-  start(kind: "review" | "improve", targetMessageId: string, options: QualityRunOptions): Run {
+  start(
+    kind: "review" | "improve",
+    targetMessageId: string,
+    options: QualityRunOptions,
+    traceParent?: TraceParent,
+  ): Run {
     const { database, events, orchestrator } = this.dependencies;
     if (!this.dependencies.isAcceptingRuns()) throw new Error("UmaRuntime is not accepting new runs");
     let target = database.getMessage(targetMessageId);
@@ -62,7 +68,16 @@ export class RuntimeQualityOperations {
       events.emit(session.id, created.id, "run.updated", created);
       return created;
     });
-    orchestrator.enqueue(session.id, () => this.execute(session, run.id, target, kind, options));
+    const queuedTrace = this.dependencies.trace.startQueued(
+      run.id,
+      session.id,
+      kind,
+      { "run.kind": kind },
+      traceParent,
+    );
+    orchestrator.enqueue(session.id, () =>
+      queuedTrace.run((root) => this.execute(session, run.id, target, kind, options, undefined, root)),
+    );
     return run;
   }
 
@@ -85,9 +100,12 @@ export class RuntimeQualityOperations {
     target: TranscriptItem,
     kind: "review" | "improve",
     options: QualityRunOptions,
+    traceParent?: TraceParent,
+    rootTraceOverride?: TraceContext,
   ): Promise<void> {
     const { database, events, orchestrator, controllers, trace } = this.dependencies;
-    const rootTrace = trace.startRoot(runId, session.id, kind, { "run.kind": kind });
+    const rootTrace =
+      rootTraceOverride ?? trace.startRoot(runId, session.id, kind, { "run.kind": kind }, traceParent);
     const release = await orchestrator.acquire();
     if (database.getRun(runId).status === "cancelled") {
       try {

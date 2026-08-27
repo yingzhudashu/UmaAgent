@@ -1,6 +1,6 @@
 # UmaAgent 服务器部署与验收
 
-本文档面向 UmaAgent `1.3.0`、Protocol v14、SQLite schema 20。Core 是唯一权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得共享 Core 的状态目录。
+本文档面向 UmaAgent `1.3.0`、Protocol v14、SQLite schema 20。Core 是唯一业务权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得访问 Core 的 `state.db` 或 workspace。Core、Server 与 Browser Worker 仅共享独立 telemetry 目录。
 
 ## 1. 部署前确认
 
@@ -116,6 +116,7 @@ Docker 是主要发布路径。如必须原生部署，使用专用系统用户�
 ```bash
 sudo useradd --system --home /var/lib/uma-agent --shell /usr/sbin/nologin umaagent
 sudo install -d -o umaagent -g umaagent /var/lib/uma-agent/state /srv/uma-workspace
+sudo install -d -o umaagent -g umaagent -m 0770 /var/lib/uma-agent/telemetry
 sudo install -d -m 0750 /etc/uma-agent
 sudo cp deploy/uma.config.production.json /etc/uma-agent/uma.config.json
 sudo cp deploy/uma.env.native.example /etc/uma-agent/uma.env
@@ -150,10 +151,10 @@ Wants=network-online.target
 Type=simple
 User=umaagent
 Group=umaagent
-WorkingDirectory=/opt/UmaAgent
+WorkingDirectory=/opt/uma-agent/current
 Environment=NODE_ENV=production
 EnvironmentFile=/etc/uma-agent/uma.env
-ExecStart=/usr/bin/node /opt/UmaAgent/apps/server/dist/main.js --config=/etc/uma-agent/uma.config.json
+ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent/current/apps/server/dist/main.js --config=/etc/uma-agent/uma.config.json
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
@@ -161,7 +162,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/uma-agent/state /srv/uma-workspace
+ReadWritePaths=/var/lib/uma-agent/state /var/lib/uma-agent/telemetry /srv/uma-workspace
 
 [Install]
 WantedBy=multi-user.target
@@ -315,16 +316,20 @@ docker run --rm \
 
 原生部署从新版本开始时，使用 release 中的 `deploy/reset-native-state.sh --apply`。脚本只处理 UmaAgent Core、工作区、Browser Worker 和 Feishu 独立 state，并先移动到 `/srv/backups/uma-agent/reset-<UTC>`；不会读取、删除或移动 `/home/ubuntu/miniagent`。
 
-数据库只允许通过已测试的相邻事务迁移升级，不提供旧 DTO 或 schema fallback。schema 19 会迁移到 schema 20，并将现有个人令牌的到期字段清空为永久有效；令牌身份指纹和其他业务数据必须保持不变。其他不受支持的版本会拒绝启动。升级前必须备份，回滚时部署原版本并恢复原版本生成的备份。
+数据库只接受 schema 20。schema 19、旧版本和未来版本均直接拒绝启动，不执行迁移、fallback 或隐式令牌变更。升级前必须备份并完成完整性与保护用户指纹检查；失败时只切换 release 指针，不覆盖数据库。
 
 ## 9. Trace、资源报告与真实 API 验证
 
-Core 使用 SQLite schema 20 持久化 Trace。Run、queue、preflight、model、tool、command、approval 和终态会形成一棵有父子关系的 Span 树；查询入口为 `GET /api/v14/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。资源快照和诊断报告分别通过 `/api/v14/reports/resources` 与 `/api/v14/reports/diagnostics` 读取，均只允许管理员。
+Core 的业务数据使用 schema 20 `state.db`；Trace 写入 `UMA_TELEMETRY_DIR` 下的独立 `telemetry.db`。生产把该目录挂载给 Core、Server 与 Browser Worker，但不向 Worker 暴露业务 state 或 workspace。Client、Server HTTP、Run、queue、preflight、model、tool、MCP HTTP 和 Browser 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v14/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。Trace 不保存 prompt、模型正文、完整 URL 查询、Cookie、Token 或原始工具参数。资源快照和诊断报告分别通过 `/api/v14/reports/resources` 与 `/api/v14/reports/diagnostics` 读取，均只允许管理员。
 
-真实测试默认读取 `D:\AIhub\miniagent-python\config.user.json` 的 Provider、模型、API 类型和能力字段，在临时目录生成 Uma 配置和 schema 20 状态库。执行时优先使用配置声明的环境变量；若环境变量为空，且 `UMA_REAL_API=1` 已明确授权，脚本才会从该配置的对应 credential 读取 API key，并仅注入当前 Node 进程，不写入临时配置、数据库、Trace、日志或测试报告。缺少授权或密钥时命令直接失败，不切换 Faux：
+真实测试只接受明确的 UmaAgent 环境变量，并在临时目录生成隔离配置、state、workspace、用户和令牌。它不读取 MiniAgent 配置，也不得使用生产保护 PAT。缺少授权或密钥时命令直接失败，不切换 Faux：
 
 ```powershell
 $env:UMA_REAL_API = "1"
+$env:UMA_REAL_PROVIDER = "受控 Provider 名称"
+$env:UMA_REAL_MODEL = "受控模型 ID"
+$env:UMA_REAL_BASE_URL = "https://受控网关/v1"
+$env:UMA_REAL_API_KEY_ENV = "OPENAI_API_KEY"
 $env:OPENAI_API_KEY = "从受控密钥管理注入"
 npm run test:real:smoke
 npm run test:real:eval
@@ -335,6 +340,17 @@ npm run test:real:soak
 ```
 
 输出只包含 p50/p95/p99、CPU/内存/WAL/event-loop 聚合值、token 数量、错误分类和脱敏 Trace ID，不包含 prompt、完整响应、凭据或隐藏思维链。真实测试结束后会删除临时状态目录。
+
+### 原生发布保护门禁
+
+生产 Promote 必须预先创建 `/etc/uma-agent/protected-user-pat`，所有者为 root、权限为 `0600`。PAT 只由保护脚本在进程内读取，不得作为命令行参数、日志或 Trace 属性传递。使用 release 内的门禁脚本执行切换：
+
+```bash
+sudo /opt/uma-agent/releases/<release>/deploy/promote-native-release.sh \
+  /opt/uma-agent/releases/<release> /opt/uma-agent/dependencies/node_modules
+```
+
+脚本先验证 candidate、执行 SQLite online backup、完整性检查和保护用户对象指纹，再原子切换 `current`、检查 live/ready 与只读认证，最后比较指纹。任一步失败只恢复上一 release 指针并重启服务，不覆盖或回滚 `state.db`。
 
 ## 10. 故障排查
 

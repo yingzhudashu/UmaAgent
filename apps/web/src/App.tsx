@@ -266,12 +266,15 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
         unsubscribe = client.subscribeSessions(
           [{ id: selected, lastSequence: cached?.[0] ?? 0 }],
           (event) => {
+            const transient = event.type === "message.delta" && "transient" in event && event.transient;
             const durableSequence =
               event.type === "session.snapshot"
                 ? (event.payload as SessionSnapshot).snapshotSequence
                 : event.sequence;
-            void cacheCursor(selected, durableSequence);
-            setSyncCursor(durableSequence);
+            if (!transient) {
+              void cacheCursor(selected, durableSequence);
+              setSyncCursor(durableSequence);
+            }
             setLastSyncAt(Date.now());
             if (event.type === "approval.requested")
               setApprovals((items) => [

@@ -97,6 +97,29 @@ function traceparent(): string {
 }
 export type EventConnectionState = "disconnected" | "connecting" | "connected";
 export type SessionSubscription = { id: string; lastSequence?: number };
+function eventEnvelope(value: unknown): value is AgentEventEnvelope {
+  if (!value || typeof value !== "object") return false;
+  const event = value as Record<string, unknown>;
+  if (
+    event.protocolVersion !== PROTOCOL_VERSION ||
+    typeof event.sessionId !== "string" ||
+    typeof event.sequence !== "number" ||
+    typeof event.timestamp !== "number" ||
+    typeof event.type !== "string"
+  )
+    return false;
+  if (event.type !== "message.delta") return event.sequence >= 1;
+  const payload = event.payload as Record<string, unknown> | undefined;
+  return (
+    event.transient === true &&
+    event.sequence === 0 &&
+    Boolean(payload) &&
+    typeof payload?.messageId === "string" &&
+    typeof payload.append === "string" &&
+    payload.append.length > 0 &&
+    typeof payload.updatedAt === "number"
+  );
+}
 
 export class UmaClient {
   private readonly baseUrl: string;
@@ -522,7 +545,16 @@ export class UmaClient {
     runId: string,
     options: { signal?: AbortSignal; pollMs?: number } = {},
   ): Promise<import("@uma-agent/protocol").Run> {
-    const terminal = new Set(["completed", "failed", "cancelled", "interrupted", "awaiting_input"]);
+    // These states require a caller decision before execution can make progress. Returning
+    // them keeps CLI and evaluation clients from polling forever while preserving approval.
+    const terminal = new Set([
+      "completed",
+      "failed",
+      "cancelled",
+      "interrupted",
+      "awaiting_input",
+      "awaiting_confirmation",
+    ]);
     while (true) {
       if (options.signal?.aborted) throw new DOMException("Run wait cancelled", "AbortError");
       const run = await this.getRun(runId);
@@ -681,7 +713,7 @@ export class UmaClient {
             listener(parsed as unknown as ResourceInvalidated | ResourceResyncRequired);
           return;
         }
-        this.dispatch(parsed as unknown as AgentEventEnvelope);
+        if (eventEnvelope(parsed)) this.dispatch(parsed);
       } catch {
         /* Ignore malformed remote frames. */
       }
@@ -715,6 +747,10 @@ export class UmaClient {
 
   private dispatch(event: AgentEventEnvelope): void {
     if (!this.subscriptions.has(event.sessionId)) return;
+    if (event.type === "message.delta" && "transient" in event && event.transient) {
+      this.notify(event);
+      return;
+    }
     const recoveringTo = this.recoveryTargets.get(event.sessionId);
     if (recoveringTo !== undefined) {
       this.recoveryTargets.set(event.sessionId, Math.max(recoveringTo, event.sequence));

@@ -40,6 +40,7 @@ import type {
   TranscriptItem,
   UpdateScheduledTaskRequest,
 } from "@uma-agent/protocol";
+import type { TraceParent } from "@uma-agent/telemetry";
 import Value from "typebox/value";
 import { ContextManager } from "./context-manager.js";
 import { UmaDatabase } from "./database.js";
@@ -55,6 +56,7 @@ import { RunContextBuilder } from "./run-context.js";
 import { RunOrchestrator } from "./run-orchestrator.js";
 import { RunPreflight } from "./run-preflight.js";
 import { RunQualityService } from "./run-quality.js";
+import { RuntimeCommandOperations } from "./runtime-command-operations.js";
 import { RuntimeOptimizationService } from "./runtime-optimization.js";
 import { RuntimeOptimizationExecutionService } from "./runtime-optimization-execution.js";
 import { RuntimeQualityOperations } from "./runtime-quality-operations.js";
@@ -97,6 +99,7 @@ export class UmaRuntime {
   private preflight: RunPreflight;
   private quality: RunQualityService;
   private readonly qualityOperations: RuntimeQualityOperations;
+  private readonly commandOperations: RuntimeCommandOperations;
   private readonly optimization: RuntimeOptimizationService;
   readonly optimizationExecution: RuntimeOptimizationExecutionService;
   private readonly resources: RuntimeResourceService;
@@ -168,6 +171,21 @@ export class UmaRuntime {
       this.invalidateResource("optimization"),
     );
     this.approvals = new RunApprovals(this.database, this.events, config.runtime.approvalTimeoutMs);
+    this.commandOperations = new RuntimeCommandOperations({
+      database: this.database,
+      events: this.events,
+      orchestrator: this.orchestrator,
+      approvals: this.approvals,
+      controllers: this.controllers,
+      activeTraces: this.activeTraces,
+      isAcceptingRuns: () => this.started && !this.stopping,
+      snapshotModel: this.models.snapshot.bind(this.models),
+      waitForSideEffectGate: (sessionId, runId) => this.waitForSideEffectGate(sessionId, runId),
+      transitionRun: (sessionId, runId, patch) => this.transitionRun(sessionId, runId, patch),
+      executeRecoveredAction: (run, action, automatic, signal) =>
+        this.executeRecoveredAction(run, action, automatic, signal),
+      trace: this.trace,
+    });
     this.scheduler = new SchedulerService(this.database, this, () => this.invalidateResource("schedules"));
     this.workspacePolicy = new WorkspacePolicy(config.server.workspaceRoots);
     this.optimizationExecution = new RuntimeOptimizationExecutionService(this.database, this.workspacePolicy);
@@ -235,7 +253,7 @@ export class UmaRuntime {
     await this.orchestrator.drain();
     await this.scheduler.drain();
     await this.mcp.close();
-    this.trace.store.close();
+    await this.trace.store.close();
     this.database.close();
     this.stateLock.release();
     this.started = false;
@@ -739,7 +757,10 @@ export class UmaRuntime {
     return this.resources.audit(runId);
   }
   listTrace(query: TraceQuery) {
-    return this.database.listTrace(query);
+    return this.trace.listTrace(query);
+  }
+  diagnosticsReport(from: number, to: number) {
+    return { ...this.database.diagnosticsReport(from, to), trace: this.trace.store.summarize(from, to) };
   }
   listResourceSnapshots(from = 0, to = Date.now(), limit = 500) {
     return this.database.listResourceSnapshots(from, to, limit);
@@ -997,7 +1018,7 @@ export class UmaRuntime {
     this.database.deleteSession(id);
   }
 
-  sendMessage(sessionId: string, input: SendMessageRequest): Run {
+  sendMessage(sessionId: string, input: SendMessageRequest, traceParent?: TraceParent): Run {
     if (!this.started || this.stopping) throw new Error("UmaRuntime is not accepting new runs");
     const session = this.database.getSession(sessionId);
     const existing = this.database.findMessageOwner(input.messageId);
@@ -1116,177 +1137,35 @@ export class UmaRuntime {
     const enqueue = continuation
       ? this.orchestrator.enqueueFirst.bind(this.orchestrator)
       : this.orchestrator.enqueue.bind(this.orchestrator);
-    enqueue(sessionId, () => this.executeRun(session, run.id, input, prompt));
+    const queuedTrace = this.trace.startQueued(
+      run.id,
+      session.id,
+      "run",
+      { "run.kind": "agent" },
+      traceParent,
+    );
+    this.activeTraces.set(run.id, queuedTrace.root);
+    enqueue(sessionId, () => queuedTrace.run(() => this.executeRun(session, run.id, input, prompt)));
     if (continuation) this.orchestrator.resume(sessionId);
     return run;
   }
-  reviewMessage(messageId: string, feedback = ""): Run {
-    return this.qualityOperations.start("review", messageId, { feedback });
+  reviewMessage(messageId: string, feedback = "", traceParent?: TraceParent): Run {
+    return this.qualityOperations.start("review", messageId, { feedback }, traceParent);
   }
-  improveMessage(messageId: string, options: { force?: boolean; reset?: boolean } = {}): Run {
-    return this.qualityOperations.start("improve", messageId, options);
+  improveMessage(
+    messageId: string,
+    options: { force?: boolean; reset?: boolean } = {},
+    traceParent?: TraceParent,
+  ): Run {
+    return this.qualityOperations.start("improve", messageId, options, traceParent);
   }
-  sendCommand(sessionId: string, command: string, messageId: string = randomUUID()): Run {
-    const normalized = command.trim();
-    if (!normalized) throw new Error("Command is required");
-    if (!this.started || this.stopping) throw new Error("UmaRuntime is not accepting new runs");
-    const session = this.database.getSession(sessionId);
-    const existing = this.database.findMessageOwner(messageId);
-    if (existing) {
-      if (existing.sessionId !== sessionId || !existing.runId)
-        throw new Error("messageId is already used by another message");
-      return this.database.getRun(existing.runId);
-    }
-    if (this.database.listQueuedRuns(sessionId).length >= 100) throw new Error("Session queue is full");
-    const run = this.events.transaction(() => {
-      const created = this.database.createRun(
-        sessionId,
-        messageId,
-        this.models.snapshot(session.model),
-        session.thinkingLevel,
-        "command",
-        "agent",
-      ).run;
-      const message = this.database.insertMessage({
-        id: messageId,
-        sessionId,
-        runId: created.id,
-        role: "user",
-        status: "complete",
-        content: `!${normalized}`,
-      });
-      this.events.emit(sessionId, created.id, "message.completed", message);
-      this.events.emit(sessionId, created.id, "run.updated", created);
-      return created;
-    });
-    this.orchestrator.enqueue(sessionId, () => this.executeCommand(session, run.id, normalized));
-    return run;
-  }
-  private async executeCommand(session: Session, runId: string, command: string): Promise<void> {
-    const rootTrace = this.trace.startRoot(runId, session.id, "command", { "run.kind": "command" });
-    this.activeTraces.set(runId, rootTrace);
-    await this.waitForSideEffectGate(session.id, runId);
-    const release = await this.orchestrator.acquire();
-    if (this.database.getRun(runId).status === "cancelled") {
-      try {
-        rootTrace.finish({ status: "cancelled" });
-      } finally {
-        this.activeTraces.delete(runId);
-        release();
-      }
-      return;
-    }
-    const controller = new AbortController();
-    this.controllers.set(session.id, controller);
-    const toolCallId = randomUUID();
-    try {
-      this.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
-      const action = this.events.transaction(() => {
-        const value = this.database.createRunAction({
-          runId,
-          checkpointId: this.database.getLatestCheckpoint(runId)?.id,
-          toolCallId,
-          toolName: "shell",
-          toolClass: "shell",
-          idempotencyKey: `${runId}:command`,
-          input: { command },
-        });
-        this.events.emit(session.id, runId, "run.action_prepared", value);
-        return value;
-      });
-      const approvalTrace = rootTrace.child("approval", "approval", { tool: "shell" });
-      let approved: boolean;
-      try {
-        approved = await this.approvals.request({
-          sessionId: session.id,
-          runId,
-          toolCallId,
-          toolName: "shell",
-          args: { command },
-          signal: controller.signal,
-        });
-        approvalTrace.finish(
-          approved
-            ? { status: "ok" }
-            : { status: "error", error: { name: "ApprovalRejected", message: "Approval was rejected" } },
-        );
-      } catch (error) {
-        approvalTrace.finish({
-          status: "error",
-          error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
-        });
-        throw error;
-      }
-      if (!approved) {
-        this.events.transaction(() => {
-          const rejected = this.database.transitionRunAction(action.id, ["prepared"], {
-            status: "rejected",
-            error: "Command execution was not approved",
-          }).action;
-          this.events.emit(session.id, runId, "run.action_decided", { action: rejected, decision: "reject" });
-        });
-        throw new Error("Command execution was not approved");
-      }
-      this.database.createToolCall({ id: toolCallId, runId, name: "shell", args: { command } });
-      const toolTrace = rootTrace.child("tool", "tool", { tool: "shell" });
-      let result: { status: string; error?: string; result?: unknown };
-      try {
-        result = await this.executeRecoveredAction(
-          this.database.getRun(runId),
-          action,
-          false,
-          controller.signal,
-        );
-        toolTrace.finish({ status: result.status === "completed" ? "ok" : "error" });
-      } catch (error) {
-        toolTrace.finish({
-          status: "error",
-          error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
-        });
-        throw error;
-      }
-      if (result.status !== "completed") throw new Error(result.error ?? "Command execution failed");
-      const output =
-        result.result && typeof result.result === "object"
-          ? JSON.stringify(result.result, null, 2)
-          : String(result.result ?? "Command completed");
-      this.events.transaction(() => {
-        const message = this.database.insertMessage({
-          sessionId: session.id,
-          runId,
-          role: "assistant",
-          status: "complete",
-          content: output,
-        });
-        const completed = this.database.updateRun(runId, { status: "completed", error: null });
-        this.events.emit(session.id, runId, "message.completed", message);
-        this.events.emit(session.id, runId, "run.updated", completed);
-        const response = this.database.responseForRun(runId);
-        if (response) {
-          this.database.updateResponseAttachmentStatus(response.id, "sent");
-          const updated = this.database.updateResponse(response.id, { status: "completed", content: output });
-          this.events.emit(session.id, runId, "response.completed", updated);
-        }
-      });
-    } catch (error) {
-      rootTrace.setStatus({
-        status: "error",
-        error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
-      });
-      const interrupted = this.database.listRunActions(runId).some((action) => action.status === "uncertain");
-      this.transitionRun(session.id, runId, {
-        status: interrupted ? "interrupted" : controller.signal.aborted ? "cancelled" : "failed",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      try {
-        rootTrace.finish();
-      } finally {
-        this.activeTraces.delete(runId);
-        this.controllers.delete(session.id);
-        release();
-      }
-    }
+  sendCommand(
+    sessionId: string,
+    command: string,
+    messageId: string = randomUUID(),
+    traceParent?: TraceParent,
+  ): Run {
+    return this.commandOperations.start(sessionId, command, messageId, traceParent);
   }
 
   private async waitForSideEffectGate(sessionId: string, runId: string): Promise<void> {
@@ -1401,7 +1280,7 @@ export class UmaRuntime {
     promptOverride?: string,
     resumeFromCheckpoint = false,
   ): Promise<void> {
-    const rootTrace = this.trace.startRoot(runId, sessionAtQueueTime.id, "run", { "run.kind": "agent" });
+    const rootTrace = this.activeTraces.get(runId) ?? this.trace.startRoot(runId, sessionAtQueueTime.id);
     this.activeTraces.set(runId, rootTrace);
     await this.waitForSideEffectGate(sessionAtQueueTime.id, runId);
     const release = await this.orchestrator.acquire();
@@ -1864,7 +1743,6 @@ export class UmaRuntime {
       }
     } catch (error) {
       if (error instanceof Error && /provider contract/i.test(error.message)) throw error;
-      // Provider availability must not discard an otherwise completed user task.
     }
   }
 
@@ -2302,7 +2180,11 @@ export class UmaRuntime {
     const abort = () => agent.abort();
     signal.addEventListener("abort", abort, { once: true });
     try {
-      await agent.prompt(context.prompt, context.images);
+      const rootTrace = this.activeTraces.get(runId);
+      const prompt = () => agent.prompt(context.prompt, context.images);
+      await (rootTrace
+        ? this.mcp.withTrace({ traceId: rootTrace.traceId, spanId: rootTrace.spanId, traceFlags: 1 }, prompt)
+        : prompt());
       if (agent.state.errorMessage) throw new Error(agent.state.errorMessage);
       if (loopFailure) throw new Error(loopFailure);
       if (turnLimitReached)
@@ -2327,13 +2209,13 @@ export class UmaRuntime {
       .find((item) => item.runId === runId && item.role === "assistant" && item.status === "complete");
     if (!final || final.content.includes("执行假设：")) return;
     const content = `${final.content}\n\n执行假设：\n${assumptions.map((item) => `- ${item}`).join("\n")}`;
-    this.events.transaction(() => {
+    this.database.withTransaction(() => {
       this.database.updateMessage(final.id, { content });
-      this.events.emit(sessionId, runId, "message.delta", {
-        messageId: final.id,
-        append: content.slice(final.content.length),
-        updatedAt: Date.now(),
-      });
+    });
+    this.events.emitTransientDelta(sessionId, runId, {
+      messageId: final.id,
+      append: content.slice(final.content.length),
+      updatedAt: Date.now(),
     });
   }
 
@@ -2363,13 +2245,11 @@ export class UmaRuntime {
       pendingAssistant = undefined;
       flushTimer = undefined;
       if (!append) return;
-      this.events.transaction(() => {
-        this.events.emit(sessionId, runId, "message.delta", {
-          messageId: assistantItem?.id as string,
-          ...(responseId ? { responseId } : {}),
-          append,
-          updatedAt: Date.now(),
-        });
+      this.events.emitTransientDelta(sessionId, runId, {
+        messageId: assistantItem.id,
+        ...(responseId ? { responseId } : {}),
+        append,
+        updatedAt: Date.now(),
       });
     };
     agent.subscribe((event: AgentEvent) => {

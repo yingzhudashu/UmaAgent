@@ -1,6 +1,7 @@
 FROM node:22.19.0-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json tsconfig.base.json biome.json ./
+COPY packages/telemetry ./packages/telemetry
 COPY apps/browser-worker ./apps/browser-worker
 RUN npm ci --ignore-scripts
 RUN npm run build --workspace=@uma-agent/browser-worker
@@ -9,10 +10,12 @@ FROM node:22.19.0-bookworm-slim
 ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
+COPY packages/telemetry/package.json ./packages/telemetry/package.json
 COPY apps/browser-worker/package.json ./apps/browser-worker/package.json
 RUN npm ci --omit=dev --ignore-scripts --workspace=@uma-agent/browser-worker \
  && npx playwright install --with-deps chromium
 COPY --from=build /app/apps/browser-worker/dist ./apps/browser-worker/dist
+COPY --from=build /app/packages/telemetry/dist ./packages/telemetry/dist
 EXPOSE 3230
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:3230/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]

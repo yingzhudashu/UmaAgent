@@ -1,10 +1,9 @@
 import Type, { type Static } from "typebox";
+import { type AgentEventEnvelope, AgentEventEnvelopeSchema } from "./event-contract.js";
+import { Id, PROTOCOL_VERSION, Strict, Timestamp } from "./schema-helpers.js";
 
-export const PROTOCOL_VERSION = 14 as const;
-const Id = Type.String({ minLength: 1, maxLength: 128 });
-const Timestamp = Type.Integer({ minimum: 0 });
-const Strict = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
-  Type.Object(properties, { additionalProperties: false });
+export * from "./event-contract.js";
+export { PROTOCOL_VERSION } from "./schema-helpers.js";
 
 export const ModelRefSchema = Strict({ provider: Id, id: Id });
 export type ModelRef = Static<typeof ModelRefSchema>;
@@ -414,49 +413,6 @@ export const SearchCitationSchema = Strict({
   source: Type.Union([Type.Literal("tavily"), Type.Literal("stackexchange")]),
 });
 export type SearchCitation = Static<typeof SearchCitationSchema>;
-
-export const EventTypeSchema = Type.Union([
-  Type.Literal("sync.started"),
-  Type.Literal("sync.completed"),
-  Type.Literal("session.snapshot"),
-  Type.Literal("run.updated"),
-  Type.Literal("message.started"),
-  Type.Literal("message.delta"),
-  Type.Literal("message.completed"),
-  Type.Literal("response.started"),
-  Type.Literal("response.updated"),
-  Type.Literal("response.delta"),
-  Type.Literal("response.activity"),
-  Type.Literal("response.attachment.updated"),
-  Type.Literal("response.completed"),
-  Type.Literal("plan.updated"),
-  Type.Literal("tool.started"),
-  Type.Literal("tool.completed"),
-  Type.Literal("approval.requested"),
-  Type.Literal("approval.resolved"),
-  Type.Literal("server.status"),
-  Type.Literal("run.awaiting_input"),
-  Type.Literal("run.resumed"),
-  Type.Literal("run.action_prepared"),
-  Type.Literal("run.action_decided"),
-  Type.Literal("run.loop_warning"),
-  Type.Literal("task.updated"),
-  Type.Literal("memory.updated"),
-  Type.Literal("schedule.updated"),
-  Type.Literal("knowledge.updated"),
-]);
-export type AgentEventType = Static<typeof EventTypeSchema>;
-export type MessageDelta = { messageId: string; responseId?: string; append: string; updatedAt: number };
-export const AgentEventEnvelopeSchema = Strict({
-  protocolVersion: Type.Literal(PROTOCOL_VERSION),
-  sessionId: Id,
-  runId: Type.Optional(Id),
-  sequence: Type.Integer({ minimum: 1 }),
-  timestamp: Timestamp,
-  type: EventTypeSchema,
-  payload: Type.Unknown(),
-});
-export type AgentEventEnvelope = Static<typeof AgentEventEnvelopeSchema>;
 
 export const ErrorCodeSchema = Type.Union([
   Type.Literal("auth_required"),
@@ -898,12 +854,23 @@ export const AuditRecordSchema = Strict({
 });
 export type AuditRecord = Static<typeof AuditRecordSchema>;
 
+export const TraceSpanEventSchema = Strict({
+  name: Type.String({ minLength: 1, maxLength: 120 }),
+  occurredAt: Timestamp,
+  attributes: Type.Record(
+    Type.String({ maxLength: 80 }),
+    Type.Union([Type.String(), Type.Number(), Type.Boolean()]),
+  ),
+});
+export type TraceSpanEvent = Static<typeof TraceSpanEventSchema>;
+
 export const TraceSpanSchema = Strict({
   traceId: Id,
   spanId: Id,
   parentSpanId: Type.Optional(Id),
-  runId: Id,
-  sessionId: Id,
+  runId: Type.Optional(Id),
+  sessionId: Type.Optional(Id),
+  service: Type.String({ minLength: 1, maxLength: 80 }),
   name: Type.String({ minLength: 1, maxLength: 200 }),
   kind: Type.String({ minLength: 1, maxLength: 40 }),
   status: Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("cancelled")]),
@@ -915,6 +882,7 @@ export const TraceSpanSchema = Strict({
   ),
   errorType: Type.Optional(Type.String({ maxLength: 200 })),
   errorMessage: Type.Optional(Type.String({ maxLength: 2_000 })),
+  events: Type.Array(TraceSpanEventSchema, { maxItems: 64 }),
   endedAt: Timestamp,
 });
 export type TraceSpan = Static<typeof TraceSpanSchema>;

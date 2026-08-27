@@ -15,6 +15,9 @@ describe("evaluation runner", () => {
       async waitForRun() {
         return run;
       },
+      async confirmPlan() {
+        return run;
+      },
       async getSession() {
         return {
           transcript: [{ runId: run.id, role: "assistant", content: "expected answer" }],
@@ -53,6 +56,9 @@ describe("evaluation runner", () => {
         return { runId: run.id };
       },
       async waitForRun() {
+        return run;
+      },
+      async confirmPlan() {
         return run;
       },
       async getSession() {
@@ -129,6 +135,58 @@ describe("evaluation runner", () => {
         error: "connection lost",
       }),
     ]);
+  });
+
+  it("confirms a plan explicitly before evaluating its completed result", async () => {
+    const completed = { id: "run-plan", status: "completed", route: "plan" } as Run;
+    let waitCalls = 0;
+    let confirmations = 0;
+    const client: EvalClient = {
+      async createSession() {
+        return { id: "session" };
+      },
+      async sendMessage() {
+        return { runId: completed.id };
+      },
+      async waitForRun() {
+        waitCalls++;
+        return waitCalls === 1
+          ? ({ id: completed.id, status: "awaiting_confirmation", route: "plan" } as Run)
+          : completed;
+      },
+      async confirmPlan() {
+        confirmations++;
+        return completed;
+      },
+      async getSession() {
+        return {
+          transcript: [{ runId: completed.id, role: "assistant", content: "planned result" }],
+        } as SessionSnapshot;
+      },
+      async listAudit() {
+        return [];
+      },
+      async listRunActions() {
+        return [];
+      },
+      async getSessionEvents() {
+        return { events: [] } as never;
+      },
+    };
+
+    await expect(
+      evaluateSuite(client, [
+        {
+          name: "planned",
+          prompt: "plan",
+          mode: "plan",
+          expectedStatus: "completed",
+          expectedIncludes: "planned",
+        },
+      ]),
+    ).resolves.toEqual([expect.objectContaining({ passed: true, status: "completed" })]);
+    expect(confirmations).toBe(1);
+    expect(waitCalls).toBe(2);
   });
 
   it("renders escaped JUnit with a single failure count", () => {

@@ -167,7 +167,11 @@ try {
     maxRssBytes: maxRss,
     maxWalBytes: maxWal,
     resources: await api("/reports/resources?from=0&limit=500"),
-    dataset: baseline.dataset,
+    dataset: {
+      sessions: 1,
+      requests: messages,
+      durableEvents: cursor,
+    },
     budgets,
   };
   console.log(JSON.stringify(result));

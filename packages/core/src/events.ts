@@ -1,10 +1,13 @@
 import {
   type AgentEventEnvelope,
-  type AgentEventType,
+  type DurableAgentEventType,
+  type MessageDelta,
+  MessageDeltaSchema,
   PROTOCOL_VERSION,
   type ResourceInvalidated,
   type ResourceKind,
 } from "@uma-agent/protocol";
+import Value from "typebox/value";
 import type { UmaDatabase } from "./database.js";
 
 export type EventListener = (event: AgentEventEnvelope) => void;
@@ -37,13 +40,27 @@ export class EventHub {
   emit(
     sessionId: string,
     runId: string | undefined,
-    type: AgentEventType,
+    type: DurableAgentEventType,
     payload: unknown,
   ): AgentEventEnvelope {
     if (!this.pending) throw new Error("Durable events must be emitted inside an EventHub transaction");
     const event = this.database.appendEvent(sessionId, runId, type, payload);
     this.pending.push(event);
     return event;
+  }
+
+  emitTransientDelta(sessionId: string, runId: string | undefined, payload: MessageDelta): void {
+    if (!Value.Check(MessageDeltaSchema, payload)) throw new Error("Invalid message.delta payload");
+    this.broadcast({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId,
+      ...(runId ? { runId } : {}),
+      sequence: 0,
+      timestamp: Date.now(),
+      transient: true,
+      type: "message.delta",
+      payload,
+    });
   }
 
   transaction<T>(operation: () => T): T {

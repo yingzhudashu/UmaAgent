@@ -1,7 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { formatTraceparent, type TraceParent } from "@uma-agent/telemetry";
 import Type, { type TSchema } from "typebox";
 import type { McpServerConfig } from "./types.js";
 
@@ -20,6 +22,19 @@ function textResult(content: unknown): string {
 
 export class McpManager {
   private connections: Connected[] = [];
+  private readonly traceContext = new AsyncLocalStorage<TraceParent>();
+
+  withTrace<T>(parent: TraceParent, operation: () => Promise<T>): Promise<T> {
+    return this.traceContext.run(parent, operation);
+  }
+
+  private readonly tracedFetch = (url: string | URL, init?: RequestInit): Promise<Response> => {
+    const parent = this.traceContext.getStore();
+    if (!parent) return fetch(url, init);
+    const headers = new Headers(init?.headers);
+    headers.set("traceparent", formatTraceparent(parent));
+    return fetch(url, { ...init, headers });
+  };
 
   async connect(configs: McpServerConfig[], toolTimeoutMs: number): Promise<void> {
     await this.close();
@@ -34,6 +49,7 @@ export class McpManager {
                 ...(config.env ? { env: { ...process.env, ...config.env } as Record<string, string> } : {}),
               })
             : new StreamableHTTPClientTransport(new URL(config.url as string), {
+                fetch: this.tracedFetch,
                 ...(config.authTokenEnv
                   ? {
                       requestInit: {
