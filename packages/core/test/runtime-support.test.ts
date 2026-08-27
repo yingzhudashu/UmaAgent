@@ -79,6 +79,7 @@ describe("runtime support", () => {
 
   it("recognizes secrets and transient provider failures", () => {
     expect(isSecretLike("api_key=hidden")).toBe(true);
+    expect(isSecretLike("uma_pat_example-sensitive-value")).toBe(true);
     expect(isSecretLike("ordinary preference")).toBe(false);
     expect(isTransientProviderError(new Error("429 rate limit"))).toBe(true);
     expect(isTransientProviderError("socket hang up")).toBe(true);

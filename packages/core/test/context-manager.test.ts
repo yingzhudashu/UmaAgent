@@ -101,4 +101,51 @@ describe("ContextManager", () => {
     expect(result.messages).toHaveLength(10);
     expect(mocks.generateSummary).not.toHaveBeenCalled();
   });
+
+  it("builds history strictly before the current message and after the persisted summary", async () => {
+    const current = {
+      id: "current",
+      sequence: 9,
+      message: { role: "user", content: "继续处理这个文件", timestamp: 9 } as AgentMessage,
+    };
+    const database = {
+      getMessage: vi.fn(() => ({
+        id: current.id,
+        sequence: current.sequence,
+        status: "complete",
+        content: "继续处理这个文件",
+        createdAt: 9,
+      })),
+      getContextSummary: vi.fn(() => ({
+        sessionId: session.id,
+        throughSequence: 4,
+        content: "Earlier context includes report.docx",
+        updatedAt: 4,
+      })),
+      listAgentMessages: vi.fn(
+        (_sessionId: string, options: { beforeSequence: number; afterSequence: number }) =>
+          options.beforeSequence === 9
+            ? [
+                {
+                  id: "history",
+                  sequence: 8,
+                  message: { role: "assistant", content: [], timestamp: 8 } as AgentMessage,
+                },
+              ]
+            : [current],
+      ),
+    };
+    const manager = new ContextManager(database as never, { get: vi.fn(() => model), models: {} } as never);
+    const result = await manager.buildForMessage(session, current.id, new AbortController().signal, model);
+    expect(database.listAgentMessages).toHaveBeenNthCalledWith(1, session.id, {
+      beforeSequence: 9,
+      afterSequence: 4,
+    });
+    expect(database.listAgentMessages).toHaveBeenNthCalledWith(2, session.id, {
+      afterSequence: 8,
+      beforeSequence: 10,
+    });
+    expect(result.messages.filter((message) => message === current.message)).toHaveLength(0);
+    expect(result.current).toBe(current);
+  });
 });

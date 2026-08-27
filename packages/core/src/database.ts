@@ -498,8 +498,11 @@ export class UmaDatabase {
     return this.messages.listHistory(sessionId, beforeSequence, limit);
   }
 
-  listAgentMessages(sessionId: string, beforeSequence?: number): StoredAgentMessage[] {
-    return this.messages.listAgentMessages(sessionId, beforeSequence);
+  listAgentMessages(
+    sessionId: string,
+    options?: { beforeSequence?: number; afterSequence?: number },
+  ): StoredAgentMessage[] {
+    return this.messages.listAgentMessages(sessionId, options);
   }
 
   getMessage(id: string): TranscriptItem {
@@ -1747,7 +1750,18 @@ export class UmaDatabase {
   }): MemoryFact {
     const id = randomUUID();
     const now = Date.now();
-    this.withTransaction(() => {
+    const storedId = this.withTransaction(() => {
+      const duplicate = row(
+        this.db.prepare(
+          "SELECT id FROM memory_facts WHERE owner_id=? AND scope=? AND COALESCE(session_id,'')=COALESCE(?,'') AND key=? AND value=? AND status IN ('active','candidate') ORDER BY updated_at DESC LIMIT 1",
+        ),
+        input.ownerId ?? "system",
+        input.scope,
+        input.sessionId ?? null,
+        input.key,
+        input.value,
+      );
+      if (duplicate) return text(duplicate.id);
       const previous =
         input.status === "active"
           ? row(
@@ -1787,8 +1801,9 @@ export class UmaDatabase {
       this.db
         .prepare("INSERT INTO memory_fts(id,content) VALUES(?,?)")
         .run(id, `${input.key} ${input.value}`);
+      return id;
     });
-    return this.getMemoryFact(id);
+    return this.getMemoryFact(storedId);
   }
 
   getMemoryFact(id: string): MemoryFact {

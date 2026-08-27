@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { Attachment, MessageSource, SessionHistoryPage, TranscriptItem } from "@uma-agent/protocol";
 import {
   attachmentIdsFrom,
@@ -63,21 +64,36 @@ export class MessageRepository {
     };
   }
 
-  listAgentMessages(sessionId: string, beforeSequence?: number): StoredAgentMessage[] {
-    const statement =
-      beforeSequence === undefined
-        ? this.db.prepare(
-            "SELECT id,sequence,payload_json FROM messages WHERE session_id=? AND payload_json IS NOT NULL AND status='complete' ORDER BY sequence",
-          )
-        : this.db.prepare(
-            "SELECT id,sequence,payload_json FROM messages WHERE session_id=? AND sequence<? AND payload_json IS NOT NULL AND status='complete' ORDER BY sequence",
-          );
-    return rows(
-      statement,
-      ...(beforeSequence === undefined ? [sessionId] : [sessionId, beforeSequence]),
-    ).flatMap((value) => {
-      const message = parseJson<AgentMessage | null>(value.payload_json, null);
-      return message ? [{ id: text(value.id), sequence: integer(value.sequence), message }] : [];
+  listAgentMessages(
+    sessionId: string,
+    options: { beforeSequence?: number; afterSequence?: number } = {},
+  ): StoredAgentMessage[] {
+    const conditions = ["session_id=?", "(status='complete' OR (role='tool' AND status='error'))"];
+    const parameters: Array<string | number> = [sessionId];
+    if (options.afterSequence !== undefined) {
+      conditions.push("sequence>?");
+      parameters.push(options.afterSequence);
+    }
+    if (options.beforeSequence !== undefined) {
+      conditions.push("sequence<?");
+      parameters.push(options.beforeSequence);
+    }
+    const values = rows(
+      this.db.prepare(
+        `SELECT id,sequence,role,status,name,content,payload_json,attachment_ids_json,updated_at FROM messages WHERE ${conditions.join(" AND ")} ORDER BY sequence`,
+      ),
+      ...parameters,
+    );
+    const attachmentIds = [...new Set(values.flatMap(attachmentIdsFrom))];
+    const attachments = this.loadAttachments(attachmentIds);
+    return values.flatMap((value) => {
+      const parsed = parseJson<AgentMessage | null>(value.payload_json, null);
+      const message = this.withAttachmentContext(
+        parsed ?? this.deriveAgentMessage(value),
+        attachmentIdsFrom(value),
+        attachments,
+      );
+      return [{ id: text(value.id), sequence: integer(value.sequence), message }];
     });
   }
 
@@ -130,5 +146,61 @@ export class MessageRepository {
       result.set(attachment.id, attachment);
     }
     return result;
+  }
+
+  private withAttachmentContext(
+    message: AgentMessage,
+    ids: string[],
+    attachments: Map<string, Attachment>,
+  ): AgentMessage {
+    if (message.role !== "user" || ids.length === 0) return message;
+    const metadata = ids
+      .map((id) => attachments.get(id))
+      .filter((item): item is Attachment => item !== undefined)
+      .map((item) => `- ${item.name} (id: ${item.id}, type: ${item.mimeType})`)
+      .join("\n");
+    if (!metadata) return message;
+    const suffix = `\n\n<attachments>\n${metadata}\n</attachments>`;
+    return {
+      ...message,
+      content:
+        typeof message.content === "string"
+          ? `${message.content}${suffix}`
+          : [...message.content, { type: "text", text: suffix }],
+    };
+  }
+
+  private deriveAgentMessage(value: Row): AgentMessage {
+    const role = text(value.role);
+    const content = text(value.content);
+    const timestamp = integer(value.updated_at);
+    if (role === "assistant")
+      return {
+        role: "assistant",
+        content: [{ type: "text", text: content }],
+        api: "openai-responses",
+        provider: "uma-agent",
+        model: "historical",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp,
+      } as AssistantMessage;
+    if (role === "tool")
+      return {
+        role: "toolResult",
+        toolCallId: `historical-${text(value.id)}`,
+        toolName: text(value.name) || "tool",
+        content: [{ type: "text", text: content }],
+        isError: text(value.status) === "error",
+        timestamp,
+      } as ToolResultMessage;
+    return { role: "user", content, timestamp };
   }
 }

@@ -76,17 +76,20 @@ const response = (context) => {
             .map((item) => item.text)
             .join("\n")
         : "your request";
-  if (context.systemPrompt.includes("Classify the request")) {
-    const taskClass = content.includes("FAUX_CLARIFY")
+  // Dynamic session context is prepended to the request in the real runtime.
+  // Keep Faux assertions focused on the actual user request text.
+  const requestText = content.replace(/<([a-z_]+)>[\s\S]*?<\/\1>\s*/g, "").trim();
+  if (context.systemPrompt.includes("Classify the latest user request")) {
+    const taskClass = requestText.includes("FAUX_CLARIFY")
       ? "standard"
-      : content.includes("deterministic plan")
+      : requestText.includes("deterministic plan")
         ? "complex"
         : "simple";
     return fauxAssistantMessage(JSON.stringify({ taskClass }));
   }
-  if (context.systemPrompt.includes("Specify the request execution contract")) {
-    const clarify = content.includes("FAUX_CLARIFY");
-    const planned = content.includes("deterministic plan");
+  if (context.systemPrompt.includes("Specify the latest request execution contract")) {
+    const clarify = requestText.includes("FAUX_CLARIFY");
+    const planned = requestText.includes("deterministic plan");
     return fauxAssistantMessage(
       JSON.stringify({
         taskClass: planned ? "complex" : "standard",
@@ -99,19 +102,19 @@ const response = (context) => {
       }),
     );
   }
-  if (context.systemPrompt.includes("Verify whether the result"))
+  if (context.systemPrompt.includes("Verify whether the latest result"))
     return fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" }));
   if (context.systemPrompt.includes("Extract durable user facts")) return fauxAssistantMessage("[]");
-  if (content.includes("configured deterministic read tool")) {
+  if (requestText.includes("configured deterministic read tool")) {
     if (context.messages.some((message) => message.role === "toolResult"))
       return fauxAssistantMessage("FAUX_TOOL_RESULT");
     return fauxAssistantMessage([fauxToolCall("memory_search", { query: "deterministic", limit: 1 })]);
   }
-  if (content.includes("FAUX_SECURITY_TEST")) return fauxAssistantMessage("FAUX_SECURITY_SAFE");
-  if (content.includes("FAUX_PROMPT_INJECTION")) return fauxAssistantMessage("FAUX_INJECTION_REFUSED");
-  if (content.includes("Execute only plan step 1")) return fauxAssistantMessage("FAUX_PLAN_STEP_1");
-  if (content.includes("Execute only plan step 2")) return fauxAssistantMessage("FAUX_PLAN_STEP_2");
-  return fauxAssistantMessage(`Faux Core received: ${content.slice(0, 300)}`);
+  if (requestText.includes("FAUX_SECURITY_TEST")) return fauxAssistantMessage("FAUX_SECURITY_SAFE");
+  if (requestText.includes("FAUX_PROMPT_INJECTION")) return fauxAssistantMessage("FAUX_INJECTION_REFUSED");
+  if (requestText.includes("Execute only plan step 1")) return fauxAssistantMessage("FAUX_PLAN_STEP_1");
+  if (requestText.includes("Execute only plan step 2")) return fauxAssistantMessage("FAUX_PLAN_STEP_2");
+  return fauxAssistantMessage(`Faux Core received: ${requestText.slice(0, 300)}`);
 };
 faux.setResponses(Array.from({ length: 500 }, () => response));
 runtime.models.models.setProvider(faux.provider);

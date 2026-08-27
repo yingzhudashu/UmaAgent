@@ -229,6 +229,138 @@ describe("UmaDatabase", () => {
     db.close();
   });
 
+  it("builds bounded model history with attachment metadata and terminal tool failures", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-agent-history-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    const session = db.createSession({
+      title: "history",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const other = db.createSession({
+      title: "other",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const attachment = db.addAttachment({
+      sessionId: session.id,
+      name: "report.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      size: 10,
+      storagePath: join(root, "report.docx"),
+    });
+    const first = db.insertMessage({
+      sessionId: session.id,
+      role: "user",
+      status: "complete",
+      content: "读取这个文件",
+      payload: { role: "user", content: "读取这个文件", timestamp: 1 },
+      attachmentIds: [attachment.id],
+    });
+    const success = db.insertMessage({
+      sessionId: session.id,
+      role: "tool",
+      status: "complete",
+      name: "read",
+      content: "document title",
+      payload: {
+        role: "toolResult",
+        toolCallId: "read-1",
+        toolName: "read",
+        content: [{ type: "text", text: "document title" }],
+        isError: false,
+        timestamp: 2,
+      },
+    });
+    const failure = db.insertMessage({
+      sessionId: session.id,
+      role: "tool",
+      status: "error",
+      name: "web_search",
+      content: "upstream timeout",
+      payload: {
+        role: "toolResult",
+        toolCallId: "search-1",
+        toolName: "web_search",
+        content: [{ type: "text", text: "upstream timeout" }],
+        isError: true,
+        timestamp: 3,
+      },
+    });
+    const textOnly = db.insertMessage({
+      sessionId: session.id,
+      role: "assistant",
+      status: "complete",
+      content: "legacy-safe transcript text",
+    });
+    db.insertMessage({
+      sessionId: session.id,
+      role: "tool",
+      status: "streaming",
+      name: "read",
+      content: "partial",
+      payload: {
+        role: "toolResult",
+        toolCallId: "partial-1",
+        toolName: "read",
+        content: [{ type: "text", text: "partial" }],
+        isError: false,
+        timestamp: 4,
+      },
+    });
+    db.insertMessage({
+      sessionId: other.id,
+      role: "user",
+      status: "complete",
+      content: "private other session",
+      payload: { role: "user", content: "private other session", timestamp: 5 },
+    });
+
+    const history = db.listAgentMessages(session.id, {
+      afterSequence: first.sequence - 1,
+      beforeSequence: textOnly.sequence + 1,
+    });
+    expect(history).toHaveLength(4);
+    expect(JSON.stringify(history[0]?.message)).toContain("report.docx");
+    expect(JSON.stringify(history[0]?.message)).toContain(attachment.id);
+    expect(history[1]).toMatchObject({ id: success.id, message: { role: "toolResult", isError: false } });
+    expect(history[2]).toMatchObject({ id: failure.id, message: { role: "toolResult", isError: true } });
+    expect(history[3]).toMatchObject({ id: textOnly.id, message: { role: "assistant" } });
+    expect(JSON.stringify(history[3]?.message)).toContain("legacy-safe transcript text");
+    expect(JSON.stringify(history)).not.toContain("private other session");
+    expect(JSON.stringify(history)).not.toContain("partial");
+    db.close();
+  });
+
+  it("deduplicates unchanged active and candidate memory facts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-memory-deduplicate-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    const input = {
+      ownerId: "test-user",
+      scope: "global" as const,
+      key: "preference.output",
+      value: "Prefer concise answers",
+      category: "preference",
+      confidence: 0.8,
+      status: "candidate" as const,
+    };
+    const first = db.addMemoryFact(input);
+    const duplicate = db.addMemoryFact(input);
+    expect(duplicate.id).toBe(first.id);
+    expect(
+      Number(
+        (
+          db.db
+            .prepare("SELECT COUNT(*) AS count FROM memory_facts WHERE owner_id=? AND key=?")
+            .get(input.ownerId, input.key) as { count: number }
+        ).count,
+      ),
+    ).toBe(1);
+    db.close();
+  });
+
   it("paginates durable events beyond one thousand entries", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-events-"));
     temporary.push(root);

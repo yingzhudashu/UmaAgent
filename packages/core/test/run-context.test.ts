@@ -24,7 +24,12 @@ describe("run context builder", () => {
     temporary.push(root);
     const imagePath = join(root, "image.png");
     await writeFile(imagePath, new Uint8Array([1, 2, 3]));
-    const model = { provider: "test", id: "model" } as Model<"openai-responses">;
+    const model = {
+      provider: "test",
+      id: "model",
+      contextWindow: 100_000,
+      maxTokens: 4_096,
+    } as Model<"openai-responses">;
     const database = {
       sessionOwner: vi.fn(() => "system"),
       getMessage: vi.fn(() => ({ sequence: 7 })),
@@ -38,12 +43,22 @@ describe("run context builder", () => {
         updatedAt: 1,
       })),
       listMemoryRollups: vi.fn(() => []),
-      getAttachment: vi.fn((id: string) =>
-        id === "image" ? { mimeType: "image/png" } : { mimeType: "text/plain" },
-      ),
+      getAttachment: vi.fn((id: string) => ({
+        id,
+        name: id === "image" ? "diagram.png" : "notes.txt",
+        mimeType: id === "image" ? "image/png" : "text/plain",
+      })),
       getAttachmentPath: vi.fn(() => imagePath),
     } as unknown as UmaDatabase;
     const contextManager = {
+      buildForMessage: vi.fn(async () => ({
+        summary: { content: "persisted summary" },
+        messages: [
+          { role: "compactionSummary", summary: "persisted summary", tokensBefore: 0, timestamp: 1 },
+          { role: "user", content: "history", timestamp: 1 },
+        ],
+        current: { id: "message", sequence: 7, message: { role: "user", content: "original", timestamp: 1 } },
+      })),
       compact: vi.fn(async () => ({
         summary: { content: "persisted summary" },
         messages: [
@@ -97,12 +112,13 @@ describe("run context builder", () => {
       readOnly: true,
     });
     expect(context.prompt).toContain("override\n\nApproved execution plan:");
-    expect(context.prompt).toContain("Attachments: image, text");
+    expect(context.prompt).toContain("diagram.png (id: image, type: image/png)");
+    expect(context.prompt).toContain("notes.txt (id: text, type: text/plain)");
     expect(context.systemPrompt).not.toContain("persisted summary");
     expect(context.messages[0]?.role).toBe("compactionSummary");
     expect(context.messages[0]).toMatchObject({ summary: "persisted summary" });
-    expect(context.systemPrompt).toContain("likes deterministic tests");
-    expect(context.systemPrompt).toContain("notes.md\nknown answer");
+    expect(context.prompt).toContain("likes deterministic tests");
+    expect(context.prompt).toContain("notes.md\nknown answer");
     expect(context.images).toEqual([{ type: "image", data: "AQID", mimeType: "image/png" }]);
     expect(context.tools.map((tool) => tool.name)).toEqual(["read", "attachment_read"]);
   });

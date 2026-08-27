@@ -1,9 +1,11 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { contentText } from "@earendil-works/pi-ai";
 import type { QualityIssue } from "@uma-agent/protocol";
 import Type, { type TSchema } from "typebox";
 import Value from "typebox/value";
-import type { RunPreflight } from "./run-preflight.js";
+import type { ModelCallService } from "./model-calls.js";
 import { extractJson } from "./runtime-support.js";
+import type { TraceContext } from "./trace.js";
 
 const ReviewSchema = Type.Object(
   {
@@ -40,18 +42,44 @@ export interface ReviewIteration {
   improvedAnswer?: string;
 }
 
-/** Tool-free, bounded answer review and revision calls. */
+export interface QualityContext {
+  runId: string;
+  sessionId: string;
+  messages: AgentMessage[];
+  signal: AbortSignal;
+  contextSummarySequence?: number;
+  trace?: TraceContext;
+}
+
+function instruction(content: string): AgentMessage {
+  return { role: "user", content, timestamp: Date.now() };
+}
+
+/** Tool-free bounded review calls that preserve the target conversation prefix. */
 export class RunQualityService {
-  constructor(private readonly preflight: RunPreflight) {}
+  constructor(private readonly modelCalls: ModelCallService) {}
 
   private async json<T>(
-    runId: string,
+    context: QualityContext,
+    purpose: string,
     systemPrompt: string,
     prompt: string,
     schema: TSchema,
-    signal: AbortSignal,
   ): Promise<T> {
-    let response = await this.preflight.complete(runId, "reasoning", systemPrompt, prompt, signal, true);
+    const base = [...context.messages, instruction(prompt)];
+    let response = await this.modelCalls.complete({
+      runId: context.runId,
+      sessionId: context.sessionId,
+      role: "reasoning",
+      purpose,
+      systemPrompt,
+      messages: base,
+      signal: context.signal,
+      ...(context.contextSummarySequence !== undefined
+        ? { contextSummarySequence: context.contextSummarySequence }
+        : {}),
+      ...(context.trace ? { trace: context.trace } : {}),
+    });
     for (let attempt = 0; attempt < 2; attempt++) {
       if (response.stopReason === "error" || response.stopReason === "aborted")
         throw new Error(response.errorMessage ?? "Quality model call failed");
@@ -59,37 +87,44 @@ export class RunQualityService {
         const value = extractJson(contentText(response.content));
         if (Value.Check(schema, value)) return value as T;
       } catch {
-        // A single format-repair request is allowed and has no tools or side effects.
+        // One repair turn is appended after the same stable conversation prefix.
       }
       if (attempt === 1) break;
-      response = await this.preflight.complete(
-        runId,
-        "reasoning",
-        "Return only one JSON value matching the requested schema. No Markdown or commentary.",
-        prompt,
-        signal,
-        true,
-      );
+      response = await this.modelCalls.complete({
+        runId: context.runId,
+        sessionId: context.sessionId,
+        role: "reasoning",
+        purpose: `${purpose}.repair`,
+        systemPrompt,
+        messages: [
+          ...base,
+          instruction("Return only one JSON value matching the requested schema. No Markdown or commentary."),
+        ],
+        signal: context.signal,
+        ...(context.contextSummarySequence !== undefined
+          ? { contextSummarySequence: context.contextSummarySequence }
+          : {}),
+        ...(context.trace ? { trace: context.trace } : {}),
+      });
     }
     throw new Error("Provider contract error: invalid quality response");
   }
 
   async review(
-    runId: string,
+    context: QualityContext,
     question: string,
     answer: string,
     feedback: string,
-    signal: AbortSignal,
   ): Promise<ReviewIteration[]> {
     const iterations: ReviewIteration[] = [];
     let current = answer;
     for (let iteration = 1; iteration <= 3; iteration++) {
       const result = await this.json<ReviewIteration>(
-        runId,
-        "Review the public answer for factual accuracy, logic, completeness and clarity. Return JSON {passed,issues:[{type,description}],suggestions:string[],improvedAnswer?:string}. Do not use tools and do not expose hidden reasoning.",
-        `Question:\n${question.slice(0, 10_000)}\n\nAnswer:\n${current.slice(0, 30_000)}${feedback ? `\n\nUser feedback:\n${feedback.slice(0, 10_000)}` : ""}`,
+        context,
+        "quality.review",
+        "Review the public answer in its conversation for factual accuracy, logic, completeness and clarity. Return JSON {passed,issues:[{type,description}],suggestions:string[],improvedAnswer?:string}. Do not use tools and do not expose hidden reasoning.",
+        `Target question:\n${question.slice(0, 10_000)}\n\nTarget answer:\n${current.slice(0, 30_000)}${feedback ? `\n\nUser feedback:\n${feedback.slice(0, 10_000)}` : ""}`,
         ReviewSchema,
-        signal,
       );
       iterations.push(result);
       if (result.passed || result.issues.length === 0 || !result.improvedAnswer) break;
@@ -99,18 +134,17 @@ export class RunQualityService {
   }
 
   improve(
-    runId: string,
+    context: QualityContext,
     question: string,
     answer: string,
     suggestions: string[],
-    signal: AbortSignal,
   ): Promise<{ improvedAnswer: string }> {
     return this.json(
-      runId,
-      "Improve the public answer using every supplied suggestion. Preserve its intent and style. Return JSON {improvedAnswer:string}. Do not use tools or expose hidden reasoning.",
-      `Question:\n${question.slice(0, 10_000)}\n\nAnswer:\n${answer.slice(0, 30_000)}\n\nSuggestions:\n${suggestions.map((item) => `- ${item}`).join("\n")}`,
+      context,
+      "quality.improve",
+      "Improve the target public answer in its conversation using every supplied suggestion. Preserve its intent and style. Return JSON {improvedAnswer:string}. Do not use tools or expose hidden reasoning.",
+      `Target question:\n${question.slice(0, 10_000)}\n\nTarget answer:\n${answer.slice(0, 30_000)}\n\nSuggestions:\n${suggestions.map((item) => `- ${item}`).join("\n")}`,
       ImproveSchema,
-      signal,
     );
   }
 }

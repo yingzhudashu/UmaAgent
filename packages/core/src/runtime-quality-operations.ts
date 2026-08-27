@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Run, Session, TranscriptItem } from "@uma-agent/protocol";
 import type { TraceParent } from "@uma-agent/telemetry";
+import type { ContextManager } from "./context-manager.js";
 import type { UmaDatabase } from "./database.js";
 import type { EventHub } from "./events.js";
 import type { ModelRegistry } from "./models.js";
@@ -22,6 +24,8 @@ interface RuntimeQualityDependencies {
   isAcceptingRuns: () => boolean;
   getQualityService: () => RunQualityService;
   getReasoningModel: () => ReturnType<ModelRegistry["snapshot"]>;
+  getContextManager: () => ContextManager;
+  getModels: () => ModelRegistry;
   trace: TraceService;
 }
 
@@ -124,6 +128,22 @@ export class RuntimeQualityOperations {
         .reverse()
         .find((item) => item.role === "user")?.content;
       if (!question) throw new Error("The target answer has no preceding user message");
+      const targetContext = await this.dependencies
+        .getContextManager()
+        .buildForMessage(
+          session,
+          target.id,
+          controller.signal,
+          this.dependencies.getModels().fromSnapshot(database.getRun(runId).model),
+        );
+      const qualityContext = {
+        runId,
+        sessionId: session.id,
+        messages: [...targetContext.messages, targetContext.current.message],
+        signal: controller.signal,
+        ...(targetContext.summary ? { contextSummarySequence: targetContext.summary.throughSequence } : {}),
+        ...(rootTrace ? { trace: rootTrace } : {}),
+      };
       this.transitionRun(session.id, runId, { status: "running", phase: "execute" });
       const quality = this.dependencies.getQualityService();
       const invokeModel = async <T>(name: string, operation: () => Promise<T>): Promise<T> => {
@@ -143,7 +163,7 @@ export class RuntimeQualityOperations {
       let output = "";
       if (kind === "review") {
         const iterations = await invokeModel("model.review", () =>
-          quality.review(runId, question, target.content, options.feedback ?? "", controller.signal),
+          quality.review(qualityContext, question, target.content, options.feedback ?? ""),
         );
         iterations.forEach((iteration, index) => {
           database.addQualityAssessment({
@@ -165,7 +185,7 @@ export class RuntimeQualityOperations {
         let assessments = database.listQualityForMessage(target.id);
         if (options.force || assessments.length === 0) {
           const reviewed = await invokeModel("model.review", () =>
-            quality.review(runId, question, target.content, "", controller.signal),
+            quality.review(qualityContext, question, target.content, ""),
           );
           reviewed.forEach((iteration, index) => {
             database.addQualityAssessment({
@@ -184,22 +204,39 @@ export class RuntimeQualityOperations {
         output = (
           await invokeModel("model.improve", () =>
             quality.improve(
-              runId,
+              qualityContext,
               question,
               target.content,
               suggestions.length ? suggestions : ["Improve accuracy, completeness and clarity"],
-              controller.signal,
             ),
           )
         ).improvedAnswer;
       }
       events.transaction(() => {
+        const model = database.getRun(runId).model;
         const message = database.insertMessage({
           sessionId: session.id,
           runId,
           role: "assistant",
           status: "complete",
           content: output,
+          payload: {
+            role: "assistant",
+            content: [{ type: "text", text: output }],
+            api: model.api,
+            provider: model.ref.provider,
+            model: model.ref.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          } as AssistantMessage,
           revisionOfMessageId: target.id,
         });
         const completed = database.updateRun(runId, { status: "completed", error: null });

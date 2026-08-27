@@ -91,7 +91,7 @@ export function decisionFrom(value: unknown): Omit<PreflightDecision, "route"> {
 }
 
 export function isSecretLike(value: string): boolean {
-  return /(api[_-]?key|bearer\s+|password|secret|token\s*[:=]|-----BEGIN)/i.test(value);
+  return /(api[_-]?key|bearer\s+|password|secret|token\s*[:=]|uma_pat_|-----BEGIN)/i.test(value);
 }
 
 export function isTransientProviderError(error: unknown): boolean {

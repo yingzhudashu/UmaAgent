@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { SendMessageRequest, Session } from "@uma-agent/protocol";
-import type { ContextManager } from "./context-manager.js";
+import { assertContextCapacity, type ContextManager } from "./context-manager.js";
 import type { UmaDatabase } from "./database.js";
 import type { KnowledgeService } from "./knowledge.js";
 import type { ModelRegistry } from "./models.js";
@@ -40,13 +40,11 @@ export class RunContextBuilder {
     promptOverride?: string;
     readOnly: boolean;
   }): Promise<AgentContext> {
-    const userMessage = this.database.getMessage(input.request.messageId);
     const model = this.models.fromSnapshot(this.database.getRun(input.runId).model);
-    const history = await this.contextManager.compact(
+    const history = await this.contextManager.buildForMessage(
       input.session,
-      this.database.listAgentMessages(input.session.id, userMessage.sequence),
+      input.request.messageId,
       input.signal,
-      false,
       model,
     );
     const memory = this.database.searchMemory(input.session.id, input.request.text, 5);
@@ -83,8 +81,12 @@ export class RunContextBuilder {
     const assumptions = input.decision.assumptions.length
       ? `\n\nWorking assumptions (use these defaults unless evidence disproves them; mention material assumptions in the final result):\n${input.decision.assumptions.map((item) => `- ${item}`).join("\n")}`
       : "";
-    const attachments = input.request.attachmentIds?.length
-      ? `\n\nAttachments: ${input.request.attachmentIds.join(", ")}. Use attachment_read when needed.`
+    const currentAttachments = (input.request.attachmentIds ?? []).map((id) => {
+      const attachment = this.database.getAttachment(id);
+      return attachment ? `${attachment.name} (id: ${attachment.id}, type: ${attachment.mimeType})` : id;
+    });
+    const attachments = currentAttachments.length
+      ? `\n\nCurrent attachments:\n${currentAttachments.map((item) => `- ${item}`).join("\n")}\nUse attachment_read when needed.`
       : "";
     const images: ImageContent[] = [];
     for (const attachmentId of input.request.attachmentIds ?? []) {
@@ -96,10 +98,13 @@ export class RunContextBuilder {
         mimeType: attachment.mimeType,
       });
     }
+    const systemPrompt = `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought. When referencing a generated file, use only [filename](uma-attachment://<real attachment id>) with an ID returned by an attachment tool. Never emit API URLs, filesystem paths, sandbox links, or invented attachment IDs.${this.skills.systemPrompt(input.session.id)}`;
+    const prompt = `${supportingContext ? `${supportingContext}\n\n` : ""}${input.promptOverride ?? input.request.text}${plan}${assumptions}${attachments}`;
+    assertContextCapacity(model, history.messages, systemPrompt, prompt);
     return {
       model,
-      systemPrompt: `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought. When referencing a generated file, use only [filename](uma-attachment://<real attachment id>) with an ID returned by an attachment tool. Never emit API URLs, filesystem paths, sandbox links, or invented attachment IDs.${this.skills.systemPrompt(input.session.id)}${supportingContext ? `\n\n${supportingContext}` : ""}`,
-      prompt: `${input.promptOverride ?? input.request.text}${plan}${assumptions}${attachments}`,
+      systemPrompt,
+      prompt,
       images,
       tools: input.tools.filter(
         (tool) =>

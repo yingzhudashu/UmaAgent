@@ -239,6 +239,39 @@ describe("UmaRuntime preflight", () => {
     expect(runtime.getSnapshot(session.id).transcript.filter((item) => item.id === "answer")).toHaveLength(1);
   });
 
+  it("shares prior file context with clarification continuation without duplicating the answer", async () => {
+    let continuationContext = "";
+    const runtime = await runtimeWith([
+      classification("standard"),
+      decision("clarify"),
+      (context) => {
+        continuationContext = JSON.stringify(context.messages);
+        return classification("simple");
+      },
+      fauxAssistantMessage("The title in report.docx is Quarterly Results"),
+    ]);
+    const session = await runtime.createSession({ title: "File clarification" });
+    const firstTerminal = waitForTerminal(runtime, session.id);
+    const original = runtime.sendMessage(session.id, {
+      messageId: "file-question",
+      text: "请查看 report.docx，之后我还会问这个文件",
+      mode: "agent",
+    });
+    expect((await firstTerminal).status).toBe("awaiting_input");
+
+    const continuedTerminal = waitForRunTerminal(runtime, original.id);
+    const continued = runtime.sendMessage(session.id, {
+      messageId: "file-answer",
+      text: "就是刚才提到的那个文件",
+      mode: "agent",
+    });
+    expect(continued.id).toBe(original.id);
+    expect((await continuedTerminal).status).toBe("completed");
+    expect(continuationContext).toContain("report.docx");
+    expect(continuationContext).toContain("Which target?");
+    expect(continuationContext.match(/就是刚才提到的那个文件/g)).toHaveLength(1);
+  });
+
   it("verifies planned work and completes persisted plan steps", async () => {
     const runtime = await runtimeWith([
       classification("complex"),
@@ -917,27 +950,14 @@ describe("UmaRuntime preflight", () => {
     expect(await clarifyTerminal).toMatchObject({ status: "completed", route: "direct" });
   });
 
-  it("retries transient control responses before public output and stops after the retry cap", async () => {
+  it("surfaces provider response errors without adding a second retry loop", async () => {
     const transient = fauxAssistantMessage("");
     transient.stopReason = "error";
     transient.errorMessage = "HTTP 429 rate limit";
-    const runtime = await runtimeWith([
-      transient,
-      classification("simple"),
-      fauxAssistantMessage("after retry"),
-      fauxAssistantMessage("[]"),
-    ]);
-    expect((await runOnce(runtime)).run.status).toBe("completed");
-
-    const first = fauxAssistantMessage("");
-    first.stopReason = "error";
-    first.errorMessage = "network timeout";
-    const second = { ...first };
-    const third = { ...first };
-    const exhausted = await runtimeWith([first, second, third]);
-    const result = (await runOnce(exhausted)).run;
+    const runtime = await runtimeWith([transient]);
+    const result = (await runOnce(runtime)).run;
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("network timeout");
+    expect(result.error).toContain("HTTP 429 rate limit");
   });
 
   it("implements every internal schedule-manage operation and validates required fields", async () => {

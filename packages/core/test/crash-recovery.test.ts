@@ -49,6 +49,12 @@ describe("real process crash recovery", () => {
         expect(run?.status).toBe("interrupted");
         if (scenario.actionStatus)
           expect(database.listRunActions(run?.id as string)[0]?.status).toBe(scenario.actionStatus);
+        if (scenario.point.startsWith("tool.completed")) {
+          const toolResult = database
+            .listAgentMessages(session?.id as string)
+            .find((item) => item.message.role === "toolResult");
+          expect(toolResult?.message).toMatchObject({ role: "toolResult" });
+        }
         if (scenario.modelStatus) {
           const call = database.db.prepare("SELECT status FROM model_calls WHERE run_id=?").get(run?.id) as {
             status: string;
