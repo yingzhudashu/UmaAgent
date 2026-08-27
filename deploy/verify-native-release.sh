@@ -3,6 +3,9 @@ set -euo pipefail
 
 release_dir=${1:?usage: verify-native-release.sh RELEASE_DIR SHARED_NODE_MODULES}
 shared_dir=${2:?usage: verify-native-release.sh RELEASE_DIR SHARED_NODE_MODULES}
+node_bin=/opt/node-v22.23.2-linux-x64/bin/node
+
+[[ -x "$node_bin" ]] || { echo "required Node runtime is missing: $node_bin" >&2; exit 1; }
 
 release_real=$(readlink -f -- "$release_dir")
 shared_real=$(readlink -f -- "$shared_dir")
@@ -44,7 +47,7 @@ done
 
 (
   cd "$release_real"
-  node --input-type=module -e "await import('@uma-agent/protocol'); await import('@uma-agent/telemetry'); await import('@uma-agent/core'); await import('./apps/server/dist/app.js')"
+  "$node_bin" --input-type=module -e "await import('@uma-agent/protocol'); await import('@uma-agent/telemetry'); await import('@uma-agent/core'); await import('./apps/server/dist/app.js')"
 )
 
 printf 'UmaAgent release verified: %s\n' "$release_real"
