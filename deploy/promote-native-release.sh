@@ -7,6 +7,7 @@ state_dir=/var/lib/uma-agent/state
 secret_file=/etc/uma-agent/protected-user-pat
 current_link=/opt/uma-agent/current
 unit=/etc/systemd/system/uma-agent.service
+browser_unit=/etc/systemd/system/uma-browser-worker.service
 guard_dir=/var/lib/uma-agent/release-guards
 backup_dir=/srv/backups/uma-agent
 node_bin=/opt/node-v22.23.2-linux-x64/bin/node
@@ -32,6 +33,8 @@ chmod 0600 "$before"
 previous=$(readlink -f -- "$current_link")
 unit_backup=$(mktemp /run/uma-agent.service.XXXXXX)
 cp -- "$unit" "$unit_backup"
+browser_unit_backup=$(mktemp /run/uma-browser-worker.service.XXXXXX)
+cp -- "$browser_unit" "$browser_unit_backup"
 services=(uma-agent.service uma-browser-worker.service uma-feishu-mcp.service uma-feishu-adapter.service)
 for service in "${services[@]}"; do
   systemctl cat "$service" >/dev/null
@@ -41,12 +44,16 @@ rollback() {
   ln -sfn -- "$previous" "${current_link}.rollback"
   mv -Tf -- "${current_link}.rollback" "$current_link"
   install -o root -g root -m 0644 "$unit_backup" "$unit"
+  install -o root -g root -m 0644 "$browser_unit_backup" "$browser_unit"
   systemctl daemon-reload
   systemctl restart "${services[@]}" || true
+  rm -f -- "$unit_backup" "$browser_unit_backup"
 }
 trap rollback ERR
 
 install -o root -g root -m 0644 "$release_real/deploy/uma-agent.service" "$unit"
+install -o root -g root -m 0644 "$release_real/deploy/uma-browser-worker.service" "$browser_unit"
+install -d -o umaagent -g umaagent -m 0770 /var/lib/uma-agent/telemetry
 systemctl daemon-reload
 systemctl stop "${services[@]}"
 ln -sfn -- "$release_real" "${current_link}.next"
@@ -60,7 +67,10 @@ for _ in {1..30}; do
   fi
   sleep 1
 done
-[[ "$ready" = 1 ]] || { echo "UmaAgent readiness timed out" >&2; exit 1; }
+if [[ "$ready" != 1 ]]; then
+  echo "UmaAgent readiness timed out" >&2
+  false
+fi
 curl --fail --silent --show-error http://127.0.0.1:3210/api/v14/health/live >/dev/null
 curl --fail --silent --show-error http://127.0.0.1:3210/api/v14/health/ready >/dev/null
 "$node_bin" "$release_real/deploy/verify-protected-auth.mjs" "$secret_file" >/dev/null
@@ -68,6 +78,6 @@ curl --fail --silent --show-error http://127.0.0.1:3210/api/v14/health/ready >/d
 chmod 0600 "$after"
 "$node_bin" "$release_real/deploy/compare-protected-user.mjs" "$before" "$after" >/dev/null
 trap - ERR
-rm -f -- "$unit_backup"
+rm -f -- "$unit_backup" "$browser_unit_backup"
 printf 'Promoted UmaAgent release: %s\n' "$release_real"
 printf 'Protected state backup: %s\n' "$backup_db"
