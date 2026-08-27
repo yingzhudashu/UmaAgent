@@ -10,6 +10,7 @@ Group=umaagent-xianyu
 SupplementaryGroups=umaagent
 WorkingDirectory=/opt/uma-agent/current
 Environment=NODE_ENV=production
+EnvironmentFile=/etc/uma-agent/uma.env
 ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent/current/apps/xianyu-adapter/dist/main.js --config=/etc/uma-agent/config.user.json
 Restart=on-failure
 RestartSec=5

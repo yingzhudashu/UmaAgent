@@ -5,12 +5,10 @@
 ## 事实源与分层
 
 - Core Server 是业务运行、权限、模型、工具和 `state.db` 的唯一事实源；跨服务 Trace 统一写入独立 telemetry 存储。
-- `@uma-agent/client` 是 CLI、Web、Feishu 和 Xianyu 的唯一 HTTP/WebSocket 客户端边界。
 - Protocol 使用严格 TypeBox schema；服务端拒绝未知字段。
 - SQLite 使用 WAL；schema 不匹配直接拒绝启动。
 - Trace 只保存脱敏属性和耗时，不保存 prompt、完整模型响应、隐藏思维链、凭据或原始工具参数。
 - Windows 真实运行数据位于 `%LOCALAPPDATA%/UmaAgent`：`state` 保存 Core 状态，`workspaces` 保存用户工作区，`channels` 保存 Adapter 状态；仓库根目录不承载运行数据。
-- Feishu/Xianyu Adapter 与 Feishu MCP 使用 `config.user.json` 管理应用和渠道参数；Feishu MCP Bearer Token 与 Core MCP 配置统一从 `FEISHU_MCP_TOKEN` 环境变量读取。旧应用凭据环境变量入口已删除。
 
 ## 关键不变量
 
@@ -30,7 +28,6 @@
 | Server/Client | API v14、统一错误映射、权限和分页已审查 | Server/Client tests |
 | Web | React Query、事件重连、离线只读缓存和移动布局已审查 | Playwright E2E |
 | Trace/Diagnostics | 父子关系、脱敏、分页、资源快照和 p50/p95/p99 已审查 | Trace/diagnostics tests |
-| Feishu/Xianyu | 重连、去重、回调、控制面认证和外部失败边界已审查 | Adapter tests；真实门禁需显式授权 |
 | 文档/配置 | README、部署、基线、功能矩阵和示例配置按当前代码核对 | 本文档与 `docs/README.md` |
 
 当前尺寸基线记录在 `scripts/architecture-baseline.json`。本次升级新增了严格 Protocol 类型、优化应用持久化、趋势查询和 Web 管理区域；`runtime.ts`、`database.ts`、Server、CLI、Web 和 Protocol 的进一步拆分必须由 Trace/profiler 证据驱动，禁止为了降低行数进行行为不变但风险不明的拆分。
@@ -43,7 +40,6 @@
 | --- | --- | --- |
 | Faux 性能基线 | 通过 | 20 个请求、240 个 durable 事件；API p50/p95/p99 = 7.47/9.33/10.66 ms；事件 p50/p95/p99 = 3.34/4.49/5.37 ms；RSS 峰值 176,771,072 B；WAL 峰值 4,128,272 B |
 | Faux soak | 通过 | 36.3 秒、42 条消息、504 个 durable 事件；RSS 140,054,528 -> 142,737,408 B；WAL 峰值 1,882,872 B |
-| 分支覆盖率 | 门禁通过，仍需提升 | 总体 73.11%；Core 73.32%、Client 74.88%、Channel Adapter 49.29%、Server 67.63%、Feishu Adapter 75.08%；以实测向下取整值作为只升不降 ratchet，80% 为目标 |
 | 真实 smoke/eval/perf/soak | 未在当前环境执行 | 必须显式提供隔离环境的 `UMA_REAL_*` 配置；缺少配置时安全跳过，不将 faux 结果冒充真实通过 |
 
 ## 验收命令

@@ -7,9 +7,7 @@ agent.example.com {
   }
 }
 
-# Optional: expose only the Feishu interactive-card callback. Message events use
 # the official outbound long connection and do not need a public webhook.
-feishu-callback.example.com {
   @card path /webhook/card
   handle @card {
     reverse_proxy 127.0.0.1:3220

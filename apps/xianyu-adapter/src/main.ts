@@ -13,11 +13,6 @@ function requireControlToken(request: IncomingMessage, token: string): void {
   if (header !== `Bearer ${token}`) throw new Error("Xianyu control authentication required");
 }
 
-function localHealthRequest(request: IncomingMessage): boolean {
-  const address = request.socket.remoteAddress;
-  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
-}
-
 function allowedImageUrl(value: string): boolean {
   const url = new URL(value);
   return (
@@ -130,7 +125,7 @@ export function createConfiguredXianyuAdapter(transport: XianyuTransport, state:
   };
   subscribeSession = subscribe;
   for (const [sessionId, conversation] of conversations) subscribe(sessionId, conversation);
-  return { adapter, client, sessions, subscribe };
+  return { adapter, client, sessions, conversations, subscribe };
 }
 
 async function loadXianyuState(path: string): Promise<XianyuState> {
@@ -178,9 +173,10 @@ function createStateWriter(path: string, state: XianyuState): () => void {
 export async function startXianyuService(
   configPath = process.argv.find((arg) => arg.startsWith("--config="))?.slice(9) ?? "config.user.json",
 ) {
-  const user = await loadUserConfig(configPath, "xianyu");
+  const user = await loadUserConfig(configPath);
   const cookie = user.xianyu.cookie;
-  const controlToken = user.xianyu.controlToken;
+  const controlToken = process.env.UMA_XIANYU_CONTROL_TOKEN?.trim();
+  if (!controlToken) throw new Error("UMA_XIANYU_CONTROL_TOKEN is required");
   const host = user.xianyu.host;
   const port = user.xianyu.port;
   const statePath = join(user.xianyu.stateDir, "state.json");
@@ -210,11 +206,7 @@ export async function startXianyuService(
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
     try {
       if (request.url === "/health" && request.method === "GET") {
-        if (!localHealthRequest(request)) {
-          response.writeHead(403, { "content-type": "application/json" });
-          response.end(JSON.stringify({ error: "Local health check required" }));
-          return;
-        }
+        requireControlToken(request, controlToken);
         response.writeHead(200, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
@@ -229,6 +221,31 @@ export async function startXianyuService(
         requireControlToken(request, controlToken);
         configured.adapter.pause();
         response.writeHead(204).end();
+        return;
+      }
+      if (request.url === "/start" && request.method === "POST") {
+        requireControlToken(request, controlToken);
+        await configured.adapter.start();
+        response.writeHead(204).end();
+        return;
+      }
+      if (request.url === "/stop" && request.method === "POST") {
+        requireControlToken(request, controlToken);
+        await configured.adapter.stop();
+        response.writeHead(204).end();
+        return;
+      }
+      if (request.url === "/conversations" && request.method === "GET") {
+        requireControlToken(request, controlToken);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify(
+            [...configured.conversations.entries()].map(([sessionId, conversation]) => ({
+              sessionId,
+              conversation,
+            })),
+          ),
+        );
         return;
       }
       if (request.url === "/resume" && request.method === "POST") {

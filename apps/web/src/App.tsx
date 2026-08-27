@@ -12,6 +12,7 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
+  Store,
   TerminalSquare,
   Trash2,
 } from "lucide-react";
@@ -25,6 +26,7 @@ import { ResourceArea } from "./areas/ResourceArea.js";
 import { ApprovalBar, RunPanel } from "./areas/RunArea.js";
 import { ScheduleArea } from "./areas/ScheduleArea.js";
 import { SessionArea } from "./areas/SessionArea.js";
+import { XianyuArea } from "./areas/XianyuArea.js";
 import {
   cacheCursor,
   cachedCursor,
@@ -86,6 +88,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const scrollFrameRef = useRef<number | undefined>(undefined);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [xianyuOpen, setXianyuOpen] = useState(false);
 
   const sessions = useQuery({
     queryKey: ["sessions"],
@@ -618,6 +621,14 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               </button>
               <button
                 type="button"
+                className={`icon ${xianyuOpen ? "active" : ""}`}
+                onClick={() => setXianyuOpen((value) => !value)}
+                title="咸鱼控制台"
+              >
+                <Store />
+              </button>
+              <button
+                type="button"
                 className="icon"
                 onClick={renameSession}
                 title="重命名会话"
@@ -867,6 +878,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             </form>
           </div>
         </Workspace>
+        {xianyuOpen && <XianyuArea client={client} onClose={() => setXianyuOpen(false)} />}
         <CommandPaletteHost
           open={commandOpen}
           client={client}

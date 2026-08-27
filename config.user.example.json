@@ -4,22 +4,8 @@
     "serverUrl": "http://127.0.0.1:3210",
     "token": "填入 Core 个人访问令牌"
   },
-  "feishu": {
-    "appId": "填入飞书 App ID",
-    "appSecret": "填入飞书 App Secret",
-    "verificationToken": "可选：飞书回调 Verification Token",
-    "encryptKey": "可选：飞书回调 Encrypt Key",
-    "allowedOpenIds": ["ou_你的 Open ID"],
-    "host": "127.0.0.1",
-    "port": 3220,
-    "stateDir": "%LOCALAPPDATA%/UmaAgent/channels/feishu",
-    "maxAttachmentBytes": 26214400,
-    "mcpHost": "127.0.0.1",
-    "mcpPort": 3240
-  },
   "xianyu": {
     "cookie": "运行 uma xianyu login 后由 CLI 写入",
-    "controlToken": "填入闲鱼控制面 Bearer Token",
     "host": "127.0.0.1",
     "port": 3250,
     "stateDir": "%LOCALAPPDATA%/UmaAgent/channels/xianyu"

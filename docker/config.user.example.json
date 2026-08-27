@@ -4,15 +4,10 @@
     "serverUrl": "http://uma:3210",
     "token": "填入 Core 个人访问令牌"
   },
-  "feishu": {
-    "appId": "填入飞书 App ID",
-    "appSecret": "填入飞书 App Secret",
-    "allowedOpenIds": ["ou_你的 Open ID"],
+  "xianyu": {
+    "cookie": "闲鱼 Cookie",
     "host": "0.0.0.0",
-    "port": 3220,
-    "stateDir": "/data/feishu",
-    "maxAttachmentBytes": 26214400,
-    "mcpHost": "0.0.0.0",
-    "mcpPort": 3240
+    "port": 3250,
+    "stateDir": "/data/xianyu"
   }
 }

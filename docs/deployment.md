@@ -1,12 +1,10 @@
 # UmaAgent 服务器部署与验收
 
-本文档面向 UmaAgent `1.3.0`、Protocol v14、SQLite schema 20。Core 是唯一业务权威服务，Browser Worker、Feishu Adapter、Feishu MCP 和 Skill Worker 都是独立进程，不得访问 Core 的 `state.db` 或 workspace。Core、Server 与 Browser Worker 仅共享独立 telemetry 目录。
 
 ## 1. 部署前确认
 
 推荐起点：Linux x86_64、2 核 CPU、4 GiB 内存和 20 GiB 可用磁盘；启用 Chromium Browser Worker 时建议 4 核、8 GiB。需要 Docker Engine 24+、Compose v2、Git，以及可访问模型 Provider 的出站 HTTPS。Node 原生部署要求 Node.js 22.19.0 或更新的 22.x。
 
-公网只开放反向代理的 80/443。默认 Compose 将 Core `3210` 和 Feishu Adapter `3220` 绑定到宿主机回环地址；Browser Worker `3230`、Feishu MCP `3240` 和 Skill Worker `3250` 只在 Docker 网络中暴露，不应发布到公网。
 
 部署前运行：
 
@@ -40,14 +38,10 @@ openssl rand -hex 32 # BROWSER_WORKER_TOKEN
 
 配置是严格 JSON，未知字段会使 Core 拒绝启动。非回环 HTTP MCP 必须设置 `authTokenEnv`。
 
-Feishu MCP 配置片段：
 
 ```json
 {
-  "name": "feishu",
   "transport": "http",
-  "url": "http://feishu-mcp:3240/mcp",
-  "authTokenEnv": "FEISHU_MCP_TOKEN"
 }
 ```
 
@@ -93,7 +87,6 @@ docker compose \
 | --- | --- | --- |
 | Core SQLite、WAL、上传、技能 | `/data/state` | `umaagent_uma-state` 命名卷 |
 | 服务器工作区 | `/data/workspace` | `./workspace` bind mount |
-| Feishu 队列和映射 | `/data/feishu`（外部 state 对应 `channels/feishu`） | `umaagent_feishu-state` 命名卷 |
 | Skill Worker scratch | `/scratch` | `umaagent_skill-scratch` 命名卷 |
 
 卷名前缀由 `COMPOSE_PROJECT_NAME` 决定。不要让第二个 Core 挂载同一 `uma-state` 卷；SQLite WAL 是单进程、单副本设计。
@@ -177,7 +170,6 @@ sudo systemctl status uma-agent
 journalctl -u uma-agent -n 200 --no-pager
 ```
 
-Browser Worker 和 Feishu 服务应使用各自的 systemd unit 与环境文件，不要和 Core 共用系统用户、Token 或可写目录。
 
 ## 4. 健康检查与首轮验收
 
@@ -226,37 +218,17 @@ Caddy 和 Nginx 样例都支持 WebSocket。证书域名必须和 `server.webOri
 
 ## 6. 可选服务
 
-### Feishu Adapter
+### Xianyu Adapter
 
-复制仓库根目录的 `config.user.example.json` 为 `/etc/uma-agent/config.user.json`（Docker 使用 `docker/config.user.example.json` 生成被挂载的 `docker/config.user.json`），仅在该文件的 `core` 和 `feishu` 节点填写令牌、应用凭据与白名单。Adapter 不再读取 `FEISHU_*` 凭据环境变量。默认使用飞书官方长连接接收 `im.message.receive_v1`，不需要公开消息 Webhook：
-
-```bash
-docker compose \
-  -f docker-compose.yml \
-  -f deploy/docker-compose.production.yml \
-  --profile feishu up -d --build
-```
-
-如需交互卡片按钮，在 `config.user.json` 中填写 `feishu.verificationToken` 和 `feishu.encryptKey`，并将飞书卡片回调指向 `https://feishu-callback.example.com/webhook/card`。未配置公网回调时消息收发仍可使用，但按钮回调会禁用。Adapter 的 `/health` 可由服务器本机检查：
+闲鱼 Adapter 只监听回环地址，Core 通过内部控制令牌代理访问。配置 `UMA_XIANYU_CONTROL_TOKEN`、`UMA_XIANYU_ADMIN_PASSWORD_HASH` 和用户配置中的 Cookie 后启动：
 
 ```bash
-curl --fail http://127.0.0.1:3220/health
+sudo systemctl enable --now uma-xianyu-adapter.service
+curl --fail http://127.0.0.1:3250/health
 ```
 
-只授权所需的飞书应用权限，发布应用版本，并确认白名单之外的 Open ID 无法触发 Core。
+Adapter 的 `/start`、`/stop`、`/pause`、`/resume`、`/conversations`、`/history`、`/item`、`/chat` 和 `/publish` 只接受内部控制令牌；客户端不得直连 Adapter。
 
-### Feishu MCP
-
-在同一 `config.user.json` 的 `feishu.mcpHost` 和 `mcpPort` 中配置 MCP，并在 `.env`/`uma.env` 中设置 `FEISHU_MCP_TOKEN`。在 Core 配置的 `mcpServers` 中加入前述片段，然后启动 profile 并重建 Core：
-
-```bash
-docker compose \
-  -f docker-compose.yml \
-  -f deploy/docker-compose.production.yml \
-  --profile feishu-tools up -d --build
-```
-
-Feishu MCP 不挂载 Core state/workspace。所有修改类 MCP 工具仍须经过 Core 审批、Action Ledger 和审计。
 
 ### Skill Worker
 
@@ -273,11 +245,10 @@ docker compose \
 
 ## 7. 防火墙与安全检查
 
-- 入站只允许 SSH 管理端口及 80/443；3210、3220、3230、3240、3250 不对公网开放。
-- Core Token、Browser/Feishu/Skill Worker Token 必须分别生成，不能复用。
+- 入站只允许 SSH 管理端口及 80/443；3210、3230、3250 不对公网开放。
 - `.env` 权限设为 `0600`；日志、工单和截图中不得出现 Authorization、Cookie、API Key 或 Secret。
 - Browser Worker 必须保留 Bearer Token；它阻止私网、保留地址和非 HTTP(S) 导航，但仍应部署在受限网络。
-- Adapter 和 MCP 不挂载 `/data/state` 或 `/data/workspace`。
+- Xianyu Adapter 不挂载 `/data/state` 或 `/data/workspace`。
 - 定期检查 `docker compose logs`、磁盘、`state.db-wal` 大小和容器重启次数。
 - 配置中的 Provider URL 和 MCP URL 必须是受信地址；不要在 URL 中放用户名、密码或 Token。
 
@@ -287,7 +258,6 @@ SQLite 使用 WAL。可靠备份必须先停止写入；不要只复制正在运
 
 ```bash
 mkdir -p backups
-docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml stop uma feishu-adapter
 
 docker run --rm \
   -v umaagent_uma-state:/source:ro \
@@ -295,12 +265,9 @@ docker run --rm \
   alpine sh -c 'cd /source && tar czf /backup/uma-state.tgz .'
 
 docker run --rm \
-  -v umaagent_feishu-state:/source:ro \
   -v "$PWD/backups:/backup" \
-  alpine sh -c 'cd /source && tar czf /backup/feishu-state.tgz .'
 ```
 
-备份应包括完整 Core state（`state.db`、可能存在的 WAL/SHM、uploads 和托管技能）、Feishu state，以及不含密钥的生产配置模板。不要备份 `.env` 或任何 Secret。校验压缩包可读取并复制到另一台受控存储。
 
 恢复前必须确认目标卷名，停止所有相关容器，并使用生成备份时的相同 UmaAgent 版本。清空目标卷会破坏现有数据，先再次核对：
 
@@ -312,9 +279,7 @@ docker run --rm \
   alpine sh -c 'find /target -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && tar xzf /backup/uma-state.tgz -C /target'
 ```
 
-恢复 Feishu state 使用同样方式但指向 `umaagent_feishu-state`。启动后先检查 readiness，再检查 Session、附件、技能和 Adapter 映射。
 
-原生部署从新版本开始时，使用 release 中的 `deploy/reset-native-state.sh --apply`。脚本只处理 UmaAgent Core、工作区、Browser Worker 和 Feishu 独立 state，并先移动到 `/srv/backups/uma-agent/reset-<UTC>`；不会读取、删除或移动 `/home/ubuntu/miniagent`。
 
 数据库只接受 schema 20。schema 19、旧版本和未来版本均直接拒绝启动，不执行迁移、fallback 或隐式令牌变更。升级前必须备份并完成完整性与保护用户指纹检查；失败时只切换 release 指针，不覆盖数据库。
 
@@ -372,7 +337,6 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 | Web 可打开但无法登录 | Token 错误、跨站 Cookie 未使用 HTTPS、反向代理未传递 Host/协议 |
 | CLI 401 | `UMA_TOKEN` 无效、已撤销或已过期 |
 | 模型运行失败 | Provider URL、模型 ID、API 类型、Key 或模型 capabilities 不匹配 |
-| Feishu 无入站 | 应用未发布、事件未启用、Open ID 不在白名单或长连接无法出站 |
 | Core readiness 等待 MCP | profile 未启动、Token 不一致、网络名/URL 错误或循环依赖配置未按本文启动 |
 
 ## 11. 部署验收清单
@@ -384,6 +348,5 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 创建数据后重启 Core，Snapshot、历史和 cursor 连续。
 - [ ] 第二个 Core 无法获取同一状态目录锁。
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
-- [ ] Feishu 白名单、消息去重、重启恢复和可选卡片回调通过。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
 - [ ] 确认当前应用版本、Protocol v14 和 schema 20，保留可回滚 release 与同版本备份。

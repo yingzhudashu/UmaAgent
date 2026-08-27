@@ -19,7 +19,6 @@
 | `packages/telemetry` | Span、资源样本、分页和 OTLP | 脱敏、属性上限、未完成 Span、独立数据库 | Telemetry/Core 测试 | 跨服务 OTLP 实网端到端需显式配置 |
 | `apps/server` | Fastify、认证、所有权和 HTTP 映射 | v14 路由、错误分类、健康检查 | Server 测试、E2E | 反向代理特殊头部需生产验收 |
 | `apps/web` | 聊天、设置、附件和响应式布局 | 状态文案、长文本、登出、附件协议 | Web 单测、Playwright | 浏览器差异需发布后抽查 |
-| Worker/Adapter | Browser、Feishu、Xianyu 外部边界 | 启停、重连、凭据脱敏 | 各包测试 | 真实渠道测试必须使用临时凭据 |
 | 部署与文档 | 发布、备份、恢复、版本事实源 | schema/PAT 门禁和 release 流程 | `docs/deployment.md`、CI | 生产发布受保护 secret 存在性阻断 |
 
 ## 重点审查结论
@@ -29,7 +28,6 @@
 3. Trace 属性、错误和事件均有长度限制和敏感字段脱敏；诊断失败不能改变业务结果。
 4. 所有生产发布必须先备份 SQLite、执行完整性检查，并验证受保护用户的令牌元数据和对象指纹。
 5. 机器审计只能发现模式性问题，不能替代复杂状态机、取消、并发和数据保护边界的人工审查。
-6. 覆盖率门禁按当前实测分支覆盖率向下取整建立 ratchet，禁止通过排除生产文件维持数字。Core、Client、Channel Adapter、Server 和 Feishu Adapter 尚未达到 80%，后续修改必须先补对应分支测试并逐步提高阈值。
 
 ## 本轮证据（2026-08-27）
 

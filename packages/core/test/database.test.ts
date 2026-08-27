@@ -453,7 +453,6 @@ describe("UmaDatabase", () => {
       ["editor.vscode", "用户偏好使用 VS Code 编辑代码", "VS Code 编辑"],
       ["deploy.sqlite", "项目采用 SQLite WAL 单副本部署", "SQLite WAL"],
       ["security.reasoning", "系统永不保存隐藏思维链", "隐藏思维链"],
-      ["channel.feishu", "飞书消息通过独立 Adapter 接入", "飞书 Adapter"],
       ["runtime.pi", "Runtime reuses the stable Pi agent loop", "stable Pi agent"],
       ["testing.playwright", "Web end-to-end tests use Playwright", "Playwright end-to-end"],
       ["memory.active", "Only active facts are injected into prompts", "active facts prompts"],

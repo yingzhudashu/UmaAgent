@@ -149,6 +149,7 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
       "runtime",
       "roles",
       "embedding",
+      "xianyu",
     ],
     "config",
   );
@@ -159,6 +160,8 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
   const runtime = record(root.runtime ?? {}, "runtime");
   const roles = record(root.roles, "roles");
   const embedding = record(root.embedding ?? {}, "embedding");
+  const xianyuValue = root.xianyu === undefined ? undefined : record(root.xianyu, "xianyu");
+  if (xianyuValue) assertKeys(xianyuValue, ["adapterUrl", "controlTokenEnv"], "xianyu");
   const models = Object.entries(modelProfiles).map(([id, value], index) => {
     const item = record(value, `models.${id}`);
     const providerId = stringValue(item.provider, `models.${id}.provider`);
@@ -245,6 +248,14 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
       ),
       retryAttempts: numberValue(embedding.retryAttempts, "embedding.retryAttempts", 2),
     },
+    ...(xianyuValue
+      ? {
+          xianyu: {
+            adapterUrl: httpUrl(xianyuValue.adapterUrl, "xianyu.adapterUrl"),
+            controlTokenEnv: stringValue(xianyuValue.controlTokenEnv, "xianyu.controlTokenEnv"),
+          },
+        }
+      : {}),
   };
   if (
     !models.some(
@@ -262,6 +273,8 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
   }
   if (result.embedding.enabled && !process.env[result.embedding.apiKeyEnv]?.trim())
     throw new Error(`Missing embedding API key: ${result.embedding.apiKeyEnv}`);
+  if (result.xianyu && !process.env[result.xianyu.controlTokenEnv]?.trim())
+    throw new Error(`Missing Xianyu control token: ${result.xianyu.controlTokenEnv}`);
   if (!isLoopbackHost(host) && allowedWebOrigins.length === 0)
     throw new Error("Public server hosts require at least one server.webOrigins entry");
   return result;

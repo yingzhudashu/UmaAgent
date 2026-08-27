@@ -35,7 +35,7 @@ unit_backup=$(mktemp /run/uma-agent.service.XXXXXX)
 cp -- "$unit" "$unit_backup"
 browser_unit_backup=$(mktemp /run/uma-browser-worker.service.XXXXXX)
 cp -- "$browser_unit" "$browser_unit_backup"
-services=(uma-agent.service uma-browser-worker.service uma-feishu-mcp.service uma-feishu-adapter.service)
+services=(uma-agent.service uma-browser-worker.service)
 for service in "${services[@]}"; do
   systemctl cat "$service" >/dev/null
 done

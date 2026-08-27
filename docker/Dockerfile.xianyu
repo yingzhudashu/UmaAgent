@@ -1,0 +1,23 @@
+FROM node:22.19.0-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json tsconfig.json tsconfig.base.json biome.json ./
+COPY packages ./packages
+COPY apps/xianyu-adapter ./apps/xianyu-adapter
+RUN npm ci --ignore-scripts
+RUN npm run build --workspace=@uma-agent/xianyu-adapter
+
+FROM node:22.19.0-bookworm-slim
+ENV NODE_ENV=production
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY packages/channel-adapter/package.json ./packages/channel-adapter/package.json
+COPY packages/client/package.json ./packages/client/package.json
+COPY packages/protocol/package.json ./packages/protocol/package.json
+COPY apps/xianyu-adapter/package.json ./apps/xianyu-adapter/package.json
+RUN npm ci --omit=dev --ignore-scripts --workspace=@uma-agent/xianyu-adapter
+COPY --from=build /app/apps/xianyu-adapter/dist ./apps/xianyu-adapter/dist
+COPY --from=build /app/packages/channel-adapter/dist ./packages/channel-adapter/dist
+COPY --from=build /app/packages/client/dist ./packages/client/dist
+COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
+EXPOSE 3250
+CMD ["node", "apps/xianyu-adapter/dist/main.js", "--config=/run/uma/config.user.json"]

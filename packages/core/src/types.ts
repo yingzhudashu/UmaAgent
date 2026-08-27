@@ -50,6 +50,7 @@ export interface UmaConfig {
   runtime: { maxParallelSessions: number; approvalTimeoutMs: number; toolTimeoutMs: number };
   roles: { default: ModelRef; reasoning: ModelRef; fast: ModelRef; vision: ModelRef };
   embedding: EmbeddingConfig;
+  xianyu?: { adapterUrl: string; controlTokenEnv: string };
 }
 
 export interface EmbeddingConfig {

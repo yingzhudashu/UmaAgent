@@ -7,6 +7,10 @@
     "webOrigins": ["https://robotclaw.site", "https://www.robotclaw.site"],
     "maxUploadBytes": 20971520
   },
+  "xianyu": {
+    "adapterUrl": "http://127.0.0.1:3250",
+    "controlTokenEnv": "UMA_XIANYU_CONTROL_TOKEN"
+  },
   "auth": { "webSessionHours": 168 },
   "providers": {
     "openai": {
@@ -55,12 +59,6 @@
       "transport": "http",
       "url": "http://127.0.0.1:3230/mcp",
       "authTokenEnv": "BROWSER_WORKER_TOKEN"
-    },
-    {
-      "name": "feishu",
-      "transport": "http",
-      "url": "http://127.0.0.1:3240/mcp",
-      "authTokenEnv": "FEISHU_MCP_TOKEN"
     }
   ],
   "runtime": {

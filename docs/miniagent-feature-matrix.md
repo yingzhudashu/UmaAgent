@@ -15,8 +15,6 @@
 | schedule/background task | implemented | Scheduler 重启、occurrence、API 测试 | soak 验证无重叠和无重复 |
 | SKILL.md 生命周期 | implemented | 内置 Web/StackExchange/Skill Creator/Vetter 基线、MiniAgent frontmatter 门控、staging、审查、enable/disable、refresh 测试 | 可执行 Skill 继续通过隔离 Worker 验证 |
 | MCP stdio/HTTP | implemented | MCP 状态、审批、超时测试 | 保持 Core/Worker 隔离 |
-| Feishu 消息与卡片 | implemented | Fake Gateway、去重、cursor、回调和重连测试 | 仅在显式授权时运行真实网关验收 |
-| Feishu 文档/Bitable/Drive | implemented | Markdown 创建/追加、Drive 分页/附件、Bitable 映射和 malformed response 高层契约测试 | 仅在显式授权时运行真实网关验收 |
 | `/test` 与评测趋势 | implemented | Eval Runner Faux、趋势 API、CLI/Web 趋势展示和失败分类测试 | 持续用真实 Provider 验证 |
 | trace/diagnostics/stats | implemented | SQLite Trace spans、Run 查询、资源快照、p50/p95/p99 diagnostics | 持续用真实 Provider 和 soak 验证 |
 | dream 维护 | implemented | 确定性 rollup/裁剪，不调用模型 | 不引入模型梦境生成 |

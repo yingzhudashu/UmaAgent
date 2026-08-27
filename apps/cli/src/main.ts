@@ -12,7 +12,6 @@ import {
   Text,
   TuiMainScreen,
 } from "@earendil-works/pi-tui";
-import { loadUserConfig } from "@uma-agent/channel-adapter";
 import { UmaClient, UmaClientError } from "@uma-agent/client";
 import {
   AGENT_SHORTCUT_COMMANDS,
@@ -26,7 +25,6 @@ import {
 import clipboard from "clipboardy";
 import { BUILTIN_EVALUATIONS, runBuiltInEvaluations } from "./evaluations.js";
 import { createTuiAutocomplete } from "./tui-completion.js";
-import { xianyuLogin } from "./xianyu-login.js";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "chat";
@@ -874,33 +872,55 @@ async function doctorCommand(): Promise<void> {
   if (!result.ok) process.exitCode = 1;
 }
 
-async function channelStatusCommand(): Promise<void> {
-  const channelUrl = valueAfter("--channel-url") ?? process.env.UMA_CHANNEL_URL;
-  if (!channelUrl) throw new Error("Set --channel-url=<url> or UMA_CHANNEL_URL to query an Adapter");
-  const response = await fetch(`${channelUrl.replace(/\/$/, "")}/health`);
-  if (!response.ok) throw new Error(`Channel health request failed: HTTP ${response.status}`);
-  console.log(JSON.stringify(await response.json(), null, 2));
+async function readHidden(prompt: string): Promise<string> {
+  process.stdout.write(prompt);
+  const input = process.stdin;
+  if (!input.isTTY || typeof input.setRawMode !== "function") {
+    const chunks: Buffer[] = [];
+    for await (const chunk of input) chunks.push(Buffer.from(chunk));
+    process.stdout.write("\n");
+    return Buffer.concat(chunks).toString("utf8").trim();
+  }
+  input.setRawMode(true);
+  input.resume();
+  return await new Promise<string>((resolve) => {
+    const chars: string[] = [];
+    const onData = (chunk: Buffer) => {
+      for (const char of chunk.toString("utf8")) {
+        if (char === "\r" || char === "\n") {
+          input.setRawMode?.(false);
+          input.pause();
+          input.off("data", onData);
+          process.stdout.write("\n");
+          resolve(chars.join(""));
+        } else if (char === "\u0003") {
+          process.exitCode = 130;
+        } else if (char === "\u007f") chars.pop();
+        else chars.push(char);
+      }
+    };
+    input.on("data", onData);
+  });
 }
 
 async function xianyuCommand(): Promise<void> {
   const action = positionals[0] ?? "status";
-  const channelUrl = valueAfter("--channel-url") ?? process.env.UMA_CHANNEL_URL;
-  if (action === "login") {
-    const configPath = valueAfter("--config") ?? process.env.UMA_CONFIG_USER ?? "config.user.json";
-    await xianyuLogin(configPath);
-    return;
-  }
-  if (!channelUrl) throw new Error("Set --channel-url=<url> or UMA_CHANNEL_URL");
-  const configPath = valueAfter("--config") ?? "config.user.json";
-  const user = await loadUserConfig(configPath, "xianyu");
-  const headers = { authorization: `Bearer ${user.xianyu.controlToken}` };
-  const endpoint = action === "status" ? "/health" : `/${action}`;
-  const response = await fetch(`${channelUrl.replace(/\/$/, "")}${endpoint}`, {
-    method: action === "status" ? "GET" : "POST",
-    headers,
-  });
-  if (!response.ok) throw new Error(`Xianyu request failed: HTTP ${response.status}`);
-  if (response.status !== 204) console.log(JSON.stringify(await response.json(), null, 2));
+  const password = await readHidden("闲鱼管理员密码: ");
+  const { grant } = await client.xianyuUnlock(password);
+  if (action === "status") console.log(JSON.stringify(await client.xianyuStatus(grant), null, 2));
+  else if (action === "start") await client.xianyuStart(grant);
+  else if (action === "stop") await client.xianyuStop(grant);
+  else if (action === "pause") await client.xianyuPause(grant);
+  else if (action === "resume") await client.xianyuResume(grant);
+  else if (action === "history") {
+    const id = positionals[1];
+    if (!id) throw new Error("uma xianyu history <conversation-id>");
+    console.log(JSON.stringify(await client.xianyuHistory(grant, id), null, 2));
+  } else if (action === "item") {
+    const id = positionals[1];
+    if (!id) throw new Error("uma xianyu item <item-id>");
+    console.log(JSON.stringify(await client.xianyuItem(grant, id), null, 2));
+  } else throw new Error("uma xianyu status|start|stop|pause|resume|history <id>|item <id>");
 }
 
 async function main(): Promise<void> {
@@ -918,11 +938,10 @@ async function main(): Promise<void> {
   else if (command === "audit") await auditCommand();
   else if (command === "eval" || command === "test") await evalCommand();
   else if (command === "sync") await syncCommand();
-  else if (command === "channel" && positionals[0] === "status") await channelStatusCommand();
   else if (command === "xianyu") await xianyuCommand();
   else
     console.log(
-      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel|delete\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa eval list|run|status|show|trend\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|mount|search|unmount|reload\numa xianyu login|status|start|stop|pause|resume\numa channel status --channel-url=<url>\numa doctor",
+      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel|delete\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa eval list|run|status|show|trend\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|mount|search|unmount|reload\numa xianyu login|status|start|stop|pause|resume|history|item\numa doctor",
     );
   client.close();
 }

@@ -29,6 +29,7 @@ import { type AuthPrincipal, AuthService } from "./auth.js";
 import { mapServerError } from "./error-mapping.js";
 import { installHttpTelemetry } from "./httpTelemetry.js";
 import { installRuntimeLogging } from "./runtimeLogging.js";
+import { verifyXianyuPassword, XianyuControlClient, XianyuGrantStore } from "./xianyu.js";
 
 type SocketMessage = {
   type?: string;
@@ -91,6 +92,26 @@ export async function createServer(
     await httpTelemetry.close();
   });
   const auth = new AuthService(runtime);
+  const xianyu = runtime.config.xianyu
+    ? new XianyuControlClient(
+        runtime.config.xianyu.adapterUrl,
+        process.env[runtime.config.xianyu.controlTokenEnv]?.trim() ?? "",
+      )
+    : undefined;
+  const xianyuGrants = new XianyuGrantStore();
+  const xianyuFailures = new Map<string, number[]>();
+  const xianyuPasswordHash = process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH?.trim();
+  const xianyuRateAllowed = (key: string): boolean => {
+    const now = Date.now();
+    const values = (xianyuFailures.get(key) ?? []).filter((time) => now - time < 5 * 60_000);
+    xianyuFailures.set(key, values);
+    return values.length < 5;
+  };
+  const xianyuRecordFailure = (key: string): void => {
+    const values = xianyuFailures.get(key) ?? [];
+    values.push(Date.now());
+    xianyuFailures.set(key, values);
+  };
   await app.register(cookie);
   await app.register(cors, {
     origin: (origin, callback) =>
@@ -285,7 +306,124 @@ export async function createServer(
       crossOrigin: crossOrigin(origin, request.headers.host),
       secure: secureOrigin(origin),
     });
+    const principal = auth.principalFromRequest(request);
+    if (principal) xianyuGrants.revoke(principal.userId);
     return reply.code(204).send();
+  });
+
+  const requireXianyu = (request: FastifyRequest): AuthPrincipal => {
+    const principal = userPrincipal(auth, request);
+    if (!xianyu || !xianyuPasswordHash) throw new Error("Xianyu service is not configured");
+    const grant = request.headers["x-xianyu-grant"];
+    if (typeof grant !== "string" || !xianyuGrants.valid(principal.userId, grant))
+      throw new Error("Xianyu grant expired or missing");
+    return principal;
+  };
+  const xianyuClient = (): XianyuControlClient => {
+    if (!xianyu) throw new Error("Xianyu service is not configured");
+    return xianyu;
+  };
+  app.post<{ Body: { password?: string } }>("/api/v14/xianyu/unlock", async (request, reply) => {
+    const principal = userPrincipal(auth, request);
+    if (!xianyu || !xianyuPasswordHash) throw new Error("Xianyu service is not configured");
+    const key = `${request.ip}:${principal.userId}`;
+    if (!xianyuRateAllowed(key))
+      return reply.code(429).send(errorBody(request.id, "rate_limited", "Too many unlock attempts", true));
+    const password = request.body?.password;
+    if (typeof password !== "string" || !(await verifyXianyuPassword(password, xianyuPasswordHash))) {
+      xianyuRecordFailure(key);
+      return reply
+        .code(403)
+        .send(errorBody(request.id, "forbidden", "Invalid Xianyu administrator password"));
+    }
+    const grant = xianyuGrants.issue(principal.userId);
+    request.log.info({
+      requestId: request.id,
+      userId: principal.userId,
+      action: "xianyu.unlock",
+      result: "ok",
+    });
+    return grant;
+  });
+  app.get("/api/v14/xianyu/status", async (request) => {
+    const principal = requireXianyu(request);
+    const result = await xianyuClient().health();
+    request.log.info({
+      requestId: request.id,
+      userId: principal.userId,
+      action: "xianyu.status",
+      result: "ok",
+    });
+    return result;
+  });
+  app.get("/api/v14/xianyu/conversations", async (request) => {
+    const principal = requireXianyu(request);
+    const result = await xianyuClient().conversations();
+    request.log.info({
+      requestId: request.id,
+      userId: principal.userId,
+      action: "xianyu.conversations",
+      result: "ok",
+    });
+    return result;
+  });
+  const xianyuAction = (path: "/start" | "/stop" | "/pause" | "/resume", action: string) =>
+    app.post(`/api/v14/xianyu${path}`, async (request) => {
+      const principal = requireXianyu(request);
+      await xianyuClient().request<void>(path, { method: "POST" });
+      request.log.info({ requestId: request.id, userId: principal.userId, action, result: "ok" });
+      return { ok: true };
+    });
+  xianyuAction("/start", "xianyu.start");
+  xianyuAction("/stop", "xianyu.stop");
+  xianyuAction("/pause", "xianyu.pause");
+  xianyuAction("/resume", "xianyu.resume");
+  app.get<{ Params: { conversationId: string } }>(
+    "/api/v14/xianyu/history/:conversationId",
+    async (request) => {
+      const principal = requireXianyu(request);
+      const result = await xianyuClient().history(request.params.conversationId);
+      request.log.info({
+        requestId: request.id,
+        userId: principal.userId,
+        action: "xianyu.history",
+        result: "ok",
+      });
+      return result;
+    },
+  );
+  app.get<{ Params: { itemId: string } }>("/api/v14/xianyu/item/:itemId", async (request) => {
+    const principal = requireXianyu(request);
+    const result = await xianyuClient().item(request.params.itemId);
+    request.log.info({
+      requestId: request.id,
+      userId: principal.userId,
+      action: "xianyu.item",
+      result: "ok",
+    });
+    return result;
+  });
+  app.post<{ Body: Record<string, unknown> }>("/api/v14/xianyu/chat", async (request) => {
+    const principal = requireXianyu(request);
+    const result = await xianyuClient().chat(request.body ?? {});
+    request.log.info({
+      requestId: request.id,
+      userId: principal.userId,
+      action: "xianyu.chat",
+      result: "ok",
+    });
+    return result;
+  });
+  app.post<{ Body: Record<string, unknown> }>("/api/v14/xianyu/publish", async (request) => {
+    const principal = requireXianyu(request);
+    const result = await xianyuClient().publish(request.body ?? {});
+    request.log.info({
+      requestId: request.id,
+      userId: principal.userId,
+      action: "xianyu.publish",
+      result: "ok",
+    });
+    return result;
   });
 
   app.get("/api/v14/sessions", async (request) => {

@@ -8,6 +8,7 @@
     "maxUploadBytes": 20971520
   },
   "auth": { "webSessionHours": 168 },
+  "xianyu": { "adapterUrl": "http://127.0.0.1:3250", "controlTokenEnv": "UMA_XIANYU_CONTROL_TOKEN" },
   "providers": {
     "openai": {
       "driver": "openai",

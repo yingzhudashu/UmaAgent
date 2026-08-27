@@ -22,7 +22,6 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 - `/review` 三轮内无工具审查与 `/improve` 不可变答案修订链
 - Agent Profile、结构化渐进记忆、事实 supersede、历史 rollup 与按需原文回溯
 - 技能包 staging、风险扫描、人工启用、热刷新，以及可选的隔离 Skill Worker
-- 独立 Feishu MCP，提供文档、多维表格和云盘工具，不污染消息 Adapter 或 Core
 - 证据化优化提案；接受提案后可在固定验证命令约束下备份、原子应用、失败回滚和人工回滚
 - 每 Run 工具循环保护：重复调用、无进展结果和 A/B ping-pong 会先产生公开告警，再以 `tool_loop_detected` 安全终止
 - 持久化 Faux/real 评测报告、跨设备评测历史，以及知识搜索、重建索引和终态任务清理
@@ -39,7 +38,6 @@ $env:OPENAI_API_KEY = "你的模型密钥"
 npm run build
 npm start
 ```
-
 打开 `http://127.0.0.1:3210`。CLI 使用：
 
 ```powershell
@@ -155,21 +153,27 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
-## 飞书 Adapter
 
-飞书接入是独立进程，不访问 Core SQLite。先复制 `config.user.example.json` 为未纳入 Git 的 `config.user.json`，填写 Core 令牌和飞书配置，然后使用统一配置启动：
 
 ```powershell
 Copy-Item config.user.example.json config.user.json
-# 编辑 config.user.json 中的 core、feishu 字段
-npm run build --workspace=@uma-agent/feishu-adapter
-npm run start:feishu -- --config=config.user.json
 ```
 
 Docker 中请改用 `docker/config.user.example.json` 生成 `docker/config.user.json`；其中 Core 地址必须是 Compose 服务名 `http://uma:3210`。
 
-Adapter 只接受 `config.user.json` 中 `feishu.allowedOpenIds` 白名单中的所有者。Webhook 在签名校验后先持久化去重记录并立即 ACK，后台 Worker 再处理；重启会恢复 pending 入站。私聊全部进入 Core，群聊仅处理白名单用户 @机器人或回复 Adapter 已发送消息的内容；文本、图片和文件会转换为标准消息与 Attachment。运行卡片支持审批、恢复及副作用 Action 决策，更新采用一秒尾随节流且终态立即定稿。按钮只携带短期 opaque token，重复点击保持幂等。Adapter 自己的 SQLite 只保存会话映射、入站队列、卡片游标和回调状态。
 通用渠道类型、指数退避和节流工具由 `@uma-agent/channel-adapter` 提供；Core 不依赖任何渠道 SDK。
+
+## 咸鱼控制台
+
+咸鱼入口由 Web、CLI 和 Android 统一调用 Core API，客户端不直接访问 Adapter。先在服务端设置 `UMA_XIANYU_CONTROL_TOKEN` 与 `UMA_XIANYU_ADMIN_PASSWORD_HASH`，再启动 `uma-xianyu-adapter`。管理员密码使用 `scrypt$N$r$p$salt$digest` 格式；登录用户解锁后获得仅存于内存、有效 30 分钟的 Grant。CLI 用法：
+
+```text
+uma xianyu status|start|stop|pause|resume
+uma xianyu history <conversation-id>
+uma xianyu item <item-id>
+```
+
+Android 工程位于 `android/`，应用 ID 为 `site.robotclaw.umaagent`，生产 Core 地址固定为 `https://robotclaw.site`。PAT 使用 Android Keystore 加密保存，离线状态只读。
 
 ## 质量、记忆与技能
 
@@ -213,14 +217,9 @@ node apps/eval-runner/dist/main.js eval-suite.json
 评测只读取终态 Run 和公开 transcript，不读取数据库、隐藏思维链，也不修改代码或执行 Git。
 完成的不可变报告会通过 Client SDK 上传到 Core；CLI 的 `uma eval`/`/test` 与 Web Evaluation 区域读取同一份跨设备历史。Diagnostics 与 Optimization 区域只展示公开审计聚合和人工提案状态，不提供补丁应用入口。
 
-## Feishu MCP 与隔离 Skill Worker
 
-消息 Adapter 只处理通道。飞书业务工具由 `apps/feishu-mcp` 独立提供，使用官方 SDK 暴露云文档、Bitable 与 Drive MCP 工具，包括 Markdown 创建/追加文档、Bitable 分页与批量记录操作、Drive 上传下载/复制/移动/权限管理。文件输入使用 Uma Attachment ID，通过 Client SDK 下载，不挂载 Core state 或 workspace。所有分页工具统一返回 `items + nextPageToken + hasMore`；不支持的 Markdown 结构保留为公开纯文本。服务必须设置独立 Bearer Token，并仅部署在内部网络：
 
 ```powershell
-# 在 config.user.json 的 feishu.mcpHost/mcpPort 中配置 MCP，并通过 FEISHU_MCP_TOKEN 提供 Bearer Token
-npm run build --workspace=@uma-agent/feishu-mcp
-npm run start --workspace=@uma-agent/feishu-mcp -- --config=config.user.json
 ```
 
 `apps/skill-worker` 只运行已批准且内容哈希与 `skill-worker.json` 清单一致的预打包 JavaScript ESM 工具。它不执行 `npm install`，技能目录只读，scratch 独立；容器默认无 Core state、workspace 或宿主路径挂载。Worker 未部署时，静态技能指令仍可用，但对应可执行工具显示 unavailable。
@@ -237,15 +236,11 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml con
 docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml up -d --build
 ```
 
-飞书消息、飞书业务 MCP 和隔离技能 Worker 使用独立 profile：
 
 ```bash
-docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml --profile feishu up -d
-docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml --profile feishu-tools up -d
 docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml --profile skills up -d
 ```
 
-Compose 默认只向宿主机回环地址发布 Core 和 Adapter；公网入口必须由 Caddy/Nginx 终止 TLS。完整的端口、MCP 注册、飞书长连接、健康检查、状态锁、停机备份、恢复、回滚和验收命令以 [部署文档](docs/deployment.md) 为准。Core 使用单进程 SQLite WAL，同一状态卷不能由多个 Core 共享。
 
 ## 架构边界
 
@@ -258,7 +253,6 @@ apps/server ─> packages/core ─> Pi AI/Agent
                   └───────────> packages/protocol
 ```
 
-`core` 不依赖 Fastify 或 UI；客户端不直接访问数据库或 Agent 对象。未来飞书、桌面端和移动端应使用共享 Client SDK，不把渠道 SDK 引入 Core。
 
 ## 质量检查
 
@@ -276,5 +270,3 @@ npm run test:real:eval
 npm run test:real:perf
 npm run test:real:soak
 ```
-
-单元与集成测试覆盖 Runtime、SQLite、Protocol、Client、Server、CLI JSON 流、Web 离线缓存、飞书持久队列、Feishu MCP、Skill Worker、Browser Worker 和 Eval Runner；Playwright 使用两个独立浏览器上下文验证同一 Session 的实时同步与离线只读。Docker 构建也属于 CI 门禁；本机没有 Docker 时可先完成其余门禁，再在 CI 或具备 Docker Engine 的环境验证全部镜像。
