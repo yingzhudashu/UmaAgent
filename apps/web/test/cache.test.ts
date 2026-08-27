@@ -35,6 +35,18 @@ describe("Web offline cache", () => {
     expect((await cachedSnapshot(id))?.session.id).toBe(id);
   });
 
+  it("writes a snapshot and its cursor as one cache transaction", async () => {
+    const id = crypto.randomUUID();
+    await cacheSnapshot(snapshot(id, 21));
+    await cacheSnapshot({
+      ...snapshot(id, 7),
+      session: { ...snapshot(id, 7).session, title: "Stale" },
+    });
+    expect(await cachedSnapshot(id)).toMatchObject({ snapshotSequence: 21 });
+    expect((await cachedSnapshot(id))?.session.title).toBe("Cached");
+    expect(await cachedCursor(id)).toBe(21);
+  });
+
   it("persists explicitly loaded history pages for offline reading", async () => {
     const id = crypto.randomUUID();
     const item: TranscriptItem = {

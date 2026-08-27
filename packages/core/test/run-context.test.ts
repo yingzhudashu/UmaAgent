@@ -46,7 +46,10 @@ describe("run context builder", () => {
     const contextManager = {
       compact: vi.fn(async () => ({
         summary: { content: "persisted summary" },
-        messages: [{ role: "user", content: "history", timestamp: 1 }],
+        messages: [
+          { role: "compactionSummary", summary: "persisted summary", tokensBefore: 0, timestamp: 1 },
+          { role: "user", content: "history", timestamp: 1 },
+        ],
       })),
     } as unknown as ContextManager;
     const builder = new RunContextBuilder(
@@ -95,7 +98,9 @@ describe("run context builder", () => {
     });
     expect(context.prompt).toContain("override\n\nApproved execution plan:");
     expect(context.prompt).toContain("Attachments: image, text");
-    expect(context.systemPrompt).toContain("persisted summary");
+    expect(context.systemPrompt).not.toContain("persisted summary");
+    expect(context.messages[0]?.role).toBe("compactionSummary");
+    expect(context.messages[0]).toMatchObject({ summary: "persisted summary" });
     expect(context.systemPrompt).toContain("likes deterministic tests");
     expect(context.systemPrompt).toContain("notes.md\nknown answer");
     expect(context.images).toEqual([{ type: "image", data: "AQID", mimeType: "image/png" }]);

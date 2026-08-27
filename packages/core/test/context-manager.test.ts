@@ -51,7 +51,9 @@ describe("ContextManager", () => {
     const { manager } = fixture(existing);
     const result = await manager.compact(session, entries, new AbortController().signal);
     expect(result.summary).toBe(existing);
-    expect(result.messages).toHaveLength(5);
+    expect(result.messages).toHaveLength(6);
+    expect(result.messages[0]?.role).toBe("compactionSummary");
+    expect(result.messages[1]?.content).toBe("message 6");
     expect(mocks.generateSummary).not.toHaveBeenCalled();
   });
 
@@ -74,7 +76,9 @@ describe("ContextManager", () => {
     const result = await manager.compact(session, entries, new AbortController().signal, true);
     expect(database.putContextSummary).toHaveBeenCalledWith("session-1", 8, "new summary");
     expect(result.summary).toMatchObject({ throughSequence: 8, content: "new summary" });
-    expect(result.messages).toHaveLength(2);
+    expect(result.messages).toHaveLength(3);
+    expect(result.messages[0]?.role).toBe("compactionSummary");
+    expect(result.messages.at(-1)?.content).toBe("message 10");
   });
 
   it("keeps the original context when summary generation declines or throws", async () => {

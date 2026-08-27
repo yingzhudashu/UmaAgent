@@ -83,6 +83,25 @@ describe("UmaDatabase", () => {
     db.close();
   });
 
+  it("never lets an older compaction replace a newer context boundary", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-summary-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    const session = db.createSession({
+      title: "summary",
+      workspace: root,
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    db.putContextSummary(session.id, 12, "newer summary");
+    db.putContextSummary(session.id, 8, "stale summary");
+    expect(db.getContextSummary(session.id)).toMatchObject({
+      throughSequence: 12,
+      content: "newer summary",
+    });
+    db.close();
+  });
+
   it("marks active runs interrupted after restart", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-restart-"));
     temporary.push(root);

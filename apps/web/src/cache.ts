@@ -72,10 +72,29 @@ async function get<T>(store: string, key: string): Promise<T | undefined> {
 }
 
 export async function cacheSnapshot(snapshot: SessionSnapshot): Promise<void> {
-  await Promise.all([
-    put(SNAPSHOTS, key(snapshot.session.id), snapshot),
-    cacheCursor(snapshot.session.id, snapshot.snapshotSequence),
-  ]);
+  const database = await openDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction([SNAPSHOTS, CURSORS], "readwrite");
+    const snapshots = transaction.objectStore(SNAPSHOTS);
+    const snapshotKey = key(snapshot.session.id);
+    const existingSnapshot = snapshots.get(snapshotKey);
+    existingSnapshot.onsuccess = () => {
+      const current = existingSnapshot.result as SessionSnapshot | undefined;
+      if (!current || current.snapshotSequence <= snapshot.snapshotSequence)
+        snapshots.put(snapshot, snapshotKey);
+    };
+    existingSnapshot.onerror = () => transaction.abort();
+    const cursors = transaction.objectStore(CURSORS);
+    const cursorKey = key(snapshot.session.id);
+    const request = cursors.get(cursorKey);
+    request.onsuccess = () =>
+      cursors.put(Math.max(Number(request.result ?? 0), snapshot.snapshotSequence), cursorKey);
+    request.onerror = () => transaction.abort();
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error ?? new Error("Cache transaction aborted"));
+  });
+  database.close();
 }
 
 export const cachedSnapshot = (sessionId: string) => get<SessionSnapshot>(SNAPSHOTS, key(sessionId));

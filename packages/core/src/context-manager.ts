@@ -1,4 +1,9 @@
-import { type AgentMessage, estimateContextTokens, generateSummary } from "@earendil-works/pi-agent-core";
+import {
+  type AgentMessage,
+  createCompactionSummaryMessage,
+  estimateContextTokens,
+  generateSummary,
+} from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { Session } from "@uma-agent/protocol";
 import type { UmaDatabase } from "./database.js";
@@ -8,6 +13,15 @@ import type { ContextSummary, StoredAgentMessage, UmaConfig } from "./types.js";
 export interface CompactedContext {
   messages: AgentMessage[];
   summary?: ContextSummary;
+}
+
+function composeMessages(summary: ContextSummary | undefined, pending: StoredAgentMessage[]): AgentMessage[] {
+  return [
+    ...(summary
+      ? [createCompactionSummaryMessage(summary.content, 0, summary.updatedAt) as AgentMessage]
+      : []),
+    ...pending.map((entry) => entry.message),
+  ];
 }
 
 export class ContextManager {
@@ -25,8 +39,8 @@ export class ContextManager {
   ): Promise<CompactedContext> {
     let summary = this.database.getContextSummary(session.id);
     let pending = entries.filter((entry) => entry.sequence > (summary?.throughSequence ?? 0));
-    const summaryMessage: AgentMessage[] = summary
-      ? [{ role: "user", content: `Conversation summary:\n${summary.content}`, timestamp: summary.updatedAt }]
+    const summaryMessage = summary
+      ? [createCompactionSummaryMessage(summary.content, 0, summary.updatedAt) as AgentMessage]
       : [];
     const model = modelOverride ?? this.models.get(session.model);
     const contextTokens = estimateContextTokens([
@@ -34,7 +48,7 @@ export class ContextManager {
       ...pending.map((entry) => entry.message),
     ]).tokens;
     if ((!force && contextTokens < model.contextWindow * 0.65) || pending.length < 6)
-      return { messages: pending.map((entry) => entry.message), ...(summary ? { summary } : {}) };
+      return { messages: composeMessages(summary, pending), ...(summary ? { summary } : {}) };
 
     const keepRecentTokens = Math.min(20_000, Math.floor(model.contextWindow * 0.2));
     let retainedTokens = 0;
@@ -44,7 +58,7 @@ export class ContextManager {
       const entry = pending[cut];
       if (entry) retainedTokens += estimateContextTokens([entry.message]).tokens;
     }
-    if (cut < 2) return { messages: pending.map((entry) => entry.message), ...(summary ? { summary } : {}) };
+    if (cut < 2) return { messages: composeMessages(summary, pending), ...(summary ? { summary } : {}) };
 
     const toSummarize = pending.slice(0, cut);
     try {
@@ -60,12 +74,17 @@ export class ContextManager {
       );
       if (generated.ok) {
         const last = toSummarize.at(-1);
-        if (last) summary = this.database.putContextSummary(session.id, last.sequence, generated.value);
-        pending = pending.slice(cut);
+        if (last) {
+          // The database keeps the newest boundary when two runs compact concurrently.
+          // Re-read it before slicing so an older compaction can never hide newer history.
+          const persisted = this.database.putContextSummary(session.id, last.sequence, generated.value);
+          summary = persisted;
+          pending = entries.filter((entry) => entry.sequence > persisted.throughSequence);
+        }
       }
     } catch {
       // Compaction is advisory; the next model call reports a hard context failure.
     }
-    return { messages: pending.map((entry) => entry.message), ...(summary ? { summary } : {}) };
+    return { messages: composeMessages(summary, pending), ...(summary ? { summary } : {}) };
   }
 }

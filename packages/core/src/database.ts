@@ -524,7 +524,7 @@ export class UmaDatabase {
   putContextSummary(sessionId: string, throughSequence: number, content: string): ContextSummary {
     this.db
       .prepare(
-        "INSERT INTO context_summaries(session_id,through_sequence,content,updated_at) VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET through_sequence=excluded.through_sequence,content=excluded.content,updated_at=excluded.updated_at",
+        "INSERT INTO context_summaries(session_id,through_sequence,content,updated_at) VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET through_sequence=excluded.through_sequence,content=excluded.content,updated_at=excluded.updated_at WHERE excluded.through_sequence > context_summaries.through_sequence",
       )
       .run(sessionId, throughSequence, content, Date.now());
     return this.getContextSummary(sessionId) as ContextSummary;

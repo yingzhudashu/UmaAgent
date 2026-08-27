@@ -98,7 +98,7 @@ export class RunContextBuilder {
     }
     return {
       model,
-      systemPrompt: `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought. When referencing a generated file, use only [filename](uma-attachment://<real attachment id>) with an ID returned by an attachment tool. Never emit API URLs, filesystem paths, sandbox links, or invented attachment IDs.${this.skills.systemPrompt(input.session.id)}${history.summary ? `\n\n<conversation_summary>\n${history.summary.content}\n</conversation_summary>` : ""}${supportingContext ? `\n\n${supportingContext}` : ""}`,
+      systemPrompt: `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought. When referencing a generated file, use only [filename](uma-attachment://<real attachment id>) with an ID returned by an attachment tool. Never emit API URLs, filesystem paths, sandbox links, or invented attachment IDs.${this.skills.systemPrompt(input.session.id)}${supportingContext ? `\n\n${supportingContext}` : ""}`,
       prompt: `${input.promptOverride ?? input.request.text}${plan}${assumptions}${attachments}`,
       images,
       tools: input.tools.filter(
