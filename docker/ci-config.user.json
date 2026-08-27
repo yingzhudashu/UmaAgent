@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "core": { "serverUrl": "http://uma-core:3210", "token": "ci-core-token" },
+  "xianyu": {
+    "cookie": "unb=ci-owner; _m_h5_tk=ci-token_ci-signature",
+    "host": "0.0.0.0",
+    "port": 3250,
+    "stateDir": "/data/xianyu"
+  }
+}

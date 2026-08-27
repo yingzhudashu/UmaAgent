@@ -25,6 +25,7 @@ import {
 import clipboard from "clipboardy";
 import { BUILTIN_EVALUATIONS, runBuiltInEvaluations } from "./evaluations.js";
 import { createTuiAutocomplete } from "./tui-completion.js";
+import { runXianyuCommand } from "./xianyu-command.js";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "chat";
@@ -871,7 +872,6 @@ async function doctorCommand(): Promise<void> {
   console.log(JSON.stringify(result, null, 2));
   if (!result.ok) process.exitCode = 1;
 }
-
 async function readHidden(prompt: string): Promise<string> {
   process.stdout.write(prompt);
   const input = process.stdin;
@@ -902,27 +902,6 @@ async function readHidden(prompt: string): Promise<string> {
     input.on("data", onData);
   });
 }
-
-async function xianyuCommand(): Promise<void> {
-  const action = positionals[0] ?? "status";
-  const password = await readHidden("闲鱼管理员密码: ");
-  const { grant } = await client.xianyuUnlock(password);
-  if (action === "status") console.log(JSON.stringify(await client.xianyuStatus(grant), null, 2));
-  else if (action === "start") await client.xianyuStart(grant);
-  else if (action === "stop") await client.xianyuStop(grant);
-  else if (action === "pause") await client.xianyuPause(grant);
-  else if (action === "resume") await client.xianyuResume(grant);
-  else if (action === "history") {
-    const id = positionals[1];
-    if (!id) throw new Error("uma xianyu history <conversation-id>");
-    console.log(JSON.stringify(await client.xianyuHistory(grant, id), null, 2));
-  } else if (action === "item") {
-    const id = positionals[1];
-    if (!id) throw new Error("uma xianyu item <item-id>");
-    console.log(JSON.stringify(await client.xianyuItem(grant, id), null, 2));
-  } else throw new Error("uma xianyu status|start|stop|pause|resume|history <id>|item <id>");
-}
-
 async function main(): Promise<void> {
   if (command === "chat") return chat();
   if (command === "run") await runCommand();
@@ -938,14 +917,14 @@ async function main(): Promise<void> {
   else if (command === "audit") await auditCommand();
   else if (command === "eval" || command === "test") await evalCommand();
   else if (command === "sync") await syncCommand();
-  else if (command === "xianyu") await xianyuCommand();
+  else if (command === "xianyu")
+    await runXianyuCommand(client, args, positionals, valueAfter, readHidden, (value) => console.log(value));
   else
     console.log(
-      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel|delete\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa eval list|run|status|show|trend\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|mount|search|unmount|reload\numa xianyu login|status|start|stop|pause|resume|history|item\numa doctor",
+      "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel|delete\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa eval list|run|status|show|trend\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|mount|search|unmount|reload\numa xianyu status|start|stop|pause|resume|history <id>|item <id>|chat <receiver-id> <item-id>|publish ...\numa doctor",
     );
   client.close();
 }
-
 await main().catch((error: unknown) => {
   client.close();
   console.error(error instanceof Error ? error.message : String(error));

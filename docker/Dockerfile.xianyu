@@ -20,4 +20,5 @@ COPY --from=build /app/packages/channel-adapter/dist ./packages/channel-adapter/
 COPY --from=build /app/packages/client/dist ./packages/client/dist
 COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 EXPOSE 3250
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=6 CMD node -e "fetch('http://127.0.0.1:3250/health',{headers:{authorization:'Bearer '+process.env.UMA_XIANYU_CONTROL_TOKEN}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 CMD ["node", "apps/xianyu-adapter/dist/main.js", "--config=/run/uma/config.user.json"]

@@ -17,9 +17,8 @@ jobs:
       - run: npm run build
       - run: npm run build:web:embed
       - run: docker build -t uma-agent:ci .
-      - run: docker build -f docker/Dockerfile.feishu -t uma-agent-feishu:ci .
+      - run: docker build -f docker/Dockerfile.xianyu -t uma-agent-xianyu:ci .
       - run: docker build -f docker/Dockerfile.browser -t uma-agent-browser:ci .
-      - run: docker build -f docker/Dockerfile.feishu-mcp -t uma-agent-feishu-mcp:ci .
       - run: docker build -f docker/Dockerfile.skill-worker -t uma-agent-skill-worker:ci .
       - name: Smoke-test containers, persistence, and the Core state lock
         shell: bash
@@ -29,10 +28,10 @@ jobs:
           state_volume=uma-ci-state
           telemetry_volume=uma-ci-telemetry
           workspace_volume=uma-ci-workspace
-          feishu_volume=uma-ci-feishu
+          xianyu_volume=uma-ci-xianyu
           cleanup() {
-            docker rm -f uma-core-lock uma-feishu uma-feishu-mcp uma-skill-worker uma-core browser-worker >/dev/null 2>&1 || true
-            docker volume rm "$state_volume" "$telemetry_volume" "$workspace_volume" "$feishu_volume" >/dev/null 2>&1 || true
+            docker rm -f uma-core-lock uma-xianyu uma-skill-worker uma-core browser-worker >/dev/null 2>&1 || true
+            docker volume rm "$state_volume" "$telemetry_volume" "$workspace_volume" "$xianyu_volume" >/dev/null 2>&1 || true
             docker network rm "$network" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
@@ -41,7 +40,7 @@ jobs:
           docker volume create "$state_volume" >/dev/null
           docker volume create "$telemetry_volume" >/dev/null
           docker volume create "$workspace_volume" >/dev/null
-          docker volume create "$feishu_volume" >/dev/null
+          docker volume create "$xianyu_volume" >/dev/null
 
           wait_healthy() {
             local container=$1
@@ -105,30 +104,14 @@ jobs:
           fi
           docker logs uma-core-lock 2>&1 | grep -q "State directory is already in use"
 
-          docker run -d --name uma-feishu --network "$network" \
-            -e FEISHU_APP_ID=ci-app-id \
-            -e FEISHU_APP_SECRET=ci-app-secret \
-            -e FEISHU_ALLOWED_OPEN_IDS=ci-owner \
-            -e UMA_SERVER_URL=http://uma-core:3210 \
-            -e UMA_TOKEN=ci-core-token \
-            -e FEISHU_STATE_DIR=/data/feishu \
-            -e FEISHU_HOST=0.0.0.0 \
-            -e FEISHU_PORT=3220 \
-            -v "$feishu_volume:/data/feishu" \
-            uma-agent-feishu:ci >/dev/null
-          wait_healthy uma-feishu
-          docker restart uma-feishu >/dev/null
-          wait_healthy uma-feishu
-
-          docker run -d --name uma-feishu-mcp --network "$network" \
-            -e FEISHU_APP_ID=ci-app-id \
-            -e FEISHU_APP_SECRET=ci-app-secret \
-            -e FEISHU_MCP_HOST=0.0.0.0 \
-            -e FEISHU_MCP_AUTH_TOKEN=ci-feishu-mcp-token \
-            -e UMA_SERVER_URL=http://uma-core:3210 \
-            -e UMA_TOKEN=ci-core-token \
-            uma-agent-feishu-mcp:ci >/dev/null
-          wait_healthy uma-feishu-mcp
+          docker run -d --name uma-xianyu --network "$network" \
+            -e UMA_XIANYU_CONTROL_TOKEN=ci-xianyu-token \
+            -v "$xianyu_volume:/data/xianyu" \
+            -v "$PWD/docker/ci-config.user.json:/run/uma/config.user.json:ro" \
+            uma-agent-xianyu:ci >/dev/null
+          wait_healthy uma-xianyu
+          docker restart uma-xianyu >/dev/null
+          wait_healthy uma-xianyu
 
           skill_root=/tmp/uma-ci-skills
           mkdir -p "$skill_root/example"

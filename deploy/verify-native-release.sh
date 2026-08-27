@@ -10,6 +10,8 @@ node_bin=/opt/node-v22.23.2-linux-x64/bin/node
 release_real=$(readlink -f -- "$release_dir")
 shared_real=$(readlink -f -- "$shared_dir")
 [[ -d "$release_real/apps/server/dist" ]] || { echo "missing server dist in $release_real" >&2; exit 1; }
+[[ -d "$release_real/apps/xianyu-adapter/dist" ]] || { echo "missing xianyu adapter dist in $release_real" >&2; exit 1; }
+[[ -f "$release_real/deploy/uma-xianyu-adapter.service" ]] || { echo "missing xianyu adapter unit in $release_real" >&2; exit 1; }
 [[ -d "$release_real/packages/core/dist" ]] || { echo "missing core dist in $release_real" >&2; exit 1; }
 [[ -f "$release_real/RELEASE" ]] || { echo "missing RELEASE metadata in $release_real" >&2; exit 1; }
 grep -qx 'protocol=14' "$release_real/RELEASE" || { echo "release protocol is not 14" >&2; exit 1; }
