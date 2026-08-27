@@ -34,7 +34,7 @@
 - `npm run audit:source`：完成一方源文件的模式审计；结果用于定位热路径、IO、并发和凭据边界，不冒充人工逐行结论。
 - `npm run check`：架构、Biome 和 TypeScript 通过，共检查 217 个文件；`apps/server/src/app.ts` 回到 1214 行架构基线以内。
 - `npm run build`：Protocol、Core、Server、CLI、Web、Xianyu Adapter、Browser Worker 和 Skill Worker 全部构建通过。
-- `npm test`：48 个测试文件、251 项测试通过；新增咸鱼输入校验、scrypt 参数边界和 CORS 头部覆盖。
+- `npm test`：48 个测试文件、252 项测试通过；新增咸鱼输入校验、scrypt 参数边界和 CORS 头部覆盖。
 - `npm run test:web:e2e`：需在具备 Chromium 的环境执行；本机本轮未重复运行。
 - `npm run test:eval:faux`：6 个公开行为用例通过，包括澄清、Plan 确认、工具、凭据和提示注入边界。
 - `npm run test:perf`：20 个请求基准通过；最终数值记录在 `docs/architecture-quality.md`。
