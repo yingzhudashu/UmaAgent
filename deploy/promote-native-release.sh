@@ -18,7 +18,7 @@ stamp=$(date -u +%Y%m%d%H%M%S)
 release_real=$(readlink -f -- "$release_dir")
 case "$release_real" in /opt/uma-agent/releases/*) ;; *) echo "invalid release path" >&2; exit 1 ;; esac
 
-"$release_real/deploy/verify-native-release.sh" "$release_real" "$shared_dir"
+bash "$release_real/deploy/verify-native-release.sh" "$release_real" "$shared_dir"
 install -d -o root -g root -m 0700 "$guard_dir" "$backup_dir"
 before="$guard_dir/$stamp-before.json"
 after="$guard_dir/$stamp-after.json"
