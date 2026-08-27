@@ -10,7 +10,7 @@ Group=umaagent
 WorkingDirectory=/opt/uma-agent/current
 Environment=NODE_ENV=production
 EnvironmentFile=/etc/uma-agent/uma.env
-ExecStartPre=/usr/local/libexec/uma-agent-verify-release /opt/uma-agent/current /opt/uma-agent/dependencies/node_modules
+ExecStartPre=/usr/bin/bash /opt/uma-agent/current/deploy/verify-native-release.sh /opt/uma-agent/current /opt/uma-agent/dependencies/node_modules
 ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent/current/apps/server/dist/main.js --config=/etc/uma-agent/uma.config.json
 Restart=on-failure
 RestartSec=5

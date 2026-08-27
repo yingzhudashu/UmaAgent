@@ -6,6 +6,7 @@ shared_dir=${2:?usage: promote-native-release.sh RELEASE_DIR SHARED_NODE_MODULES
 state_dir=/var/lib/uma-agent/state
 secret_file=/etc/uma-agent/protected-user-pat
 current_link=/opt/uma-agent/current
+unit=/etc/systemd/system/uma-agent.service
 guard_dir=/var/lib/uma-agent/release-guards
 backup_dir=/srv/backups/uma-agent
 node_bin=/opt/node-v22.23.2-linux-x64/bin/node
@@ -29,6 +30,8 @@ chmod 0600 "$backup_db"
 chmod 0600 "$before"
 
 previous=$(readlink -f -- "$current_link")
+unit_backup=$(mktemp /run/uma-agent.service.XXXXXX)
+cp -- "$unit" "$unit_backup"
 services=(uma-agent.service uma-browser-worker.service uma-feishu-mcp.service uma-feishu-adapter.service)
 for service in "${services[@]}"; do
   systemctl cat "$service" >/dev/null
@@ -37,10 +40,14 @@ if systemctl cat uma-xianyu-adapter.service >/dev/null 2>&1; then services+=(uma
 rollback() {
   ln -sfn -- "$previous" "${current_link}.rollback"
   mv -Tf -- "${current_link}.rollback" "$current_link"
+  install -o root -g root -m 0644 "$unit_backup" "$unit"
+  systemctl daemon-reload
   systemctl restart "${services[@]}" || true
 }
 trap rollback ERR
 
+install -o root -g root -m 0644 "$release_real/deploy/uma-agent.service" "$unit"
+systemctl daemon-reload
 systemctl stop "${services[@]}"
 ln -sfn -- "$release_real" "${current_link}.next"
 mv -Tf -- "${current_link}.next" "$current_link"
@@ -61,5 +68,6 @@ curl --fail --silent --show-error http://127.0.0.1:3210/api/v14/health/ready >/d
 chmod 0600 "$after"
 "$node_bin" "$release_real/deploy/compare-protected-user.mjs" "$before" "$after" >/dev/null
 trap - ERR
+rm -f -- "$unit_backup"
 printf 'Promoted UmaAgent release: %s\n' "$release_real"
 printf 'Protected state backup: %s\n' "$backup_db"
