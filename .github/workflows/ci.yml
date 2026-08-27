@@ -14,6 +14,16 @@ jobs:
           node-version: 22.19.0
           cache: npm
       - run: npm ci --ignore-scripts
+      - name: Verify removed channel has no tracked remnants
+        shell: bash
+        run: |
+          set -euo pipefail
+          removed_channel=$(printf 'fe%s' 'ishu')
+          removed_vendor=$(printf 'la%s' 'rk')
+          if git grep -I -n -i -e "$removed_channel" -e "$removed_vendor" -- .; then
+            echo 'Removed channel remnants detected' >&2
+            exit 1
+          fi
       - run: npm run build
       - run: npm run build:web:embed
       - run: docker build -t uma-agent:ci .

@@ -85,12 +85,13 @@ describe("server", () => {
       headers: {
         origin: "https://web.example",
         "access-control-request-method": "POST",
-        "access-control-request-headers": "content-type",
+        "access-control-request-headers": "content-type, x-xianyu-grant",
       },
     });
     expect(preflight.statusCode).toBe(204);
     expect(preflight.headers["access-control-allow-origin"]).toBe("https://web.example");
     expect(preflight.headers["access-control-allow-credentials"]).toBe("true");
+    expect(preflight.headers["access-control-allow-headers"]).toContain("X-Xianyu-Grant");
     const deniedPreflight = await app.inject({
       method: "OPTIONS",
       url: "/api/v14/sessions",

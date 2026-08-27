@@ -20,6 +20,8 @@ stamp=$(date -u +%Y%m%d%H%M%S)
 [[ $(stat -c '%u:%a' "$secret_file") = 0:600 ]] || { echo "protected PAT file must be root:root 0600" >&2; exit 1; }
 [[ -f /etc/uma-agent/uma.env ]] || { echo "UmaAgent environment file is missing" >&2; exit 1; }
 [[ -f /etc/uma-agent/config.user.json ]] || { echo "Xianyu user config is missing" >&2; exit 1; }
+[[ -f "$unit" ]] || { echo "Core systemd unit is missing: $unit" >&2; exit 1; }
+[[ -f "$browser_unit" ]] || { echo "Browser Worker systemd unit is missing: $browser_unit" >&2; exit 1; }
 grep -q '^UMA_XIANYU_ADMIN_PASSWORD_HASH=scrypt\$' /etc/uma-agent/uma.env || {
   echo "Xianyu administrator password hash is missing or invalid" >&2
   exit 1
@@ -37,7 +39,8 @@ chmod 0600 "$backup_db"
 "$node_bin" "$release_real/deploy/protected-user-fingerprint.mjs" "$state_dir" "$secret_file" >"$before"
 chmod 0600 "$before"
 
-previous=$(readlink -f -- "$current_link")
+previous=""
+if [[ -e "$current_link" || -L "$current_link" ]]; then previous=$(readlink -f -- "$current_link"); fi
 unit_backup=$(mktemp /run/uma-agent.service.XXXXXX)
 cp -- "$unit" "$unit_backup"
 browser_unit_backup=$(mktemp /run/uma-browser-worker.service.XXXXXX)
@@ -55,8 +58,12 @@ for service in "${services[@]}"; do
   if [[ "$service" != "uma-xianyu-adapter.service" ]]; then systemctl cat "$service" >/dev/null; fi
 done
 rollback() {
-  ln -sfn -- "$previous" "${current_link}.rollback"
-  mv -Tf -- "${current_link}.rollback" "$current_link"
+  if [[ -n "$previous" ]]; then
+    ln -sfn -- "$previous" "${current_link}.rollback"
+    mv -Tf -- "${current_link}.rollback" "$current_link"
+  else
+    rm -f -- "$current_link"
+  fi
   install -o root -g root -m 0644 "$unit_backup" "$unit"
   install -o root -g root -m 0644 "$browser_unit_backup" "$browser_unit"
   if [[ "$xianyu_unit_exists" = 1 ]]; then

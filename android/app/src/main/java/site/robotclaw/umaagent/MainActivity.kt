@@ -24,6 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -38,6 +39,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
@@ -62,6 +64,8 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     private var api: UmaApi? = null
     private var socket: WebSocket? = null
     private var reconnect: Job? = null
+    private var grant: String? = null
+    private var grantExpiry: Job? = null
     private var sessions = emptyList<BootstrapEntry>()
     private val sequences = mutableMapOf<String, Long>()
     private val json = Json { ignoreUnknownKeys = true }
@@ -69,7 +73,11 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     init {
         val cached = cache.read()
         if (cached != null) state.value = state.value.copy(sessions = cached.sessions)
-        patStore.read()?.let { login(it, persist = false) }
+        patStore.read()?.let {
+            api = UmaApi(it)
+            state.value = state.value.copy(tokenPresent = true, offline = cached != null)
+            login(it, persist = false)
+        }
     }
 
     fun login(token: String, persist: Boolean = true) {
@@ -96,6 +104,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun logout() {
         socket?.close(1000, "logout"); socket = null; reconnect?.cancel(); api = null
+        grant = null; grantExpiry?.cancel(); grantExpiry = null
         patStore.clear(); state.value = UmaUiState()
     }
 
@@ -139,8 +148,15 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             val client = api ?: return@launch
             state.value = state.value.copy(loading = true, error = "")
             try {
-                val grant = client.unlock(password).grant
-                val status = client.xianyuStatus(grant)
+                val unlocked = client.unlock(password)
+                grant = unlocked.grant
+                grantExpiry?.cancel()
+                grantExpiry = viewModelScope.launch {
+                    delay((unlocked.expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
+                    grant = null
+                    state.value = state.value.copy(xianyuStatus = "")
+                }
+                val status = client.xianyuStatus(unlocked.grant)
                 state.value = state.value.copy(xianyuStatus = status.toString(), loading = false, offline = false)
             } catch (error: Throwable) {
                 state.value = state.value.copy(loading = false, error = error.message ?: "咸鱼解锁失败")
@@ -177,11 +193,36 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         val previous = sequences[sessionId] ?: 0
         if (sequence <= previous) return
         val client = api ?: return
+        var latest = previous
         if (sequence > previous + 1) {
-            runCatching { client.events(sessionId, previous) }
+            var cursor = previous
+            var hasMore = true
+            while (hasMore) {
+                val page = client.events(sessionId, cursor)
+                val events = page["events"]?.let { element ->
+                    (element as? kotlinx.serialization.json.JsonArray)?.mapNotNull { it as? JsonObject }
+                }.orEmpty()
+                for (event in events) {
+                    val eventSequence = event["sequence"]?.jsonPrimitive?.longOrNull ?: continue
+                    if (eventSequence > latest) latest = eventSequence
+                }
+                cursor = page["nextSequence"]?.jsonPrimitive?.longOrNull ?: latest
+                latest = maxOf(latest, cursor)
+                hasMore = page["hasMore"]?.jsonPrimitive?.booleanOrNull == true
+                if (hasMore && cursor <= previous) break
+            }
         }
-        sequences[sessionId] = sequence
-        if (sessionId == state.value.selectedSessionId) runCatching { state.value = state.value.copy(snapshot = client.snapshot(sessionId).toString(), offline = false) }
+        sequences[sessionId] = maxOf(latest, sequence)
+        runCatching {
+            val snapshot = client.snapshot(sessionId)
+            val encoded = snapshot.toString()
+            withContext(Dispatchers.IO) {
+                val current = cache.read()
+                cache.write(CacheEnvelope(1, state.value.sessions, (current?.snapshots ?: emptyMap()) + (sessionId to encoded)))
+            }
+            if (sessionId == state.value.selectedSessionId)
+                state.value = state.value.copy(snapshot = encoded, offline = false)
+        }
     }
 
     private fun scheduleReconnect() {
@@ -211,7 +252,13 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
     var message by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (!state.tokenPresent) {
-            OutlinedTextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("PAT") })
+            OutlinedTextField(
+                token,
+                { token = it },
+                Modifier.fillMaxWidth(),
+                visualTransformation = PasswordVisualTransformation(),
+                label = { Text("PAT") },
+            )
             Button({ model.login(token) }, enabled = token.isNotBlank() && !state.loading) { Text("登录") }
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -227,7 +274,12 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
             OutlinedTextField(message, { message = it }, Modifier.fillMaxWidth(), label = { Text("消息") })
             Button({ model.send(message); message = "" }, enabled = !state.offline && message.isNotBlank() && !state.loading) { Text("发送") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(password, { password = it }, label = { Text("咸鱼管理员密码") })
+                OutlinedTextField(
+                    password,
+                    { password = it },
+                    visualTransformation = PasswordVisualTransformation(),
+                    label = { Text("咸鱼管理员密码") },
+                )
                 Button({ model.unlockXianyu(password); password = "" }, enabled = password.isNotBlank() && !state.loading) { Text("解锁") }
             }
             if (state.xianyuStatus.isNotBlank()) Text(state.xianyuStatus)

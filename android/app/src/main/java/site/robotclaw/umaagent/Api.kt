@@ -123,8 +123,17 @@ data class CacheEnvelope(val version: Int, val sessions: List<Session>, val snap
 class SnapshotCache(context: Context) {
     private val file = File(context.filesDir, "cache.json")
     fun read(): CacheEnvelope? = try {
-        if (!file.exists()) null else json.decodeFromString<CacheEnvelope>(file.readText()).takeIf { it.version == 1 }
+        if (!file.exists()) null else json.decodeFromString<CacheEnvelope>(file.readText()).let {
+            if (it.version == 1) it else null.also { file.delete() }
+        }
     } catch (_: Exception) { file.delete(); null }
-    fun write(value: CacheEnvelope) { file.writeText(json.encodeToString(value)) }
+    fun write(value: CacheEnvelope) {
+        val temporary = File(context.filesDir, "cache.json.tmp")
+        temporary.writeText(json.encodeToString(value))
+        if (!temporary.renameTo(file)) {
+            file.delete()
+            check(temporary.renameTo(file)) { "无法保存离线缓存" }
+        }
+    }
     fun clear() { file.delete() }
 }

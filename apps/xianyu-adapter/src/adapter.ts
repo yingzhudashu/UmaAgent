@@ -71,8 +71,13 @@ export function createXianyuAdapter(deps: { transport: XianyuTransport; core: Xi
   return {
     async start() {
       if (started) return;
-      await deps.transport.start(handleInbound);
       started = true;
+      try {
+        await deps.transport.start(handleInbound);
+      } catch (error) {
+        started = false;
+        throw error;
+      }
     },
     async stop() {
       if (!started) return;

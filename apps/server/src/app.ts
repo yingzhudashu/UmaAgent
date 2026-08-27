@@ -29,7 +29,13 @@ import { type AuthPrincipal, AuthService } from "./auth.js";
 import { mapServerError } from "./error-mapping.js";
 import { installHttpTelemetry } from "./httpTelemetry.js";
 import { installRuntimeLogging } from "./runtimeLogging.js";
-import { verifyXianyuPassword, XianyuControlClient, XianyuGrantStore } from "./xianyu.js";
+import {
+  validateXianyuChatBody,
+  validateXianyuPublishBody,
+  verifyXianyuPassword,
+  XianyuControlClient,
+  XianyuGrantStore,
+} from "./xianyu.js";
 
 type SocketMessage = {
   type?: string;
@@ -118,7 +124,7 @@ export async function createServer(
       callback(null, Boolean(origin && runtime.config.server.webOrigins.includes(origin))),
     credentials: true,
     methods: ["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type"],
+    allowedHeaders: ["Authorization", "Content-Type", "Traceparent", "X-Xianyu-Grant"],
     maxAge: 600,
     strictPreflight: true,
     preflightContinue: true,
@@ -405,7 +411,7 @@ export async function createServer(
   });
   app.post<{ Body: Record<string, unknown> }>("/api/v14/xianyu/chat", async (request) => {
     const principal = requireXianyu(request);
-    const result = await xianyuClient().chat(request.body ?? {});
+    const result = await xianyuClient().chat(validateXianyuChatBody(request.body ?? {}));
     request.log.info({
       requestId: request.id,
       userId: principal.userId,
@@ -416,7 +422,7 @@ export async function createServer(
   });
   app.post<{ Body: Record<string, unknown> }>("/api/v14/xianyu/publish", async (request) => {
     const principal = requireXianyu(request);
-    const result = await xianyuClient().publish(request.body ?? {});
+    const result = await xianyuClient().publish(validateXianyuPublishBody(request.body ?? {}));
     request.log.info({
       requestId: request.id,
       userId: principal.userId,

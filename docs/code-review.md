@@ -29,17 +29,20 @@
 4. 所有生产发布必须先备份 SQLite、执行完整性检查，并验证受保护用户的令牌元数据和对象指纹。
 5. 机器审计只能发现模式性问题，不能替代复杂状态机、取消、并发和数据保护边界的人工审查。
 
-## 本轮证据（2026-08-27）
+## 本轮证据（2026-08-28）
 
-- `npm run audit:source`：完成 168 个一方源文件的模式审计；结果用于定位热路径、IO、并发和凭据边界，不冒充人工逐行结论。
-- `npm run check`：架构、Biome 和 TypeScript 通过，共检查 231 个文件。
-- `npm test`：53 个测试文件、265 项测试通过。
-- `npm run test:web:e2e`：Chromium 3 项通过。
+- `npm run audit:source`：完成一方源文件的模式审计；结果用于定位热路径、IO、并发和凭据边界，不冒充人工逐行结论。
+- `npm run check`：架构、Biome 和 TypeScript 通过，共检查 217 个文件；`apps/server/src/app.ts` 回到 1214 行架构基线以内。
+- `npm run build`：Protocol、Core、Server、CLI、Web、Xianyu Adapter、Browser Worker 和 Skill Worker 全部构建通过。
+- `npm test`：48 个测试文件、251 项测试通过；新增咸鱼输入校验、scrypt 参数边界和 CORS 头部覆盖。
+- `npm run test:web:e2e`：需在具备 Chromium 的环境执行；本机本轮未重复运行。
 - `npm run test:eval:faux`：6 个公开行为用例通过，包括澄清、Plan 确认、工具、凭据和提示注入边界。
 - `npm run test:perf`：20 个请求基准通过；最终数值记录在 `docs/architecture-quality.md`。
 - 短时 Faux soak：36.3 秒、42 条消息、504 个 durable 事件，RSS 和 WAL 均在预算内。
 - 真实 Provider：当前环境未提供 `UMA_REAL_*`，未执行，也未使用生产凭据替代。
 - 容器：当前 Windows 主机没有 Docker CLI；容器构建与 smoke 由 CI 和候选服务器继续验证。
+- Android：仓库内 Gradle Wrapper 固定 8.9；本机下载分发包超时，已用缓存 Gradle 8.14.3 尝试但缺少 Android Gradle Plugin 缓存，Android 构建以 GitHub Actions 为准。
+- 生产：本轮未连接生产服务器，未执行旧渠道运行面清理、咸鱼 secret 注入或真实账号 smoke。
 
 ## 固定验证命令
 

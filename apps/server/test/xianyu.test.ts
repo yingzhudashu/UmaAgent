@@ -1,6 +1,11 @@
 import { randomBytes, scryptSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { verifyXianyuPassword, XianyuGrantStore } from "../src/xianyu.js";
+import {
+  validateXianyuChatBody,
+  validateXianyuPublishBody,
+  verifyXianyuPassword,
+  XianyuGrantStore,
+} from "../src/xianyu.js";
 
 describe("xianyu access control", () => {
   it("verifies the scrypt password format without exposing plaintext", async () => {
@@ -10,6 +15,15 @@ describe("xianyu access control", () => {
     await expect(verifyXianyuPassword("correct horse", encoded)).resolves.toBe(true);
     await expect(verifyXianyuPassword("wrong", encoded)).resolves.toBe(false);
     await expect(verifyXianyuPassword("correct horse", "plaintext")).resolves.toBe(false);
+    await expect(
+      verifyXianyuPassword(
+        "correct horse",
+        `scrypt$33554432$8$1$${salt.toString("base64url")}$${digest.toString("base64url")}`,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      verifyXianyuPassword("correct horse", `scrypt$16384$8$1$${salt.toString("base64url")}$AA`),
+    ).resolves.toBe(false);
   });
 
   it("issues per-user in-memory grants", () => {
@@ -19,5 +33,21 @@ describe("xianyu access control", () => {
     expect(store.valid("user-2", issued.grant)).toBe(false);
     store.revoke("user-1");
     expect(store.valid("user-1", issued.grant)).toBe(false);
+  });
+
+  it("rejects incomplete control payloads before reaching the adapter", () => {
+    expect(() => validateXianyuChatBody({ receiverId: "", itemId: "item" })).toThrow();
+    expect(validateXianyuChatBody({ receiverId: " buyer ", itemId: " item " })).toEqual({
+      receiverId: "buyer",
+      itemId: "item",
+    });
+    expect(() => validateXianyuPublishBody({ description: "item", imagePaths: [] })).toThrow();
+    expect(
+      validateXianyuPublishBody({
+        description: " item ",
+        imagePaths: [" /tmp/a.jpg "],
+        delivery: "free_shipping",
+      }),
+    ).toMatchObject({ description: "item", imagePaths: ["/tmp/a.jpg"] });
   });
 });
