@@ -28,6 +28,7 @@ import type { RawData } from "ws";
 import { type AuthPrincipal, AuthService } from "./auth.js";
 import { mapServerError } from "./error-mapping.js";
 import { installHttpTelemetry } from "./httpTelemetry.js";
+import { SERVER_LOG_REDACTIONS } from "./log-redaction.js";
 import { installRuntimeLogging } from "./runtimeLogging.js";
 import {
   validateXianyuChatBody,
@@ -84,10 +85,7 @@ export async function createServer(
   options: { webRoot?: string | false; configLoader?: () => Promise<UmaConfig> } = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: {
-      level: process.env.UMA_LOG_LEVEL ?? "info",
-      redact: ["req.headers.authorization", "req.headers.cookie", "body.token"],
-    },
+    logger: { level: process.env.UMA_LOG_LEVEL ?? "info", redact: SERVER_LOG_REDACTIONS },
     bodyLimit: runtime.config.server.maxUploadBytes + 1024,
   });
   const stopRuntimeLogging = installRuntimeLogging(runtime, app);
@@ -308,11 +306,11 @@ export async function createServer(
   };
   app.post("/api/v14/auth/logout", async (request, reply) => {
     const origin = request.headers.origin;
+    const principal = auth.principalFromRequest(request);
     auth.logout(request, reply, {
       crossOrigin: crossOrigin(origin, request.headers.host),
       secure: secureOrigin(origin),
     });
-    const principal = auth.principalFromRequest(request);
     if (principal) xianyuGrants.revoke(principal.userId);
     return reply.code(204).send();
   });

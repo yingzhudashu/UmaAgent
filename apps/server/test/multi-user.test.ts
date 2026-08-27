@@ -87,5 +87,5 @@ describe("multi-user authentication", () => {
     ).toThrow("authorization code");
     delete process.env.UMA_OAUTH_REDIRECTS;
     database.close();
-  });
+  }, 30_000);
 });

@@ -1,8 +1,9 @@
+import { randomBytes, scryptSync } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type UmaConfig, UmaRuntime } from "@uma-agent/core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, crossOrigin, secureOrigin, shouldCloseForBufferedAmount } from "../src/app.js";
 import { AuthService } from "../src/auth.js";
 
@@ -61,13 +62,25 @@ describe("server", () => {
         fast: { provider: "test", id: "model" },
         vision: { provider: "test", id: "model" },
       },
+      xianyu: { adapterUrl: "http://127.0.0.1:3250", controlTokenEnv: "UMA_TEST_XIANYU_TOKEN" },
     };
+    const previousToken = process.env.UMA_TEST_XIANYU_TOKEN;
+    const previousPassword = process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH;
+    const salt = randomBytes(16);
+    const digest = scryptSync("test-admin-password", salt, 32, { N: 16_384, r: 8, p: 1 });
+    process.env.UMA_TEST_XIANYU_TOKEN = "adapter-test-token";
+    process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH = `scrypt$16384$8$1$${salt.toString("base64url")}$${digest.toString("base64url")}`;
     const runtime = new UmaRuntime(config);
     await runtime.start();
     const admin = runtime.database.createUser("admin");
     const testToken = new AuthService(runtime).issueToken(admin.id, "server-test").token;
     const app = await createServer(runtime, { webRoot: false, configLoader: async () => config });
     cleanup.push(async () => {
+      vi.restoreAllMocks();
+      if (previousToken === undefined) delete process.env.UMA_TEST_XIANYU_TOKEN;
+      else process.env.UMA_TEST_XIANYU_TOKEN = previousToken;
+      if (previousPassword === undefined) delete process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH;
+      else process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH = previousPassword;
       await app.close();
       await runtime.stop();
       await rm(root, { recursive: true, force: true });
@@ -470,6 +483,147 @@ describe("server", () => {
       ).statusCode,
     ).toBe(200);
     const authHeaders = { authorization: `Bearer ${testToken}` };
+    const adapterRequests: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      adapterRequests.push(`${init?.method ?? "GET"} ${url}`);
+      const payload = url.endsWith("/health")
+        ? { status: "ok", paused: false }
+        : url.endsWith("/conversations")
+          ? [{ id: "conversation-1", sessionId: session.id }]
+          : url.includes("/history/")
+            ? { messages: [] }
+            : url.includes("/item/")
+              ? { id: "item-1", title: "Test item" }
+              : url.endsWith("/chat")
+                ? { ok: true, conversationId: "conversation-1" }
+                : url.endsWith("/publish")
+                  ? { ok: true, itemId: "item-2" }
+                  : {};
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v14/xianyu/status", headers: authHeaders })).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v14/xianyu/unlock",
+          headers: authHeaders,
+          payload: { password: "wrong" },
+        })
+      ).statusCode,
+    ).toBe(403);
+    const unlocked = await app.inject({
+      method: "POST",
+      url: "/api/v14/xianyu/unlock",
+      headers: authHeaders,
+      payload: { password: "test-admin-password" },
+    });
+    expect(unlocked.statusCode).toBe(200);
+    const grant = unlocked.json<{ grant: string; expiresAt: number }>();
+    expect(grant.grant).toHaveLength(43);
+    expect(grant.expiresAt).toBeGreaterThan(Date.now());
+    const xianyuHeaders = { ...authHeaders, "x-xianyu-grant": grant.grant };
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v14/xianyu/status", headers: xianyuHeaders })).json(),
+    ).toMatchObject({ status: "ok" });
+    expect(
+      (
+        await app.inject({ method: "GET", url: "/api/v14/xianyu/conversations", headers: xianyuHeaders })
+      ).json(),
+    ).toEqual([{ id: "conversation-1", sessionId: session.id }]);
+    for (const action of ["start", "stop", "pause", "resume"])
+      expect(
+        (await app.inject({ method: "POST", url: `/api/v14/xianyu/${action}`, headers: xianyuHeaders }))
+          .statusCode,
+      ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/v14/xianyu/history/conversation-1",
+          headers: xianyuHeaders,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v14/xianyu/item/item-1", headers: xianyuHeaders }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v14/xianyu/chat",
+          headers: xianyuHeaders,
+          payload: { receiverId: "buyer-1", itemId: "item-1" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v14/xianyu/chat",
+          headers: xianyuHeaders,
+          payload: { receiverId: "", itemId: "item-1" },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v14/xianyu/publish",
+          headers: xianyuHeaders,
+          payload: { description: "item", imagePaths: ["/tmp/a.jpg"], delivery: "free_shipping" },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v14/xianyu/publish",
+          headers: xianyuHeaders,
+          payload: { description: "item", imagePaths: [], delivery: "free_shipping" },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(adapterRequests).toEqual(
+      expect.arrayContaining([
+        "GET http://127.0.0.1:3250/health",
+        "POST http://127.0.0.1:3250/start",
+        "POST http://127.0.0.1:3250/publish",
+      ]),
+    );
+    const renewedLogin = await app.inject({
+      method: "POST",
+      url: "/api/v14/auth/login",
+      headers: { origin: "https://web.example" },
+      payload: { token: testToken },
+    });
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v14/auth/logout",
+          headers: {
+            origin: "https://web.example",
+            authorization: `Bearer ${testToken}`,
+            cookie: `${renewedLogin.cookies[0]?.name}=${renewedLogin.cookies[0]?.value}`,
+          },
+        })
+      ).statusCode,
+    ).toBe(204);
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v14/xianyu/status", headers: xianyuHeaders })).statusCode,
+    ).toBe(403);
     expect(
       (await app.inject({ method: "GET", url: "/api/v14/sessions", headers: authHeaders })).json<
         Array<{ id: string }>

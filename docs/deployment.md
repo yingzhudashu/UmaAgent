@@ -30,7 +30,7 @@ openssl rand -hex 32 # BROWSER_WORKER_TOKEN
 
 - 将 `server.webOrigins` 改为 Web 实际使用的精确 Origin，例如 `https://agent.example.com`。不接受通配符、路径或结尾 `/`。
 - 核对 Provider `baseUrl`、模型 ID、API 类型、上下文窗口、输出上限和 capabilities。示例值不是对任意 Provider 的兼容承诺。
-- 若启用语义知识检索，设置 `EMBEDDING_API_KEY`，并在配置中保持 `embedding.enabled=true`；默认使用 SiliconFlow `BAAI/bge-m3`。Embedding 暂时不可用时，知识库回退到 FTS 检索。
+- 若启用语义知识检索，设置 `EMBEDDING_API_KEY`，并在配置中保持 `embedding.enabled=true`；默认使用 SiliconFlow `BAAI/bge-m3`。未配置 Embedding 时仅使用显式配置的关键词检索，不会隐式切换运行模式。
 - 密钥只通过 `apiKeyEnv` 和 `authTokenEnv` 引用环境变量，不能写进 JSON。
 - 多用户 Web/移动端认证使用用户个人令牌；个人令牌只保存哈希，Web Cookie 绑定用户。原生 App 的 PKCE redirect 必须通过 `UMA_OAUTH_REDIRECTS` 显式配置为 `clientId|redirectUri`，禁止通配符。
 - `workspaceRoots` 保持为容器内路径 `/data/workspace`。远程客户端路径不是服务器工作区路径。
@@ -91,9 +91,9 @@ docker compose \
 
 卷名前缀由 `COMPOSE_PROJECT_NAME` 决定。不要让第二个 Core 挂载同一 `uma-state` 卷；SQLite WAL 是单进程、单副本设计。
 
-### 不使用 Docker 的 Node/systemd 部署
+### Native Node/systemd 部署
 
-Docker 是主要发布路径。如必须原生部署，使用专用系统用户，并把 state、workspace、配置和环境文件放在不同目录：
+生产发布使用专用系统用户和 Native systemd；state、workspace、配置和环境文件必须放在不同目录。Docker Compose 仅用于本地/CI 隔离验证：
 
 本仓库为 RobotClaw 服务器提供可直接安装的原生模板：
 
@@ -224,7 +224,9 @@ Caddy 和 Nginx 样例都支持 WebSocket。证书域名必须和 `server.webOri
 
 ```bash
 sudo systemctl enable --now uma-xianyu-adapter.service
-curl --fail http://127.0.0.1:3250/health
+curl --fail \
+  -H "Authorization: Bearer ${UMA_XIANYU_CONTROL_TOKEN}" \
+  http://127.0.0.1:3250/health
 ```
 
 Adapter 的 `/start`、`/stop`、`/pause`、`/resume`、`/conversations`、`/history`、`/item`、`/chat` 和 `/publish` 只接受内部控制令牌；客户端不得直连 Adapter。

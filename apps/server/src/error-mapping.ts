@@ -17,7 +17,9 @@ export function mapServerError(
   const provider =
     !providerContract && /(provider|preflight|classification|verification|model)/i.test(error.message);
   const cancelled = /cancel/i.test(error.message);
-  const forbidden = /administrator access|required permission|forbidden/i.test(error.message);
+  const forbidden = /administrator access|required permission|forbidden|grant expired|grant missing/i.test(
+    error.message,
+  );
   const validation =
     /(invalid|required|must |unsupported|outside|escapes|exceeds|unavailable|does not support|belongs to another session)/i.test(
       error.message,

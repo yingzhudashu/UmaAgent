@@ -8,6 +8,8 @@ const temporary: string[] = [];
 afterEach(async () => {
   delete process.env.UMA_CONFIG_KEY;
   delete process.env.UMA_CONFIG_MCP_TOKEN;
+  delete process.env.UMA_CONFIG_XIANYU_TOKEN;
+  delete process.env.UMA_CONFIG_STATE;
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -200,5 +202,61 @@ describe("loadConfig", () => {
     ];
     for (const [mutate, expected] of cases)
       await expect(loadConfig(await mutateConfig(mutate))).rejects.toThrow(expected);
+  });
+
+  it("validates the optional Xianyu adapter configuration", async () => {
+    process.env.UMA_CONFIG_KEY = "key";
+    process.env.UMA_CONFIG_XIANYU_TOKEN = "adapter-token";
+    const path = await mutateConfig((value) => {
+      value.xianyu = { adapterUrl: "http://127.0.0.1:3250/", controlTokenEnv: "UMA_CONFIG_XIANYU_TOKEN" };
+    });
+    await expect(loadConfig(path)).resolves.toMatchObject({
+      xianyu: { adapterUrl: "http://127.0.0.1:3250", controlTokenEnv: "UMA_CONFIG_XIANYU_TOKEN" },
+    });
+    await expect(
+      loadConfig(
+        await mutateConfig((value) => {
+          value.xianyu = { adapterUrl: "ftp://127.0.0.1:3250", controlTokenEnv: "UMA_CONFIG_XIANYU_TOKEN" };
+        }),
+      ),
+    ).rejects.toThrow("valid HTTP(S)");
+    delete process.env.UMA_CONFIG_XIANYU_TOKEN;
+    await expect(
+      loadConfig(
+        await mutateConfig((value) => {
+          value.xianyu = { adapterUrl: "http://127.0.0.1:3250", controlTokenEnv: "UMA_CONFIG_XIANYU_TOKEN" };
+        }),
+      ),
+    ).rejects.toThrow("Missing Xianyu control token");
+    process.env.UMA_CONFIG_XIANYU_TOKEN = "adapter-token";
+    await expect(
+      loadConfig(
+        await mutateConfig((value) => {
+          value.xianyu = {
+            adapterUrl: "http://127.0.0.1:3250",
+            controlTokenEnv: "UMA_CONFIG_XIANYU_TOKEN",
+            extra: true,
+          };
+        }),
+      ),
+    ).rejects.toThrow("unknown fields");
+  });
+
+  it("expands configured data paths and rejects missing path variables", async () => {
+    process.env.UMA_CONFIG_KEY = "key";
+    process.env.UMA_CONFIG_STATE = "external-state";
+    const expanded = await loadConfig(
+      await mutateConfig((value) => {
+        (value.server as Record<string, unknown>).stateDir = "$UMA_CONFIG_STATE";
+      }),
+    );
+    expect(expanded.server.stateDir).toMatch(/external-state$/);
+    await expect(
+      loadConfig(
+        await mutateConfig((value) => {
+          (value.server as Record<string, unknown>).workspaceRoots = ["%UMA_CONFIG_MISSING_PATH%"];
+        }),
+      ),
+    ).rejects.toThrow("config path references missing environment variable UMA_CONFIG_MISSING_PATH");
   });
 });

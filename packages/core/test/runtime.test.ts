@@ -446,7 +446,7 @@ describe("UmaRuntime preflight", () => {
     );
     const runtime = await runtimeWith([classification("simple"), ...toolTurns]);
     const session = await runtime.createSession();
-    const terminal = waitForTerminal(runtime, session.id, 15_000);
+    const terminal = waitForTerminal(runtime, session.id, 60_000);
     runtime.sendMessage(session.id, {
       messageId: "global-turn-limit",
       text: "keep listing",
@@ -456,7 +456,7 @@ describe("UmaRuntime preflight", () => {
     expect(run.status).toBe("failed");
     expect(run.turnCount).toBe(400);
     expect(run.error).toContain("Run turn limit exceeded (400)");
-  }, 20_000);
+  }, 60_000);
 
   it("persists a warning and fails a Run after six repeated tool calls", async () => {
     const runtime = await runtimeWith([

@@ -7,7 +7,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -47,11 +49,19 @@ class UmaApi(private val token: String, private val baseUrl: String = "https://r
             val builder = Request.Builder().url("$baseUrl/api/v14$path").addHeader("Authorization", "Bearer $token")
             if (grant != null) builder.addHeader("X-Xianyu-Grant", grant)
             if (body != null) builder.method(method, body.toRequestBody("application/json".toMediaType()))
+            else if (method != "GET") builder.method(method, null)
             http.newCall(builder.build()).execute().use { response ->
                 if (!response.isSuccessful) error("HTTP ${response.code}")
                 response.body?.string() ?: "{}"
             }
         }
+
+    suspend fun getJson(path: String): JsonElement = json.parseToJsonElement(request(path))
+    suspend fun postJson(path: String, body: JsonObject = buildJsonObject {}): JsonElement =
+        json.parseToJsonElement(request(path, "POST", body.toString()))
+    suspend fun patchJson(path: String, body: JsonObject): JsonElement =
+        json.parseToJsonElement(request(path, "PATCH", body.toString()))
+    suspend fun delete(path: String) { request(path, "DELETE") }
 
     suspend fun bootstrap(): Bootstrap = json.decodeFromString(request("/sync/bootstrap", "POST"))
     suspend fun sessions(): List<Session> = json.decodeFromString(request("/sessions"))
@@ -67,10 +77,86 @@ class UmaApi(private val token: String, private val baseUrl: String = "https://r
             put("messageId", java.util.UUID.randomUUID().toString()); put("text", text); put("mode", "agent")
         }.toString()),
     ).jsonObject
+    suspend fun createSession(title: String): Session = json.decodeFromString(
+        request("/sessions", "POST", buildJsonObject { put("title", title) }.toString()),
+    )
+    suspend fun renameSession(sessionId: String, title: String): Session = json.decodeFromString(
+        request("/sessions/${encode(sessionId)}", "PATCH", buildJsonObject { put("title", title) }.toString()),
+    )
+    suspend fun deleteSession(sessionId: String) { request("/sessions/${encode(sessionId)}", "DELETE") }
+    suspend fun cancelSession(sessionId: String) { request("/sessions/${encode(sessionId)}/cancel", "POST") }
+    suspend fun compactSession(sessionId: String): JsonObject = json.parseToJsonElement(
+        request("/sessions/${encode(sessionId)}/compact", "POST"),
+    ).jsonObject
     suspend fun unlock(password: String): Unlock = json.decodeFromString(
         request("/xianyu/unlock", "POST", buildJsonObject { put("password", password) }.toString()),
     )
     suspend fun xianyuStatus(grant: String): JsonObject = json.parseToJsonElement(request("/xianyu/status", grant = grant)).jsonObject
+    suspend fun xianyuConversations(grant: String): JsonElement = json.parseToJsonElement(request("/xianyu/conversations", grant = grant))
+    suspend fun xianyuHistory(grant: String, conversationId: String): JsonElement = json.parseToJsonElement(
+        request("/xianyu/history/${encode(conversationId)}", grant = grant),
+    )
+    suspend fun xianyuItem(grant: String, itemId: String): JsonElement = json.parseToJsonElement(
+        request("/xianyu/item/${encode(itemId)}", grant = grant),
+    )
+    suspend fun xianyuControl(grant: String, action: String) {
+        require(action in setOf("start", "stop", "pause", "resume"))
+        request("/xianyu/$action", "POST", grant = grant)
+    }
+    suspend fun xianyuChat(grant: String, receiverId: String, itemId: String): JsonElement = json.parseToJsonElement(
+        request("/xianyu/chat", "POST", buildJsonObject { put("receiverId", receiverId); put("itemId", itemId) }.toString(), grant),
+    )
+    suspend fun xianyuPublish(grant: String, description: String, imagePaths: List<String>, delivery: String): JsonElement = json.parseToJsonElement(
+        request("/xianyu/publish", "POST", buildJsonObject {
+            put("description", description)
+            put("imagePaths", kotlinx.serialization.json.buildJsonArray { imagePaths.forEach { add(JsonPrimitive(it)) } })
+            put("delivery", delivery)
+        }.toString(), grant),
+    )
+
+    suspend fun authMe(): JsonObject = getJson("/auth/me").jsonObject
+    suspend fun models(): JsonElement = getJson("/models")
+    suspend fun profile(): JsonElement = getJson("/profile")
+    suspend fun updateProfile(content: String): JsonElement =
+        putJson("/profile", buildJsonObject { put("content", content) })
+    suspend fun skills(): JsonElement = getJson("/skills")
+    suspend fun mcp(): JsonElement = getJson("/mcp")
+    suspend fun knowledge(): JsonElement = getJson("/knowledge")
+    suspend fun knowledgeSearch(query: String, sourceId: String? = null, limit: Int = 20): JsonElement =
+        getJson("/knowledge/search?q=${encode(query)}${sourceId?.let { "&sourceId=${encode(it)}" } ?: ""}&limit=$limit")
+    suspend fun tasks(): JsonElement = getJson("/tasks")
+    suspend fun createTask(prompt: String, parentSessionId: String? = null): JsonElement = postJson(
+        "/tasks",
+        buildJsonObject { put("prompt", prompt); parentSessionId?.let { put("parentSessionId", it) } },
+    )
+    suspend fun cancelTask(id: String): JsonElement = postJson("/tasks/${encode(id)}/cancel")
+    suspend fun deleteTask(id: String) { delete("/tasks/${encode(id)}") }
+    suspend fun schedules(): JsonElement = getJson("/schedules")
+    suspend fun memory(status: String? = null): JsonElement = getJson("/memory${status?.let { "?status=${encode(it)}" } ?: ""}")
+    suspend fun operations(): JsonElement = getJson("/reports/operations")
+    suspend fun diagnostics(): JsonElement = getJson("/reports/diagnostics")
+    suspend fun evaluations(): JsonElement = getJson("/evaluations")
+    suspend fun optimizationProposals(): JsonElement = getJson("/optimization-proposals")
+    suspend fun run(runId: String): JsonElement = getJson("/runs/${encode(runId)}")
+    suspend fun runCheckpoints(runId: String): JsonElement = getJson("/runs/${encode(runId)}/checkpoints")
+    suspend fun runActions(runId: String): JsonElement = getJson("/runs/${encode(runId)}/actions")
+    suspend fun resumeRun(runId: String): JsonElement = postJson("/runs/${encode(runId)}/resume")
+    suspend fun confirmPlan(runId: String): JsonElement = postJson("/runs/${encode(runId)}/confirm-plan")
+    suspend fun cancelRun(runId: String): JsonElement = postJson("/runs/${encode(runId)}/cancel")
+    suspend fun decideAction(runId: String, actionId: String, decision: String): JsonElement = postJson(
+        "/runs/${encode(runId)}/actions/${encode(actionId)}/decide",
+        buildJsonObject { put("decision", decision) },
+    )
+    suspend fun reviewMessage(messageId: String, feedback: String = ""): JsonElement = postJson(
+        "/messages/${encode(messageId)}/review",
+        buildJsonObject { put("feedback", feedback) },
+    )
+    suspend fun improveMessage(messageId: String, force: Boolean = false, reset: Boolean = false): JsonElement = postJson(
+        "/messages/${encode(messageId)}/improve",
+        buildJsonObject { put("force", force); put("reset", reset) },
+    )
+    private suspend fun putJson(path: String, body: JsonObject): JsonElement =
+        json.parseToJsonElement(request(path, "PUT", body.toString()))
 
     fun connectEvents(onOpen: (WebSocket) -> Unit, onText: (String) -> Unit, onFailure: (Throwable) -> Unit): WebSocket {
         val url = baseUrl.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/api/v14/events"
@@ -120,7 +206,7 @@ class PatStore(context: Context) {
 @Serializable
 data class CacheEnvelope(val version: Int, val sessions: List<Session>, val snapshots: Map<String, String>)
 
-class SnapshotCache(context: Context) {
+class SnapshotCache(private val context: Context) {
     private val file = File(context.filesDir, "cache.json")
     fun read(): CacheEnvelope? = try {
         if (!file.exists()) null else json.decodeFromString<CacheEnvelope>(file.readText()).let {
