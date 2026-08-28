@@ -5,8 +5,8 @@ COPY packages ./packages
 COPY apps ./apps
 COPY scripts ./scripts
 RUN npm ci --ignore-scripts
-RUN node --input-type=module -e "console.log(await import.meta.resolve('@uma-agent/protocol'))"
 RUN npm run build
+RUN test -f packages/protocol/dist/index.js && test -f packages/telemetry/dist/index.js && test -f packages/core/dist/index.js
 RUN npm prune --omit=dev --ignore-scripts
 
 FROM node:22.19.0-bookworm-slim
