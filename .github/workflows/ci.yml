@@ -8,8 +8,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22.19.0
           cache: npm
@@ -26,7 +26,8 @@ jobs:
           fi
       - run: npm run build
       - run: npm run build:web:embed
-      - run: docker build -t uma-agent:ci .
+      - name: Build core image with plain diagnostics
+        run: docker build --progress=plain -t uma-agent:ci .
       - run: docker build -f docker/Dockerfile.xianyu -t uma-agent-xianyu:ci .
       - run: docker build -f docker/Dockerfile.browser -t uma-agent-browser:ci .
       - run: docker build -f docker/Dockerfile.skill-worker -t uma-agent-skill-worker:ci .

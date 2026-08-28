@@ -18,6 +18,14 @@ sign-off before a release is declared complete.
 - Legacy-channel scan: run the repository forbidden-term scan while excluding
   `.git`, dependency caches, and build caches; the result must be empty.
 
+## Latest hosted CI evidence
+
+- Commit `8be9ea1` was pushed to `origin/master` and triggered both workflows.
+- Android run `33130710336` passed with JDK 17, SDK 35, tests, lint, and APK assembly.
+- Node/Docker run `33130710399` passed checkout, install, and TypeScript build but
+  failed during the core image build with a workspace module-resolution error;
+  local clean-checkout build passed, so Docker output is still required.
+
 ## R1 device checks
 
 - [ ] PAT login succeeds and survives process restart through Android Keystore.
