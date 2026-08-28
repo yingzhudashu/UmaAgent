@@ -2066,9 +2066,36 @@ export class UmaDatabase {
 
   listQualityForMessage(messageId: string): QualityAssessment[] {
     return rows(
-      this.db.prepare("SELECT run_id FROM quality_assessments WHERE target_message_id=? ORDER BY created_at"),
+      this.db.prepare(
+        "SELECT run_id FROM quality_assessments WHERE target_message_id=? GROUP BY run_id ORDER BY MIN(created_at)",
+      ),
       messageId,
     ).flatMap((value) => this.listQualityAssessments(text(value.run_id)));
+  }
+
+  listQualityRunsForMessage(messageId: string): Array<{
+    id: string;
+    kind: "review" | "improve";
+    status: Run["status"];
+    resultMessageId?: string;
+    error?: string;
+    createdAt: number;
+    updatedAt: number;
+  }> {
+    return rows(
+      this.db.prepare(
+        "SELECT id,kind,status,result_message_id,error,created_at,updated_at FROM runs WHERE target_message_id=? AND kind IN ('review','improve') ORDER BY created_at,id",
+      ),
+      messageId,
+    ).map((value) => ({
+      id: text(value.id),
+      kind: text(value.kind) as "review" | "improve",
+      status: text(value.status) as Run["status"],
+      ...(value.result_message_id ? { resultMessageId: text(value.result_message_id) } : {}),
+      ...(value.error ? { error: text(value.error) } : {}),
+      createdAt: integer(value.created_at),
+      updatedAt: integer(value.updated_at),
+    }));
   }
 
   listActivity(sessionId: string, limit = 200): Array<Record<string, unknown>> {

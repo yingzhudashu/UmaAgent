@@ -536,9 +536,15 @@ export async function createServer(
       if (!Value.Check(EditMessageRequestSchema, request.body))
         throw new Error("Invalid edit message request");
       const owner = runtime.database.messageOwner(request.params.id);
-      if (!owner) throw new Error("Message not found");
-      requireSessionOwner(request, owner);
-      const run = runtime.editMessage(owner, request.params.id, request.body.text, requestTrace(request));
+      const message = runtime.database.findMessageOwner(request.params.id);
+      if (!owner || !message) throw new Error("Message not found");
+      requireOwned(request, owner);
+      const run = runtime.editMessage(
+        message.sessionId,
+        request.params.id,
+        request.body.text,
+        requestTrace(request),
+      );
       return reply.code(202).send({ runId: run.id, status: run.status });
     },
   );
@@ -1018,6 +1024,11 @@ export async function createServer(
   app.get<{ Params: { id: string } }>("/api/v15/runs/:id/quality", async (request) =>
     ownedResult(request, runtime.database.runOwner(request.params.id), () =>
       runtime.listQualityAssessments(request.params.id),
+    ),
+  );
+  app.get<{ Params: { id: string } }>("/api/v15/messages/:id/quality", async (request) =>
+    ownedResult(request, runtime.database.messageOwner(request.params.id), () =>
+      runtime.listMessageQuality(request.params.id),
     ),
   );
   app.post<{ Params: { id: string }; Body: { feedback?: string } }>(

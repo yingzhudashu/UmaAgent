@@ -61,6 +61,7 @@ import { ResponseCard } from "./components/ResponseCard.js";
 import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
 import { Login } from "./Login.js";
+import { useQualityHistory } from "./quality-history.js";
 import { buildConversationEntries } from "./responseTurns.js";
 import { applyStreamingEvent } from "./streaming.js";
 
@@ -77,7 +78,6 @@ type QualityOperation = {
   assessments?: readonly QualityAssessment[];
   result?: string;
 };
-
 export interface AppProps {
   client: UmaClient;
   embedded?: boolean;
@@ -111,6 +111,14 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [commandOpen, setCommandOpen] = useState(false);
   const [xianyuOpen, setXianyuOpen] = useState(false);
   const [qualityOperations, setQualityOperations] = useState<Record<string, QualityOperation>>({});
+  const mergeQualityHistory = useCallback((restored: Record<string, QualityOperation>) => {
+    setQualityOperations((current) => {
+      const next = { ...current };
+      for (const [messageId, operation] of Object.entries(restored))
+        if (current[messageId]?.status !== "running") next[messageId] = operation;
+      return next;
+    });
+  }, []);
 
   const sessions = useQuery({
     queryKey: ["sessions"],
@@ -229,6 +237,13 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     enabled: Boolean(selected && selected !== "undefined") && authenticated,
     refetchInterval: false,
   });
+  useQualityHistory(
+    client,
+    snapshot.data?.transcript,
+    Boolean(authenticated),
+    selected && `${selected}:${snapshot.data?.snapshotSequence ?? 0}`,
+    mergeQualityHistory,
+  );
   useEffect(() => {
     const capture = (event: Event) => {
       event.preventDefault();
@@ -556,6 +571,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const startQuality = (messageId: string, kind: "review" | "improve") => {
     const current = qualityOperations[messageId];
     if (current?.status === "running" || !selected) return;
+    const sessionId = selected;
     setQualityOperations((items) => ({ ...items, [messageId]: { kind, status: "running" } }));
     const request = kind === "review" ? client.reviewMessage(messageId) : client.improveMessage(messageId);
     void request
@@ -567,7 +583,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
         return client.waitForRun(started.runId).then(async (run) => {
           const assessments = await client.listRunQuality(started.runId);
           const latest = run.resultMessageId
-            ? (await client.getSession(selected)).transcript.find((item) => item.id === run.resultMessageId)
+            ? (await client.getSession(sessionId)).transcript.find((item) => item.id === run.resultMessageId)
                 ?.content
             : undefined;
           setQualityOperations((items) => ({
@@ -580,7 +596,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               ...(latest !== undefined ? { result: latest } : {}),
             },
           }));
-          await queryClient.invalidateQueries({ queryKey: ["snapshot", selected] });
+          await queryClient.invalidateQueries({ queryKey: ["snapshot", sessionId] });
         });
       })
       .catch((error) => {

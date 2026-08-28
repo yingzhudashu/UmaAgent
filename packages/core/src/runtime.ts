@@ -828,6 +828,10 @@ export class UmaRuntime {
     return this.resources.listQualityAssessments(runId);
   }
 
+  listMessageQuality(messageId: string) {
+    return this.resources.listMessageQuality(messageId);
+  }
+
   private transitionRun(
     sessionId: string,
     runId: string,
@@ -2162,7 +2166,7 @@ export class UmaRuntime {
         this.models.models.streamSimple(model, modelContext, {
           ...options,
           headers: { ...(options?.headers ?? {}), "user-agent": "UmaAgent/1.0", accept: "application/json" },
-          sessionId: modelCacheKey(session.id),
+          sessionId: modelCacheKey(session.id, `agent:${model.provider}:${model.id}`),
           cacheRetention: "short",
           ...transientModelRetry,
         }),

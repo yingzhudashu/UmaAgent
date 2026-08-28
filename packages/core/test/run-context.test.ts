@@ -119,6 +119,10 @@ describe("run context builder", () => {
     expect(context.messages[0]).toMatchObject({ summary: "persisted summary" });
     expect(context.prompt).toContain("likes deterministic tests");
     expect(context.prompt).toContain("notes.md\nknown answer");
+    expect(context.prompt.indexOf("override")).toBeLessThan(context.prompt.indexOf("<relevant_memory>"));
+    expect(context.prompt.indexOf("<relevant_memory>")).toBeLessThan(
+      context.prompt.indexOf("<relevant_knowledge>"),
+    );
     expect(context.images).toEqual([{ type: "image", data: "AQID", mimeType: "image/png" }]);
     expect(context.tools.map((tool) => tool.name)).toEqual(["read", "attachment_read"]);
   });

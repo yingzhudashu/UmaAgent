@@ -8,16 +8,21 @@ export const transientModelRetry = {
   maxRetryDelayMs: 120_000,
 } as const;
 
-export function modelCacheKey(sessionId: string): string {
-  return `uma-${createHash("sha256").update(`uma-agent:prompt-cache:v1:${sessionId}`).digest("hex").slice(0, 48)}`;
+export function modelCacheKey(sessionId: string, namespace = "default"): string {
+  return `uma-${createHash("sha256")
+    .update(`uma-agent:prompt-cache:v2:${namespace}:${sessionId}`)
+    .digest("hex")
+    .slice(0, 48)}`;
 }
 
-export function transientModelOptions(signal: AbortSignal, sessionId?: string) {
+export function transientModelOptions(signal: AbortSignal, sessionId?: string, namespace = "default") {
   return {
     signal,
     temperature: 0,
     headers: { "user-agent": "UmaAgent/1.0", accept: "application/json" },
-    ...(sessionId ? { sessionId: modelCacheKey(sessionId), cacheRetention: "short" as const } : {}),
+    ...(sessionId
+      ? { sessionId: modelCacheKey(sessionId, namespace), cacheRetention: "short" as const }
+      : {}),
     ...transientModelRetry,
   } as const;
 }

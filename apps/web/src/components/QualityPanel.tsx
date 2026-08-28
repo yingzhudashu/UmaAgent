@@ -19,7 +19,11 @@ export function QualityPanel({
   const latest = operation.assessments?.at(-1);
   return (
     <section className="quality-panel" aria-live="polite">
-      <strong>{operation.kind === "review" ? "审查结果" : "改进结果"}</strong>
+      <strong>{operation.kind === "review" ? "审查：只分析当前答案" : "改进：根据建议生成新答案"}</strong>
+      {operation.kind === "review" && <p className="quality-panel__hint">审查不会修改原答案。</p>}
+      {operation.kind === "improve" && (
+        <p className="quality-panel__hint">改进会保留原答案，并在其后生成一条新答案。</p>
+      )}
       {operation.status === "running" && <p>正在处理…</p>}
       {operation.status === "failed" && (
         <>
@@ -31,7 +35,7 @@ export function QualityPanel({
       )}
       {operation.status === "completed" && operation.kind === "review" && (
         <>
-          <p>{latest?.passed ? "未发现明显问题。" : "发现需要关注的问题。"}</p>
+          <p>{latest?.passed ? "审查通过，未发现明显问题。" : "审查发现需要关注的问题。"}</p>
           {latest?.issues.map((issue) => (
             <p className="quality-panel__item" key={`${issue.type}:${issue.description}`}>
               {issue.description}
@@ -45,7 +49,10 @@ export function QualityPanel({
         </>
       )}
       {operation.status === "completed" && operation.kind === "improve" && operation.result && (
-        <p className="quality-panel__result">{operation.result}</p>
+        <>
+          <p className="quality-panel__label">改进后的答案</p>
+          <p className="quality-panel__result">{operation.result}</p>
+        </>
       )}
     </section>
   );

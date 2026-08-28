@@ -62,12 +62,16 @@ export class RunContextBuilder {
       }
     ).searchSemantic?.(input.request.text, 3, ownerId) ??
       this.knowledge.search(input.request.text, 3, undefined, ownerId));
-    const supportingContext = [
+    const stableContext = [
       profile.content ? `<agent_profile>\n${profile.content}\n</agent_profile>` : "",
-      memory.length ? `<relevant_memory>\n${memory.join("\n")}\n</relevant_memory>` : "",
       rollups.length
         ? `<history_rollups>\n${rollups.map((item) => `[${item.fromSequence}-${item.toSequence}] ${item.summary}`).join("\n")}\n</history_rollups>`
         : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const dynamicContext = [
+      memory.length ? `<relevant_memory>\n${memory.join("\n")}\n</relevant_memory>` : "",
       knowledge.length
         ? `<relevant_knowledge>\n${knowledge.map((item) => `${item.filePath}\n${item.content}`).join("\n\n")}\n</relevant_knowledge>`
         : "",
@@ -99,7 +103,16 @@ export class RunContextBuilder {
       });
     }
     const systemPrompt = `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought. When referencing a generated file, use only [filename](uma-attachment://<real attachment id>) with an ID returned by an attachment tool. Never emit API URLs, filesystem paths, sandbox links, or invented attachment IDs.${this.skills.systemPrompt(input.session.id)}`;
-    const prompt = `${supportingContext ? `${supportingContext}\n\n` : ""}${input.promptOverride ?? input.request.text}${plan}${assumptions}${attachments}`;
+    const prompt = [
+      stableContext,
+      input.promptOverride ?? input.request.text,
+      plan.trim(),
+      assumptions.trim(),
+      dynamicContext,
+      attachments.trim(),
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     assertContextCapacity(model, history.messages, systemPrompt, prompt);
     return {
       model,

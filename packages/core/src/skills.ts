@@ -235,10 +235,12 @@ export class SkillRegistry {
   }
 
   systemPrompt(sessionId?: string): string {
-    const enabled = [...this.skills.values()].filter(
-      (skill) =>
-        skill.enabled && skill.modelInvocable !== false && isVisible(skill.scope ?? "global", sessionId),
-    );
+    const enabled = [...this.skills.values()]
+      .filter(
+        (skill) =>
+          skill.enabled && skill.modelInvocable !== false && isVisible(skill.scope ?? "global", sessionId),
+      )
+      .sort((a, b) => a.name.localeCompare(b.name));
     if (!enabled.length) return "";
     return `\n\n<available_skills>\n${enabled
       .map(

@@ -105,7 +105,9 @@ export class McpManager {
   }
 
   tools(): AgentTool[] {
-    return this.connections.flatMap((connection) => connection.tools);
+    return this.connections
+      .flatMap((connection) => connection.tools)
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   status(): Array<{ name: string; connected: boolean; toolCount: number; error?: string }> {

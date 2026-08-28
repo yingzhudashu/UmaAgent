@@ -98,6 +98,17 @@ export interface MaintenanceStatus {
   expectedVersion?: string;
 }
 
+export interface MessageQualityHistory {
+  kind: "review" | "improve";
+  runId: string;
+  status: import("@uma-agent/protocol").Run["status"];
+  resultMessageId?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+  assessments: QualityAssessment[];
+}
+
 type Listener = (event: AgentEventEnvelope) => void;
 type ResourceListener = (event: ResourceInvalidated | ResourceResyncRequired) => void;
 function traceparent(): string {
@@ -611,6 +622,9 @@ export class UmaClient {
   }
   listRunQuality(runId: string): Promise<QualityAssessment[]> {
     return this.request(`/runs/${encodeURIComponent(runId)}/quality`);
+  }
+  listMessageQuality(messageId: string): Promise<MessageQualityHistory[]> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}/quality`);
   }
   sendCommand(sessionId: string, command: string, messageId?: string): Promise<SendMessageResponse> {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/commands`, {

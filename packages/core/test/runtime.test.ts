@@ -1085,6 +1085,9 @@ describe("UmaRuntime preflight", () => {
       passed: false,
       iteration: 1,
     });
+    expect(runtime.listMessageQuality("quality-answer")).toEqual([
+      expect.objectContaining({ kind: "review", runId: review.id, status: "completed" }),
+    ]);
     const improve = runtime.improveMessage("quality-answer");
     expect((await waitForRunTerminal(runtime, improve.id)).status).toBe("completed");
     expect(runtime.listTrace({ runId: improve.id }).spans).toEqual(
@@ -1101,6 +1104,10 @@ describe("UmaRuntime preflight", () => {
       parentMessageId: "quality-answer",
     });
     expect(runtime.database.getMessage("quality-answer").content).toBe("Original answer");
+    expect(runtime.listMessageQuality("quality-answer").map((item) => item.kind)).toEqual([
+      "review",
+      "improve",
+    ]);
     expect(() => runtime.reviewMessage("quality-question")).toThrow("assistant message");
     const reset = runtime.improveMessage(revision?.id as string, { reset: true });
     expect((await waitForRunTerminal(runtime, reset.id)).status).toBe("completed");

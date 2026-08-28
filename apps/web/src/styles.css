@@ -1526,6 +1526,11 @@
 .uma-embed .quality-panel p {
   margin: 6px 0 0;
 }
+.uma-embed .quality-panel__hint,
+.uma-embed .quality-panel__label {
+  color: var(--muted);
+  font-size: 11px;
+}
 .uma-embed .quality-panel__item {
   padding-left: 9px;
   border-left: 2px solid var(--accent);

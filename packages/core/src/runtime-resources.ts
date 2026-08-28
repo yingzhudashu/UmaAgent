@@ -242,4 +242,26 @@ export class RuntimeResourceService {
     this.deps.database.getRun(runId);
     return this.deps.database.listQualityAssessments(runId);
   }
+
+  listMessageQuality(messageId: string) {
+    const groups = new Map<string, QualityAssessment[]>();
+    const runs = this.deps.database.listQualityRunsForMessage(messageId);
+    for (const run of runs) groups.set(run.id, []);
+    for (const assessment of this.deps.database.listQualityForMessage(messageId))
+      groups.set(assessment.runId, [...(groups.get(assessment.runId) ?? []), assessment]);
+    return runs
+      .map((run) => ({
+        kind: run.kind,
+        runId: run.id,
+        status: run.status,
+        ...(run.resultMessageId ? { resultMessageId: run.resultMessageId } : {}),
+        ...(run.error ? { error: run.error } : {}),
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+        assessments: (groups.get(run.id) ?? []).sort(
+          (a, b) => a.iteration - b.iteration || a.createdAt - b.createdAt,
+        ),
+      }))
+      .sort((a, b) => a.createdAt - b.createdAt || a.runId.localeCompare(b.runId));
+  }
 }

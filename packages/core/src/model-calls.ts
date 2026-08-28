@@ -58,7 +58,11 @@ export class ModelCallService {
         model,
         { systemPrompt: input.systemPrompt, messages },
         {
-          ...transientModelOptions(input.signal, input.sessionId),
+          ...transientModelOptions(
+            input.signal,
+            input.sessionId,
+            `${input.role}:${input.purpose}:${model.provider}:${model.id}`,
+          ),
           ...(input.thinkingLevel ? { reasoning: input.thinkingLevel } : {}),
         },
       );

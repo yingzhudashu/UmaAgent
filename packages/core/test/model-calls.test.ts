@@ -40,7 +40,7 @@ describe("ModelCallService", () => {
     });
     const options = completeSimple.mock.calls[0]?.[2];
     expect(options).toMatchObject({
-      sessionId: modelCacheKey("session-a"),
+      sessionId: modelCacheKey("session-a", "fast:classify:faux:model"),
       cacheRetention: "short",
       maxRetries: 5,
       maxRetryDelayMs: 120_000,
@@ -48,6 +48,9 @@ describe("ModelCallService", () => {
     });
     expect(modelCacheKey("session-a")).toBe(modelCacheKey("session-a"));
     expect(modelCacheKey("session-a")).not.toBe(modelCacheKey("session-b"));
+    expect(modelCacheKey("session-a", "fast:classify:faux:model")).not.toBe(
+      modelCacheKey("session-a", "reasoning:preflight:faux:model"),
+    );
     expect(modelCacheKey("session-a")).not.toContain("session-a");
   });
 

@@ -110,12 +110,23 @@ export class MessageRepository {
         if (value.run_id) activeRunIds.add(text(value.run_id));
       }
     }
+    const qualityRunIds = new Set(
+      rows(
+        this.db.prepare(
+          "SELECT id FROM runs WHERE target_message_id IN (SELECT id FROM messages WHERE session_id=? AND id IN (" +
+            [...ancestry].map(() => "?").join(",") +
+            ")) AND kind IN ('review','improve')",
+        ),
+        sessionId,
+        ...ancestry,
+      ).map((value) => text(value.id)),
+    );
     return all.filter((value) => {
       const sequence = integer(value.sequence);
       return (
         sequence < rootSequence ||
         activeUsers.has(text(value.id)) ||
-        (value.run_id && activeRunIds.has(text(value.run_id)))
+        (value.run_id && (activeRunIds.has(text(value.run_id)) || qualityRunIds.has(text(value.run_id))))
       );
     });
   }

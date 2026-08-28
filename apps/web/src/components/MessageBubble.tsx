@@ -142,12 +142,12 @@ export function MessageBubble({
             </>
           )}
           {!isUser && !isTool && onReview && (
-            <button type="button" className="text-action" onClick={onReview}>
+            <button type="button" className="text-action" onClick={onReview} title="只分析答案，不修改内容">
               审查
             </button>
           )}
           {!isUser && !isTool && onImprove && (
-            <button type="button" className="text-action" onClick={onImprove}>
+            <button type="button" className="text-action" onClick={onImprove} title="根据审查建议生成新答案">
               改进
             </button>
           )}

@@ -208,6 +208,7 @@ export function ResponseCard({
               type="button"
               className="text-action"
               disabled={qualityOperation?.status === "running"}
+              title="只分析答案，不修改内容"
               onClick={() => onReview(finalAssistant.id)}
             >
               {qualityOperation?.status === "running" && qualityOperation.kind === "review"
@@ -220,6 +221,7 @@ export function ResponseCard({
               type="button"
               className="text-action"
               disabled={qualityOperation?.status === "running"}
+              title="根据审查建议生成新答案"
               onClick={() => onImprove(finalAssistant.id)}
             >
               {qualityOperation?.status === "running" && qualityOperation.kind === "improve"
