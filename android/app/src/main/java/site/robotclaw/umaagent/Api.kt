@@ -2,8 +2,6 @@ package site.robotclaw.umaagent
 
 import android.content.Context
 import android.net.Uri
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -13,6 +11,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -24,12 +23,6 @@ import okhttp3.MultipartBody
 import okio.BufferedSink
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import java.io.File
-import java.security.KeyStore
-import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
-import javax.crypto.SecretKey
-import javax.crypto.spec.GCMParameterSpec
 
 @Serializable
 data class Session(val id: String, val title: String, val workspace: String = "")
@@ -43,7 +36,14 @@ data class Bootstrap(val user: JsonObject? = null, val sessions: List<BootstrapE
 @Serializable
 data class Unlock(val grant: String, val expiresAt: Long)
 
+class UmaApiException(val status: Int, message: String) : Exception(message)
+
 private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+private fun errorMessage(payload: String, status: Int, operation: String): String = runCatching {
+    val error = json.parseToJsonElement(payload).jsonObject["error"] as? JsonObject
+    (error?.get("message") as? JsonPrimitive)?.content
+}.getOrNull()?.takeIf { it.isNotBlank() } ?: "$operation（HTTP $status）"
 
 class UmaApi(
     private val token: String,
@@ -53,13 +53,16 @@ class UmaApi(
 
     private suspend fun request(path: String, method: String = "GET", body: String? = null, grant: String? = null): String =
         withContext(Dispatchers.IO) {
-            val builder = Request.Builder().url("$baseUrl/api/v14$path").addHeader("Authorization", "Bearer $token")
+            val builder = Request.Builder().url("$baseUrl/api/v15$path").addHeader("Authorization", "Bearer $token")
             if (grant != null) builder.addHeader("X-Xianyu-Grant", grant)
             if (body != null) builder.method(method, body.toRequestBody("application/json".toMediaType()))
             else if (method != "GET") builder.method(method, null)
             http.newCall(builder.build()).execute().use { response ->
-                if (!response.isSuccessful) error("HTTP ${response.code}")
-                response.body?.string() ?: "{}"
+                val payload = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    throw UmaApiException(response.code, errorMessage(payload, response.code, "请求失败"))
+                }
+                payload.ifBlank { "{}" }
             }
         }
 
@@ -84,20 +87,24 @@ class UmaApi(
                 .addFormDataPart("file", name, body)
                 .addFormDataPart("sessionId", sessionId)
                 .build()
-            val request = Request.Builder().url("$baseUrl/api/v14/uploads")
+            val request = Request.Builder().url("$baseUrl/api/v15/uploads")
                 .addHeader("Authorization", "Bearer $token")
                 .post(multipart).build()
             http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) error("HTTP ${response.code}")
-                json.parseToJsonElement(response.body?.string() ?: "{}").jsonObject
+                val payload = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw UmaApiException(response.code, errorMessage(payload, response.code, "附件上传失败"))
+                json.parseToJsonElement(payload.ifBlank { "{}" }).jsonObject
             }
         }
 
     suspend fun downloadAttachment(context: Context, id: String, destination: Uri): Long = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url("$baseUrl/api/v14/attachments/${encode(id)}/content?download=1")
+        val request = Request.Builder().url("$baseUrl/api/v15/attachments/${encode(id)}/content?download=1")
             .addHeader("Authorization", "Bearer $token").build()
         http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) error("HTTP ${response.code}")
+            if (!response.isSuccessful) {
+                val payload = response.body?.string().orEmpty()
+                throw UmaApiException(response.code, errorMessage(payload, response.code, "附件下载失败"))
+            }
             val input = response.body?.byteStream() ?: error("附件为空")
             val output = context.contentResolver.openOutputStream(destination) ?: error("无法写入附件")
             var total = 0L
@@ -123,9 +130,12 @@ class UmaApi(
     }
     suspend fun events(sessionId: String, after: Long, limit: Int = 500): JsonObject =
         json.parseToJsonElement(request("/sessions/${encode(sessionId)}/events?after=$after&limit=$limit")).jsonObject
-    suspend fun send(sessionId: String, text: String): JsonObject = json.parseToJsonElement(
+    suspend fun send(sessionId: String, text: String, attachmentIds: List<String> = emptyList()): JsonObject = json.parseToJsonElement(
         request("/sessions/${encode(sessionId)}/messages", "POST", buildJsonObject {
             put("messageId", java.util.UUID.randomUUID().toString()); put("text", text); put("mode", "agent")
+            if (attachmentIds.isNotEmpty()) put("attachmentIds", kotlinx.serialization.json.buildJsonArray {
+                attachmentIds.forEach { add(JsonPrimitive(it)) }
+            })
         }.toString()),
     ).jsonObject
     suspend fun createSession(title: String): Session = json.decodeFromString(
@@ -157,11 +167,28 @@ class UmaApi(
     suspend fun xianyuChat(grant: String, receiverId: String, itemId: String): JsonElement = json.parseToJsonElement(
         request("/xianyu/chat", "POST", buildJsonObject { put("receiverId", receiverId); put("itemId", itemId) }.toString(), grant),
     )
-    suspend fun xianyuPublish(grant: String, description: String, imagePaths: List<String>, delivery: String): JsonElement = json.parseToJsonElement(
+    suspend fun xianyuPublish(
+        grant: String,
+        description: String,
+        imagePaths: List<String>,
+        delivery: String,
+        longitude: String,
+        latitude: String,
+        currentPrice: String? = null,
+        originalPrice: String? = null,
+        shippingFee: String? = null,
+        selfPickup: Boolean? = null,
+    ): JsonElement = json.parseToJsonElement(
         request("/xianyu/publish", "POST", buildJsonObject {
             put("description", description)
             put("imagePaths", kotlinx.serialization.json.buildJsonArray { imagePaths.forEach { add(JsonPrimitive(it)) } })
             put("delivery", delivery)
+            put("longitude", longitude)
+            put("latitude", latitude)
+            currentPrice?.let { put("currentPrice", it) }
+            originalPrice?.let { put("originalPrice", it) }
+            shippingFee?.let { put("shippingFee", it) }
+            selfPickup?.let { put("selfPickup", it) }
         }.toString(), grant),
     )
 
@@ -206,11 +233,20 @@ class UmaApi(
         "/messages/${encode(messageId)}/improve",
         buildJsonObject { put("force", force); put("reset", reset) },
     )
+    suspend fun editMessage(messageId: String, text: String): JsonElement = patchJson(
+        "/messages/${encode(messageId)}", buildJsonObject { put("text", text) },
+    )
+    suspend fun queue(sessionId: String): JsonElement = getJson("/sessions/${encode(sessionId)}/queue")
+    suspend fun reorderQueue(sessionId: String, runIds: List<String>): JsonElement = postJson(
+        "/sessions/${encode(sessionId)}/queue/reorder",
+        kotlinx.serialization.json.buildJsonObject { put("runIds", kotlinx.serialization.json.buildJsonArray { runIds.forEach { add(JsonPrimitive(it)) } }) },
+    )
+    suspend fun prioritizeRun(runId: String): JsonElement = postJson("/runs/${encode(runId)}/prioritize")
     private suspend fun putJson(path: String, body: JsonObject): JsonElement =
         json.parseToJsonElement(request(path, "PUT", body.toString()))
 
     fun connectEvents(onOpen: (WebSocket) -> Unit, onText: (String) -> Unit, onFailure: (Throwable) -> Unit): WebSocket {
-        val url = baseUrl.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/api/v14/events"
+        val url = baseUrl.replaceFirst("https://", "wss://").replaceFirst("http://", "ws://") + "/api/v15/events"
         return http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) = onOpen(webSocket)
             override fun onMessage(webSocket: WebSocket, text: String) = onText(text)
@@ -220,65 +256,4 @@ class UmaApi(
     }
 
     private fun encode(value: String) = java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
-}
-
-class PatStore(context: Context) {
-    private val file = File(context.filesDir, "pat.bin")
-    private val alias = "uma-pat"
-
-    private fun key(): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(alias, null) as? SecretKey)?.let { return it }
-        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        generator.init(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
-        return generator.generateKey()
-    }
-
-    fun save(value: String) {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
-        file.writeBytes(cipher.iv + cipher.doFinal(value.toByteArray(Charsets.UTF_8)))
-    }
-
-    fun read(): String? {
-        if (!file.exists()) return null
-        return try {
-            val bytes = file.readBytes(); if (bytes.size <= 12) return null
-            Cipher.getInstance("AES/GCM/NoPadding").run {
-                init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
-                String(doFinal(bytes.copyOfRange(12, bytes.size)), Charsets.UTF_8)
-            }
-        } catch (_: Exception) {
-            file.delete()
-            null
-        }
-    }
-
-    fun clear() { file.delete() }
-}
-
-@Serializable
-data class CacheEnvelope(
-    val version: Int,
-    val sessions: List<Session>,
-    val snapshots: Map<String, String>,
-    val sequences: Map<String, Long> = emptyMap(),
-)
-
-class SnapshotCache(private val context: Context) {
-    private val file = File(context.filesDir, "cache.json")
-    fun read(): CacheEnvelope? = try {
-        if (!file.exists()) null else json.decodeFromString<CacheEnvelope>(file.readText()).let {
-            if (it.version == 2) it else null.also { file.delete() }
-        }
-    } catch (_: Exception) { file.delete(); null }
-    fun write(value: CacheEnvelope) {
-        val temporary = File(context.filesDir, "cache.json.tmp")
-        temporary.writeText(json.encodeToString(value))
-        if (!temporary.renameTo(file)) {
-            file.delete()
-            check(temporary.renameTo(file)) { "无法保存离线缓存" }
-        }
-    }
-    fun clear() { file.delete() }
 }

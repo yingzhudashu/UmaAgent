@@ -1,7 +1,8 @@
 import type { TranscriptItem } from "@uma-agent/protocol";
-import { Bot, Check, ChevronRight, Copy, UserRound } from "lucide-react";
+import { Bot, Check, ChevronRight, Copy, Pencil, UserRound, X } from "lucide-react";
 import { useState } from "react";
 import { Markdown } from "../Markdown.js";
+import { type QualityOperationView, QualityPanel } from "./QualityPanel.js";
 
 export function MessageBubble({
   item,
@@ -9,14 +10,24 @@ export function MessageBubble({
   onAttachment,
   onReview,
   onImprove,
+  onEdit,
+  qualityOperation,
+  onQualityRetry,
 }: {
   item: TranscriptItem;
   onRetry: (() => void) | undefined;
   onAttachment: ((id: string) => void) | undefined;
   onReview: (() => void) | undefined;
   onImprove: (() => void) | undefined;
+  onEdit: ((text: string) => Promise<void>) | undefined;
+  qualityOperation?: QualityOperationView;
+  onQualityRetry?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.content);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState<string>();
   const isUser = item.role === "user";
   const isTool = item.role === "tool";
   const toolSummary =
@@ -51,7 +62,20 @@ export function MessageBubble({
               <pre>{item.content}</pre>
             </details>
           ) : isUser ? (
-            <p>{item.content}</p>
+            editing ? (
+              <div className="message-editor">
+                <small>编辑后会从此消息创建新分支并重新运行。</small>
+                <textarea
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  rows={5}
+                  disabled={saving}
+                />
+                {editError && <p className="error-text">{editError}</p>}
+              </div>
+            ) : (
+              <p>{item.content}</p>
+            )
           ) : (
             <Markdown
               content={item.content}
@@ -61,6 +85,11 @@ export function MessageBubble({
           {item.status === "streaming" && <output className="stream-caret" aria-label="正在生成" />}
         </div>
         <div className="message-actions">
+          {isUser && !editing && (
+            <button type="button" className="text-action" onClick={() => void copy()} title="复制内容">
+              {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "已复制" : "复制"}
+            </button>
+          )}
           {!isUser && (
             <button type="button" className="text-action" onClick={() => void copy()} title="复制内容">
               {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "已复制" : "复制"}
@@ -71,6 +100,47 @@ export function MessageBubble({
               重试
             </button>
           )}
+          {isUser && onEdit && !editing && item.status === "complete" && (
+            <button
+              type="button"
+              className="text-action"
+              onClick={() => {
+                setDraft(item.content);
+                setEditing(true);
+              }}
+            >
+              <Pencil size={13} /> 编辑
+            </button>
+          )}
+          {isUser && editing && onEdit && (
+            <>
+              <button
+                type="button"
+                className="text-action"
+                onClick={() => {
+                  setSaving(true);
+                  setEditError(undefined);
+                  void onEdit(draft)
+                    .then(() => setEditing(false))
+                    .catch((error: unknown) =>
+                      setEditError(error instanceof Error ? error.message : "保存并重跑失败"),
+                    )
+                    .finally(() => setSaving(false));
+                }}
+                disabled={!draft.trim() || saving}
+              >
+                <Check size={13} /> {saving ? "正在重跑…" : "保存并重跑"}
+              </button>
+              <button
+                type="button"
+                className="text-action"
+                onClick={() => setEditing(false)}
+                disabled={saving}
+              >
+                <X size={13} /> 取消
+              </button>
+            </>
+          )}
           {!isUser && !isTool && onReview && (
             <button type="button" className="text-action" onClick={onReview}>
               审查
@@ -80,6 +150,9 @@ export function MessageBubble({
             <button type="button" className="text-action" onClick={onImprove}>
               改进
             </button>
+          )}
+          {!isUser && !isTool && qualityOperation && onQualityRetry && (
+            <QualityPanel operation={qualityOperation} onRetry={onQualityRetry} />
           )}
           {item.attachments.map((attachment) => (
             <button

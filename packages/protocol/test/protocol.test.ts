@@ -14,8 +14,8 @@ import {
 } from "../src/index.js";
 
 describe("protocol schemas", () => {
-  it("keeps the checked v14 fixtures valid for native clients", async () => {
-    for (const name of ["v14-event.json", "v14-transient-delta.json"]) {
+  it("keeps the checked v15 fixtures valid for native clients", async () => {
+    for (const name of ["v15-event.json", "v15-transient-delta.json"]) {
       const fixture = JSON.parse(
         await readFile(resolve("packages/protocol/test/fixtures", name), "utf8"),
       ) as unknown;
@@ -59,7 +59,7 @@ describe("protocol schemas", () => {
 
   it("accepts only strict transient append deltas", () => {
     const delta = {
-      protocolVersion: 14,
+      protocolVersion: 15,
       sessionId: "session",
       runId: "run",
       sequence: 0,

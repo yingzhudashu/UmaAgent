@@ -35,9 +35,18 @@ export function buildConversationEntries(
     itemsByRun.set(item.runId, items);
   }
 
-  const entries: ConversationEntry[] = [];
+  const orderedEntries: Array<{ entry: ConversationEntry; sortKey: number; order: number }> = [];
+  let order = 0;
   const renderedSegments = new Set<string>();
-  const appendResponseSegment = (response: Response, run: Run | undefined, segment: TranscriptItem[]) => {
+  const appendEntry = (entry: ConversationEntry, sortKey: number) => {
+    orderedEntries.push({ entry, sortKey, order: order++ });
+  };
+  const appendResponseSegment = (
+    response: Response,
+    run: Run | undefined,
+    segment: TranscriptItem[],
+    sortKey: number,
+  ) => {
     const firstUser = segment.find((item) => item.role === "user");
     const segmentId = `${response.id}:${firstUser?.id ?? segment[0]?.id ?? "empty"}`;
     if (renderedSegments.has(segmentId)) return;
@@ -45,20 +54,23 @@ export function buildConversationEntries(
     const hasLaterUser = (itemsByRun.get(response.runId) ?? []).some(
       (item) => item.role === "user" && item.sequence > (firstUser?.sequence ?? 0),
     );
-    entries.push({
-      kind: "response",
-      id: segmentId,
-      response,
-      run,
-      items: segment,
-      isCurrentSegment: !hasLaterUser,
-    });
+    appendEntry(
+      {
+        kind: "response",
+        id: segmentId,
+        response,
+        run,
+        items: segment,
+        isCurrentSegment: !hasLaterUser,
+      },
+      sortKey,
+    );
   };
   for (const item of transcript) {
     const response = responseForItem(item, byMessageId, byRunId);
     if (response) {
       if (item.role !== "user") continue;
-      entries.push({ kind: "message", item });
+      appendEntry({ kind: "message", item }, item.sequence);
       const runItems = itemsByRun.get(response.runId) ?? [];
       const segment = runItems.filter(
         (candidate) =>
@@ -67,17 +79,27 @@ export function buildConversationEntries(
             (runItems.find((next) => next.role === "user" && next.sequence > item.sequence)?.sequence ??
               Number.POSITIVE_INFINITY),
       );
-      appendResponseSegment(response, runsById.get(response.runId), segment);
+      appendResponseSegment(response, runsById.get(response.runId), segment, item.sequence + 0.1);
       continue;
     }
-    entries.push({ kind: "message", item });
+    appendEntry({ kind: "message", item }, item.sequence);
   }
 
   for (const response of responses) {
     const runItems = itemsByRun.get(response.runId) ?? [];
-    if (!runItems.some((item) => item.role === "user"))
-      appendResponseSegment(response, runsById.get(response.runId), runItems);
+    if (!runItems.some((item) => item.role === "user")) {
+      const firstVisible = runItems[0];
+      const responseMessage = transcript.find((item) => item.id === response.messageId);
+      const sortKey = firstVisible
+        ? firstVisible.sequence + 0.1
+        : responseMessage
+          ? responseMessage.sequence + 0.1
+          : (transcript[0]?.sequence ?? 0) - 0.1;
+      appendResponseSegment(response, runsById.get(response.runId), runItems, sortKey);
+    }
   }
 
-  return entries;
+  return orderedEntries
+    .sort((left, right) => left.sortKey - right.sortKey || left.order - right.order)
+    .map(({ entry }) => entry);
 }

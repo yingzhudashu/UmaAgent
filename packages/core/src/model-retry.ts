@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 
 /** Bound retries for transient provider gateway failures such as HTTP 524. */
 export const transientModelRetry = {
-  maxRetries: 2,
+  maxRetries: 5,
   // Some OpenAI-compatible gateways return Retry-After: 60 with transient 502s.
   // Honour that bounded, server-directed backoff instead of turning it into a hard failure.
-  maxRetryDelayMs: 60_000,
+  maxRetryDelayMs: 120_000,
 } as const;
 
 export function modelCacheKey(sessionId: string): string {

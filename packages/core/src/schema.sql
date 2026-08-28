@@ -34,6 +34,7 @@ CREATE TABLE sessions (
   model_id TEXT NOT NULL,
   thinking_level TEXT NOT NULL,
   queue_mode TEXT NOT NULL DEFAULT 'queue' CHECK (queue_mode IN ('queue','preemptive')),
+  active_branch_id TEXT,
   next_sequence INTEGER NOT NULL DEFAULT 1,
   next_event_sequence INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
@@ -44,6 +45,9 @@ CREATE TABLE runs (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   message_id TEXT NOT NULL UNIQUE,
+  target_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  result_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  queue_position INTEGER,
   interaction_mode TEXT NOT NULL CHECK (interaction_mode IN ('plan','agent')),
   kind TEXT NOT NULL DEFAULT 'agent' CHECK (kind IN ('agent','review','improve','command')),
   status TEXT NOT NULL,
@@ -130,13 +134,23 @@ CREATE TABLE messages (
   content TEXT NOT NULL,
   payload_json TEXT,
   source_json TEXT,
-  revision_of_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  parent_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
   attachment_ids_json TEXT NOT NULL DEFAULT '[]',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE(session_id, sequence)
 );
 CREATE INDEX messages_session_sequence ON messages(session_id, sequence);
+
+CREATE TABLE conversation_branches (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  head_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX conversation_branches_session ON conversation_branches(session_id, updated_at DESC);
 
 CREATE TABLE tool_calls (
   id TEXT PRIMARY KEY,
@@ -386,6 +400,7 @@ CREATE INDEX run_actions_run_status ON run_actions(run_id, status);
 
 CREATE TABLE context_summaries (
   session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  branch_id TEXT REFERENCES conversation_branches(id) ON DELETE CASCADE,
   through_sequence INTEGER NOT NULL,
   content TEXT NOT NULL,
   updated_at INTEGER NOT NULL
@@ -533,4 +548,4 @@ CREATE TABLE resource_snapshots (
 );
 CREATE INDEX resource_snapshots_captured ON resource_snapshots(captured_at DESC);
 
-PRAGMA user_version = 20;
+PRAGMA user_version = 21;

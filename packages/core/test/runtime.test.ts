@@ -1098,7 +1098,7 @@ describe("UmaRuntime preflight", () => {
       .transcript.find((item) => item.runId === improve.id && item.role === "assistant");
     expect(revision).toMatchObject({
       content: "Answer with the missing detail",
-      revisionOfMessageId: "quality-answer",
+      parentMessageId: "quality-answer",
     });
     expect(runtime.database.getMessage("quality-answer").content).toBe("Original answer");
     expect(() => runtime.reviewMessage("quality-question")).toThrow("assistant message");
@@ -1110,7 +1110,7 @@ describe("UmaRuntime preflight", () => {
         .transcript.find((item) => item.runId === reset.id && item.role === "assistant"),
     ).toMatchObject({
       content: "Reset improvement from original",
-      revisionOfMessageId: "quality-answer",
+      parentMessageId: "quality-answer",
     });
     const noFeedbackReview = runtime.reviewMessage("quality-answer");
     expect((await waitForRunTerminal(runtime, noFeedbackReview.id)).status).toBe("completed");

@@ -176,11 +176,11 @@ journalctl -u uma-agent -n 200 --no-pager
 Liveness 只表示进程事件循环可响应；readiness 还检查数据库、工作区、模型目录和 MCP：
 
 ```bash
-curl --fail http://127.0.0.1:3210/api/v14/health/live
-curl --fail http://127.0.0.1:3210/api/v14/health/ready
+curl --fail http://127.0.0.1:3210/api/v15/health/live
+curl --fail http://127.0.0.1:3210/api/v15/health/ready
 curl --fail \
   -H "Authorization: Bearer ${UMA_TOKEN}" \
-  http://127.0.0.1:3210/api/v14/sessions
+  http://127.0.0.1:3210/api/v15/sessions
 ```
 
 再从另一台设备验证 SDK/CLI，而不是只在服务器本机测试：
@@ -283,11 +283,11 @@ docker run --rm \
 
 
 
-数据库只接受 schema 20。schema 19、旧版本和未来版本均直接拒绝启动，不执行迁移、fallback 或隐式令牌变更。升级前必须备份并完成完整性与保护用户指纹检查；失败时只切换 release 指针，不覆盖数据库。
+数据库只接受 schema 21；任何非 21 版本均直接拒绝启动。升级前必须备份并完成完整性与保护用户指纹检查；失败时只切换 release 指针，不覆盖数据库。
 
 ## 9. Trace、资源报告与真实 API 验证
 
-Core 的业务数据使用 schema 20 `state.db`；Trace 写入 `UMA_TELEMETRY_DIR` 下的独立 `telemetry.db`。生产把该目录挂载给 Core、Server 与 Browser Worker，但不向 Worker 暴露业务 state 或 workspace。Client、Server HTTP、Run、queue、preflight、model、tool、MCP HTTP 和 Browser 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v14/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。Trace 不保存 prompt、模型正文、完整 URL 查询、Cookie、Token 或原始工具参数。资源快照和诊断报告分别通过 `/api/v14/reports/resources` 与 `/api/v14/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
+Core 的业务数据使用 schema 21 `state.db`；Trace 写入 `UMA_TELEMETRY_DIR` 下的独立 `telemetry.db`。生产把该目录挂载给 Core、Server 与 Browser Worker，但不向 Worker 暴露业务 state 或 workspace。Client、Server HTTP、Run、queue、preflight、model、tool、MCP HTTP 和 Browser 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v15/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。Trace 不保存 prompt、模型正文、完整 URL 查询、Cookie、Token 或原始工具参数。资源快照和诊断报告分别通过 `/api/v15/reports/resources` 与 `/api/v15/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
 
 真实测试只接受明确的 UmaAgent 环境变量，并在临时目录生成隔离配置、state、workspace、用户和令牌。它不读取 MiniAgent 配置，也不得使用生产保护 PAT。缺少授权或密钥时命令直接失败，不切换 Faux：
 
@@ -351,4 +351,4 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 第二个 Core 无法获取同一状态目录锁。
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v14 和 schema 20，保留可回滚 release 与同版本备份。
+- [ ] 确认当前应用版本、Protocol v15 和 schema 21，保留可回滚 release 与同版本备份。

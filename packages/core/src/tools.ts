@@ -11,6 +11,7 @@ import type { UmaDatabase } from "./database.js";
 import type { KnowledgeService } from "./knowledge.js";
 import type { SearchService } from "./search.js";
 import type { SkillRegistry } from "./skills.js";
+import type { SmathWorkerClient } from "./smath-worker.js";
 import type { WorkspacePolicy } from "./workspace.js";
 
 type ToolDetails = Record<string, unknown>;
@@ -199,6 +200,12 @@ export function createBuiltinTools(input: {
   scheduleManage: (input: Record<string, unknown>) => unknown;
   memoryWrite: (scope: "global" | "session", content: string) => ReturnType<UmaDatabase["addMemoryFact"]>;
   attachmentCreateFromWorkspace?: (path: string) => Promise<{ id: string; name: string }>;
+  smath?: SmathWorkerClient;
+  smathAttachmentCreate?: (file: {
+    name: string;
+    mimeType: string;
+    data: Buffer;
+  }) => Promise<{ id: string; name: string }>;
 }): AgentTool[] {
   const {
     session,
@@ -211,6 +218,8 @@ export function createBuiltinTools(input: {
     scheduleManage,
     memoryWrite,
     attachmentCreateFromWorkspace,
+    smath,
+    smathAttachmentCreate,
   } = input;
   const webSearchTool = () =>
     defineTool({
@@ -325,9 +334,117 @@ export function createBuiltinTools(input: {
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
   });
   const attachmentSchema = Type.Object({ attachmentId: Type.String() });
+  const smathPathSchema = Type.Object({ path: Type.Optional(Type.String()) });
+  const smathWriteSchema = Type.Object({
+    path: Type.String(),
+    content: Type.String({ maxLength: 1_000_000 }),
+  });
+  const smathExportSchema = Type.Object({
+    path: Type.String(),
+    format: Type.Union([Type.Literal("pdf"), Type.Literal("html")]),
+  });
+  const ownerId = database.sessionOwner(session.id);
+  if (!ownerId) throw new Error("Session owner is missing");
+  const smathTools: AgentTool[] = smath
+    ? [
+        defineTool({
+          name: "smath_list",
+          label: "List SMath worksheets",
+          description: "List SMath files in this user's isolated SMath workspace.",
+          parameters: smathPathSchema,
+          executionMode: "parallel",
+          async execute(_id, params, signal) {
+            const value = await smath.execute(
+              ownerId,
+              { operation: "list", ...(params.path ? { path: params.path } : {}) },
+              signal,
+            );
+            return result(value.output ?? "No SMath worksheets", { ...value });
+          },
+        }),
+        defineTool({
+          name: "smath_read",
+          label: "Read SMath worksheet",
+          description: "Read a worksheet source file from this user's isolated SMath workspace.",
+          parameters: Type.Object({ path: Type.String() }),
+          executionMode: "parallel",
+          async execute(_id, params, signal) {
+            const value = await smath.execute(ownerId, { operation: "read", path: params.path }, signal);
+            return result(value.output ?? "", { ...value });
+          },
+        }),
+        ...(["create", "update"] as const).map((operation) =>
+          defineTool({
+            name: `smath_${operation}`,
+            label: `${operation === "create" ? "Create" : "Update"} SMath worksheet`,
+            description:
+              "Write a worksheet source file in this user's isolated SMath workspace. Requires approval.",
+            parameters: smathWriteSchema,
+            executionMode: "sequential",
+            async execute(_id, params, signal) {
+              const value = await smath.execute(
+                ownerId,
+                { operation, path: params.path, content: params.content },
+                signal,
+              );
+              return result(value.output ?? `${operation}d ${params.path}`, { ...value });
+            },
+          }),
+        ),
+        defineTool({
+          name: "smath_delete",
+          label: "Delete SMath worksheet",
+          description: "Delete one worksheet in this user's isolated SMath workspace. Requires approval.",
+          parameters: Type.Object({ path: Type.String() }),
+          executionMode: "sequential",
+          async execute(_id, params, signal) {
+            const value = await smath.execute(ownerId, { operation: "delete", path: params.path }, signal);
+            return result(value.output ?? `Deleted ${params.path}`, { ...value });
+          },
+        }),
+        defineTool({
+          name: "smath_calculate",
+          label: "Calculate SMath worksheet",
+          description: "Run a worksheet through the isolated SMath worker. Requires approval.",
+          parameters: Type.Object({ path: Type.String() }),
+          executionMode: "sequential",
+          async execute(_id, params, signal) {
+            const value = await smath.execute(ownerId, { operation: "calculate", path: params.path }, signal);
+            return result(value.output ?? "SMath calculation completed", { ...value });
+          },
+        }),
+        defineTool({
+          name: "smath_export",
+          label: "Export SMath worksheet",
+          description: "Export a worksheet as PDF or HTML. Requires approval.",
+          parameters: smathExportSchema,
+          executionMode: "sequential",
+          async execute(_id, params, signal) {
+            const value = await smath.execute(
+              ownerId,
+              { operation: "export", path: params.path, format: params.format },
+              signal,
+            );
+            const attachment =
+              value.file && smathAttachmentCreate
+                ? await smathAttachmentCreate({
+                    name: value.file.name,
+                    mimeType: value.file.mimeType,
+                    data: Buffer.from(value.file.dataBase64, "base64"),
+                  })
+                : undefined;
+            return result(value.output ?? "SMath export completed", {
+              ...value,
+              ...(attachment ? { attachment } : {}),
+            });
+          },
+        }),
+      ]
+    : [];
 
   return [
     ...historyTools(),
+    ...smathTools,
     defineTool({
       name: "read",
       label: "Read file",

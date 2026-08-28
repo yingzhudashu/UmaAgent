@@ -47,7 +47,30 @@ describe("xianyu access control", () => {
         description: " item ",
         imagePaths: [" /tmp/a.jpg "],
         delivery: "free_shipping",
+        longitude: "121.4",
+        latitude: "31.2",
       }),
-    ).toMatchObject({ description: "item", imagePaths: ["/tmp/a.jpg"] });
+    ).toMatchObject({
+      description: "item",
+      imagePaths: ["/tmp/a.jpg"],
+      longitude: "121.4",
+      latitude: "31.2",
+    });
+    expect(() =>
+      validateXianyuPublishBody({
+        description: "item",
+        imagePaths: ["/tmp/a.jpg"],
+        delivery: "free_shipping",
+      }),
+    ).toThrow(/longitude/);
+    expect(() =>
+      validateXianyuPublishBody({
+        description: "item",
+        imagePaths: ["/tmp/a.jpg"],
+        delivery: "fixed",
+        longitude: "1",
+        latitude: "2",
+      }),
+    ).toThrow(/shippingFee/);
   });
 });

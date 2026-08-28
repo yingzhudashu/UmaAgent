@@ -76,6 +76,7 @@ import { SchedulerService } from "./scheduler.js";
 import { SearchService } from "./search.js";
 import { SkillPackageService } from "./skill-packages.js";
 import { SkillRegistry } from "./skills.js";
+import { SmathWorkerClient } from "./smath-worker.js";
 import { StateLock } from "./state-lock.js";
 import { ToolLoopGuard } from "./tool-loop-guard.js";
 import { createBuiltinTools } from "./tools.js";
@@ -109,6 +110,7 @@ export class UmaRuntime {
   private readonly controllers = new Map<string, AbortController>();
   private readonly preemptedRuns = new Set<string>();
   private readonly approvals: RunApprovals;
+  private readonly smath = SmathWorkerClient.fromEnvironment();
   private readonly stateLock: StateLock;
   readonly permissions = new PermissionPolicy();
   private readonly taskSemaphore = new Semaphore(4);
@@ -1092,8 +1094,13 @@ export class UmaRuntime {
             session.thinkingLevel,
             "agent",
             input.mode,
+            { queuePosition: this.database.listQueuedRuns(sessionId).length + 1 },
           );
       if (!result.created) return result;
+      const activeBranchId = this.database.getSession(sessionId).activeBranchId;
+      const activeBranchHead = activeBranchId
+        ? this.database.listBranches(sessionId).find((branch) => branch.id === activeBranchId)?.headMessageId
+        : undefined;
       this.database.insertMessage({
         id: input.messageId,
         sessionId,
@@ -1104,7 +1111,14 @@ export class UmaRuntime {
         payload: { role: "user", content: input.text, timestamp: Date.now() },
         attachmentIds,
         ...(input.source ? { source: input.source } : {}),
+        ...((input.parentMessageId ?? activeBranchHead)
+          ? { parentMessageId: input.parentMessageId ?? (activeBranchHead as string) }
+          : {}),
       });
+      if (activeBranchId)
+        this.database.db
+          .prepare("UPDATE conversation_branches SET head_message_id=?,updated_at=? WHERE id=?")
+          .run(input.messageId, Date.now(), activeBranchId);
       const response = continuation
         ? this.database.responseForRun(result.run.id)
         : this.database.createResponse({
@@ -1161,6 +1175,73 @@ export class UmaRuntime {
     traceParent?: TraceParent,
   ): Run {
     return this.qualityOperations.start("improve", messageId, options, traceParent);
+  }
+
+  editMessage(sessionId: string, messageId: string, text: string, traceParent?: TraceParent): Run {
+    const original = this.database.getMessage(messageId);
+    const owner = this.database.findMessageOwner(messageId);
+    if (!owner || owner.sessionId !== sessionId) throw new Error("Message does not belong to session");
+    if (original.role !== "user") throw new Error("Only user messages can be edited");
+    if (original.status !== "complete") throw new Error("Only completed messages can be edited");
+    const originalRun = original.runId ? this.database.getRun(original.runId) : undefined;
+    if (originalRun?.status === "queued") {
+      this.events.transaction(() => {
+        const updated = this.database.updateMessage(original.id, { content: text });
+        this.events.emit(sessionId, originalRun.id, "message.completed", updated);
+      });
+      return originalRun;
+    }
+    if (this.database.listQueuedRuns(sessionId).length > 0)
+      throw new Error("Process queued messages before editing an earlier message");
+    return this.events.transaction(() => {
+      const now = Date.now();
+      const branchId = randomUUID();
+      this.database.db
+        .prepare(
+          "INSERT INTO conversation_branches(id,session_id,name,head_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+        )
+        .run(branchId, sessionId, `编辑分支 ${new Date(now).toLocaleString("zh-CN")}`, messageId, now, now);
+      this.database.db
+        .prepare("UPDATE sessions SET active_branch_id=?,updated_at=? WHERE id=?")
+        .run(branchId, now, sessionId);
+      return this.sendMessage(
+        sessionId,
+        {
+          messageId: randomUUID(),
+          text,
+          mode: "agent",
+          parentMessageId: messageId,
+        },
+        traceParent,
+      );
+    });
+  }
+
+  listQueue(sessionId: string) {
+    return this.database.listQueuedRuns(sessionId).flatMap((run, index) => {
+      try {
+        return [{ run, message: this.database.getMessage(run.messageId), position: index + 1 }];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  reorderQueue(sessionId: string, runIds: string[]) {
+    return this.events.transaction(() => {
+      const runs = this.database.reorderQueuedRuns(sessionId, runIds);
+      this.events.emit(sessionId, undefined, "queue.updated", runs);
+      return this.listQueue(sessionId);
+    });
+  }
+
+  prioritizeRun(runId: string) {
+    const run = this.database.getRun(runId);
+    return this.events.transaction(() => {
+      const prioritized = this.database.prioritizeQueuedRun(runId);
+      this.events.emit(run.sessionId, runId, "queue.updated", this.listQueue(run.sessionId));
+      return prioritized;
+    });
   }
   sendCommand(
     sessionId: string,
@@ -1787,6 +1868,21 @@ export class UmaRuntime {
             data,
           });
         },
+        ...(this.smath
+          ? {
+              smath: this.smath,
+              smathAttachmentCreate: async (file: { name: string; mimeType: string; data: Buffer }) => {
+                const responseId = runId ? this.database.responseForRun(runId)?.id : undefined;
+                return this.addAttachment({
+                  sessionId: session.id,
+                  ...(responseId ? { responseId } : {}),
+                  name: file.name,
+                  mimeType: file.mimeType,
+                  data: file.data,
+                });
+              },
+            }
+          : {}),
       }),
       ...this.mcp.tools(),
     ];
@@ -2553,7 +2649,6 @@ export class UmaRuntime {
         'Verify whether the latest result satisfies the goal and success criteria in its conversation. Return JSON only: {"accepted":boolean,"feedback":string}. Do not include chain-of-thought.',
       messages: verificationMessages,
       signal,
-      allowTransientRetries: false,
       ...(verificationContext.summary
         ? { contextSummarySequence: verificationContext.summary.throughSequence }
         : {}),
@@ -2579,7 +2674,6 @@ export class UmaRuntime {
           { role: "user", content: "Repair the invalid verification JSON.", timestamp: Date.now() },
         ],
         signal,
-        allowTransientRetries: false,
         ...(verificationContext.summary
           ? { contextSummarySequence: verificationContext.summary.throughSequence }
           : {}),

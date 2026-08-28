@@ -1,6 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type EventConnectionState, type UmaClient, UmaClientError } from "@uma-agent/client";
-import type { Approval, InteractionMode, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
+import {
+  type EventConnectionState,
+  type MaintenanceStatus,
+  type UmaClient,
+  UmaClientError,
+} from "@uma-agent/client";
+import type {
+  Approval,
+  Attachment,
+  InteractionMode,
+  QualityAssessment,
+  SessionSnapshot,
+  TranscriptItem,
+} from "@uma-agent/protocol";
 import {
   ArrowDown,
   Bot,
@@ -57,6 +69,15 @@ interface InstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
+type QualityOperation = {
+  kind: "review" | "improve";
+  status: "running" | "completed" | "failed";
+  runId?: string;
+  error?: string;
+  assessments?: readonly QualityAssessment[];
+  result?: string;
+};
+
 export interface AppProps {
   client: UmaClient;
   embedded?: boolean;
@@ -74,7 +95,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorSection, setInspectorSection] = useState<InspectorSection>();
   const [approvals, setApprovals] = useState<Approval[]>([]);
-  const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent>();
   const [historical, setHistorical] = useState<TranscriptItem[]>([]);
@@ -89,6 +110,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [xianyuOpen, setXianyuOpen] = useState(false);
+  const [qualityOperations, setQualityOperations] = useState<Record<string, QualityOperation>>({});
 
   const sessions = useQuery({
     queryKey: ["sessions"],
@@ -119,6 +141,11 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     queryFn: () => client.health(),
     enabled: authenticated,
     refetchInterval: 15_000,
+  });
+  const maintenance = useQuery<MaintenanceStatus>({
+    queryKey: ["maintenance"],
+    queryFn: () => client.maintenanceStatus(),
+    refetchInterval: 10_000,
   });
   const tasks = useQuery({
     queryKey: ["tasks"],
@@ -240,12 +267,20 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       client.close();
     }
     if (sessions.isSuccess) setLoginRequired(false);
+    if (sessions.isError && loginRequired === undefined) setLoginRequired(true);
     if (sessions.isSuccess) {
       const available = sessions.data ?? [];
       if (selected && !available.some((session) => session.id === selected)) setSelected(undefined);
       if (!selected && available[0]) setSelected(available[0].id);
     }
-  }, [sessions.error, sessions.data, sessions.isSuccess, selected, client, loginRequired]);
+  }, [sessions.error, sessions.data, sessions.isSuccess, sessions.isError, selected, client, loginRequired]);
+  useEffect(() => {
+    if (loginRequired !== undefined || sessions.isSuccess) return;
+    const timer = window.setTimeout(() => {
+      if (!sessions.isSuccess) setLoginRequired(true);
+    }, 10_000);
+    return () => window.clearTimeout(timer);
+  }, [loginRequired, sessions.isSuccess]);
   useEffect(() => {
     if (authenticated) client.connectEvents();
   }, [authenticated, client]);
@@ -394,11 +429,11 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     mutationFn: (text: string) =>
       client.sendMessage(selected as string, text, {
         mode: interactionMode,
-        ...(attachmentIds.length ? { attachmentIds } : {}),
+        ...(attachments.length ? { attachmentIds: attachments.map((item) => item.id) } : {}),
       }),
     onSuccess: () => {
       setPrompt("");
-      setAttachmentIds([]);
+      setAttachments([]);
       void queryClient.invalidateQueries({ queryKey: ["snapshot", selected] });
     },
   });
@@ -441,7 +476,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   });
   const browserOffline = !browserOnline;
   const coreUnavailable = authenticated && health.isError;
-  const offline = browserOffline || coreUnavailable;
+  const offline = browserOffline || coreUnavailable || maintenance.data?.maintenance === true;
   const connectionMessage = !browserOnline
     ? "当前设备处于离线状态，已缓存内容仍可阅读。"
     : health.isError
@@ -456,14 +491,15 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     return `${error.message}${error.requestId ? `（请求 ${error.requestId}）` : ""}`;
   };
   const Workspace = embedded ? "div" : "main";
-  const upload = async (file: File) => {
-    if (offline) return;
-    const attachment = await client.upload(file, file.name, selected);
-    setAttachmentIds((items) => [...items, attachment.id]);
+  const upload = async (file: Blob, name = "pasted-image.png") => {
+    if (offline || !selected) return;
+    const attachment = await client.upload(file, name, selected);
+    setAttachments((items) => [...items, attachment]);
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (prompt.trim() && selected && !offline) sendMessage.mutate(prompt.trim());
+    if ((prompt.trim() || attachments.length > 0) && selected && !offline)
+      sendMessage.mutate(prompt.trim() || "请分析这张图片。");
   };
   const resolveApproval = async (approval: Approval, approved: boolean) => {
     await client.resolveApproval(approval.id, approved);
@@ -500,6 +536,64 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       .sendMessage(selected, item.content, { mode, ...(ids.length ? { attachmentIds: ids } : {}) })
       .then(() => queryClient.invalidateQueries({ queryKey: ["snapshot", selected] }));
   };
+  const editMessage = async (item: TranscriptItem, text: string): Promise<void> => {
+    if (!selected || item.role !== "user") throw new Error("当前会话不可用");
+    const sessionId = selected;
+    try {
+      const result = await client.editMessage(item.id, text);
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      await queryClient.invalidateQueries({ queryKey: ["snapshot", sessionId] });
+      await client.waitForRun(result.runId);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+        queryClient.invalidateQueries({ queryKey: ["snapshot", sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ["history", sessionId] }),
+      ]);
+    } catch (error) {
+      throw new Error(requestErrorMessage(error));
+    }
+  };
+  const startQuality = (messageId: string, kind: "review" | "improve") => {
+    const current = qualityOperations[messageId];
+    if (current?.status === "running" || !selected) return;
+    setQualityOperations((items) => ({ ...items, [messageId]: { kind, status: "running" } }));
+    const request = kind === "review" ? client.reviewMessage(messageId) : client.improveMessage(messageId);
+    void request
+      .then((started) => {
+        setQualityOperations((items) => ({
+          ...items,
+          [messageId]: { kind, status: "running", runId: started.runId },
+        }));
+        return client.waitForRun(started.runId).then(async (run) => {
+          const assessments = await client.listRunQuality(started.runId);
+          const latest = run.resultMessageId
+            ? (await client.getSession(selected)).transcript.find((item) => item.id === run.resultMessageId)
+                ?.content
+            : undefined;
+          setQualityOperations((items) => ({
+            ...items,
+            [messageId]: {
+              kind,
+              status: "completed",
+              runId: started.runId,
+              assessments,
+              ...(latest !== undefined ? { result: latest } : {}),
+            },
+          }));
+          await queryClient.invalidateQueries({ queryKey: ["snapshot", selected] });
+        });
+      })
+      .catch((error) => {
+        setQualityOperations((items) => ({
+          ...items,
+          [messageId]: {
+            kind,
+            status: "failed",
+            error: requestErrorMessage(error),
+          },
+        }));
+      });
+  };
   const signOut = () => {
     const logout = client.logout();
     setLoginRequired(true);
@@ -508,7 +602,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     setSelected(undefined);
     setPrompt("");
     setApprovals([]);
-    setAttachmentIds([]);
+    setAttachments([]);
     setHistorical([]);
     setHistoryHasMore(undefined);
     setInspectorSection(undefined);
@@ -541,6 +635,11 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   return (
     <div className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${theme}`}>
       <div className="app-shell">
+        {maintenance.data?.maintenance && (
+          <output className="maintenance-banner">
+            {maintenance.data.message ?? "系统正在停服更新，请稍候。"}
+          </output>
+        )}
         <SessionArea
           sessions={sessions.data ?? []}
           selected={selected}
@@ -719,16 +818,20 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   key={entry.item.id}
                   item={entry.item}
                   onRetry={entry.item.role === "user" ? () => retryMessage(entry.item) : undefined}
+                  onEdit={entry.item.role === "user" ? (text) => editMessage(entry.item, text) : undefined}
                   onReview={
-                    entry.item.role === "assistant"
-                      ? () => void client.reviewMessage(entry.item.id).then(() => snapshot.refetch())
-                      : undefined
+                    entry.item.role === "assistant" ? () => startQuality(entry.item.id, "review") : undefined
                   }
                   onImprove={
-                    entry.item.role === "assistant"
-                      ? () => void client.improveMessage(entry.item.id).then(() => snapshot.refetch())
-                      : undefined
+                    entry.item.role === "assistant" ? () => startQuality(entry.item.id, "improve") : undefined
                   }
+                  {...(qualityOperations[entry.item.id]
+                    ? {
+                        qualityOperation: qualityOperations[entry.item.id],
+                        onQualityRetry: () =>
+                          startQuality(entry.item.id, qualityOperations[entry.item.id]?.kind ?? "review"),
+                      }
+                    : {})}
                   onAttachment={(id) =>
                     void client.attachmentContent(id).then((blob) => {
                       const url = URL.createObjectURL(blob);
@@ -744,12 +847,18 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   run={entry.run}
                   items={entry.items}
                   isCurrentSegment={entry.isCurrentSegment}
-                  onReview={(messageId) =>
-                    void client.reviewMessage(messageId).then(() => snapshot.refetch())
-                  }
-                  onImprove={(messageId) =>
-                    void client.improveMessage(messageId).then(() => snapshot.refetch())
-                  }
+                  onReview={(messageId) => startQuality(messageId, "review")}
+                  onImprove={(messageId) => startQuality(messageId, "improve")}
+                  {...(() => {
+                    const messageId = entry.items.filter((item) => item.role === "assistant").at(-1)?.id;
+                    const operation = messageId ? qualityOperations[messageId] : undefined;
+                    return operation
+                      ? {
+                          qualityOperation: operation,
+                          onQualityRetry: () => startQuality(messageId as string, operation.kind),
+                        }
+                      : {};
+                  })()}
                   {...(entry.response.status === "awaiting_confirmation" && entry.isCurrentSegment
                     ? {
                         onConfirm: () =>
@@ -769,6 +878,66 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   }
                 />
               ),
+            )}
+            {(snapshot.data?.queue?.length ?? 0) > 0 && (
+              <section className="queue-panel" aria-label="排队消息">
+                <div className="queue-panel__heading">
+                  <strong>排队中</strong>
+                  <span>{snapshot.data?.queue.length} 条</span>
+                </div>
+                {snapshot.data?.queue.map((item, index, queue) => (
+                  <div className="queue-item" key={item.run.id}>
+                    <span className="queue-item__position">{item.position}</span>
+                    <span className="queue-item__text">{item.message.content}</span>
+                    <button
+                      type="button"
+                      className="text-action"
+                      title="立即执行"
+                      onClick={() => void client.prioritizeRun(item.run.id).then(() => snapshot.refetch())}
+                    >
+                      立即执行
+                    </button>
+                    <button
+                      type="button"
+                      className="text-action"
+                      title="上移"
+                      disabled={index === 0}
+                      onClick={() => {
+                        const ids = queue.map((entry) => entry.run.id);
+                        const previous = ids[index - 1] as string;
+                        ids[index - 1] = ids[index] as string;
+                        ids[index] = previous;
+                        void client.reorderQueue(selected as string, ids).then(() => snapshot.refetch());
+                      }}
+                    >
+                      上移
+                    </button>
+                    <button
+                      type="button"
+                      className="text-action"
+                      title="下移"
+                      disabled={index === queue.length - 1}
+                      onClick={() => {
+                        const ids = queue.map((entry) => entry.run.id);
+                        const next = ids[index + 1] as string;
+                        ids[index + 1] = ids[index] as string;
+                        ids[index] = next;
+                        void client.reorderQueue(selected as string, ids).then(() => snapshot.refetch());
+                      }}
+                    >
+                      下移
+                    </button>
+                    <button
+                      type="button"
+                      className="text-action"
+                      title="取消"
+                      onClick={() => void client.cancelRun(item.run.id).then(() => snapshot.refetch())}
+                    >
+                      取消
+                    </button>
+                  </div>
+                ))}
+              </section>
             )}
             <div aria-hidden="true" />
           </section>
@@ -810,12 +979,20 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   resolve={(approved) => void resolveApproval(approval, approved)}
                 />
               ))}
-            {attachmentIds.length > 0 && (
+            {attachments.length > 0 && (
               <div className="attachments">
-                已附加 {attachmentIds.length} 个文件{" "}
-                <button type="button" onClick={() => setAttachmentIds([])}>
-                  清除
-                </button>
+                {attachments.map((attachment) => (
+                  <button
+                    type="button"
+                    key={attachment.id}
+                    title={`移除 ${attachment.name}`}
+                    onClick={() =>
+                      setAttachments((items) => items.filter((item) => item.id !== attachment.id))
+                    }
+                  >
+                    {attachment.name} ×
+                  </button>
+                ))}
               </div>
             )}
             <ModeSelector
@@ -837,7 +1014,9 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   disabled={!selected || offline}
                   onChange={(event) => {
                     const file = event.target.files?.[0];
-                    if (file) void upload(file);
+                    if (file)
+                      void upload(file, file.name).catch((error) => window.alert(requestErrorMessage(error)));
+                    event.currentTarget.value = "";
                   }}
                 />
               </label>
@@ -846,6 +1025,16 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 rows={1}
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
+                onPaste={(event) => {
+                  const image = [...event.clipboardData.items]
+                    .find((item) => item.kind === "file" && item.type.startsWith("image/"))
+                    ?.getAsFile();
+                  if (!image) return;
+                  event.preventDefault();
+                  void upload(image, `pasted-image-${Date.now()}.${image.type.split("/")[1] ?? "png"}`).catch(
+                    (error) => window.alert(requestErrorMessage(error)),
+                  );
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
@@ -869,7 +1058,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 <button
                   type="submit"
                   className="primary icon"
-                  disabled={!prompt.trim() || !selected || offline}
+                  disabled={(!prompt.trim() && attachments.length === 0) || !selected || offline}
                   title="发送"
                 >
                   <Send />

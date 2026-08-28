@@ -34,14 +34,26 @@ class SyncStateTest {
         assertEquals(2, Json.decodeFromString<CacheEnvelope>(json).version)
     }
 
-    @Test fun v14EventFixturesHaveStableEnvelopeFields() {
-        listOf("v14-event.json", "v14-transient-delta.json").forEach { name ->
+    @Test fun v15EventFixturesHaveStableEnvelopeFields() {
+        listOf("v15-event.json", "v15-transient-delta.json").forEach { name ->
             val stream = javaClass.classLoader?.getResourceAsStream("fixtures/$name")
             checkNotNull(stream) { "missing fixture $name" }
             val event = stream.bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonObject }
-            assertEquals(14, event.getValue("protocolVersion").jsonPrimitive.int)
+            assertEquals(15, event.getValue("protocolVersion").jsonPrimitive.int)
             assertEquals("session-1", event.getValue("sessionId").jsonPrimitive.content)
             assertTrue(event.getValue("timestamp").jsonPrimitive.long > 0)
         }
+    }
+
+    @Test fun snapshotMessagesAreStructuredAndMalformedSnapshotsAreEmpty() {
+        val snapshot = """{"transcript":[{"id":"m1","role":"user","status":"complete","content":"看图","attachments":[{"id":"a1"}]},{"id":"m2","role":"assistant","status":"streaming","content":"处理中"}]}"""
+        assertEquals(
+            listOf(
+                UiMessage("m1", "user", "complete", "看图", 1),
+                UiMessage("m2", "assistant", "streaming", "处理中", 0),
+            ),
+            parseSnapshotMessages(snapshot),
+        )
+        assertTrue(parseSnapshotMessages("not-json").isEmpty())
     }
 }

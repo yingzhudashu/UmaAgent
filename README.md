@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.3.0`，协议版本为 `14`，SQLite schema 为 `20`。
+ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.3.0`，协议版本为 `15`，SQLite schema 为 `21`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -117,39 +117,39 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 ## API 摘要
 
-服务器支持多用户隔离：`POST /api/v14/auth/register` 创建用户并一次性返回个人令牌，
+服务器支持多用户隔离：`POST /api/v15/auth/register` 创建用户并一次性返回个人令牌，
 `/auth/login` 将令牌交换为绑定用户的 HttpOnly Cookie，`/auth/me`、`/auth/tokens` 提供令牌
 查询和撤销。Session、Run、Task、Approval、Message、Attachment 和工作区请求均按用户所有权
 校验。移动端或其他网页可使用 `/auth/authorize` + `/auth/token` 的 S256 PKCE 流程；服务器只
 接受环境变量 `UMA_OAUTH_REDIRECTS` 中的精确 `clientId|redirectUri` 配对。
 
-- `GET/POST /api/v14/sessions`
-- `GET /api/v14/sessions/:id/snapshot`
-- `GET /api/v14/sessions/:id/events?after=<sequence>` 增量事件
-- `GET /api/v14/sessions/:id/history?before=<sequence>` 历史分页
-- `POST /api/v14/sessions/:id/messages|cancel|compact`
-- `PATCH /api/v14/sessions/:id` 可更新 `queueMode`
-- `POST /api/v14/messages/:id/review|improve`、`GET /api/v14/runs/:id/quality`
-- `POST /api/v14/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
-- `GET /api/v14/attachments/:id/content`
-- `GET /api/v14/runs/:id/checkpoints|actions`
-- `POST /api/v14/runs/:id/resume|cancel`
-- `POST /api/v14/runs/:id/actions/:actionId/decide`
-- `POST /api/v14/approvals/:id`、`POST /api/v14/uploads`
-- `GET /api/v14/health/live|ready`
-- `GET /api/v14/events` WebSocket
-- `/api/v14/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
-- `GET /api/v14/knowledge/search`、`POST /api/v14/knowledge/:id/reindex`
-- `GET/POST /api/v14/evaluations`、`GET /api/v14/evaluations/:id`
-- `DELETE /api/v14/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
-- `/api/v14/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
-- `/api/v14/skills/search|install` 与技能 enable/disable/reject 生命周期
-- `POST /api/v14/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
-- `GET /api/v14/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
-- `/api/v14/schedules` 调度 CRUD、立即执行与运行历史
-- `GET /api/v14/reports/operations|diagnostics|resources` 脱敏运行、Trace 延迟和 CPU/RSS/WAL 统计
-- `GET /api/v14/traces?runId=<runId>` 查询 Run 的完整持久化 Trace Span 树，也支持按 Trace、时间、状态和名称过滤
-- `/api/v14/optimization-proposals` 提供证据、建议和人工接受/拒绝；`/api/v14/optimization-applications` 提供验证、回滚记录
+- `GET/POST /api/v15/sessions`
+- `GET /api/v15/sessions/:id/snapshot`
+- `GET /api/v15/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v15/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v15/sessions/:id/messages|cancel|compact`
+- `PATCH /api/v15/sessions/:id` 可更新 `queueMode`
+- `POST /api/v15/messages/:id/review|improve`、`GET /api/v15/runs/:id/quality`
+- `POST /api/v15/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
+- `GET /api/v15/attachments/:id/content`
+- `GET /api/v15/runs/:id/checkpoints|actions`
+- `POST /api/v15/runs/:id/resume|cancel`
+- `POST /api/v15/runs/:id/actions/:actionId/decide`
+- `POST /api/v15/approvals/:id`、`POST /api/v15/uploads`
+- `GET /api/v15/health/live|ready`
+- `GET /api/v15/events` WebSocket
+- `/api/v15/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `GET /api/v15/knowledge/search`、`POST /api/v15/knowledge/:id/reindex`
+- `GET/POST /api/v15/evaluations`、`GET /api/v15/evaluations/:id`
+- `DELETE /api/v15/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
+- `/api/v15/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
+- `/api/v15/skills/search|install` 与技能 enable/disable/reject 生命周期
+- `POST /api/v15/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
+- `GET /api/v15/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
+- `/api/v15/schedules` 调度 CRUD、立即执行与运行历史
+- `GET /api/v15/reports/operations|diagnostics|resources` 脱敏运行、Trace 延迟和 CPU/RSS/WAL 统计
+- `GET /api/v15/traces?runId=<runId>` 查询 Run 的完整持久化 Trace Span 树，也支持按 Trace、时间、状态和名称过滤
+- `/api/v15/optimization-proposals` 提供证据、建议和人工接受/拒绝；`/api/v15/optimization-applications` 提供验证、回滚记录
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
@@ -191,7 +191,7 @@ Android 工程位于 `android/`，应用 ID 为 `site.robotclaw.umaagent`，生�
 
 `queue` 模式按 Session 严格 FIFO，最多等待 100 条；`preemptive` 在新消息到达时取消旧排队 Run，并请求取消活动 Run。若活动工具可能产生副作用，其 Action 会转为 `uncertain`，必须先 acknowledge 或 reject，新 Run 才能继续。`awaiting_input` 的下一条消息始终作为原 Run 的澄清补充，不参与抢占。
 
-`/review [反馈]` 对目标答案执行最多三轮、无工具的结构化审查；`/improve` 根据最近评估只重写一次，`--force` 先评估，`--reset` 从原始答案而不是最近修订重写。原答案永久不变，新答案使用 `revisionOfMessageId` 建立版本链。
+`/review [反馈]` 对目标答案执行最多三轮、无工具的结构化审查；`/improve` 根据最近评估只重写一次，`--force` 先评估，`--reset` 从原始答案而不是最近修订重写。原答案永久不变，新答案使用 `parentMessageId` 建立不可变消息树。
 
 Core 仅向上下文注入 Profile、active 事实和相关历史 rollup。事实 key 出现明确新值时，旧事实转为 `superseded` 并保留来源和证据；原始 transcript 仍是唯一历史原文。`history_search` 与 `history_read` 是只读工具，允许 Agent 从摘要回溯原文。
 

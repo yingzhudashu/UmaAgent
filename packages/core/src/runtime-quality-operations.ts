@@ -44,8 +44,10 @@ export class RuntimeQualityOperations {
     let target = database.getMessage(targetMessageId);
     if (target.role !== "assistant") throw new Error("Quality operations require an assistant message");
     if (kind === "improve" && options.reset) {
-      while (target.revisionOfMessageId) target = database.getMessage(target.revisionOfMessageId);
+      while (target.parentMessageId) target = database.getMessage(target.parentMessageId);
     }
+    const active = database.findActiveQualityRun(target.id, kind);
+    if (active) return active;
     const owner = database.findMessageOwner(target.id);
     if (!owner) throw new Error("Message owner is unavailable");
     const session = database.getSession(owner.sessionId);
@@ -59,16 +61,8 @@ export class RuntimeQualityOperations {
         session.thinkingLevel,
         kind,
         "agent",
+        { targetMessageId: target.id, queuePosition: database.listQueuedRuns(session.id).length + 1 },
       ).run;
-      const command = database.insertMessage({
-        id: commandMessageId,
-        sessionId: session.id,
-        runId: created.id,
-        role: "user",
-        status: "complete",
-        content: kind === "review" ? "/review" : "/improve",
-      });
-      events.emit(session.id, created.id, "message.completed", command);
       events.emit(session.id, created.id, "run.updated", created);
       return created;
     });
@@ -237,9 +231,14 @@ export class RuntimeQualityOperations {
             stopReason: "stop",
             timestamp: Date.now(),
           } as AssistantMessage,
-          revisionOfMessageId: target.id,
+          parentMessageId: target.id,
         });
-        const completed = database.updateRun(runId, { status: "completed", error: null });
+        const completed = database.updateRun(runId, {
+          status: "completed",
+          error: null,
+          resultMessageId: message.id,
+          queuePosition: null,
+        });
         events.emit(session.id, runId, "message.completed", message);
         events.emit(session.id, runId, "run.updated", completed);
         events.invalidate("quality");

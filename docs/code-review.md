@@ -5,8 +5,8 @@
 ## 当前契约
 
 - UmaAgent 版本：1.3.0
-- Protocol：v14，HTTP API `/api/v14`
-- SQLite：schema 20 唯一支持格式；其他版本直接拒绝启动
+- Protocol：v15，HTTP API `/api/v15`
+- SQLite：schema 21 唯一支持格式；其他版本直接拒绝启动
 - Trace：独立 `telemetry.db`；业务状态位于 `state.db`
 
 ## 审查边界
@@ -14,16 +14,16 @@
 | 区域 | 职责边界 | 已核对内容 | 证据 | 未覆盖风险 |
 | --- | --- | --- | --- | --- |
 | `packages/core` | 运行、权限、工具、队列、数据库 | 状态转换、事务、取消、恢复、所有权 | Core 单元测试、`npm run check` | 真实外部服务故障组合仍需隔离演练 |
-| `packages/protocol` | TypeBox 契约和事件 | v14 schema、严格字段、事件载荷 | Protocol 构建与测试 | 新事件消费者需在变更中同步审查 |
+| `packages/protocol` | TypeBox 契约和事件 | v15 schema、严格字段、事件载荷 | Protocol 构建与测试 | 新事件消费者需在变更中同步审查 |
 | `packages/client` | HTTP/WebSocket 客户端边界 | traceparent、错误、重连、分页 | Client 测试 | 弱网长时间运行需 soak |
 | `packages/telemetry` | Span、资源样本、分页和 OTLP | 脱敏、属性上限、未完成 Span、独立数据库 | Telemetry/Core 测试 | 跨服务 OTLP 实网端到端需显式配置 |
-| `apps/server` | Fastify、认证、所有权和 HTTP 映射 | v14 路由、错误分类、健康检查 | Server 测试、E2E | 反向代理特殊头部需生产验收 |
+| `apps/server` | Fastify、认证、所有权和 HTTP 映射 | v15 路由、错误分类、健康检查 | Server 测试、E2E | 反向代理特殊头部需生产验收 |
 | `apps/web` | 聊天、设置、附件和响应式布局 | 状态文案、长文本、登出、附件协议 | Web 单测、Playwright | 浏览器差异需发布后抽查 |
 | 部署与文档 | 发布、备份、恢复、版本事实源 | schema/PAT 门禁和 release 流程 | `docs/deployment.md`、CI | 生产发布受保护 secret 存在性阻断 |
 
 ## 重点审查结论
 
-1. 数据库启动严格要求 schema 20；没有迁移实现、降级路径或兼容层。
+1. 数据库启动严格要求 schema 21；没有迁移实现、降级路径或兼容层。
 2. 新 Trace 只写入 `telemetry.db`。`state.db` 中的 `trace_spans` 仅保留为历史结构，不得由新代码写入。
 3. Trace 属性、错误和事件均有长度限制和敏感字段脱敏；诊断失败不能改变业务结果。
 4. 所有生产发布必须先备份 SQLite、执行完整性检查，并验证受保护用户的令牌元数据和对象指纹。

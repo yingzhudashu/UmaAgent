@@ -16,7 +16,6 @@ export interface ModelCompletionInput {
   messages: AgentMessage[];
   signal: AbortSignal;
   thinkingLevel?: ThinkingLevel;
-  allowTransientRetries?: boolean;
   contextSummarySequence?: number;
   trace?: TraceContext;
 }
@@ -60,7 +59,6 @@ export class ModelCallService {
         { systemPrompt: input.systemPrompt, messages },
         {
           ...transientModelOptions(input.signal, input.sessionId),
-          ...(input.allowTransientRetries === false ? { maxRetries: 0 } : {}),
           ...(input.thinkingLevel ? { reasoning: input.thinkingLevel } : {}),
         },
       );

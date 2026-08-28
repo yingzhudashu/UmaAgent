@@ -26,8 +26,19 @@ const readTools = new Set([
   "web_search",
   "history_search",
   "history_read",
+  "smath_list",
+  "smath_read",
 ]);
-const writeTools = new Set(["write", "edit", "attachment_create_from_workspace"]);
+const writeTools = new Set([
+  "write",
+  "edit",
+  "attachment_create_from_workspace",
+  "smath_create",
+  "smath_update",
+  "smath_delete",
+  "smath_calculate",
+  "smath_export",
+]);
 
 export class PermissionPolicy {
   classify(toolName: string): ToolClass {
@@ -58,6 +69,9 @@ export class PermissionPolicy {
         requiresApproval: true,
         reason: "Shell execution always requires approval",
       };
+    }
+    if (kind === "write") {
+      return { allowed: true, requiresApproval: true, reason: "Workspace changes require approval" };
     }
     return {
       allowed: true,

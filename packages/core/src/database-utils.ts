@@ -75,6 +75,7 @@ export function toSession(value: Row): Session {
     model: { provider: text(value.model_provider), id: text(value.model_id) },
     thinkingLevel: text(value.thinking_level) as ThinkingLevel,
     queueMode: text(value.queue_mode || "queue") as Session["queueMode"],
+    ...(value.active_branch_id ? { activeBranchId: text(value.active_branch_id) } : {}),
     createdAt: integer(value.created_at),
     updatedAt: integer(value.updated_at),
   };

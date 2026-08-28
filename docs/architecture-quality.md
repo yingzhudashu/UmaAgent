@@ -1,6 +1,6 @@
 # UmaAgent 架构与质量基线
 
-当前发布版本为 `1.3.0`，Protocol v14，HTTP API `/api/v14`，SQLite schema 20。schema 20 是唯一支持格式；更旧数据库和旧 API 不兼容并直接拒绝启动。
+当前发布版本为 `1.3.0`，Protocol v15，HTTP API `/api/v15`，SQLite schema 21。schema 21 是唯一支持格式；更旧数据库和旧 API 不兼容并直接拒绝启动。
 
 ## 事实源与分层
 
@@ -25,7 +25,7 @@
 | 区域 | 审查结论 | 证据/门禁 |
 | --- | --- | --- |
 | Core Runtime/Database | 状态、事务、资源释放和恢复路径已审查；大文件只按职责边界继续拆分 | `npm run check`、Core tests |
-| Server/Client | API v14、统一错误映射、权限和分页已审查 | Server/Client tests |
+| Server/Client | API v15、统一错误映射、权限和分页已审查 | Server/Client tests |
 | Web | React Query、事件重连、离线只读缓存和移动布局已审查 | Playwright E2E |
 | Trace/Diagnostics | 父子关系、脱敏、分页、资源快照和 p50/p95/p99 已审查 | Trace/diagnostics tests |
 | 文档/配置 | README、部署、基线、功能矩阵和示例配置按当前代码核对 | 本文档与 `docs/README.md` |

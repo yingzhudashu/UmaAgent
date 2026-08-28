@@ -6,32 +6,27 @@ sign-off before a release is declared complete.
 
 ## R1 local baseline
 
-- Candidate commit: `003539d` (local; `origin/master` remains `fcd9069` until network push succeeds).
-- Protocol: `v14`; database schema: `20`.
+- Candidate commit: `f176a03` (local working tree; publish the final reviewed commit before promotion).
+- Protocol: `v15`; database schema: `21`.
 - `npm run check`: passed.
 - `npm run build`: passed.
-- `npm test`: passed (255 tests).
-- `npm run test:coverage`: passed, 255 tests; 84.42% lines, 81.93% statements.
-- Android `test lint assembleDebug`: passed locally with API 35 and JDK 17.
+- `npm test`: passed (257 tests across 48 files).
+- Android `test assembleDebug compileDebugAndroidTestKotlin`: passed locally with SDK/target API 35 and JDK 17.
 - APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
-- APK SHA-256: `9D6466D9BC917BBF31C407EE2AE31A2D01545F8590D91622DB7AA2F1DC7A4DF7`.
+- APK SHA-256: `A2E2758A21B3ACCA758CA6A7CCD335A2AEB7B01A5806AD609829087A6160C31E`.
 - Legacy-channel scan: run the repository forbidden-term scan while excluding
   `.git`, dependency caches, and build caches; the result must be empty.
 
 ## Latest hosted CI evidence
 
-- Commit `fcd9069` is pushed to `origin/master` and triggered both workflows.
-- Android run `33133640950` passed with JDK 17, SDK 35, tests, lint, and APK assembly.
-- Node/Docker run `33133640982` failed during the core image build; `003539d` removes
-  the unverified workspace prune step and must be pushed before CI can be re-run.
-- The prior Docker failure was fixed by moving workspace import validation after
-  TypeScript compilation and checking the generated protocol, telemetry, and core
-  artifacts.
+- Hosted CI evidence is pending publication of the reviewed working tree.
+- Local Node, Web paste-image E2E, Android JVM tests, APK assembly, and instrumented-test
+  compilation are the current evidence; device execution is still required.
 
 ## R1 device checks
 
 - [ ] PAT login succeeds and survives process restart through Android Keystore.
-- [ ] Session list, snapshot, history, message send, and streaming updates match Web.
+- [ ] Session list, snapshot, history, message send, image attachments, and streaming updates match Web.
 - [ ] Duplicate, out-of-order, and missing sequence events recover without rollback.
 - [ ] Offline mode serves cached reads and disables every write action.
 - [ ] Network recovery reconnects and fills the event gap without duplicate messages.
@@ -44,7 +39,7 @@ operator must attach the following evidence:
 
 - [ ] Release verifier output and `systemd-analyze verify` output.
 - [x] SQLite, telemetry, workspace, Xianyu state (absent and recorded), and config backup checksums.
-- [x] Restore/integrity check output showing schema `20` and no foreign-key violations.
+- [ ] Restore/integrity check output showing schema `21` and no foreign-key violations.
 - [x] Inventory and archive record for removed legacy services, state, and environment files.
 - [ ] Core, Browser Worker, and Xianyu Adapter systemd status after promotion.
 - [ ] Core live/ready, Adapter health, and Core-proxied Xianyu status responses.
@@ -58,8 +53,8 @@ administrator hash are injected by the operator; no placeholder secret was used.
 
 ## R2 completion
 
-- [ ] Session/run controls, attachments, approvals, resources, and Xianyu console are complete.
-- [ ] TypeScript and Kotlin consume the same v14 fixtures and contract tests pass.
+- [ ] Session/run controls, image attachments, approvals, resources, and Xianyu console are complete.
+- [ ] TypeScript and Kotlin consume the same v15 fixtures and contract tests pass.
 - [ ] API 35 emulator instrumented tests pass for lifecycle, rotation, background, and offline recovery.
 - [ ] No new migration, compatibility layer, fallback, or legacy field was introduced.
 - [ ] 24-hour post-release observation has no unresolved release-blocking errors.

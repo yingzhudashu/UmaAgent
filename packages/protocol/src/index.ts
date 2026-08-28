@@ -157,7 +157,7 @@ export const TranscriptItemSchema = Strict({
   content: Type.String(),
   name: Type.Optional(Type.String()),
   runId: Type.Optional(Id),
-  revisionOfMessageId: Type.Optional(Id),
+  parentMessageId: Type.Optional(Id),
   attachments: Type.Array(AttachmentSchema),
   source: Type.Optional(MessageSourceSchema),
   createdAt: Timestamp,
@@ -198,6 +198,9 @@ export const RunSchema = Strict({
   id: Id,
   sessionId: Id,
   messageId: Id,
+  targetMessageId: Type.Optional(Id),
+  resultMessageId: Type.Optional(Id),
+  queuePosition: Type.Optional(Type.Integer({ minimum: 1 })),
   interactionMode: InteractionModeSchema,
   kind: RunKindSchema,
   status: RunStatusSchema,
@@ -249,6 +252,7 @@ export const SessionSchema = Strict({
   model: ModelRefSchema,
   thinkingLevel: ThinkingLevelSchema,
   queueMode: QueueModeSchema,
+  activeBranchId: Type.Optional(Id),
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });
@@ -299,6 +303,24 @@ export const SessionSnapshotSchema = Strict({
     hasMoreBefore: Type.Boolean(),
   }),
   responses: Type.Optional(Type.Array(ResponseSchema)),
+  branches: Type.Array(
+    Strict({
+      id: Id,
+      sessionId: Id,
+      name: Type.String({ minLength: 1, maxLength: 200 }),
+      headMessageId: Type.Optional(Id),
+      active: Type.Boolean(),
+      createdAt: Timestamp,
+      updatedAt: Timestamp,
+    }),
+  ),
+  queue: Type.Array(
+    Strict({
+      run: RunSchema,
+      message: TranscriptItemSchema,
+      position: Type.Integer({ minimum: 1 }),
+    }),
+  ),
 });
 export type SessionSnapshot = Static<typeof SessionSnapshotSchema>;
 
@@ -460,6 +482,7 @@ export const SendMessageRequestSchema = Strict({
   attachmentIds: Type.Optional(Type.Array(Id, { maxItems: 20 })),
   mode: InteractionModeSchema,
   source: Type.Optional(MessageSourceSchema),
+  parentMessageId: Type.Optional(Id),
 });
 export type SendMessageRequest = Static<typeof SendMessageRequestSchema>;
 
@@ -786,6 +809,16 @@ export const ImproveMessageRequestSchema = Strict({
   force: Type.Optional(Type.Boolean()),
   reset: Type.Optional(Type.Boolean()),
 });
+
+export const EditMessageRequestSchema = Strict({
+  text: Type.String({ minLength: 1, maxLength: 1_000_000 }),
+});
+export type EditMessageRequest = Static<typeof EditMessageRequestSchema>;
+
+export const QueueReorderRequestSchema = Strict({
+  runIds: Type.Array(Id, { minItems: 0, maxItems: 100 }),
+});
+export type QueueReorderRequest = Static<typeof QueueReorderRequestSchema>;
 export type ImproveMessageRequest = Static<typeof ImproveMessageRequestSchema>;
 
 export const CommandRequestSchema = Strict({

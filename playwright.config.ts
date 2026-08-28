@@ -20,7 +20,7 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
     command: "npm run dev:faux",
-    url: "http://127.0.0.1:33210/api/v14/health/ready",
+    url: "http://127.0.0.1:33210/api/v15/health/ready",
     timeout: 120_000,
     reuseExistingServer: false,
     env: {

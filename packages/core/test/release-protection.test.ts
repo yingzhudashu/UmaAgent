@@ -61,7 +61,7 @@ describe("release data protection", () => {
     await import("node:fs/promises").then(({ mkdir }) => mkdir(state));
     const source = new DatabaseSync(join(state, "state.db"));
     source.exec(
-      "CREATE TABLE records(value TEXT); INSERT INTO records VALUES('kept'); PRAGMA user_version=20;",
+      "CREATE TABLE records(value TEXT); INSERT INTO records VALUES('kept'); PRAGMA user_version=21;",
     );
     source.close();
     const destination = join(root, "backup", "state.db");

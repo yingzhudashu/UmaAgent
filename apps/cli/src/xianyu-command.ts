@@ -61,6 +61,7 @@ export async function runXianyuCommand(
       body[key] = value;
     }
   }
+  if (!body.longitude || !body.latitude) throw new Error("publish requires --longitude and --latitude");
   if (args.includes("--self-pickup")) body.selfPickup = true;
   print(JSON.stringify(await client.xianyuPublish(grant, body), null, 2));
 }

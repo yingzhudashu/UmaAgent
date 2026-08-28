@@ -91,6 +91,13 @@ export interface XianyuUnlock {
   expiresAt: number;
 }
 
+export interface MaintenanceStatus {
+  maintenance: boolean;
+  message?: string;
+  startedAt?: string;
+  expectedVersion?: string;
+}
+
 type Listener = (event: AgentEventEnvelope) => void;
 type ResourceListener = (event: ResourceInvalidated | ResourceResyncRequired) => void;
 function traceparent(): string {
@@ -158,31 +165,45 @@ export class UmaClient {
     headers.set("traceparent", traceparent());
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
-    const response = await this.fetchFn(`${this.baseUrl}/api/v14${path}`, {
-      ...init,
-      headers,
-      credentials: "include",
-    });
-    if (!response.ok) {
-      const body = (await response
-        .json()
-        .catch(() => ({ error: { code: "http_error", message: response.statusText } }))) as {
-        error?: { code?: string; message?: string; retryable?: boolean; requestId?: string };
-      };
-      throw new UmaClientError(
-        response.status,
-        body.error?.code ?? "http_error",
-        body.error?.message ?? response.statusText,
-        body.error?.retryable ?? false,
-        body.error?.requestId,
-      );
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await this.fetchFn(`${this.baseUrl}/api/v15${path}`, {
+        ...init,
+        headers,
+        credentials: "include",
+        signal: init.signal ?? controller.signal,
+      });
+      if (!response.ok) {
+        const body = (await response
+          .json()
+          .catch(() => ({ error: { code: "http_error", message: response.statusText } }))) as {
+          error?: { code?: string; message?: string; retryable?: boolean; requestId?: string };
+        };
+        throw new UmaClientError(
+          response.status,
+          body.error?.code ?? "http_error",
+          body.error?.message ?? response.statusText,
+          body.error?.retryable ?? false,
+          body.error?.requestId,
+        );
+      }
+      if (response.status === 204) return undefined as T;
+      return response.json() as Promise<T>;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError")
+        throw new UmaClientError(504, "request_timeout", "连接超时，请检查 UmaAgent Core。", true);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
-    if (response.status === 204) return undefined as T;
-    return response.json() as Promise<T>;
   }
 
   health(): Promise<Health> {
     return this.request("/health/ready");
+  }
+  maintenanceStatus(): Promise<MaintenanceStatus> {
+    return this.request("/maintenance");
   }
   async login(token: string): Promise<{ ok: boolean }> {
     this.closed = false;
@@ -567,6 +588,27 @@ export class UmaClient {
       body: JSON.stringify(options),
     });
   }
+  editMessage(messageId: string, text: string): Promise<SendMessageResponse> {
+    return this.request(`/messages/${encodeURIComponent(messageId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ text }),
+    });
+  }
+  listQueue(sessionId: string): Promise<import("@uma-agent/protocol").SessionSnapshot["queue"]> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/queue`);
+  }
+  reorderQueue(
+    sessionId: string,
+    runIds: string[],
+  ): Promise<import("@uma-agent/protocol").SessionSnapshot["queue"]> {
+    return this.request(`/sessions/${encodeURIComponent(sessionId)}/queue/reorder`, {
+      method: "POST",
+      body: JSON.stringify({ runIds }),
+    });
+  }
+  prioritizeRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
+    return this.request(`/runs/${encodeURIComponent(runId)}/prioritize`, { method: "POST" });
+  }
   listRunQuality(runId: string): Promise<QualityAssessment[]> {
     return this.request(`/runs/${encodeURIComponent(runId)}/quality`);
   }
@@ -656,7 +698,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v14/attachments/${encodeURIComponent(id)}/content`,
+      `${this.baseUrl}/api/v15/attachments/${encodeURIComponent(id)}/content`,
       { headers, credentials: "include" },
     );
     if (!response.ok) {
@@ -682,7 +724,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v14/attachments/${encodeURIComponent(id)}/content?download=1`,
+      `${this.baseUrl}/api/v15/attachments/${encodeURIComponent(id)}/content?download=1`,
       { headers, credentials: "include" },
     );
     if (!response.ok) throw new UmaClientError(response.status, "http_error", response.statusText, false);
@@ -728,7 +770,7 @@ export class UmaClient {
   connectEvents(): void {
     if (this.socket || this.closed) return;
     this.eventConnectionState = "connecting";
-    const url = new URL("/api/v14/events", this.baseUrl);
+    const url = new URL("/api/v15/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())

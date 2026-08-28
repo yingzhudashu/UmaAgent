@@ -23,6 +23,68 @@ function allowedImageUrl(value: string): boolean {
   );
 }
 
+function validatePublishBody(body: Record<string, unknown>): {
+  description: string;
+  imagePaths: string[];
+  delivery: "free_shipping" | "distance_based" | "fixed" | "pickup_only";
+  longitude: string;
+  latitude: string;
+  currentPrice?: string | number;
+  originalPrice?: string | number;
+  shippingFee?: string | number;
+  selfPickup?: boolean;
+} {
+  const allowed = new Set([
+    "description",
+    "imagePaths",
+    "delivery",
+    "longitude",
+    "latitude",
+    "currentPrice",
+    "originalPrice",
+    "shippingFee",
+    "selfPickup",
+  ]);
+  const unknown = Object.keys(body).filter((key) => !allowed.has(key));
+  if (unknown.length) throw new Error(`发布请求包含未知字段: ${unknown.join(", ")}`);
+  const imagePaths = body.imagePaths;
+  const delivery = body.delivery;
+  if (
+    typeof body.description !== "string" ||
+    !body.description.trim() ||
+    !Array.isArray(imagePaths) ||
+    imagePaths.length === 0 ||
+    !imagePaths.every((value) => typeof value === "string" && value.trim()) ||
+    typeof delivery !== "string" ||
+    !["free_shipping", "distance_based", "fixed", "pickup_only"].includes(delivery) ||
+    (typeof body.longitude !== "string" && typeof body.longitude !== "number") ||
+    String(body.longitude).trim() === "" ||
+    (typeof body.latitude !== "string" && typeof body.latitude !== "number") ||
+    String(body.latitude).trim() === ""
+  )
+    throw new Error("description, imagePaths, delivery, longitude and latitude are required");
+  for (const key of ["currentPrice", "originalPrice", "shippingFee"] as const) {
+    if (body[key] === undefined) continue;
+    const value = Number(body[key]);
+    if (!Number.isFinite(value) || value < 0) throw new Error(`${key} must be a non-negative number`);
+  }
+  if (delivery === "fixed" && body.shippingFee === undefined)
+    throw new Error("fixed delivery requires shippingFee");
+  if (body.selfPickup !== undefined && typeof body.selfPickup !== "boolean")
+    throw new Error("selfPickup must be boolean");
+  return {
+    description: body.description.trim(),
+    imagePaths: imagePaths.map((value) => String(value).trim()),
+    delivery: delivery as "free_shipping" | "distance_based" | "fixed" | "pickup_only",
+    longitude: String(body.longitude).trim(),
+    latitude: String(body.latitude).trim(),
+    ...(body.currentPrice === undefined ? {} : { currentPrice: body.currentPrice as string | number }),
+    ...(body.originalPrice === undefined ? {} : { originalPrice: body.originalPrice as string | number }),
+    ...(body.shippingFee === undefined ? {} : { shippingFee: body.shippingFee as string | number }),
+    ...(body.selfPickup === undefined ? {} : { selfPickup: body.selfPickup as boolean }),
+  };
+}
+
 async function readJsonBody(
   request: IncomingMessage,
   maxBytes = 2 * 1024 * 1024,
@@ -87,18 +149,28 @@ export function createConfiguredXianyuAdapter(transport: XianyuTransport, state:
       },
       uploadRemoteImage: async (url, sessionId) => {
         if (!allowedImageUrl(url)) throw new Error("闲鱼图片 URL 不在允许的 CDN 范围内");
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`闲鱼图片下载失败: HTTP ${response.status}`);
-        const blob = await response.blob();
-        const mime = blob.type.startsWith("image/") ? blob.type : "image/jpeg";
-        const extension = mime.split("/", 2)[1] || "jpg";
-        return (
-          await client.upload(
-            new Blob([await blob.arrayBuffer()], { type: mime }),
-            `xianyu-${Date.now()}.${extension}`,
-            sessionId,
-          )
-        ).id;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20_000);
+        try {
+          const response = await fetch(url, { signal: controller.signal });
+          if (!response.ok) throw new Error(`闲鱼图片下载失败: HTTP ${response.status}`);
+          const contentLength = Number(response.headers.get("content-length") ?? 0);
+          if (contentLength > 20 * 1024 * 1024) throw new Error("闲鱼图片超过 20 MB 限制");
+          const blob = await response.blob();
+          if (!blob.type.startsWith("image/")) throw new Error("闲鱼图片响应不是图片");
+          if (blob.size > 20 * 1024 * 1024) throw new Error("闲鱼图片超过 20 MB 限制");
+          const mime = blob.type;
+          const extension = mime.split("/", 2)[1] || "jpg";
+          return (
+            await client.upload(
+              new Blob([await blob.arrayBuffer()], { type: mime }),
+              `xianyu-${Date.now()}.${extension}`,
+              sessionId,
+            )
+          ).id;
+        } finally {
+          clearTimeout(timeout);
+        }
       },
       sendMessage: async (sessionId, text, source, attachmentIds) => {
         if (!source) throw new Error("Xianyu message source is required");
@@ -282,22 +354,8 @@ export async function startXianyuService(
       }
       if (request.method === "POST" && request.url === "/publish") {
         requireControlToken(request, controlToken);
-        const body = await readJsonBody(request);
-        const result = await xianyuClient.publishItem({
-          imagePaths: Array.isArray(body.imagePaths) ? body.imagePaths.map(String) : [],
-          description: String(body.description ?? ""),
-          delivery: String(body.delivery ?? "free_shipping") as
-            | "free_shipping"
-            | "distance_based"
-            | "fixed"
-            | "pickup_only",
-          longitude: String(body.longitude ?? ""),
-          latitude: String(body.latitude ?? ""),
-          ...(body.currentPrice === undefined ? {} : { currentPrice: String(body.currentPrice) }),
-          ...(body.originalPrice === undefined ? {} : { originalPrice: String(body.originalPrice) }),
-          ...(body.shippingFee === undefined ? {} : { shippingFee: String(body.shippingFee) }),
-          selfPickup: Boolean(body.selfPickup),
-        });
+        const body = validatePublishBody(await readJsonBody(request));
+        const result = await xianyuClient.publishItem(body);
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(result));
         return;

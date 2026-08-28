@@ -21,9 +21,6 @@ export function XianyuArea({ client, onClose }: { client: UmaClient; onClose: ()
   const [item, setItem] = useState<unknown>();
   const [receiverId, setReceiverId] = useState("");
   const [chatItemId, setChatItemId] = useState("");
-  const [description, setDescription] = useState("");
-  const [imagePaths, setImagePaths] = useState("");
-  const [delivery, setDelivery] = useState("free_shipping");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -102,21 +99,6 @@ export function XianyuArea({ client, onClose }: { client: UmaClient; onClose: ()
       await client.xianyuChat(grant, { receiverId: receiverId.trim(), itemId: chatItemId.trim() });
       setNotice("会话已创建");
       setConversations(await client.xianyuConversations<Conversation[]>(grant));
-    });
-
-  const publish = () =>
-    grant &&
-    void run(async () => {
-      if (!description.trim() || !imagePaths.trim()) throw new Error("请输入商品描述和图片路径");
-      await client.xianyuPublish(grant, {
-        description: description.trim(),
-        imagePaths: imagePaths
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean),
-        delivery,
-      });
-      setNotice("商品已发布");
     });
 
   return (
@@ -248,29 +230,6 @@ export function XianyuArea({ client, onClose }: { client: UmaClient; onClose: ()
               />
               <button type="button" className="run-action" onClick={createChat} disabled={loading}>
                 <Send size={15} /> 建立会话
-              </button>
-            </div>
-            <div className="inspector-group">
-              <h3>发布商品</h3>
-              <textarea
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder="商品描述"
-                rows={3}
-              />
-              <input
-                value={imagePaths}
-                onChange={(event) => setImagePaths(event.target.value)}
-                placeholder="图片路径，逗号分隔"
-              />
-              <select value={delivery} onChange={(event) => setDelivery(event.target.value)}>
-                <option value="free_shipping">包邮</option>
-                <option value="distance_based">按距离</option>
-                <option value="fixed">固定运费</option>
-                <option value="pickup_only">仅自提</option>
-              </select>
-              <button type="button" className="run-action" onClick={publish} disabled={loading}>
-                <Send size={15} /> 发布
               </button>
             </div>
           </>

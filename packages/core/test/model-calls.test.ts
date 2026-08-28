@@ -42,8 +42,8 @@ describe("ModelCallService", () => {
     expect(options).toMatchObject({
       sessionId: modelCacheKey("session-a"),
       cacheRetention: "short",
-      maxRetries: 2,
-      maxRetryDelayMs: 60_000,
+      maxRetries: 5,
+      maxRetryDelayMs: 120_000,
       signal,
     });
     expect(modelCacheKey("session-a")).toBe(modelCacheKey("session-a"));
@@ -51,7 +51,7 @@ describe("ModelCallService", () => {
     expect(modelCacheKey("session-a")).not.toContain("session-a");
   });
 
-  it("disables SDK retries for contract repair calls when requested", async () => {
+  it("uses the shared SDK retry budget for contract repair calls", async () => {
     const { service, completeSimple } = fixture();
     await service.complete({
       runId: "run",
@@ -61,9 +61,11 @@ describe("ModelCallService", () => {
       systemPrompt: "stable system",
       messages: [{ role: "user", content: "repair", timestamp: 1 }],
       signal: new AbortController().signal,
-      allowTransientRetries: false,
     });
-    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ maxRetries: 0 });
+    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({
+      maxRetries: 5,
+      maxRetryDelayMs: 120_000,
+    });
   });
 
   it("fails before provider I/O when the request cannot preserve output capacity", async () => {

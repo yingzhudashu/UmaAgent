@@ -28,6 +28,7 @@ export const DurableEventTypeSchema = Type.Union([
   Type.Literal("memory.updated"),
   Type.Literal("schedule.updated"),
   Type.Literal("knowledge.updated"),
+  Type.Literal("queue.updated"),
 ]);
 export const EventTypeSchema = Type.Union([DurableEventTypeSchema, Type.Literal("message.delta")]);
 export type DurableAgentEventType = Static<typeof DurableEventTypeSchema>;

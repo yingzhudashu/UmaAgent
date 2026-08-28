@@ -55,6 +55,8 @@ data class UmaUiState(
     val xianyuData: String = "",
     val resourceData: String = "",
     val attachmentData: String = "",
+    val pendingAttachmentIds: List<String> = emptyList(),
+    val pendingAttachments: List<PendingAttachment> = emptyList(),
     val offline: Boolean = false,
     val loading: Boolean = false,
     val error: String = "",
@@ -137,12 +139,19 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun send(text: String) {
         val id = state.value.selectedSessionId ?: return
-        if (state.value.offline || text.isBlank()) return
+        if (state.value.offline || (text.isBlank() && state.value.pendingAttachmentIds.isEmpty())) return
         viewModelScope.launch {
             val client = api ?: return@launch
             state.value = state.value.copy(loading = true, error = "")
             try {
-                client.send(id, text); selectSession(id); state.value = state.value.copy(offline = false)
+                client.send(id, text.ifBlank { "请分析这张图片。" }, state.value.pendingAttachmentIds)
+                selectSession(id)
+                state.value = state.value.copy(
+                    offline = false,
+                    pendingAttachmentIds = emptyList(),
+                    pendingAttachments = emptyList(),
+                    attachmentData = "",
+                )
             } catch (error: Throwable) {
                 state.value = state.value.copy(loading = false, offline = true, error = error.message ?: "发送失败")
             }
@@ -157,11 +166,33 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             state.value = state.value.copy(loading = true, error = "")
             runCatching { client.upload(getApplication(), uri, name, sessionId) }
                 .onSuccess { attachment ->
-                    state.value = state.value.copy(attachmentData = attachment.toString(), loading = false)
+                    val id = attachment["id"]?.jsonPrimitive?.content
+                    val uploaded = id?.let {
+                        PendingAttachment(
+                            id = it,
+                            name = attachment["name"]?.jsonPrimitive?.content ?: name,
+                            size = attachment["size"]?.jsonPrimitive?.longOrNull ?: 0L,
+                        )
+                    }
+                    state.value = state.value.copy(
+                        attachmentData = attachment.toString(),
+                        pendingAttachmentIds = id?.let { state.value.pendingAttachmentIds + it }
+                            ?: state.value.pendingAttachmentIds,
+                        pendingAttachments = uploaded?.let { state.value.pendingAttachments + it }
+                            ?: state.value.pendingAttachments,
+                        loading = false,
+                    )
                     selectSession(sessionId)
                 }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "附件上传失败") }
         }
+    }
+
+    fun removePendingAttachment(id: String) {
+        state.value = state.value.copy(
+            pendingAttachmentIds = state.value.pendingAttachmentIds.filterNot { it == id },
+            pendingAttachments = state.value.pendingAttachments.filterNot { it.id == id },
+        )
     }
 
     fun downloadAttachment(id: String, destination: Uri) {
@@ -184,6 +215,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess { session ->
                     sessions = sessions + BootstrapEntry(session)
                     state.value = state.value.copy(sessions = sessions.map { it.session }, selectedSessionId = session.id, loading = false)
+                    persistCache()
                     selectSession(session.id)
                 }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "创建会话失败") }
@@ -200,6 +232,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess { session ->
                     sessions = sessions.map { if (it.session.id == id) it.copy(session = session) else it }
                     state.value = state.value.copy(sessions = sessions.map { it.session }, loading = false)
+                    persistCache()
                 }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "重命名失败") }
         }
@@ -215,6 +248,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess {
                     sessions = sessions.filterNot { it.session.id == id }
                     state.value = state.value.copy(sessions = sessions.map { it.session }, selectedSessionId = null, snapshot = "", loading = false)
+                    persistCache()
                 }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "删除会话失败") }
         }
@@ -306,18 +340,6 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun xianyuPublish(description: String, images: String, delivery: String) {
-        val currentGrant = grant ?: return
-        val imagePaths = images.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-        if (description.isBlank() || imagePaths.isEmpty() || state.value.offline) return
-        viewModelScope.launch {
-            val client = api ?: return@launch
-            runCatching { client.xianyuPublish(currentGrant, description.trim(), imagePaths, delivery) }
-                .onSuccess { value -> state.value = state.value.copy(xianyuData = value.toString(), error = "") }
-                .onFailure { error -> state.value = state.value.copy(error = error.message ?: "发布失败") }
-        }
-    }
-
     fun loadResource(path: String) {
         if (state.value.offline) return
         viewModelScope.launch {
@@ -335,6 +357,20 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { client.postJson(path) }
                 .onSuccess { value -> state.value = state.value.copy(resourceData = value.toString(), error = "") }
                 .onFailure { error -> state.value = state.value.copy(error = error.message ?: "操作失败") }
+        }
+    }
+
+    private fun persistCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val current = cache.read()
+            cache.write(
+                CacheEnvelope(
+                    version = 2,
+                    sessions = state.value.sessions,
+                    snapshots = current?.snapshots ?: emptyMap(),
+                    sequences = sequences.toMap(),
+                ),
+            )
         }
     }
 
@@ -432,8 +468,6 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
     var conversationId by remember { mutableStateOf("") }
     var receiverId by remember { mutableStateOf("") }
     var chatItemId by remember { mutableStateOf("") }
-    var description by remember { mutableStateOf("") }
-    var images by remember { mutableStateOf("") }
     var attachmentId by remember { mutableStateOf("") }
     var pendingDownloadId by remember { mutableStateOf("") }
     val attachmentPicker = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -477,9 +511,35 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
                 Button({ model.cancelSelectedSession() }, enabled = !state.offline && state.selectedSessionId != null) { Text("取消") }
                 Button({ model.compactSelectedSession() }, enabled = !state.offline && state.selectedSessionId != null) { Text("压缩") }
             }
-            if (state.snapshot.isNotBlank()) Text(state.snapshot, Modifier.fillMaxWidth())
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button({ attachmentPicker.launch(arrayOf("*/*")) }, enabled = !state.offline && state.selectedSessionId != null && !state.loading) { Text("上传附件") }
+            val messages = parseSnapshotMessages(state.snapshot)
+            if (messages.isNotEmpty()) {
+                LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(messages, key = { it.id }) { item ->
+                        val label = when (item.role) {
+                            "user" -> "你"
+                            "tool" -> "工具"
+                            else -> "UmaAgent"
+                        }
+                        Text(
+                            "$label${if (item.status == "streaming") "（生成中）" else ""}: ${item.content}" +
+                                if (item.attachmentCount > 0) "\n附件 ${item.attachmentCount} 个" else "",
+                            Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            } else if (!state.offline) {
+                Text("暂无消息", Modifier.fillMaxWidth())
+            }
+            Button({ attachmentPicker.launch(arrayOf("*/*")) }, enabled = !state.offline && state.selectedSessionId != null && !state.loading) { Text("上传附件") }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                state.pendingAttachments.forEach { attachment ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                        Text("${attachment.name} (${attachment.size} bytes)", modifier = Modifier.weight(1f))
+                        Button({ model.removePendingAttachment(attachment.id) }, enabled = !state.loading) { Text("删除") }
+                    }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(attachmentId, { attachmentId = it }, label = { Text("附件 ID") }, modifier = Modifier.weight(1f))
                 Button({ pendingDownloadId = attachmentId.trim(); saveAttachmentPicker.launch("attachment") }, enabled = !state.offline && attachmentId.isNotBlank() && !state.loading) { Text("下载") }
             }
@@ -497,7 +557,7 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
             }
             if (state.resourceData.isNotBlank()) Text(state.resourceData, Modifier.fillMaxWidth())
             OutlinedTextField(message, { message = it }, Modifier.fillMaxWidth(), label = { Text("消息") })
-            Button({ model.send(message); message = "" }, enabled = !state.offline && message.isNotBlank() && !state.loading) { Text("发送") }
+            Button({ model.send(message); message = "" }, enabled = !state.offline && (message.isNotBlank() || state.pendingAttachmentIds.isNotEmpty()) && !state.loading) { Text("发送") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     password,
@@ -527,14 +587,8 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
                     OutlinedTextField(chatItemId, { chatItemId = it }, label = { Text("建聊商品 ID") }, modifier = Modifier.weight(1f))
                     Button({ model.xianyuChat(receiverId, chatItemId) }, enabled = receiverId.isNotBlank() && chatItemId.isNotBlank() && !state.offline) { Text("建聊") }
                 }
-                OutlinedTextField(description, { description = it }, Modifier.fillMaxWidth(), label = { Text("发布描述") })
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(images, { images = it }, label = { Text("图片路径（逗号分隔）") }, modifier = Modifier.weight(1f))
-                    Button({ model.xianyuPublish(description, images, "free_shipping") }, enabled = description.isNotBlank() && images.isNotBlank() && !state.offline) { Text("发布") }
-                }
                 if (state.xianyuData.isNotBlank()) Text(state.xianyuData, Modifier.fillMaxWidth())
             }
-            if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error)
         }
         if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error)
     }

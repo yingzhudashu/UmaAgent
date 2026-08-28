@@ -1184,6 +1184,17 @@
   min-height: 0;
   overflow: hidden;
 }
+.uma-embed .maintenance-banner {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: 8px 14px;
+  background: #fff3cd;
+  color: #664d03;
+  border-bottom: 1px solid #ffecb5;
+  text-align: center;
+  font-size: 13px;
+}
 .uma-embed.uma-embed--standalone {
   height: 100dvh;
   min-height: 480px;
@@ -1484,6 +1495,42 @@
 }
 .uma-embed .user-bubble p {
   margin: 0;
+  white-space: pre-wrap;
+}
+.uma-embed .message-editor {
+  display: grid;
+  gap: 8px;
+}
+.uma-embed .message-editor small {
+  color: color-mix(in srgb, #fff 82%, transparent);
+}
+.uma-embed .message-editor textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid color-mix(in srgb, #fff 35%, transparent);
+  border-radius: 6px;
+  padding: 8px;
+  color: var(--ink);
+  background: var(--surface-0);
+}
+.uma-embed .quality-panel {
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-0);
+  color: var(--ink);
+  font-size: 12px;
+}
+.uma-embed .quality-panel p {
+  margin: 6px 0 0;
+}
+.uma-embed .quality-panel__item {
+  padding-left: 9px;
+  border-left: 2px solid var(--accent);
+}
+.uma-embed .quality-panel__result {
   white-space: pre-wrap;
 }
 .uma-embed .assistant-body {

@@ -48,4 +48,31 @@ describe("Xianyu protocol", () => {
       conversation: { conversationId: "conversation", adapter: "xianyu" },
     });
   });
+
+  it("normalizes image sync push frames for Core vision handling", () => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        message: {
+          cid: "conversation@goofish",
+          uuid: "uuid-image",
+          extension: { senderUserId: "buyer", messageId: "message-image" },
+          content: {
+            custom: {
+              data: Buffer.from(
+                JSON.stringify({
+                  contentType: 2,
+                  image: { pics: [{ url: "https://img.alicdn.com/a.jpg" }] },
+                }),
+              ).toString("base64"),
+            },
+          },
+        },
+      }),
+    ).toString();
+    expect(parseInboundFrame({ body: { syncPushPackage: { data: [{ data: payload }] } } })).toMatchObject({
+      externalMessageId: "message-image",
+      imageUrl: "https://img.alicdn.com/a.jpg",
+      text: "",
+    });
+  });
 });

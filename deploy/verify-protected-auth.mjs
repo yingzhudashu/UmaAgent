@@ -8,7 +8,7 @@ if (process.platform !== "win32" && (stat.mode & 0o777) !== 0o600)
 if (process.platform !== "win32" && secretPath === "/etc/uma-agent/protected-user-pat" && stat.uid !== 0)
   throw new Error("production protected PAT file must be owned by root");
 const token = readFileSync(secretPath, "utf8").trim();
-const response = await fetch(`${baseUrl}/api/v14/sessions`, {
+const response = await fetch(`${baseUrl}/api/v15/sessions`, {
   headers: { authorization: `Bearer ${token}` },
 });
 if (!response.ok) throw new Error(`protected user authentication failed: HTTP ${response.status}`);

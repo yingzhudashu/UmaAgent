@@ -3,6 +3,7 @@ import { Bot, Check, ChevronRight, Copy, Download, FileText, LoaderCircle, Wrenc
 import { useState } from "react";
 import { Markdown } from "../Markdown.js";
 import { responseStatusLabels } from "../statusLabels.js";
+import { type QualityOperationView, QualityPanel } from "./QualityPanel.js";
 
 function toolStatus(item: TranscriptItem): string {
   if (item.status === "error") return "执行失败";
@@ -48,6 +49,8 @@ export function ResponseCard({
   onReview,
   onImprove,
   isCurrentSegment = true,
+  qualityOperation,
+  onQualityRetry,
 }: {
   response: Response;
   run: Run | undefined;
@@ -57,6 +60,8 @@ export function ResponseCard({
   onReview?: (messageId: string) => void;
   onImprove?: (messageId: string) => void;
   isCurrentSegment?: boolean;
+  qualityOperation?: QualityOperationView;
+  onQualityRetry?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const assistantItems = items.filter((item) => item.role === "assistant");
@@ -199,16 +204,33 @@ export function ResponseCard({
             {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "已复制" : "复制"}
           </button>
           {finalAssistant && onReview && (
-            <button type="button" className="text-action" onClick={() => onReview(finalAssistant.id)}>
-              审查
+            <button
+              type="button"
+              className="text-action"
+              disabled={qualityOperation?.status === "running"}
+              onClick={() => onReview(finalAssistant.id)}
+            >
+              {qualityOperation?.status === "running" && qualityOperation.kind === "review"
+                ? "审查中…"
+                : "审查"}
             </button>
           )}
           {finalAssistant && onImprove && (
-            <button type="button" className="text-action" onClick={() => onImprove(finalAssistant.id)}>
-              改进
+            <button
+              type="button"
+              className="text-action"
+              disabled={qualityOperation?.status === "running"}
+              onClick={() => onImprove(finalAssistant.id)}
+            >
+              {qualityOperation?.status === "running" && qualityOperation.kind === "improve"
+                ? "改进中…"
+                : "改进"}
             </button>
           )}
         </div>
+        {qualityOperation && onQualityRetry && (
+          <QualityPanel operation={qualityOperation} onRetry={onQualityRetry} />
+        )}
 
         {response.attachments.length > 0 && (
           <div className="response-files">

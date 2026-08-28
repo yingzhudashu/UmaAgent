@@ -90,6 +90,23 @@ test("two devices converge on one session and offline mode is read-only", async 
   await secondContext.close();
 });
 
+test("pastes an image into the composer and sends it as an attachment", async ({ page }) => {
+  await register(page);
+  await page.getByRole("button", { name: "新会话" }).click();
+  const input = page.getByPlaceholder("向 UmaAgent 发送消息");
+  await input.evaluate((element) => {
+    const file = new File([new Uint8Array([137, 80, 78, 71])], "clipboard.png", { type: "image/png" });
+    const data = new DataTransfer();
+    data.items.add(file);
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, clipboardData: data }));
+  });
+  await expect(page.getByRole("button", { name: /pasted-image-.*\.png ×/ })).toBeVisible();
+  await page.getByRole("button", { name: "发送" }).click();
+  await expect(
+    page.getByText(/模型服务暂时不可用|Configured vision model does not support image input/),
+  ).toBeVisible();
+});
+
 test("keeps the workbench fixed while the transcript and settings scroll independently", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await register(page);

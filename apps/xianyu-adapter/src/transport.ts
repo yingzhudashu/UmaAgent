@@ -239,12 +239,17 @@ export class GoofishTransport implements XianyuTransport {
     );
     try {
       await this.sendJson(frame);
-      return await Promise.race([
-        result,
-        new Promise<Record<string, unknown>>((_, reject) =>
-          setTimeout(() => reject(new Error("闲鱼 RPC 超时")), 20_000),
-        ),
-      ]);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          result,
+          new Promise<Record<string, unknown>>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("闲鱼 RPC 超时")), 20_000);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     } finally {
       this.pending.delete(mid);
     }
@@ -314,8 +319,9 @@ export class GoofishTransport implements XianyuTransport {
         });
       }
       if (Number(body.hasMore ?? 0) !== 1) return result;
-      cursor = Number(body.nextCursor ?? 0);
-      if (!cursor) throw new Error("闲鱼历史响应缺少 nextCursor");
+      const nextCursor = Number(body.nextCursor ?? 0);
+      if (!nextCursor || nextCursor >= cursor) throw new Error("闲鱼历史响应缺少有效 nextCursor");
+      cursor = nextCursor;
     }
   }
 }

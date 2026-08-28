@@ -130,4 +130,43 @@ describe("buildConversationEntries", () => {
       expect(responseEntries[1].isCurrentSegment).toBe(true);
     }
   });
+
+  it("places orphaned historical responses before newer visible messages", () => {
+    const transcript = [
+      item({ id: "latest-user", sequence: 100, role: "user", content: "最新问题", createdAt: 100 }),
+      item({
+        id: "latest-answer",
+        sequence: 101,
+        role: "assistant",
+        runId: "run-latest",
+        content: "最新回复",
+      }),
+    ];
+    const entries = buildConversationEntries(
+      transcript,
+      [
+        response({
+          id: "old-response",
+          runId: "run-old",
+          messageId: "old-user",
+          createdAt: 42,
+          content: "13:42 回复",
+        }),
+        response({
+          id: "latest-response",
+          runId: "run-latest",
+          messageId: "latest-user",
+          createdAt: 100,
+          content: "最新回复",
+        }),
+      ],
+      [run("run-old"), run("run-latest")],
+    );
+
+    expect(entries.map((entry) => (entry.kind === "response" ? entry.response.id : entry.item.id))).toEqual([
+      "old-response",
+      "latest-user",
+      "latest-response",
+    ]);
+  });
 });

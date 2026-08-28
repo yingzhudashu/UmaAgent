@@ -65,7 +65,7 @@ import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 20;
+const SCHEMA_VERSION = 21;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   readonly stateDir: string;
@@ -85,7 +85,7 @@ export class UmaDatabase {
     if (version === 0) {
       this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
     } else if (version !== SCHEMA_VERSION) {
-      // schema 20 是唯一支持的持久化格式。启动阶段拒绝旧/未来版本，
+      // schema 21 是唯一支持的持久化格式。启动阶段拒绝旧/未来版本，
       // 避免未经发布验证的隐式改写影响会话、附件或认证令牌。
       this.db.close();
       throw new Error(`Unsupported database schema ${version}; expected ${SCHEMA_VERSION}.`);
@@ -95,15 +95,13 @@ export class UmaDatabase {
       this.withTransaction(operation),
     );
     const interrupted = rows(
-      this.db.prepare(
-        "SELECT id,session_id FROM runs WHERE status IN ('queued','preflight','running','verifying')",
-      ),
+      this.db.prepare("SELECT id,session_id FROM runs WHERE status IN ('preflight','running','verifying')"),
     );
     this.withTransaction(() => {
       const now = Date.now();
       this.db
         .prepare(
-          "UPDATE runs SET status = 'interrupted', error = 'Server restarted during execution', updated_at = ? WHERE status IN ('queued','preflight','running','verifying')",
+          "UPDATE runs SET status = 'interrupted', error = 'Server restarted during execution', updated_at = ? WHERE status IN ('preflight','running','verifying')",
         )
         .run(now);
       this.db
@@ -369,7 +367,31 @@ export class UmaDatabase {
     thinkingLevel: ThinkingLevel;
     queueMode?: Session["queueMode"];
   }): Session {
-    return this.sessions.create(input);
+    const session = this.sessions.create(input);
+    const branchId = randomUUID();
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO conversation_branches(id,session_id,name,created_at,updated_at) VALUES(?,?,?,?,?)",
+      )
+      .run(branchId, session.id, "主分支", now, now);
+    this.db.prepare("UPDATE sessions SET active_branch_id=? WHERE id=?").run(branchId, session.id);
+    return this.getSession(session.id);
+  }
+
+  listBranches(sessionId: string) {
+    return rows(
+      this.db.prepare("SELECT * FROM conversation_branches WHERE session_id=? ORDER BY created_at"),
+      sessionId,
+    ).map((value) => ({
+      id: text(value.id),
+      sessionId: text(value.session_id),
+      name: text(value.name),
+      ...(value.head_message_id ? { headMessageId: text(value.head_message_id) } : {}),
+      active: text(this.getSession(sessionId).activeBranchId ?? "") === text(value.id),
+      createdAt: integer(value.created_at),
+      updatedAt: integer(value.updated_at),
+    }));
   }
 
   getSession(id: string): Session {
@@ -426,14 +448,14 @@ export class UmaDatabase {
     payload?: AgentMessage;
     attachmentIds?: string[];
     source?: MessageSource;
-    revisionOfMessageId?: string;
+    parentMessageId?: string;
   }): TranscriptItem {
     const id = input.id ?? randomUUID();
     const now = Date.now();
     const sequence = this.allocateMessageSequence(input.sessionId);
     this.db
       .prepare(
-        "INSERT INTO messages(id,session_id,run_id,sequence,role,status,name,content,payload_json,source_json,revision_of_message_id,attachment_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO messages(id,session_id,run_id,sequence,role,status,name,content,payload_json,source_json,parent_message_id,attachment_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
@@ -446,7 +468,7 @@ export class UmaDatabase {
         input.content,
         input.payload ? JSON.stringify(input.payload) : null,
         input.source ? JSON.stringify(input.source) : null,
-        input.revisionOfMessageId ?? null,
+        input.parentMessageId ?? null,
         JSON.stringify(input.attachmentIds ?? []),
         now,
         now,
@@ -509,10 +531,6 @@ export class UmaDatabase {
     return this.messages.getMessage(id);
   }
 
-  private listMessagesByIds(ids: string[]): TranscriptItem[] {
-    return this.messages.listByIds(ids);
-  }
-
   getContextSummary(sessionId: string): ContextSummary | undefined {
     const value = row(this.db.prepare("SELECT * FROM context_summaries WHERE session_id=?"), sessionId);
     if (!value) return undefined;
@@ -540,6 +558,7 @@ export class UmaDatabase {
     thinkingLevel: Run["thinkingLevel"],
     kind: Run["kind"],
     interactionMode: Run["interactionMode"],
+    options: { targetMessageId?: string; queuePosition?: number } = {},
   ): { run: Run; created: boolean } {
     const existing = row(this.db.prepare("SELECT id,session_id FROM runs WHERE message_id=?"), messageId);
     if (existing) {
@@ -551,18 +570,20 @@ export class UmaDatabase {
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO runs(id,session_id,message_id,interaction_mode,kind,status,phase,model_snapshot_json,thinking_level,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO runs(id,session_id,message_id,target_message_id,interaction_mode,kind,status,phase,model_snapshot_json,thinking_level,queue_position,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
         sessionId,
         messageId,
+        options.targetMessageId ?? null,
         interactionMode,
         kind,
         "queued",
         "queued",
         JSON.stringify(model),
         thinkingLevel,
+        options.queuePosition ?? null,
         now,
         now,
       );
@@ -584,12 +605,15 @@ export class UmaDatabase {
       reasoningSummary?: string;
       error?: string | null;
       clarificationCount?: number;
+      targetMessageId?: string | null;
+      resultMessageId?: string | null;
+      queuePosition?: number | null;
     },
   ): Run {
     const current = this.getRun(id);
     this.db
       .prepare(
-        "UPDATE runs SET status=?,phase=?,task_class=?,goal=?,success_criteria_json=?,assumptions_json=?,turn_count=?,correction_count=?,route=?,reasoning_summary=?,error=?,clarification_count=?,updated_at=? WHERE id=?",
+        "UPDATE runs SET status=?,phase=?,task_class=?,goal=?,success_criteria_json=?,assumptions_json=?,turn_count=?,correction_count=?,route=?,reasoning_summary=?,error=?,clarification_count=?,target_message_id=?,result_message_id=?,queue_position=?,updated_at=? WHERE id=?",
       )
       .run(
         patch.status ?? current.status,
@@ -604,6 +628,9 @@ export class UmaDatabase {
         patch.reasoningSummary ?? current.reasoningSummary ?? null,
         patch.error === undefined ? (current.error ?? null) : patch.error,
         patch.clarificationCount ?? current.clarificationCount ?? 0,
+        patch.targetMessageId === undefined ? (current.targetMessageId ?? null) : patch.targetMessageId,
+        patch.resultMessageId === undefined ? (current.resultMessageId ?? null) : patch.resultMessageId,
+        patch.queuePosition === undefined ? (current.queuePosition ?? null) : patch.queuePosition,
         Date.now(),
         id,
       );
@@ -652,6 +679,11 @@ export class UmaDatabase {
       id: text(value.id),
       sessionId: text(value.session_id),
       messageId: text(value.message_id),
+      ...(value.target_message_id ? { targetMessageId: text(value.target_message_id) } : {}),
+      ...(value.result_message_id ? { resultMessageId: text(value.result_message_id) } : {}),
+      ...(value.queue_position !== null && value.queue_position !== undefined
+        ? { queuePosition: integer(value.queue_position) }
+        : {}),
       interactionMode: text(value.interaction_mode) as Run["interactionMode"],
       kind: text(value.kind || "agent") as Run["kind"],
       status: text(value.status) as RunStatus,
@@ -943,9 +975,48 @@ export class UmaDatabase {
 
   listQueuedRuns(sessionId: string): Run[] {
     return rows(
-      this.db.prepare("SELECT id FROM runs WHERE session_id=? AND status='queued' ORDER BY created_at"),
+      this.db.prepare(
+        "SELECT id FROM runs WHERE session_id=? AND status='queued' ORDER BY COALESCE(queue_position, 2147483647), created_at",
+      ),
       sessionId,
     ).map((value) => this.getRun(text(value.id)));
+  }
+
+  findActiveQualityRun(targetMessageId: string, kind: Run["kind"]): Run | undefined {
+    const value = row(
+      this.db.prepare(
+        "SELECT id FROM runs WHERE target_message_id=? AND kind=? AND status IN ('queued','preflight','running','verifying') ORDER BY created_at DESC LIMIT 1",
+      ),
+      targetMessageId,
+      kind,
+    );
+    return value ? this.getRun(text(value.id)) : undefined;
+  }
+
+  reorderQueuedRuns(sessionId: string, runIds: string[]): Run[] {
+    const current = this.listQueuedRuns(sessionId);
+    const expected = current.map((run) => run.id);
+    if (expected.length !== runIds.length || expected.some((id) => !runIds.includes(id)))
+      throw new Error("Queue changed; reload the session snapshot");
+    const update = this.db.prepare(
+      "UPDATE runs SET queue_position=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'",
+    );
+    runIds.forEach((id, index) => {
+      update.run(index + 1, Date.now(), id, sessionId);
+    });
+    return this.listQueuedRuns(sessionId);
+  }
+
+  prioritizeQueuedRun(runId: string): Run {
+    const run = this.getRun(runId);
+    if (run.status !== "queued") throw new Error("Only queued runs can be prioritized");
+    const queued = this.listQueuedRuns(run.sessionId).filter((item) => item.id !== runId);
+    const update = this.db.prepare("UPDATE runs SET queue_position=?,updated_at=? WHERE id=?");
+    update.run(1, Date.now(), runId);
+    queued.forEach((item, index) => {
+      update.run(index + 2, Date.now(), item.id);
+    });
+    return this.getRun(runId);
   }
 
   listPendingApprovals(sessionId: string): Approval[] {
@@ -961,13 +1032,10 @@ export class UmaDatabase {
       this.db.prepare("SELECT next_event_sequence FROM sessions WHERE id=?"),
       sessionId,
     );
-    const tail = rows(
-      this.db.prepare("SELECT id,sequence FROM messages WHERE session_id=? ORDER BY sequence DESC LIMIT 101"),
-      sessionId,
-    );
-    const hasMoreBefore = tail.length > 100;
-    const visible = tail.slice(0, 100).reverse();
-    const transcript = this.listMessagesByIds(visible.map((value) => text(value.id)));
+    const allVisible = this.messages.listMessages(sessionId);
+    const visible = allVisible.slice(Math.max(0, allVisible.length - 100));
+    const hasMoreBefore = allVisible.length > visible.length;
+    const transcript = visible;
     return {
       session,
       transcript,
@@ -979,6 +1047,11 @@ export class UmaDatabase {
         hasMoreBefore,
       },
       responses: this.listResponses(sessionId),
+      branches: this.listBranches(sessionId),
+      queue: this.listQueuedRuns(sessionId).flatMap((run, index) => {
+        const value = row(this.db.prepare("SELECT id FROM messages WHERE id=?"), run.messageId);
+        return value ? [{ run, message: this.getMessage(run.messageId), position: index + 1 }] : [];
+      }),
     };
   }
 

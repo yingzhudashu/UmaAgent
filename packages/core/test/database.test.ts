@@ -63,7 +63,7 @@ describe("UmaDatabase", () => {
     reopened.close();
   });
 
-  it.each([18, 19, 21, 99])("rejects unsupported schema version %s without rewriting it", async (version) => {
+  it.each([18, 19, 22, 99])("rejects unsupported schema version %s without rewriting it", async (version) => {
     const root = await mkdtemp(join(tmpdir(), "uma-schema-"));
     temporary.push(root);
     const db = testDatabase(root);
@@ -75,11 +75,11 @@ describe("UmaDatabase", () => {
     reopened.close();
   });
 
-  it("initializes the current schema directly at version 20", async () => {
+  it("initializes the current schema directly at version 21", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-schema-18-"));
     temporary.push(root);
     const db = testDatabase(root);
-    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(20);
+    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(21);
     db.close();
   });
 

@@ -34,27 +34,17 @@ export class MessageRepository {
   }
 
   listMessages(sessionId: string): TranscriptItem[] {
-    const ids = rows(
-      this.db.prepare("SELECT id FROM messages WHERE session_id=? ORDER BY sequence"),
-      sessionId,
-    ).map((value) => text(value.id));
+    const ids = this.visibleRows(sessionId).map((value) => text(value.id));
     return this.listByIds(ids);
   }
 
   listHistory(sessionId: string, beforeSequence?: number, limit = 100): SessionHistoryPage {
     const bounded = Math.max(1, Math.min(500, limit));
-    const values = rows(
-      beforeSequence === undefined
-        ? this.db.prepare(
-            "SELECT id,sequence FROM messages WHERE session_id=? ORDER BY sequence DESC LIMIT ?",
-          )
-        : this.db.prepare(
-            "SELECT id,sequence FROM messages WHERE session_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?",
-          ),
-      ...(beforeSequence === undefined ? [sessionId, bounded + 1] : [sessionId, beforeSequence, bounded + 1]),
-    );
-    const hasMore = values.length > bounded;
-    const page = values.slice(0, bounded).reverse();
+    const all = this.visibleRows(sessionId);
+    const filtered =
+      beforeSequence === undefined ? all : all.filter((value) => integer(value.sequence) < beforeSequence);
+    const hasMore = filtered.length > bounded;
+    const page = filtered.slice(Math.max(0, filtered.length - bounded));
     const items = this.listByIds(page.map((value) => text(value.id)));
     return {
       sessionId,
@@ -64,26 +54,86 @@ export class MessageRepository {
     };
   }
 
+  /**
+   * Projects the persisted messages onto the active conversation branch. v21
+   * stores branch ancestry through parent_message_id and branch head; no
+   * second compatibility representation is needed.
+   */
+  private visibleRows(sessionId: string): Row[] {
+    const all = rows(
+      this.db.prepare("SELECT * FROM messages WHERE session_id=? ORDER BY sequence"),
+      sessionId,
+    );
+    if (all.length === 0) return [];
+    const branch = row(
+      this.db.prepare(
+        "SELECT b.name,b.head_message_id,b.created_at AS branch_created_at,s.created_at AS session_created_at FROM sessions s LEFT JOIN conversation_branches b ON b.id=s.active_branch_id WHERE s.id=?",
+      ),
+      sessionId,
+    );
+    const headId = branch?.head_message_id ? text(branch.head_message_id) : undefined;
+    if (!headId) return all;
+    const head = all.find((value) => text(value.id) === headId);
+    if (!head) return all;
+    if (text(branch?.name ?? "") === "主分支") return all;
+
+    const byId = new Map(all.map((value) => [text(value.id), value]));
+    const ancestry = new Set<string>();
+    let cursor: Row | undefined = head;
+    while (cursor) {
+      const id = text(cursor.id);
+      if (ancestry.has(id)) break;
+      ancestry.add(id);
+      cursor = cursor.parent_message_id ? byId.get(text(cursor.parent_message_id)) : undefined;
+    }
+    const branchCreatedAt = integer(branch?.branch_created_at ?? 0);
+    const branchUsers = all.filter(
+      (value) => text(value.role) === "user" && integer(value.created_at) >= branchCreatedAt,
+    );
+    const forkChild = branchUsers.find((value) => Boolean(value.parent_message_id));
+    const forkParent = forkChild?.parent_message_id ? byId.get(text(forkChild.parent_message_id)) : undefined;
+    const rootSequence = forkParent ? integer(forkParent.sequence) : integer(head.sequence);
+    const firstBranchSequence = forkChild ? integer(forkChild.sequence) : rootSequence + 1;
+    const activeRunIds = new Set<string>();
+    const activeUsers = new Set<string>();
+    for (const value of all) {
+      if (text(value.role) !== "user") continue;
+      const sequence = integer(value.sequence);
+      const id = text(value.id);
+      const linked = ancestry.has(id) || ancestry.has(text(value.parent_message_id ?? ""));
+      const laterUnlinkedUser =
+        !value.parent_message_id &&
+        sequence >= firstBranchSequence &&
+        integer(value.created_at) >= branchCreatedAt;
+      if ((linked && sequence >= firstBranchSequence) || laterUnlinkedUser) {
+        activeUsers.add(id);
+        if (value.run_id) activeRunIds.add(text(value.run_id));
+      }
+    }
+    return all.filter((value) => {
+      const sequence = integer(value.sequence);
+      return (
+        sequence < rootSequence ||
+        activeUsers.has(text(value.id)) ||
+        (value.run_id && activeRunIds.has(text(value.run_id)))
+      );
+    });
+  }
+
   listAgentMessages(
     sessionId: string,
     options: { beforeSequence?: number; afterSequence?: number } = {},
   ): StoredAgentMessage[] {
-    const conditions = ["session_id=?", "(status='complete' OR (role='tool' AND status='error'))"];
-    const parameters: Array<string | number> = [sessionId];
-    if (options.afterSequence !== undefined) {
-      conditions.push("sequence>?");
-      parameters.push(options.afterSequence);
-    }
-    if (options.beforeSequence !== undefined) {
-      conditions.push("sequence<?");
-      parameters.push(options.beforeSequence);
-    }
-    const values = rows(
-      this.db.prepare(
-        `SELECT id,sequence,role,status,name,content,payload_json,attachment_ids_json,updated_at FROM messages WHERE ${conditions.join(" AND ")} ORDER BY sequence`,
-      ),
-      ...parameters,
+    let values = this.visibleRows(sessionId).filter(
+      (value) =>
+        text(value.status) === "complete" || (text(value.role) === "tool" && text(value.status) === "error"),
     );
+    const afterSequence = options.afterSequence;
+    const beforeSequence = options.beforeSequence;
+    if (afterSequence !== undefined)
+      values = values.filter((value) => integer(value.sequence) > afterSequence);
+    if (beforeSequence !== undefined)
+      values = values.filter((value) => integer(value.sequence) < beforeSequence);
     const attachmentIds = [...new Set(values.flatMap(attachmentIdsFrom))];
     const attachments = this.loadAttachments(attachmentIds);
     return values.flatMap((value) => {
@@ -124,7 +174,7 @@ export class MessageRepository {
       content: text(value.content),
       ...(value.name ? { name: text(value.name) } : {}),
       ...(value.run_id ? { runId: text(value.run_id) } : {}),
-      ...(value.revision_of_message_id ? { revisionOfMessageId: text(value.revision_of_message_id) } : {}),
+      ...(value.parent_message_id ? { parentMessageId: text(value.parent_message_id) } : {}),
       attachments: attachmentIds
         .map((attachmentId) => resolvedAttachments.get(attachmentId))
         .filter((item): item is Attachment => item !== undefined),
