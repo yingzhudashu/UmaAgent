@@ -6,27 +6,13 @@ COPY apps ./apps
 COPY scripts ./scripts
 RUN npm ci --ignore-scripts
 RUN npm run build
-
-FROM node:22.19.0-bookworm-slim AS runtime-dependencies
-WORKDIR /app
-COPY package.json package-lock.json ./
-COPY apps/server/package.json ./apps/server/package.json
-COPY packages/client/package.json ./packages/client/package.json
-COPY packages/core/package.json ./packages/core/package.json
-COPY packages/protocol/package.json ./packages/protocol/package.json
-COPY packages/telemetry/package.json ./packages/telemetry/package.json
-RUN npm ci --omit=dev --ignore-scripts \
-  --workspace=@uma-agent/server \
-  --workspace=@uma-agent/client \
-  --workspace=@uma-agent/core \
-  --workspace=@uma-agent/protocol \
-  --workspace=@uma-agent/telemetry
+RUN npm prune --omit=dev --ignore-scripts
 
 FROM node:22.19.0-bookworm-slim
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /app/package.json /app/package-lock.json ./
-COPY --from=runtime-dependencies /app/node_modules ./node_modules
+COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/server/package.json ./apps/server/package.json
 COPY --from=build /app/apps/server/dist ./apps/server/dist
 COPY --from=build /app/apps/web/dist ./apps/web/dist
