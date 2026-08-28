@@ -49,6 +49,13 @@ chmod 0640 "$archive" "$config_copy" "$backup_root/SHA256SUMS-$stamp"
 [[ -f "$workspace_archive" ]] && chmod 0640 "$workspace_archive"
 [[ -f "$xianyu_archive" ]] && chmod 0640 "$xianyu_archive"
 
+# Keep operational data in the ordinary backup set, but never copy secrets from
+# uma.env, protected PAT files, or adapter control tokens into that set.
+for required in "$archive" "$config_copy"; do
+    test -s "$required"
+done
+sha256sum -c "$backup_root/SHA256SUMS-$stamp" >/dev/null
+
 systemctl start uma-agent.service
 systemctl start uma-browser-worker.service
 systemctl start uma-xianyu-adapter.service
