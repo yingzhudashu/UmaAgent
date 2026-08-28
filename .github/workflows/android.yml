@@ -12,8 +12,8 @@ jobs:
       run:
         working-directory: android
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -24,7 +24,7 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
       - name: Build and test
-        run: ./gradlew test lint assembleDebug
+        run: ./gradlew --no-daemon --stacktrace test lint assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: umaagent-android-debug
