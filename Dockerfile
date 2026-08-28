@@ -17,7 +17,10 @@ COPY packages/protocol/package.json ./packages/protocol/package.json
 COPY packages/telemetry/package.json ./packages/telemetry/package.json
 RUN npm ci --omit=dev --ignore-scripts \
   --workspace=@uma-agent/server \
-  --workspace=@uma-agent/client
+  --workspace=@uma-agent/client \
+  --workspace=@uma-agent/core \
+  --workspace=@uma-agent/protocol \
+  --workspace=@uma-agent/telemetry
 
 FROM node:22.19.0-bookworm-slim
 ENV NODE_ENV=production
@@ -36,6 +39,7 @@ COPY --from=build /app/packages/protocol/dist ./packages/protocol/dist
 COPY --from=build /app/packages/telemetry/package.json ./packages/telemetry/package.json
 COPY --from=build /app/packages/telemetry/dist ./packages/telemetry/dist
 COPY docker/uma.config.json ./uma.config.json
+RUN node --input-type=module -e "await import('@uma-agent/protocol'); await import('@uma-agent/telemetry'); await import('@uma-agent/core')"
 RUN mkdir -p /data/state /data/telemetry /data/workspace
 VOLUME ["/data/state", "/data/telemetry", "/data/workspace"]
 EXPOSE 3210
