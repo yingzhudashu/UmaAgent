@@ -51,8 +51,8 @@ operator must attach the following evidence:
 - [ ] Web and CLI smoke results for login, unlock, status, lifecycle, history, item, chat, and publish.
 - [ ] Rollback rehearsal result, including all three active services and release pointer.
 
-Production backup stamp: `20260828013358`; retired channel archive:
-`/srv/backups/uma-agent/retired-feishu-20260828014500`.
+Production backup stamp: `20260828013358`; retired channel archive is under
+`/srv/backups/uma-agent/retired-channel-20260828014500`.
 The Xianyu adapter remains disabled until real Cookie, control token, and scrypt
 administrator hash are injected by the operator; no placeholder secret was used.
 
