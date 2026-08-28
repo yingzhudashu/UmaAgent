@@ -6,7 +6,7 @@ sign-off before a release is declared complete.
 
 ## R1 local baseline
 
-- Candidate commit: `fcd9069f629fc069e6e50878f218f8f6a1a8e51b` (pushed to `origin/master`).
+- Candidate commit: `003539d` (local; `origin/master` remains `fcd9069` until network push succeeds).
 - Protocol: `v14`; database schema: `20`.
 - `npm run check`: passed.
 - `npm run build`: passed.
@@ -21,8 +21,9 @@ sign-off before a release is declared complete.
 ## Latest hosted CI evidence
 
 - Commit `fcd9069` is pushed to `origin/master` and triggered both workflows.
-- Android run: `33133640950` (pending at last local check).
-- Node/Docker run: `33133640982` (pending at last local check).
+- Android run `33133640950` passed with JDK 17, SDK 35, tests, lint, and APK assembly.
+- Node/Docker run `33133640982` failed during the core image build; `003539d` removes
+  the unverified workspace prune step and must be pushed before CI can be re-run.
 - The prior Docker failure was fixed by moving workspace import validation after
   TypeScript compilation and checking the generated protocol, telemetry, and core
   artifacts.
