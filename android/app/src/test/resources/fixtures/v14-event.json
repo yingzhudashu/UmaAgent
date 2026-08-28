@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 14,
+  "sessionId": "session-1",
+  "runId": "run-1",
+  "sequence": 7,
+  "timestamp": 1700000000000,
+  "type": "message.completed",
+  "payload": {
+    "messageId": "message-1",
+    "status": "complete"
+  }
+}

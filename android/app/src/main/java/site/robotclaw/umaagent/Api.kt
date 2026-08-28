@@ -1,6 +1,7 @@
 package site.robotclaw.umaagent
 
 import android.content.Context
+import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import kotlinx.coroutines.Dispatchers
@@ -16,8 +17,11 @@ import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.MultipartBody
+import okio.BufferedSink
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.File
@@ -41,8 +45,11 @@ data class Unlock(val grant: String, val expiresAt: Long)
 
 private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-class UmaApi(private val token: String, private val baseUrl: String = "https://robotclaw.site") {
-    private val http = OkHttpClient()
+class UmaApi(
+    private val token: String,
+    private val baseUrl: String = "https://robotclaw.site",
+    private val http: OkHttpClient = OkHttpClient(),
+) {
 
     private suspend fun request(path: String, method: String = "GET", body: String? = null, grant: String? = null): String =
         withContext(Dispatchers.IO) {
@@ -62,6 +69,50 @@ class UmaApi(private val token: String, private val baseUrl: String = "https://r
     suspend fun patchJson(path: String, body: JsonObject): JsonElement =
         json.parseToJsonElement(request(path, "PATCH", body.toString()))
     suspend fun delete(path: String) { request(path, "DELETE") }
+
+    suspend fun upload(context: Context, uri: Uri, name: String, sessionId: String): JsonObject =
+        withContext(Dispatchers.IO) {
+            val resolver = context.contentResolver
+            val body = object : RequestBody() {
+                override fun contentType() = resolver.getType(uri)?.toMediaType()
+                override fun writeTo(sink: BufferedSink) {
+                    resolver.openInputStream(uri)?.use { input -> input.copyTo(sink.outputStream()) }
+                        ?: error("无法读取附件")
+                }
+            }
+            val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
+                .addFormDataPart("file", name, body)
+                .addFormDataPart("sessionId", sessionId)
+                .build()
+            val request = Request.Builder().url("$baseUrl/api/v14/uploads")
+                .addHeader("Authorization", "Bearer $token")
+                .post(multipart).build()
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) error("HTTP ${response.code}")
+                json.parseToJsonElement(response.body?.string() ?: "{}").jsonObject
+            }
+        }
+
+    suspend fun downloadAttachment(context: Context, id: String, destination: Uri): Long = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url("$baseUrl/api/v14/attachments/${encode(id)}/content?download=1")
+            .addHeader("Authorization", "Bearer $token").build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) error("HTTP ${response.code}")
+            val input = response.body?.byteStream() ?: error("附件为空")
+            val output = context.contentResolver.openOutputStream(destination) ?: error("无法写入附件")
+            var total = 0L
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            input.use { source -> output.use { target ->
+                while (true) {
+                    val read = source.read(buffer)
+                    if (read < 0) break
+                    target.write(buffer, 0, read)
+                    total += read
+                }
+            } }
+            total
+        }
+    }
 
     suspend fun bootstrap(): Bootstrap = json.decodeFromString(request("/sync/bootstrap", "POST"))
     suspend fun sessions(): List<Session> = json.decodeFromString(request("/sessions"))
@@ -197,20 +248,28 @@ class PatStore(context: Context) {
                 init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
                 String(doFinal(bytes.copyOfRange(12, bytes.size)), Charsets.UTF_8)
             }
-        } catch (_: Exception) { null }
+        } catch (_: Exception) {
+            file.delete()
+            null
+        }
     }
 
     fun clear() { file.delete() }
 }
 
 @Serializable
-data class CacheEnvelope(val version: Int, val sessions: List<Session>, val snapshots: Map<String, String>)
+data class CacheEnvelope(
+    val version: Int,
+    val sessions: List<Session>,
+    val snapshots: Map<String, String>,
+    val sequences: Map<String, Long> = emptyMap(),
+)
 
 class SnapshotCache(private val context: Context) {
     private val file = File(context.filesDir, "cache.json")
     fun read(): CacheEnvelope? = try {
         if (!file.exists()) null else json.decodeFromString<CacheEnvelope>(file.readText()).let {
-            if (it.version == 1) it else null.also { file.delete() }
+            if (it.version == 2) it else null.also { file.delete() }
         }
     } catch (_: Exception) { file.delete(); null }
     fun write(value: CacheEnvelope) {

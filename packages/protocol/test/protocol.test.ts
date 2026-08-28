@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import Value from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
@@ -12,6 +14,14 @@ import {
 } from "../src/index.js";
 
 describe("protocol schemas", () => {
+  it("keeps the checked v14 fixtures valid for native clients", async () => {
+    for (const name of ["v14-event.json", "v14-transient-delta.json"]) {
+      const fixture = JSON.parse(
+        await readFile(resolve("packages/protocol/test/fixtures", name), "utf8"),
+      ) as unknown;
+      expect(Value.Check(AgentEventEnvelopeSchema, fixture), name).toBe(true);
+    }
+  });
   it("validates shortcut requests and exposes the canonical command set", () => {
     expect(AGENT_SHORTCUT_COMMANDS).toContain("/self-opt proposals");
     expect(Value.Check(ShortcutRequestSchema, { command: "/status" })).toBe(true);

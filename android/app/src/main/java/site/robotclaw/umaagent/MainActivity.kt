@@ -1,6 +1,7 @@
 package site.robotclaw.umaagent
 
 import android.app.Application
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -53,6 +54,7 @@ data class UmaUiState(
     val xianyuStatus: String = "",
     val xianyuData: String = "",
     val resourceData: String = "",
+    val attachmentData: String = "",
     val offline: Boolean = false,
     val loading: Boolean = false,
     val error: String = "",
@@ -74,7 +76,10 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         val cached = cache.read()
-        if (cached != null) state.value = state.value.copy(sessions = cached.sessions)
+        if (cached != null) {
+            sequences.putAll(cached.sequences)
+            state.value = state.value.copy(sessions = cached.sessions)
+        }
         patStore.read()?.let {
             api = UmaApi(it)
             state.value = state.value.copy(tokenPresent = true, offline = cached != null)
@@ -107,7 +112,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     fun logout() {
         socket?.close(1000, "logout"); socket = null; reconnect?.cancel(); api = null
         grant = null; grantExpiry?.cancel(); grantExpiry = null
-        patStore.clear(); state.value = UmaUiState()
+        patStore.clear(); cache.clear(); sessions = emptyList(); sequences.clear(); state.value = UmaUiState()
     }
 
     fun selectSession(id: String) {
@@ -120,7 +125,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.IO) {
                     val current = cache.read()
                     val next = (current?.snapshots ?: emptyMap()) + (id to encoded)
-                    cache.write(CacheEnvelope(1, state.value.sessions, next))
+                    cache.write(CacheEnvelope(2, state.value.sessions, next, sequences))
                 }
                 state.value = state.value.copy(snapshot = encoded, offline = false, loading = false)
             } catch (error: Throwable) {
@@ -141,6 +146,32 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: Throwable) {
                 state.value = state.value.copy(loading = false, offline = true, error = error.message ?: "发送失败")
             }
+        }
+    }
+
+    fun uploadAttachment(uri: Uri, name: String) {
+        val sessionId = state.value.selectedSessionId ?: return
+        if (state.value.offline) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.upload(getApplication(), uri, name, sessionId) }
+                .onSuccess { attachment ->
+                    state.value = state.value.copy(attachmentData = attachment.toString(), loading = false)
+                    selectSession(sessionId)
+                }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "附件上传失败") }
+        }
+    }
+
+    fun downloadAttachment(id: String, destination: Uri) {
+        if (state.value.offline || id.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.downloadAttachment(getApplication(), id.trim(), destination) }
+                .onSuccess { bytes -> state.value = state.value.copy(attachmentData = "已下载 ${bytes} bytes", loading = false) }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "附件下载失败") }
         }
     }
 
@@ -362,10 +393,12 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             val encoded = snapshot.toString()
             withContext(Dispatchers.IO) {
                 val current = cache.read()
-                cache.write(CacheEnvelope(1, state.value.sessions, (current?.snapshots ?: emptyMap()) + (sessionId to encoded)))
+                cache.write(CacheEnvelope(2, state.value.sessions, (current?.snapshots ?: emptyMap()) + (sessionId to encoded), sequences))
             }
             if (sessionId == state.value.selectedSessionId)
                 state.value = state.value.copy(snapshot = encoded, offline = false)
+        }.onFailure {
+            state.value = state.value.copy(offline = true)
         }
     }
 
@@ -401,6 +434,19 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
     var chatItemId by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var images by remember { mutableStateOf("") }
+    var attachmentId by remember { mutableStateOf("") }
+    var pendingDownloadId by remember { mutableStateOf("") }
+    val attachmentPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) model.uploadAttachment(uri, "attachment")
+    }
+    val saveAttachmentPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        if (uri != null && pendingDownloadId.isNotBlank()) model.downloadAttachment(pendingDownloadId, uri)
+        pendingDownloadId = ""
+    }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (!state.tokenPresent) {
             OutlinedTextField(
@@ -432,6 +478,12 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
                 Button({ model.compactSelectedSession() }, enabled = !state.offline && state.selectedSessionId != null) { Text("压缩") }
             }
             if (state.snapshot.isNotBlank()) Text(state.snapshot, Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button({ attachmentPicker.launch(arrayOf("*/*")) }, enabled = !state.offline && state.selectedSessionId != null && !state.loading) { Text("上传附件") }
+                OutlinedTextField(attachmentId, { attachmentId = it }, label = { Text("附件 ID") }, modifier = Modifier.weight(1f))
+                Button({ pendingDownloadId = attachmentId.trim(); saveAttachmentPicker.launch("attachment") }, enabled = !state.offline && attachmentId.isNotBlank() && !state.loading) { Text("下载") }
+            }
+            if (state.attachmentData.isNotBlank()) Text(state.attachmentData, Modifier.fillMaxWidth())
             Text("服务端资源", style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("/models" to "模型", "/profile" to "Profile", "/tasks" to "任务", "/schedules" to "计划", "/memory" to "Memory").forEach { (path, label) ->
