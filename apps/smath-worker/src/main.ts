@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { basename, dirname, extname, relative, resolve } from "node:path";
+import { dirname, extname, relative, resolve } from "node:path";
 
 const host = "127.0.0.1";
 const port = Number(process.env.UMA_SMATH_WORKER_PORT ?? "3260");
@@ -61,8 +61,8 @@ function worksheet(path: string): void {
   if (extname(path).toLowerCase() !== ".sm") fail(400, "Only .sm worksheets are allowed");
 }
 
-async function runSmath(input: string, output?: string): Promise<string> {
-  const args = ["-a", binary, "--headless", input, ...(output ? ["--export", output] : [])];
+async function runSmath(input: string): Promise<string> {
+  const args = ["-a", binary, "-s", input, "-t", "-w", String(timeoutMs), "-b"];
   return new Promise((resolveRun, reject) => {
     const child = spawn("xvfb-run", args, {
       stdio: ["ignore", "pipe", "pipe"],
@@ -88,7 +88,7 @@ async function runSmath(input: string, output?: string): Promise<string> {
 async function job(input: Record<string, unknown>) {
   const ownerId = validOwner(input.ownerId);
   const operation = input.operation;
-  if (!["list", "read", "create", "update", "calculate", "export", "delete"].includes(String(operation)))
+  if (!["list", "read", "create", "update", "calculate", "delete"].includes(String(operation)))
     fail(400, "Unsupported SMath operation");
   const path = validPath(input.path, operation !== "list");
   if (operation === "list") {
@@ -112,22 +112,7 @@ async function job(input: Record<string, unknown>) {
   }
   if ((await stat(file)).size > maxBytes) fail(400, "Worksheet exceeds size limit");
   if (operation === "calculate") return { operation, path, output: await runSmath(file) };
-  const format = input.format;
-  if (format !== "pdf" && format !== "html") fail(400, "Only pdf and html exports are allowed");
-  const output = `${file}.${format}`;
-  const log = await runSmath(file, output);
-  const data = await readFile(output);
-  if (data.length > maxBytes * 8) fail(400, "Export exceeds size limit");
-  return {
-    operation,
-    path,
-    output: log,
-    file: {
-      name: `${basename(file, ".sm")}.${format}`,
-      mimeType: format === "pdf" ? "application/pdf" : "text/html",
-      dataBase64: data.toString("base64"),
-    },
-  };
+  fail(400, "Unsupported SMath operation");
 }
 
 createServer(async (request, response) => {

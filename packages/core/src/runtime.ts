@@ -1871,16 +1871,6 @@ export class UmaRuntime {
         ...(this.smath
           ? {
               smath: this.smath,
-              smathAttachmentCreate: async (file: { name: string; mimeType: string; data: Buffer }) => {
-                const responseId = runId ? this.database.responseForRun(runId)?.id : undefined;
-                return this.addAttachment({
-                  sessionId: session.id,
-                  ...(responseId ? { responseId } : {}),
-                  name: file.name,
-                  mimeType: file.mimeType,
-                  data: file.data,
-                });
-              },
             }
           : {}),
       }),

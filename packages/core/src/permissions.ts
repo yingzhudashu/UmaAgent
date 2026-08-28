@@ -37,7 +37,6 @@ const writeTools = new Set([
   "smath_update",
   "smath_delete",
   "smath_calculate",
-  "smath_export",
 ]);
 
 export class PermissionPolicy {
