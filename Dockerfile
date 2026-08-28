@@ -5,6 +5,7 @@ COPY packages ./packages
 COPY apps ./apps
 COPY scripts ./scripts
 RUN npm ci --ignore-scripts
+RUN node --input-type=module -e "console.log(await import.meta.resolve('@uma-agent/protocol'))"
 RUN npm run build
 RUN npm prune --omit=dev --ignore-scripts
 
