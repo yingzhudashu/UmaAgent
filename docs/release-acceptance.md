@@ -6,7 +6,7 @@ sign-off before a release is declared complete.
 
 ## R1 local baseline
 
-- Candidate commit: `a0e5f85` plus the reviewed changes in the working tree.
+- Candidate commit: record the final release commit after the last verified build.
 - Protocol: `v14`; database schema: `20`.
 - `npm run check`: passed.
 - `npm run build`: passed.
