@@ -1,8 +1,11 @@
 package site.robotclaw.umaagent
 
 import android.app.Application
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -71,6 +74,12 @@ data class UmaUiState(
     val offline: Boolean = false,
     val loading: Boolean = false,
     val error: String = "",
+    val updateManifest: UpdateManifest? = null,
+    val updateChecking: Boolean = false,
+    val updateDownloading: Boolean = false,
+    val updateProgress: Int = 0,
+    val updateError: String = "",
+    val updateFilePath: String? = null,
 )
 
 class UmaViewModel(application: Application) : AndroidViewModel(application) {
@@ -98,7 +107,40 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             state.value = state.value.copy(tokenPresent = true, offline = cached != null)
             login(it, persist = false)
         }
+        checkForUpdate()
     }
+
+    fun checkForUpdate() {
+        if (state.value.updateChecking || state.value.updateDownloading) return
+        viewModelScope.launch {
+            state.value = state.value.copy(updateChecking = true, updateError = "")
+            runCatching { UpdateService.check() }
+                .onSuccess { manifest ->
+                    state.value = state.value.copy(
+                        updateManifest = manifest.takeIf { it.versionCode > BuildConfig.VERSION_CODE },
+                        updateChecking = false,
+                    )
+                }
+                .onFailure { error -> state.value = state.value.copy(updateChecking = false, updateError = error.message ?: "检查更新失败") }
+        }
+    }
+
+    fun downloadUpdate() {
+        val manifest = state.value.updateManifest ?: return
+        if (state.value.updateDownloading) return
+        viewModelScope.launch {
+            state.value = state.value.copy(updateDownloading = true, updateProgress = 0, updateError = "", updateFilePath = null)
+            runCatching {
+                UpdateService.download(getApplication(), manifest) { done, total ->
+                    val progress = if (total > 0) ((done * 100) / total).toInt().coerceIn(0, 100) else 0
+                    state.value = state.value.copy(updateProgress = progress)
+                }
+            }.onSuccess { file -> state.value = state.value.copy(updateDownloading = false, updateProgress = 100, updateFilePath = file.absolutePath) }
+                .onFailure { error -> state.value = state.value.copy(updateDownloading = false, updateError = error.message ?: "下载更新失败") }
+        }
+    }
+
+    fun clearUpdateFile() { state.value = state.value.copy(updateFilePath = null) }
 
     fun login(token: String, persist: Boolean = true) {
         if (token.isBlank()) return
@@ -523,6 +565,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun UmaScreen(model: UmaViewModel = viewModel()) {
     val state by model.uiState.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
     var token by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
@@ -552,6 +595,21 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
     LaunchedEffect(selectedSession?.id, selectedSession?.assistantName) {
         assistantName = selectedSession?.assistantName ?: "UmaAgent"
     }
+    LaunchedEffect(state.updateFilePath) {
+        val path = state.updateFilePath ?: return@LaunchedEffect
+        val file = java.io.File(path)
+        if (file.exists()) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+                val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                }
+                runCatching { context.startActivity(settingsIntent) }
+            } else {
+                runCatching { context.startActivity(UpdateService.installIntent(context, file)) }
+                    .onFailure { model.clearUpdateFile() }
+            }
+        }
+    }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (!state.tokenPresent) {
             OutlinedTextField(
@@ -562,11 +620,13 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
                 label = { Text("PAT") },
             )
             Button({ model.login(token) }, enabled = token.isNotBlank() && !state.loading) { Text("登录") }
+            UpdatePanel(state, model, context)
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(if (state.offline) "离线只读" else "已连接", style = MaterialTheme.typography.titleMedium)
                 Button({ model.logout() }) { Text("退出") }
             }
+            UpdatePanel(state, model, context)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(newTitle, { newTitle = it }, label = { Text("新会话标题") }, modifier = Modifier.weight(1f))
                 Button({ model.createSession(newTitle); newTitle = "" }, enabled = !state.offline && newTitle.isNotBlank() && !state.loading) { Text("新建") }
@@ -719,5 +779,25 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
             }
         }
         if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error)
+    }
+}
+
+@Composable
+private fun UpdatePanel(state: UmaUiState, model: UmaViewModel, context: android.content.Context) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("应用更新", style = MaterialTheme.typography.titleMedium)
+        Text("当前版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）")
+        when {
+            state.updateChecking -> Text("正在检查更新…")
+            state.updateDownloading -> Text("正在下载更新 ${state.updateProgress}%")
+            state.updateManifest != null -> {
+                Text("发现新版本 ${state.updateManifest.versionName}")
+                state.updateManifest.releaseNotes.take(3).forEach { Text("• $it") }
+                Button({ model.downloadUpdate() }) { Text("下载并安装") }
+            }
+            else -> Text("已是最新版本")
+        }
+        if (state.updateError.isNotBlank()) Text(state.updateError, color = MaterialTheme.colorScheme.error)
+        Button({ model.checkForUpdate() }, enabled = !state.updateChecking && !state.updateDownloading) { Text("检查更新") }
     }
 }
