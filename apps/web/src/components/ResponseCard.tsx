@@ -1,6 +1,7 @@
-import type { Response, ResponseStatus, Run, TranscriptItem } from "@uma-agent/protocol";
-import { Bot, Check, ChevronRight, Copy, Download, FileText, LoaderCircle, Wrench } from "lucide-react";
+import type { Response, ResponseStatus, Run, Session, TranscriptItem } from "@uma-agent/protocol";
+import { Check, ChevronRight, Copy, Download, FileText, LoaderCircle, Wrench } from "lucide-react";
 import { useState } from "react";
+import defaultAvatarUrl from "../assets/cat-avatar.jpg";
 import { Markdown } from "../Markdown.js";
 import { responseStatusLabels } from "../statusLabels.js";
 import { type QualityOperationView, QualityPanel } from "./QualityPanel.js";
@@ -42,6 +43,7 @@ function planStepParts(title: string): { summary: string; details: string } {
 
 export function ResponseCard({
   response,
+  session,
   run,
   items,
   onDownload,
@@ -53,6 +55,7 @@ export function ResponseCard({
   onQualityRetry,
 }: {
   response: Response;
+  session: Session | undefined;
   run: Run | undefined;
   items: TranscriptItem[];
   onDownload: (id: string) => void;
@@ -98,11 +101,18 @@ export function ResponseCard({
   return (
     <article className="message-row message-row--assistant response-card" aria-live="polite">
       <div className="message-avatar" aria-hidden="true">
-        <Bot size={16} />
+        <img
+          src={
+            session?.assistantAvatarAttachmentId
+              ? `/api/v15/attachments/${encodeURIComponent(session.assistantAvatarAttachmentId)}/content`
+              : defaultAvatarUrl
+          }
+          alt=""
+        />
       </div>
       <div className="message-content">
         <div className="message-meta">
-          <strong>UmaAgent</strong>
+          <strong>{session?.assistantName ?? "UmaAgent"}</strong>
           <time dateTime={new Date(updatedAt).toISOString()}>
             {new Date(updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </time>

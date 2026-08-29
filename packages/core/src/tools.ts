@@ -71,9 +71,17 @@ function runShell(
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve, reject) => {
     const executable = process.platform === "win32" ? "powershell.exe" : "/bin/bash";
+    // PowerShell 的 -Command 会再次解释参数中的引号；使用 UTF-16LE 编码
+    // 的 -EncodedCommand 让整段脚本作为一个不可歧义的参数传递。
     const args =
       process.platform === "win32"
-        ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+        ? [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            Buffer.from(command, "utf16le").toString("base64"),
+          ]
         : ["-lc", command];
     const child = spawn(executable, args, { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";

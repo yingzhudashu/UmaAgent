@@ -134,8 +134,39 @@ describe("TelemetryStore", () => {
     expect(store.summarize(0, 100)).toEqual({
       spans: 1,
       incomplete: 0,
+      active: 0,
+      errorRate: 0,
+      writeFailures: 0,
+      otlpExportFailures: 0,
+      services: [{ service: "test", spans: 1, errors: 0 }],
+      stageLatencyMs: { tool: { p50: 10, p95: 10, p99: 10 } },
       latencyMs: { p50: 10, p95: 10, p99: 10 },
     });
+    await store.close();
+  });
+
+  it("finishes a span at most once even when the store API is called repeatedly", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-idempotent-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "test");
+    const record = {
+      traceId: "trace-idempotent",
+      spanId: "span-idempotent",
+      service: "test",
+      name: "request",
+      kind: "http",
+      status: "ok" as const,
+      startedAt: 1,
+      endedAt: 2,
+      durationMs: 1,
+      attributes: {},
+      events: [{ name: "done", occurredAt: 2, attributes: {} }],
+    };
+    store.start(record);
+    store.finish(record);
+    store.finish(record);
+    expect(store.db.prepare("SELECT COUNT(*) AS count FROM span_events").get()).toEqual({ count: 1 });
+    expect(store.summarize(0, 10).spans).toBe(1);
     await store.close();
   });
 

@@ -41,6 +41,21 @@ export function DiagnosticsArea({ report }: { report: DiagnosticsReport | undefi
           </p>
         ))}
       </div>
+      <div>
+        <strong>Trace</strong>
+        <p>
+          {report.trace.spans} spans · {report.trace.incomplete} incomplete · {report.trace.active} active ·{" "}
+          {(report.trace.errorRate * 100).toFixed(1)}% errors
+        </p>
+        <p>
+          write failures {report.trace.writeFailures} · OTLP failures {report.trace.otlpExportFailures}
+        </p>
+        {report.trace.services.map((item) => (
+          <p key={item.service}>
+            {item.service}: {item.spans} spans · {item.errors} errors
+          </p>
+        ))}
+      </div>
     </div>
   );
 }

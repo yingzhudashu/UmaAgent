@@ -23,9 +23,9 @@ for entry in "$shared_dir"/* "$shared_dir"/.[!.]*; do
   ln -s -- "$entry" "$release_dir/node_modules/$name"
 done
 
-for package in browser-worker channel-adapter cli client core eval-runner protocol server skill-worker telemetry xianyu-adapter; do
+for package in browser-worker channel-adapter cli client core eval-runner protocol server telemetry xianyu-adapter; do
   case "$package" in
-    browser-worker|cli|eval-runner|server|skill-worker|xianyu-adapter) parent=apps ;;
+    browser-worker|cli|eval-runner|server|xianyu-adapter) parent=apps ;;
     *) parent=packages ;;
   esac
   ln -s -- "../../$parent/$package" "$release_dir/node_modules/@uma-agent/$package"

@@ -17,12 +17,13 @@ const providerId = process.env.UMA_REAL_PROVIDER?.trim();
 const modelKey = process.env.UMA_REAL_MODEL?.trim();
 const baseUrl = process.env.UMA_REAL_BASE_URL?.trim();
 const apiKeyEnv = process.env.UMA_REAL_API_KEY_ENV?.trim() || "OPENAI_API_KEY";
+const apiType = process.env.UMA_REAL_API_TYPE?.trim() || "openai-responses";
 if (!providerId || !modelKey || !baseUrl)
   throw new Error("UMA_REAL_PROVIDER, UMA_REAL_MODEL and UMA_REAL_BASE_URL are required");
 if (!process.env[apiKeyEnv]?.trim()) throw new Error(`Missing API key ${apiKeyEnv} in the environment`);
 const model = {
   model: modelKey,
-  api: process.env.UMA_REAL_API?.trim() || "openai_responses",
+  api: apiType,
   contextWindow: Number(process.env.UMA_REAL_CONTEXT_WINDOW ?? 100_000),
   maxOutputTokens: Number(process.env.UMA_REAL_MAX_OUTPUT_TOKENS ?? 4_096),
   capabilities: {},
@@ -62,7 +63,7 @@ const config = {
       capabilities: model.capabilities,
     },
   },
-  defaultThinkingLevel: String(model.defaults?.thinking_level ?? mini.default_thinking_level ?? "medium"),
+  defaultThinkingLevel: "medium",
   skillsDirs: [],
   mcpServers: [],
   runtime: { maxParallelSessions: 2, approvalTimeoutMs: 120_000, toolTimeoutMs: 60_000 },

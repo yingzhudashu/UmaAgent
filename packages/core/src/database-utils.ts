@@ -71,6 +71,10 @@ export function toSession(value: Row): Session {
   return {
     id: text(value.id),
     title: text(value.title),
+    assistantName: text(value.assistant_name || "UmaAgent"),
+    ...(value.assistant_avatar_attachment_id
+      ? { assistantAvatarAttachmentId: text(value.assistant_avatar_attachment_id) }
+      : {}),
     ...(value.workspace ? { workspace: text(value.workspace) } : {}),
     model: { provider: text(value.model_provider), id: text(value.model_id) },
     thinkingLevel: text(value.thinking_level) as ThinkingLevel,

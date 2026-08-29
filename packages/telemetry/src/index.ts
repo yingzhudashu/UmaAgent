@@ -58,6 +58,12 @@ export type TelemetrySpanPage = {
 export type TelemetrySummary = {
   spans: number;
   incomplete: number;
+  active: number;
+  errorRate: number;
+  writeFailures: number;
+  otlpExportFailures: number;
+  services: Array<{ service: string; spans: number; errors: number }>;
+  stageLatencyMs: Record<string, { p50: number; p95: number; p99: number }>;
   latencyMs: { p50: number; p95: number; p99: number };
 };
 export type ResourceSample = {
@@ -129,7 +135,13 @@ export class TelemetryStore {
   private closePromise?: Promise<void>;
   private closed = false;
   private otlpExportFailures = 0;
+  private telemetryWriteFailures = 0;
   private readonly otelSpans = new Map<string, Span>();
+  private readonly insertSpanStatement;
+  private readonly updateSpanStatement;
+  private readonly insertEventStatement;
+  private readonly linkRunStatement;
+  private readonly insertResourceStatement;
   constructor(
     readonly stateDir: string,
     readonly service: string,
@@ -139,6 +151,21 @@ export class TelemetryStore {
     this.db = new DatabaseSync(join(stateDir, "telemetry.db"));
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;");
     this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    this.insertSpanStatement = this.db.prepare(
+      "INSERT INTO spans(span_id,trace_id,parent_span_id,service,run_id,session_id,name,kind,status,started_at,attributes_json,error_type,error_message) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    );
+    this.updateSpanStatement = this.db.prepare(
+      "UPDATE spans SET status=?,ended_at=?,duration_ms=?,attributes_json=?,error_type=?,error_message=? WHERE span_id=? AND status='active'",
+    );
+    this.insertEventStatement = this.db.prepare(
+      "INSERT OR REPLACE INTO span_events(span_id,event_no,name,occurred_at,attributes_json) VALUES(?,?,?,?,?)",
+    );
+    this.linkRunStatement = this.db.prepare(
+      "INSERT OR IGNORE INTO run_trace_links(run_id,trace_id,linked_at) VALUES(?,?,?)",
+    );
+    this.insertResourceStatement = this.db.prepare(
+      "INSERT INTO resource_samples(id,service,captured_at,cpu_user_micros,cpu_system_micros,rss_bytes,heap_used_bytes,heap_total_bytes,external_bytes,array_buffers_bytes,event_loop_delay_ms,active_runs,queued_runs) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    );
     this.db
       .prepare(
         "UPDATE spans SET status='error',ended_at=?,duration_ms=MAX(0,? - started_at),error_type='IncompleteSpan',error_message='Service restarted before span completed' WHERE service=? AND status='active'",
@@ -224,26 +251,23 @@ export class TelemetryStore {
       this.otelSpans.set(record.spanId, span);
     }
     try {
-      this.db
-        .prepare(
-          "INSERT INTO spans(span_id,trace_id,parent_span_id,service,run_id,session_id,name,kind,status,started_at,attributes_json,error_type,error_message) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        )
-        .run(
-          record.spanId,
-          record.traceId,
-          record.parentSpanId ?? null,
-          record.service,
-          record.runId ?? null,
-          record.sessionId ?? null,
-          record.name,
-          record.kind,
-          "active",
-          record.startedAt,
-          JSON.stringify(safeAttributes(record.attributes)),
-          null,
-          null,
-        );
+      this.insertSpanStatement.run(
+        record.spanId,
+        record.traceId,
+        record.parentSpanId ?? null,
+        record.service,
+        record.runId ?? null,
+        record.sessionId ?? null,
+        record.name,
+        record.kind,
+        "active",
+        record.startedAt,
+        JSON.stringify(safeAttributes(record.attributes)),
+        null,
+        null,
+      );
     } catch {
+      this.telemetryWriteFailures += 1;
       /* diagnostics must never change business behavior */
     }
   }
@@ -261,18 +285,10 @@ export class TelemetryStore {
       otelSpan.end(record.endedAt);
       this.otelSpans.delete(record.spanId);
     }
+    let persisted = false;
     try {
-      this.onFinished?.(record);
-    } catch {
-      /* diagnostics must never change business behavior */
-    }
-    try {
-      this.db.exec("BEGIN IMMEDIATE");
-      this.db
-        .prepare(
-          "UPDATE spans SET status=?,ended_at=?,duration_ms=?,attributes_json=?,error_type=?,error_message=? WHERE span_id=?",
-        )
-        .run(
+      const update = () =>
+        this.updateSpanStatement.run(
           record.status,
           record.endedAt ?? null,
           record.durationMs ?? null,
@@ -281,58 +297,66 @@ export class TelemetryStore {
           record.errorMessage?.slice(0, 2000) ?? null,
           record.spanId,
         );
-      const insert = this.db.prepare(
-        "INSERT OR REPLACE INTO span_events(span_id,event_no,name,occurred_at,attributes_json) VALUES(?,?,?,?,?)",
-      );
-      record.events.slice(0, 64).forEach((event, index) => {
-        insert.run(
-          record.spanId,
-          index,
-          event.name.slice(0, 120),
-          event.occurredAt,
-          JSON.stringify(safeAttributes(event.attributes)),
-        );
-      });
-      this.db.exec("COMMIT");
+      if (record.events.length === 0) {
+        persisted = Number(update().changes ?? 0) > 0;
+      } else {
+        this.db.exec("BEGIN IMMEDIATE");
+        persisted = Number(update().changes ?? 0) > 0;
+        if (persisted)
+          record.events.slice(0, 64).forEach((event, index) => {
+            this.insertEventStatement.run(
+              record.spanId,
+              index,
+              event.name.slice(0, 120),
+              event.occurredAt,
+              JSON.stringify(safeAttributes(event.attributes)),
+            );
+          });
+        this.db.exec("COMMIT");
+      }
     } catch {
+      this.telemetryWriteFailures += 1;
       try {
         this.db.exec("ROLLBACK");
       } catch {
         /* ignore telemetry failure */
       }
     }
+    if (persisted) {
+      try {
+        this.onFinished?.(record);
+      } catch {
+        /* diagnostics must never change business behavior */
+      }
+    }
   }
   linkRun(runId: string, traceId: string): void {
     try {
-      this.db
-        .prepare("INSERT OR IGNORE INTO run_trace_links(run_id,trace_id,linked_at) VALUES(?,?,?)")
-        .run(runId, traceId, Date.now());
+      this.linkRunStatement.run(runId, traceId, Date.now());
     } catch {
+      this.telemetryWriteFailures += 1;
       /* ignore telemetry failure */
     }
   }
   recordResource(sample: ResourceSample): void {
     try {
-      this.db
-        .prepare(
-          "INSERT INTO resource_samples(id,service,captured_at,cpu_user_micros,cpu_system_micros,rss_bytes,heap_used_bytes,heap_total_bytes,external_bytes,array_buffers_bytes,event_loop_delay_ms,active_runs,queued_runs) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        )
-        .run(
-          sample.id,
-          this.service,
-          sample.capturedAt,
-          sample.cpuUserMicros,
-          sample.cpuSystemMicros,
-          sample.rssBytes,
-          sample.heapUsedBytes,
-          sample.heapTotalBytes,
-          sample.externalBytes,
-          sample.arrayBuffersBytes,
-          sample.eventLoopDelayMs,
-          sample.activeRuns,
-          sample.queuedRuns,
-        );
+      this.insertResourceStatement.run(
+        sample.id,
+        this.service,
+        sample.capturedAt,
+        sample.cpuUserMicros,
+        sample.cpuSystemMicros,
+        sample.rssBytes,
+        sample.heapUsedBytes,
+        sample.heapTotalBytes,
+        sample.externalBytes,
+        sample.arrayBuffersBytes,
+        sample.eventLoopDelayMs,
+        sample.activeRuns,
+        sample.queuedRuns,
+      );
     } catch {
+      this.telemetryWriteFailures += 1;
       /* ignore telemetry failure */
     }
   }
@@ -438,6 +462,62 @@ export class TelemetryStore {
       )
       .get(from, to) as Record<string, unknown>;
     const spans = Number(summary.spans ?? 0);
+    const active = Number(
+      (
+        this.db
+          .prepare("SELECT COUNT(*) AS count FROM spans WHERE status='active' AND started_at <= ?")
+          .get(to) as Record<string, unknown>
+      )?.count ?? 0,
+    );
+    const errors = Number(
+      (
+        this.db
+          .prepare("SELECT COUNT(*) AS count FROM spans WHERE status='error' AND started_at BETWEEN ? AND ?")
+          .get(from, to) as Record<string, unknown>
+      )?.count ?? 0,
+    );
+    const services = (
+      this.db
+        .prepare(
+          "SELECT service,COUNT(*) AS spans,SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS errors FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ? GROUP BY service ORDER BY service",
+        )
+        .all(from, to) as Array<Record<string, unknown>>
+    ).map((row) => ({
+      service: String(row.service),
+      spans: Number(row.spans ?? 0),
+      errors: Number(row.errors ?? 0),
+    }));
+    const stageLatencyMs: Record<string, { p50: number; p95: number; p99: number }> = {};
+    const kinds = this.db
+      .prepare("SELECT DISTINCT kind FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ?")
+      .all(from, to) as Array<Record<string, unknown>>;
+    for (const row of kinds) {
+      const kind = String(row.kind);
+      const durationAtKind = (percentile: number) => {
+        const kindCount = Number(
+          (
+            this.db
+              .prepare(
+                "SELECT COUNT(*) AS count FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ? AND kind=?",
+              )
+              .get(from, to, kind) as Record<string, unknown>
+          )?.count ?? 0,
+        );
+        if (!kindCount) return 0;
+        const offset = Math.min(kindCount - 1, Math.max(0, Math.ceil((percentile / 100) * kindCount) - 1));
+        const value = this.db
+          .prepare(
+            "SELECT duration_ms FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ? AND kind=? ORDER BY duration_ms LIMIT 1 OFFSET ?",
+          )
+          .get(from, to, kind, offset) as Record<string, unknown> | undefined;
+        return Number(value?.duration_ms ?? 0);
+      };
+      stageLatencyMs[kind] = {
+        p50: durationAtKind(50),
+        p95: durationAtKind(95),
+        p99: durationAtKind(99),
+      };
+    }
     const durationAt = (percentile: number) => {
       if (!spans) return 0;
       const offset = Math.min(spans - 1, Math.max(0, Math.ceil((percentile / 100) * spans) - 1));
@@ -451,6 +531,12 @@ export class TelemetryStore {
     return {
       spans,
       incomplete: Number(summary.incomplete ?? 0),
+      active,
+      errorRate: spans ? errors / spans : 0,
+      writeFailures: this.telemetryWriteFailures,
+      otlpExportFailures: this.otlpExportFailures,
+      services,
+      stageLatencyMs,
       latencyMs: { p50: durationAt(50), p95: durationAt(95), p99: durationAt(99) },
     };
   }

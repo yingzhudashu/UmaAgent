@@ -91,7 +91,7 @@ export const BUILTIN_SKILLS: BuiltinSkill[] = [
 - frontmatter 至少包含 name 和 description；description 要写清楚何时触发。
 - 正文只保留模型真正需要的步骤，较大的资料放在 references/。
 - 优先组合现有 Core/MCP 工具，不重复实现已有能力。
-- 如必须执行代码，拆成经过审核、哈希固定的 Worker 包，不在 SKILL.md 中执行任意脚本。
+- Skill 只提供静态说明和资源；需要执行操作时组合现有 Core/MCP 工具，并遵守对应审批策略。
 - 用一个成功样例和一个失败/边界样例验证，然后再启用。
 `,
   },

@@ -833,6 +833,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 <MessageBubble
                   key={entry.item.id}
                   item={entry.item}
+                  session={snapshot.data?.session}
                   onRetry={entry.item.role === "user" ? () => retryMessage(entry.item) : undefined}
                   onEdit={entry.item.role === "user" ? (text) => editMessage(entry.item, text) : undefined}
                   onReview={
@@ -860,6 +861,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 <ResponseCard
                   key={entry.id}
                   response={entry.response}
+                  session={snapshot.data?.session}
                   run={entry.run}
                   items={entry.items}
                   isCurrentSegment={entry.isCurrentSegment}
@@ -1273,6 +1275,12 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                     }
                     publicConfig={publicConfig.data}
                     disabled={offline}
+                    saveSession={async (patch) => {
+                      await updateSession.mutateAsync(patch);
+                    }}
+                    uploadAvatar={async (file) =>
+                      (await client.upload(file, file.name, selected, "avatar")).id
+                    }
                   />
                 </section>
               )}

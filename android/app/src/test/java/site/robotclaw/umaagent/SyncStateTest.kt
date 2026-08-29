@@ -34,6 +34,13 @@ class SyncStateTest {
         assertEquals(2, Json.decodeFromString<CacheEnvelope>(json).version)
     }
 
+    @Test fun sessionIdentityFieldsRoundTripThroughV15Json() {
+        val value = Session("s1", "One", assistantName = "猫猫球", assistantAvatarAttachmentId = "a1")
+        val decoded = Json.decodeFromString<Session>(Json.encodeToString(value))
+        assertEquals("猫猫球", decoded.assistantName)
+        assertEquals("a1", decoded.assistantAvatarAttachmentId)
+    }
+
     @Test fun v15EventFixturesHaveStableEnvelopeFields() {
         listOf("v15-event.json", "v15-transient-delta.json").forEach { name ->
             val stream = javaClass.classLoader?.getResourceAsStream("fixtures/$name")

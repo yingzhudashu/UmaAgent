@@ -248,6 +248,8 @@ export type Run = Static<typeof RunSchema>;
 export const SessionSchema = Strict({
   id: Id,
   title: Type.String({ minLength: 1, maxLength: 200 }),
+  assistantName: Type.String({ minLength: 1, maxLength: 100 }),
+  assistantAvatarAttachmentId: Type.Optional(Id),
   workspace: Type.Optional(Type.String({ minLength: 1 })),
   model: ModelRefSchema,
   thinkingLevel: ThinkingLevelSchema,
@@ -473,6 +475,8 @@ export const UpdateSessionRequestSchema = Strict({
   model: Type.Optional(ModelRefSchema),
   thinkingLevel: Type.Optional(ThinkingLevelSchema),
   queueMode: Type.Optional(QueueModeSchema),
+  assistantName: Type.Optional(Type.String({ minLength: 1, maxLength: 100 })),
+  assistantAvatarAttachmentId: Type.Optional(Type.Union([Id, Type.Null()])),
 });
 export type UpdateSessionRequest = Static<typeof UpdateSessionRequestSchema>;
 
@@ -647,6 +651,25 @@ export const DiagnosticsReportSchema = Strict({
   trace: Strict({
     spans: Type.Integer({ minimum: 0 }),
     incomplete: Type.Integer({ minimum: 0 }),
+    active: Type.Integer({ minimum: 0 }),
+    errorRate: Type.Number({ minimum: 0, maximum: 1 }),
+    writeFailures: Type.Integer({ minimum: 0 }),
+    otlpExportFailures: Type.Integer({ minimum: 0 }),
+    services: Type.Array(
+      Strict({
+        service: Type.String({ minLength: 1, maxLength: 100 }),
+        spans: Type.Integer({ minimum: 0 }),
+        errors: Type.Integer({ minimum: 0 }),
+      }),
+    ),
+    stageLatencyMs: Type.Record(
+      Type.String({ minLength: 1 }),
+      Strict({
+        p50: Type.Number({ minimum: 0 }),
+        p95: Type.Number({ minimum: 0 }),
+        p99: Type.Number({ minimum: 0 }),
+      }),
+    ),
     latencyMs: Strict({
       p50: Type.Number({ minimum: 0 }),
       p95: Type.Number({ minimum: 0 }),

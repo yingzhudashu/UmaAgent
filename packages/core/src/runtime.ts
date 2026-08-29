@@ -896,6 +896,7 @@ export class UmaRuntime {
     return this.database.createSession({
       userId: ownerId,
       title: input.title ?? "New session",
+      assistantName: "UmaAgent",
       ...(workspace ? { workspace } : {}),
       model,
       thinkingLevel: this.config.defaultThinkingLevel,
@@ -1015,9 +1016,17 @@ export class UmaRuntime {
       model?: ModelRef;
       thinkingLevel?: ThinkingLevel;
       queueMode?: Session["queueMode"];
+      assistantName?: string;
+      assistantAvatarAttachmentId?: string | null;
     },
   ): Session {
     if (patch.model) this.models.get(patch.model);
+    if (patch.assistantAvatarAttachmentId) {
+      const attachment = this.database.getAttachment(patch.assistantAvatarAttachmentId);
+      if (!attachment || !attachment.mimeType.toLowerCase().startsWith("image/"))
+        throw new Error("Assistant avatar must be an image attachment");
+      this.database.validateAttachmentForSession(patch.assistantAvatarAttachmentId, id);
+    }
     return this.events.transaction(() => {
       const session = this.database.updateSession(id, patch);
       this.events.emit(id, undefined, "session.snapshot", this.database.getSnapshot(id));
@@ -1370,33 +1379,25 @@ export class UmaRuntime {
   ): Promise<void> {
     const rootTrace = this.activeTraces.get(runId) ?? this.trace.startRoot(runId, sessionAtQueueTime.id);
     this.activeTraces.set(runId, rootTrace);
-    await this.waitForSideEffectGate(sessionAtQueueTime.id, runId);
-    const release = await this.orchestrator.acquire();
-    if (this.database.getRun(runId).status === "cancelled") {
-      try {
-        rootTrace.finish({ status: "cancelled" });
-      } finally {
-        this.activeTraces.delete(runId);
-        release();
-      }
-      return;
-    }
-    if (this.stopping) {
-      this.transitionRun(sessionAtQueueTime.id, runId, {
-        status: "cancelled",
-        error: "Server is shutting down",
-      });
-      try {
-        rootTrace.finish({ status: "cancelled" });
-      } finally {
-        this.activeTraces.delete(runId);
-        release();
-      }
-      return;
-    }
-    const controller = new AbortController();
-    this.controllers.set(sessionAtQueueTime.id, controller);
+    let release: (() => void) | undefined;
+    let controller: AbortController | undefined;
     try {
+      await this.waitForSideEffectGate(sessionAtQueueTime.id, runId);
+      release = await this.orchestrator.acquire();
+      if (this.database.getRun(runId).status === "cancelled") {
+        rootTrace.setStatus({ status: "cancelled" });
+        return;
+      }
+      if (this.stopping) {
+        this.transitionRun(sessionAtQueueTime.id, runId, {
+          status: "cancelled",
+          error: "Server is shutting down",
+        });
+        rootTrace.setStatus({ status: "cancelled" });
+        return;
+      }
+      controller = new AbortController();
+      this.controllers.set(sessionAtQueueTime.id, controller);
       const storedSession = this.database.getSession(sessionAtQueueTime.id);
       const frozenRun = this.database.getRun(runId);
       const session: Session = {
@@ -1636,7 +1637,7 @@ export class UmaRuntime {
         .listRunActions(runId)
         .some((action) => action.status === "uncertain");
       const cancelled =
-        controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError");
+        controller?.signal.aborted || (error instanceof DOMException && error.name === "AbortError");
       rootTrace.setStatus(
         cancelled
           ? { status: "cancelled" }
@@ -1685,7 +1686,7 @@ export class UmaRuntime {
       } finally {
         this.activeTraces.delete(runId);
         this.controllers.delete(sessionAtQueueTime.id);
-        release();
+        release?.();
       }
     }
   }

@@ -6,14 +6,14 @@ sign-off before a release is declared complete.
 
 ## R1 local baseline
 
-- Candidate commit: `f176a03` (local working tree; publish the final reviewed commit before promotion).
-- Protocol: `v15`; database schema: `21`.
+- Candidate commit: final reviewed commit (fill in the immutable release commit before promotion).
+- Protocol: `v15`; database schema: `22`.
 - `npm run check`: passed.
 - `npm run build`: passed.
-- `npm test`: passed (257 tests across 48 files).
+- `npm test`: passed (record the final test count from the release run).
 - Android `test assembleDebug compileDebugAndroidTestKotlin`: passed locally with SDK/target API 35 and JDK 17.
 - APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
-- APK SHA-256: `A2E2758A21B3ACCA758CA6A7CCD335A2AEB7B01A5806AD609829087A6160C31E`.
+- APK SHA-256: record the hash produced by the final Android build.
 - Legacy-channel scan: run the repository forbidden-term scan while excluding
   `.git`, dependency caches, and build caches; the result must be empty.
 
@@ -39,7 +39,7 @@ operator must attach the following evidence:
 
 - [ ] Release verifier output and `systemd-analyze verify` output.
 - [x] SQLite, telemetry, workspace, Xianyu state (absent and recorded), and config backup checksums.
-- [ ] Restore/integrity check output showing schema `21` and no foreign-key violations.
+- [ ] Restore/integrity check output showing schema `22` and no foreign-key violations.
 - [x] Inventory and archive record for removed legacy services, state, and environment files.
 - [ ] Core, Browser Worker, and Xianyu Adapter systemd status after promotion.
 - [ ] Core live/ready, Adapter health, and Core-proxied Xianyu status responses.

@@ -25,7 +25,13 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
 @Serializable
-data class Session(val id: String, val title: String, val workspace: String = "")
+data class Session(
+    val id: String,
+    val title: String,
+    val workspace: String = "",
+    val assistantName: String = "UmaAgent",
+    val assistantAvatarAttachmentId: String? = null,
+)
 
 @Serializable
 data class BootstrapEntry(val session: Session, val lastSequence: Long = 0)
@@ -121,6 +127,19 @@ class UmaApi(
         }
     }
 
+    suspend fun attachmentBytes(id: String, maxBytes: Int = 2 * 1024 * 1024): ByteArray = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(baseUrl + "/api/v15/attachments/" + encode(id) + "/content")
+            .addHeader("Authorization", "Bearer " + token).build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw UmaApiException(response.code, "头像读取失败（HTTP " + response.code + "）")
+            val body = response.body ?: error("头像为空")
+            if (body.contentLength() > maxBytes) error("头像超过大小限制")
+            val bytes = body.bytes()
+            if (bytes.size > maxBytes) error("头像超过大小限制")
+            bytes
+        }
+    }
+
     suspend fun bootstrap(): Bootstrap = json.decodeFromString(request("/sync/bootstrap", "POST"))
     suspend fun sessions(): List<Session> = json.decodeFromString(request("/sessions"))
     suspend fun snapshot(sessionId: String): JsonObject = json.parseToJsonElement(request("/sessions/${encode(sessionId)}/snapshot")).jsonObject
@@ -144,7 +163,15 @@ class UmaApi(
     suspend fun renameSession(sessionId: String, title: String): Session = json.decodeFromString(
         request("/sessions/${encode(sessionId)}", "PATCH", buildJsonObject { put("title", title) }.toString()),
     )
-    suspend fun deleteSession(sessionId: String) { request("/sessions/${encode(sessionId)}", "DELETE") }
+    suspend fun updateAssistantIdentity(sessionId: String, name: String? = null, avatarAttachmentId: String? = null, clearAvatar: Boolean = false): Session =
+        json.decodeFromString(
+            request("/sessions/" + encode(sessionId), "PATCH", buildJsonObject {
+                name?.let { put("assistantName", it) }
+                if (clearAvatar) put("assistantAvatarAttachmentId", kotlinx.serialization.json.JsonNull)
+                else avatarAttachmentId?.let { put("assistantAvatarAttachmentId", it) }
+            }.toString()),
+        )
+    suspend fun deleteSession(sessionId: String) { request("/sessions/" + encode(sessionId), "DELETE") }
     suspend fun cancelSession(sessionId: String) { request("/sessions/${encode(sessionId)}/cancel", "POST") }
     suspend fun compactSession(sessionId: String): JsonObject = json.parseToJsonElement(
         request("/sessions/${encode(sessionId)}/compact", "POST"),

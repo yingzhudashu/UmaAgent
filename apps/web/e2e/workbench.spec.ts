@@ -1,6 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
 
-async function register(page: Page): Promise<string> {
+let sharedToken: string | undefined;
+
+async function register(page: Page, reuse = false): Promise<string> {
+  if (reuse && sharedToken) {
+    await login(page, sharedToken);
+    return sharedToken;
+  }
   await page.goto("/");
   await page.getByRole("button", { name: "创建新账户" }).click();
   await page.getByLabel("令牌名称").fill("e2e");
@@ -8,6 +14,7 @@ async function register(page: Page): Promise<string> {
   const text = await page.locator(".token-result").textContent();
   const token = text?.match(/uma_pat_[A-Za-z0-9_-]+/)?.[0];
   if (!token) throw new Error("Registration did not return a personal token");
+  sharedToken = token;
   await page.getByRole("button", { name: "继续进入" }).click();
   await expect(page.getByText("Core 已连接")).toBeVisible();
   return token;
@@ -218,7 +225,7 @@ test("keeps the workbench fixed while the transcript and settings scroll indepen
 });
 
 test("keeps tool output collapsed until requested", async ({ page }) => {
-  await register(page);
+  await register(page, true);
   await page.getByRole("button", { name: "新会话" }).click();
   await page.getByRole("button", { name: "Agent" }).click();
   const input = page.getByPlaceholder("向 UmaAgent 发送消息");

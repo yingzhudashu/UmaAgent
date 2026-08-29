@@ -1,11 +1,13 @@
-import type { TranscriptItem } from "@uma-agent/protocol";
-import { Bot, Check, ChevronRight, Copy, Pencil, UserRound, X } from "lucide-react";
+import type { Session, TranscriptItem } from "@uma-agent/protocol";
+import { Check, ChevronRight, Copy, Pencil, UserRound, X } from "lucide-react";
 import { useState } from "react";
+import defaultAvatarUrl from "../assets/cat-avatar.jpg";
 import { Markdown } from "../Markdown.js";
 import { type QualityOperationView, QualityPanel } from "./QualityPanel.js";
 
 export function MessageBubble({
   item,
+  session,
   onRetry,
   onAttachment,
   onReview,
@@ -15,6 +17,7 @@ export function MessageBubble({
   onQualityRetry,
 }: {
   item: TranscriptItem;
+  session: Session | undefined;
   onRetry: (() => void) | undefined;
   onAttachment: ((id: string) => void) | undefined;
   onReview: (() => void) | undefined;
@@ -40,11 +43,24 @@ export function MessageBubble({
   return (
     <article className={`message-row message-row--${item.role}`}>
       <div className="message-avatar" aria-hidden="true">
-        {isUser ? <UserRound size={16} /> : <Bot size={16} />}
+        {isUser ? (
+          <UserRound size={16} />
+        ) : (
+          <img
+            src={
+              session?.assistantAvatarAttachmentId
+                ? `/api/v15/attachments/${encodeURIComponent(session.assistantAvatarAttachmentId)}/content`
+                : defaultAvatarUrl
+            }
+            alt=""
+          />
+        )}
       </div>
       <div className="message-content">
         <div className="message-meta">
-          <strong>{isUser ? "你" : isTool ? (item.name ?? "工具") : "UmaAgent"}</strong>
+          <strong>
+            {isUser ? "你" : isTool ? (item.name ?? "工具") : (session?.assistantName ?? "UmaAgent")}
+          </strong>
           <time dateTime={new Date(item.createdAt).toISOString()}>
             {new Date(item.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </time>

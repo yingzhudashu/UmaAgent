@@ -29,6 +29,8 @@ CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
+  assistant_name TEXT NOT NULL DEFAULT 'UmaAgent',
+  assistant_avatar_attachment_id TEXT REFERENCES attachments(id) ON DELETE SET NULL,
   workspace TEXT,
   model_provider TEXT NOT NULL,
   model_id TEXT NOT NULL,
@@ -548,4 +550,4 @@ CREATE TABLE resource_snapshots (
 );
 CREATE INDEX resource_snapshots_captured ON resource_snapshots(captured_at DESC);
 
-PRAGMA user_version = 21;
+PRAGMA user_version = 22;

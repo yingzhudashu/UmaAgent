@@ -1,6 +1,6 @@
 # UmaAgent 架构与质量基线
 
-当前发布版本为 `1.3.0`，Protocol v15，HTTP API `/api/v15`，SQLite schema 21。schema 21 是唯一支持格式；更旧数据库和旧 API 不兼容并直接拒绝启动。
+当前发布版本为 `1.3.0`，Protocol v15，HTTP API `/api/v15`，SQLite schema 22。schema 22 是唯一支持格式；更旧数据库和旧 API 不兼容并直接拒绝启动。
 
 ## 事实源与分层
 
@@ -18,7 +18,7 @@
 - WebSocket 以快照和永久事件游标恢复；发送缓冲超过上限时主动断开，避免无界内存。
 - 所有 Session、Run、Attachment、Memory、Task 和 Trace 查询按用户所有权隔离。
 - 优化写入必须先备份，再原子替换，使用固定验证命令；验证失败自动恢复。
-- Skill 只在 Core 中解释静态说明；MiniAgent 风格 frontmatter 的环境、系统命令、操作系统、模型可见性和 Session 作用域在加载时门控，可执行代码只能进入批准的 Skill Worker。
+- Skill 只在 Core 中解释静态说明；MiniAgent 风格 frontmatter 的环境、系统命令、操作系统、模型可见性和 Session 作用域在加载时门控，包含可执行代码的包会被拒绝。
 
 ## 质量审查记录
 
@@ -40,7 +40,7 @@
 | --- | --- | --- |
 | Faux 性能基线 | 通过 | 20 个请求、240 个 durable 事件；API p50/p95/p99 = 7.47/9.33/10.66 ms；事件 p50/p95/p99 = 3.34/4.49/5.37 ms；RSS 峰值 176,771,072 B；WAL 峰值 4,128,272 B |
 | Faux soak | 通过 | 36.3 秒、42 条消息、504 个 durable 事件；RSS 140,054,528 -> 142,737,408 B；WAL 峰值 1,882,872 B |
-| 真实 smoke/eval/perf/soak | 未在当前环境执行 | 必须显式提供隔离环境的 `UMA_REAL_*` 配置；缺少配置时安全跳过，不将 faux 结果冒充真实通过 |
+| 真实 smoke/eval/perf/soak | 历史受控运行已通过；本次未注入密钥 | 目标 Provider、脱敏指标和复核状态记录在 `docs/performance-trace-report-2026-08-29.md` |
 
 ## 验收命令
 

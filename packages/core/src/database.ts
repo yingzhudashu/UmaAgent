@@ -65,7 +65,7 @@ import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 21;
+const SCHEMA_VERSION = 22;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   readonly stateDir: string;
@@ -85,7 +85,7 @@ export class UmaDatabase {
     if (version === 0) {
       this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
     } else if (version !== SCHEMA_VERSION) {
-      // schema 21 是唯一支持的持久化格式。启动阶段拒绝旧/未来版本，
+      // schema 22 是唯一支持的持久化格式。启动阶段拒绝旧/未来版本，
       // 避免未经发布验证的隐式改写影响会话、附件或认证令牌。
       this.db.close();
       throw new Error(`Unsupported database schema ${version}; expected ${SCHEMA_VERSION}.`);
@@ -366,6 +366,8 @@ export class UmaDatabase {
     model: ModelRef;
     thinkingLevel: ThinkingLevel;
     queueMode?: Session["queueMode"];
+    assistantName?: string;
+    assistantAvatarAttachmentId?: string | null;
   }): Session {
     const session = this.sessions.create(input);
     const branchId = randomUUID();
@@ -405,6 +407,8 @@ export class UmaDatabase {
       model?: ModelRef;
       thinkingLevel?: ThinkingLevel;
       queueMode?: Session["queueMode"];
+      assistantName?: string;
+      assistantAvatarAttachmentId?: string | null;
     },
   ): Session {
     return this.sessions.update(id, patch);

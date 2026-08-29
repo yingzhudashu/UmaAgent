@@ -80,7 +80,7 @@ function inspect(files: PackageFile[]): {
     for (const [pattern, message] of suspicious)
       if (pattern.test(content)) diagnostics.push(`${message}: ${file.path}`);
   }
-  if (executable) diagnostics.push("Executable files require an isolated MCP/Skill Worker");
+  if (executable) throw new Error("Executable skill packages are not supported");
   const hash = createHash("sha256");
   for (const file of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
     hash.update(file.path);
@@ -90,9 +90,7 @@ function inspect(files: PackageFile[]): {
     ? "extreme"
     : diagnostics.some((item) => /destructive|remote script|dynamic/.test(item))
       ? "high"
-      : executable
-        ? "medium"
-        : "low";
+      : "low";
   return { name, version, hash: hash.digest("hex"), diagnostics: [...new Set(diagnostics)], risk };
 }
 

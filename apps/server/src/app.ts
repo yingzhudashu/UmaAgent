@@ -1090,16 +1090,20 @@ export async function createServer(
   app.post("/api/v15/uploads", async (request) => {
     const parts = request.parts();
     let sessionId: string | undefined;
+    let purpose: string | undefined;
     let upload: { name: string; mimeType: string; data: Buffer } | undefined;
     for await (const part of parts) {
       if (part.type === "file")
         upload = { name: part.filename, mimeType: part.mimetype, data: await part.toBuffer() };
       else if (part.fieldname === "sessionId") sessionId = String(part.value);
+      else if (part.fieldname === "purpose") purpose = String(part.value);
     }
     if (!upload) throw new Error("file is required");
     userPrincipal(auth, request);
     if (!sessionId) throw new Error("sessionId is required for user uploads");
     if (sessionId) requireSessionOwner(request, sessionId);
+    if (purpose === "avatar" && !upload.mimeType.toLowerCase().startsWith("image/"))
+      throw new Error("Avatar uploads must be images");
     return runtime.addAttachment({ ...(sessionId ? { sessionId } : {}), ...upload });
   });
   app.get<{ Params: { id: string }; Querystring: { download?: string } }>(

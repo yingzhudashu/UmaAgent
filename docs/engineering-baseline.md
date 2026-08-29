@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本为 UmaAgent 1.3.0、Protocol v15 和 SQLite schema 21。schema 21 是唯一支持格式；更旧或更高版本直接拒绝启动，不执行隐式迁移。
+当前版本为 UmaAgent 1.3.0、Protocol v15 和 SQLite schema 22。schema 22 是唯一支持格式；更旧或更高版本直接拒绝启动，不执行隐式迁移。
 
 ## 已落地的边界
 

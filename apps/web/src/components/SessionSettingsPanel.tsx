@@ -1,6 +1,7 @@
 import type { AgentProfile, Health, OperationsReport, PublicConfig, Session } from "@uma-agent/protocol";
-import { Save } from "lucide-react";
+import { ImagePlus, RotateCcw, Save } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
+import defaultAvatarUrl from "../assets/cat-avatar.jpg";
 
 export function SessionSettingsPanel({
   session,
@@ -14,6 +15,8 @@ export function SessionSettingsPanel({
   disabled,
   installAvailable,
   install,
+  saveSession,
+  uploadAvatar,
 }: {
   session: Session | undefined;
   health: Health | undefined;
@@ -26,10 +29,18 @@ export function SessionSettingsPanel({
   disabled: boolean;
   installAvailable: boolean;
   install: () => void;
+  saveSession: (patch: {
+    assistantName?: string;
+    assistantAvatarAttachmentId?: string | null;
+  }) => Promise<void>;
+  uploadAvatar: (file: File) => Promise<string>;
 }) {
   const [content, setContent] = useState(profile?.content ?? "");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [assistantName, setAssistantName] = useState(session?.assistantName ?? "UmaAgent");
+  const [avatarState, setAvatarState] = useState<"idle" | "saving" | "error">("idle");
   useEffect(() => setContent(profile?.content ?? ""), [profile?.content]);
+  useEffect(() => setAssistantName(session?.assistantName ?? "UmaAgent"), [session?.assistantName]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSaveState("saving");
@@ -41,6 +52,9 @@ export function SessionSettingsPanel({
     }
   };
   const saveLabel = saveState === "saving" ? "保存中…" : saveState === "saved" ? "已保存" : "保存 Profile";
+  const avatarUrl = session?.assistantAvatarAttachmentId
+    ? `/api/v15/attachments/${encodeURIComponent(session.assistantAvatarAttachmentId)}/content`
+    : defaultAvatarUrl;
   return (
     <div className="settings-panel">
       <section className="settings-section">
@@ -67,6 +81,71 @@ export function SessionSettingsPanel({
           <div className="settings-row">
             <span>Core</span>
             <span>{health?.status === "ok" ? `在线 · v${health.version}` : "不可用"}</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <div>
+            <h3>助手身份</h3>
+            <p>仅影响当前会话中的助手显示。</p>
+          </div>
+        </div>
+        <div className="assistant-identity-form">
+          <img className="assistant-avatar-preview" src={avatarUrl} alt="助手头像预览" />
+          <div className="assistant-identity-fields">
+            <label htmlFor="assistant-name">助手名称</label>
+            <input
+              id="assistant-name"
+              value={assistantName}
+              maxLength={100}
+              onChange={(event) => setAssistantName(event.target.value)}
+              disabled={disabled}
+            />
+            <div className="settings-form-actions">
+              <button
+                type="button"
+                className="primary settings-primary"
+                disabled={disabled || !assistantName.trim()}
+                onClick={() => void saveSession({ assistantName: assistantName.trim() })}
+              >
+                <Save size={14} aria-hidden="true" />
+                保存身份
+              </button>
+              <label className="text-action" aria-label="上传助手头像">
+                <ImagePlus size={14} aria-hidden="true" />
+                上传头像
+                <input
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  disabled={disabled || avatarState === "saving"}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    setAvatarState("saving");
+                    void uploadAvatar(file)
+                      .then((id) => saveSession({ assistantAvatarAttachmentId: id }))
+                      .then(() => setAvatarState("idle"))
+                      .catch(() => setAvatarState("error"));
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+              {session?.assistantAvatarAttachmentId && (
+                <button
+                  type="button"
+                  className="text-action"
+                  disabled={disabled}
+                  onClick={() => void saveSession({ assistantAvatarAttachmentId: null })}
+                >
+                  <RotateCcw size={14} aria-hidden="true" />
+                  恢复默认
+                </button>
+              )}
+            </div>
+            {avatarState === "error" && <p className="error-text">头像保存失败。</p>}
           </div>
         </div>
       </section>

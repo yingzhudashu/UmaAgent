@@ -30,7 +30,6 @@ jobs:
         run: docker build --progress=plain -t uma-agent:ci .
       - run: docker build -f docker/Dockerfile.xianyu -t uma-agent-xianyu:ci .
       - run: docker build -f docker/Dockerfile.browser -t uma-agent-browser:ci .
-      - run: docker build -f docker/Dockerfile.skill-worker -t uma-agent-skill-worker:ci .
       - name: Smoke-test containers, persistence, and the Core state lock
         shell: bash
         run: |
@@ -41,7 +40,7 @@ jobs:
           workspace_volume=uma-ci-workspace
           xianyu_volume=uma-ci-xianyu
           cleanup() {
-            docker rm -f uma-core-lock uma-xianyu uma-skill-worker uma-core browser-worker >/dev/null 2>&1 || true
+            docker rm -f uma-core-lock uma-xianyu uma-core browser-worker >/dev/null 2>&1 || true
             docker volume rm "$state_volume" "$telemetry_volume" "$workspace_volume" "$xianyu_volume" >/dev/null 2>&1 || true
             docker network rm "$network" >/dev/null 2>&1 || true
           }
@@ -124,19 +123,6 @@ jobs:
           docker restart uma-xianyu >/dev/null
           wait_healthy uma-xianyu
 
-          skill_root=/tmp/uma-ci-skills
-          mkdir -p "$skill_root/example"
-          printf 'export const ping = async () => ({ ok: true });\n' > "$skill_root/example/index.mjs"
-          skill_hash=$(node -e "const c=require('node:crypto'),f=require('node:fs');const h=c.createHash('sha256');h.update('index.mjs');h.update(f.readFileSync(process.argv[1]));process.stdout.write(h.digest('hex'))" "$skill_root/example/index.mjs")
-          printf '{"name":"example","contentHash":"%s","entry":"index.mjs","tools":[{"name":"ping","description":"health fixture","export":"ping"}]}' "$skill_hash" > "$skill_root/example/skill-worker.json"
-          docker run -d --name uma-skill-worker --network "$network" \
-            -e SKILL_WORKER_HOST=0.0.0.0 \
-            -e SKILL_WORKER_AUTH_TOKEN=ci-skill-token \
-            -e SKILL_WORKER_PACKAGES_DIR=/skills \
-            -e SKILL_WORKER_ALLOWED_HASHES="$skill_hash" \
-            -v "$skill_root:/skills:ro" \
-            uma-agent-skill-worker:ci >/dev/null
-          wait_healthy uma-skill-worker
       - run: npm run check
       - run: npm test
       - run: npm run test:coverage

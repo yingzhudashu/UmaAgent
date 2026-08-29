@@ -11,6 +11,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -18,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +55,7 @@ data class UmaUiState(
     val tokenPresent: Boolean = false,
     val sessions: List<Session> = emptyList(),
     val selectedSessionId: String? = null,
+    val assistantAvatarBytes: ByteArray? = null,
     val snapshot: String = "",
     val xianyuStatus: String = "",
     val xianyuData: String = "",
@@ -124,15 +130,17 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val snapshot = client.snapshot(id)
                 val encoded = snapshot.toString()
+                val avatarId = state.value.sessions.firstOrNull { it.id == id }?.assistantAvatarAttachmentId
+                val avatarBytes = avatarId?.let { runCatching { client.attachmentBytes(it) }.getOrNull() }
                 withContext(Dispatchers.IO) {
                     val current = cache.read()
                     val next = (current?.snapshots ?: emptyMap()) + (id to encoded)
                     cache.write(CacheEnvelope(2, state.value.sessions, next, sequences))
                 }
-                state.value = state.value.copy(snapshot = encoded, offline = false, loading = false)
+                state.value = state.value.copy(snapshot = encoded, assistantAvatarBytes = avatarBytes, offline = false, loading = false)
             } catch (error: Throwable) {
                 val cached = cache.read()?.snapshots?.get(id)
-                state.value = state.value.copy(snapshot = cached ?: "", offline = true, loading = false, error = error.message ?: "无法读取会话")
+                state.value = state.value.copy(snapshot = cached ?: "", assistantAvatarBytes = null, offline = true, loading = false, error = error.message ?: "无法读取会话")
             }
         }
     }
@@ -235,6 +243,56 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                     persistCache()
                 }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "重命名失败") }
+        }
+    }
+
+    fun updateAssistantName(name: String) {
+        val id = state.value.selectedSessionId ?: return
+        if (state.value.offline || name.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.updateAssistantIdentity(id, name = name.trim()) }
+                .onSuccess { session ->
+                    sessions = sessions.map { if (it.session.id == id) it.copy(session = session) else it }
+                    state.value = state.value.copy(sessions = sessions.map { it.session }, loading = false)
+                    persistCache()
+                }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "助手名称更新失败") }
+        }
+    }
+
+    fun uploadAssistantAvatar(uri: Uri, name: String) {
+        val id = state.value.selectedSessionId ?: return
+        if (state.value.offline) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching {
+                val attachment = client.upload(getApplication(), uri, name, id)
+                val attachmentId = attachment["id"]?.jsonPrimitive?.content ?: error("头像附件无 ID")
+                client.updateAssistantIdentity(id, avatarAttachmentId = attachmentId)
+            }.onSuccess { session ->
+                sessions = sessions.map { if (it.session.id == id) it.copy(session = session) else it }
+                state.value = state.value.copy(sessions = sessions.map { it.session }, loading = false)
+                persistCache()
+            }.onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "头像上传失败") }
+        }
+    }
+
+    fun resetAssistantAvatar() {
+        val id = state.value.selectedSessionId ?: return
+        if (state.value.offline) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.updateAssistantIdentity(id, clearAvatar = true) }
+                .onSuccess { session ->
+                    sessions = sessions.map { if (it.session.id == id) it.copy(session = session) else it }
+                    state.value = state.value.copy(sessions = sessions.map { it.session }, loading = false)
+                    persistCache()
+                }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "头像恢复失败") }
         }
     }
 
@@ -464,6 +522,7 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
     var password by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
     var newTitle by remember { mutableStateOf("") }
+    var assistantName by remember { mutableStateOf("UmaAgent") }
     var itemId by remember { mutableStateOf("") }
     var conversationId by remember { mutableStateOf("") }
     var receiverId by remember { mutableStateOf("") }
@@ -480,6 +539,13 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
     ) { uri ->
         if (uri != null && pendingDownloadId.isNotBlank()) model.downloadAttachment(pendingDownloadId, uri)
         pendingDownloadId = ""
+    }
+    val avatarPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri -> if (uri != null) model.uploadAssistantAvatar(uri, "assistant-avatar") }
+    val selectedSession = state.sessions.firstOrNull { it.id == state.selectedSessionId }
+    LaunchedEffect(selectedSession?.id, selectedSession?.assistantName) {
+        assistantName = selectedSession?.assistantName ?: "UmaAgent"
     }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (!state.tokenPresent) {
@@ -505,6 +571,43 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
                     Button({ model.selectSession(session.id) }, Modifier.fillMaxWidth()) { Text(session.title) }
                 }
             }
+            Text("助手身份", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                assistantName,
+                { assistantName = it },
+                Modifier.fillMaxWidth(),
+                label = { Text("助手名称") },
+                enabled = !state.offline && !state.loading,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    { model.updateAssistantName(assistantName) },
+                    enabled = !state.offline && assistantName.isNotBlank() && !state.loading && selectedSession != null,
+                ) { Text("保存名称") }
+                Button(
+                    { avatarPicker.launch(arrayOf("image/*")) },
+                    enabled = !state.offline && !state.loading && selectedSession != null,
+                ) { Text("上传头像") }
+                Button(
+                    { model.resetAssistantAvatar() },
+                    enabled = !state.offline && !state.loading && selectedSession?.assistantAvatarAttachmentId != null,
+                ) { Text("恢复默认") }
+            }
+            Text(
+                if (selectedSession?.assistantAvatarAttachmentId == null) "当前头像：默认 UmaAgent 头像"
+                else "当前头像附件：" + selectedSession.assistantAvatarAttachmentId,
+                Modifier.fillMaxWidth(),
+            )
+            state.assistantAvatarBytes?.let { bytes ->
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { bitmap ->
+                    Image(
+                        bitmap.asImageBitmap(),
+                        contentDescription = "助手头像预览",
+                        modifier = Modifier.fillMaxWidth(),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button({ model.renameSession(newTitle); newTitle = "" }, enabled = !state.offline && newTitle.isNotBlank() && state.selectedSessionId != null) { Text("重命名") }
                 Button({ model.deleteSelectedSession() }, enabled = !state.offline && state.selectedSessionId != null) { Text("删除") }
@@ -518,7 +621,7 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
                         val label = when (item.role) {
                             "user" -> "你"
                             "tool" -> "工具"
-                            else -> "UmaAgent"
+                            else -> state.sessions.firstOrNull { it.id == state.selectedSessionId }?.assistantName ?: "UmaAgent"
                         }
                         Text(
                             "$label${if (item.status == "streaming") "（生成中）" else ""}: ${item.content}" +

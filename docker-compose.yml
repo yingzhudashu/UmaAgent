@@ -9,7 +9,6 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY}
       BROWSER_WORKER_TOKEN: ${BROWSER_WORKER_TOKEN:?set BROWSER_WORKER_TOKEN}
       UMA_OAUTH_REDIRECTS: ${UMA_OAUTH_REDIRECTS:-}
-      SKILL_WORKER_TOKEN: ${SKILL_WORKER_TOKEN:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       UMA_LOG_LEVEL: ${UMA_LOG_LEVEL:-info}
@@ -25,7 +24,6 @@ services:
         condition: service_healthy
     networks:
       - default
-      - skill-network
 
   xianyu-adapter:
     build:
@@ -60,39 +58,8 @@ services:
     expose:
       - "3230"
 
-  skill-worker:
-    profiles: ["skills"]
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.skill-worker
-    init: true
-    restart: unless-stopped
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop: ["ALL"]
-    environment:
-      SKILL_WORKER_HOST: 0.0.0.0
-      SKILL_WORKER_PORT: 3250
-      SKILL_WORKER_AUTH_TOKEN: ${SKILL_WORKER_TOKEN:-}
-      SKILL_WORKER_PACKAGES_DIR: /skills
-      SKILL_WORKER_ALLOWED_HASHES: ${SKILL_WORKER_ALLOWED_HASHES:-}
-    volumes:
-      - ./approved-skills:/skills:ro
-      - skill-scratch:/scratch
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m
-    expose:
-      - "3250"
-    networks:
-      - skill-network
 
 volumes:
   uma-state:
   uma-telemetry:
   xianyu-state:
-  skill-scratch:
-
-networks:
-  skill-network:
-    internal: true

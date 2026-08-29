@@ -24,17 +24,21 @@ export class SessionRepository {
     model: ModelRef;
     thinkingLevel: ThinkingLevel;
     queueMode?: Session["queueMode"];
+    assistantName?: string;
+    assistantAvatarAttachmentId?: string | null;
   }): Session {
     const id = randomUUID();
     const now = Date.now();
     this.db
       .prepare(
-        "INSERT INTO sessions(id,user_id,title,workspace,model_provider,model_id,thinking_level,queue_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO sessions(id,user_id,title,assistant_name,assistant_avatar_attachment_id,workspace,model_provider,model_id,thinking_level,queue_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
       )
       .run(
         id,
         input.userId,
         input.title,
+        input.assistantName ?? "UmaAgent",
+        input.assistantAvatarAttachmentId ?? null,
         input.workspace ?? null,
         input.model.provider,
         input.model.id,
@@ -59,15 +63,21 @@ export class SessionRepository {
       model?: ModelRef;
       thinkingLevel?: ThinkingLevel;
       queueMode?: Session["queueMode"];
+      assistantName?: string;
+      assistantAvatarAttachmentId?: string | null;
     },
   ): Session {
     const current = this.get(id);
     this.db
       .prepare(
-        "UPDATE sessions SET title=?, model_provider=?, model_id=?, thinking_level=?, queue_mode=?, updated_at=? WHERE id=?",
+        "UPDATE sessions SET title=?, assistant_name=?, assistant_avatar_attachment_id=?, model_provider=?, model_id=?, thinking_level=?, queue_mode=?, updated_at=? WHERE id=?",
       )
       .run(
         patch.title ?? current.title,
+        patch.assistantName ?? current.assistantName,
+        patch.assistantAvatarAttachmentId === undefined
+          ? (current.assistantAvatarAttachmentId ?? null)
+          : patch.assistantAvatarAttachmentId,
         patch.model?.provider ?? current.model.provider,
         patch.model?.id ?? current.model.id,
         patch.thinkingLevel ?? current.thinkingLevel,

@@ -15,6 +15,5 @@ test-results
 uma.config.json
 !docker/uma.config.json
 workspace
-approved-skills
 backups
 deploy/uma.config.production.json

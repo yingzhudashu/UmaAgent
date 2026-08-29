@@ -89,18 +89,18 @@ export class RuntimeCommandOperations {
     const deps = this.dependencies;
     const rootTrace = deps.activeTraces.get(runId) ?? deps.trace.startRoot(runId, session.id, "command");
     deps.activeTraces.set(runId, rootTrace);
-    await deps.waitForSideEffectGate(session.id, runId);
-    const release = await deps.orchestrator.acquire();
-    if (deps.database.getRun(runId).status === "cancelled") {
-      rootTrace.finish({ status: "cancelled" });
-      deps.activeTraces.delete(runId);
-      release();
-      return;
-    }
-    const controller = new AbortController();
-    deps.controllers.set(session.id, controller);
-    const toolCallId = randomUUID();
+    let release: (() => void) | undefined;
+    let controller: AbortController | undefined;
     try {
+      await deps.waitForSideEffectGate(session.id, runId);
+      release = await deps.orchestrator.acquire();
+      if (deps.database.getRun(runId).status === "cancelled") {
+        rootTrace.setStatus({ status: "cancelled" });
+        return;
+      }
+      controller = new AbortController();
+      deps.controllers.set(session.id, controller);
+      const toolCallId = randomUUID();
       deps.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
       const action = deps.events.transaction(() => {
         const value = deps.database.createRunAction({
@@ -196,14 +196,14 @@ export class RuntimeCommandOperations {
       });
       const interrupted = deps.database.listRunActions(runId).some((action) => action.status === "uncertain");
       deps.transitionRun(session.id, runId, {
-        status: interrupted ? "interrupted" : controller.signal.aborted ? "cancelled" : "failed",
+        status: interrupted ? "interrupted" : controller?.signal.aborted ? "cancelled" : "failed",
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
       rootTrace.finish();
       deps.activeTraces.delete(runId);
       deps.controllers.delete(session.id);
-      release();
+      release?.();
     }
   }
 }

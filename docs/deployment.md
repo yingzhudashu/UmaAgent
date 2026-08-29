@@ -38,24 +38,6 @@ openssl rand -hex 32 # BROWSER_WORKER_TOKEN
 
 配置是严格 JSON，未知字段会使 Core 拒绝启动。非回环 HTTP MCP 必须设置 `authTokenEnv`。
 
-
-```json
-{
-  "transport": "http",
-}
-```
-
-Skill Worker 配置片段：
-
-```json
-{
-  "name": "skills",
-  "transport": "http",
-  "url": "http://skill-worker:3250/mcp",
-  "authTokenEnv": "SKILL_WORKER_TOKEN"
-}
-```
-
 ## 3. 启动 Core
 
 先验证 Compose 展开结果。此命令会检查缺失的必填环境变量，但不会显示 `.env` 之外未引用的密钥：
@@ -87,7 +69,6 @@ docker compose \
 | --- | --- | --- |
 | Core SQLite、WAL、上传、技能 | `/data/state` | `umaagent_uma-state` 命名卷 |
 | 服务器工作区 | `/data/workspace` | `./workspace` bind mount |
-| Skill Worker scratch | `/scratch` | `umaagent_skill-scratch` 命名卷 |
 
 卷名前缀由 `COMPOSE_PROJECT_NAME` 决定。不要让第二个 Core 挂载同一 `uma-state` 卷；SQLite WAL 是单进程、单副本设计。
 
@@ -232,18 +213,7 @@ curl --fail \
 Adapter 的 `/start`、`/stop`、`/pause`、`/resume`、`/conversations`、`/history`、`/item`、`/chat` 和 `/publish` 只接受内部控制令牌；客户端不得直连 Adapter。
 
 
-### Skill Worker
-
-仅对已经人工审查并打包的 JavaScript ESM 技能使用此服务。把包放入 `approved-skills/<name>`，设置 `SKILL_WORKER_TOKEN` 和逗号分隔的 `SKILL_WORKER_ALLOWED_HASHES`，在 Core 配置加入前述 MCP 片段，然后启动：
-
-```bash
-docker compose \
-  -f docker-compose.yml \
-  -f deploy/docker-compose.production.yml \
-  --profile skills up -d --build
-```
-
-容器根文件系统只读、capabilities 全部移除，技能目录只读；它不挂载 Core state/workspace。不要自动执行第三方 `npm install`。
+Browser Worker 容器根文件系统只读、capabilities 全部移除；它不挂载 Core state/workspace。不要自动执行第三方 `npm install`。
 
 ## 7. 防火墙与安全检查
 
@@ -267,7 +237,9 @@ docker run --rm \
   alpine sh -c 'cd /source && tar czf /backup/uma-state.tgz .'
 
 docker run --rm \
+  -v umaagent_uma-telemetry:/source:ro \
   -v "$PWD/backups:/backup" \
+  alpine sh -c 'cd /source && tar czf /backup/uma-telemetry.tgz .'
 ```
 
 
@@ -283,11 +255,11 @@ docker run --rm \
 
 
 
-数据库只接受 schema 21；任何非 21 版本均直接拒绝启动。升级前必须备份并完成完整性与保护用户指纹检查；失败时只切换 release 指针，不覆盖数据库。
+数据库只接受 schema 22；任何非 22 版本均直接拒绝启动。升级前必须备份并完成完整性与保护用户指纹检查；失败时只切换 release 指针，不覆盖数据库。
 
 ## 9. Trace、资源报告与真实 API 验证
 
-Core 的业务数据使用 schema 21 `state.db`；Trace 写入 `UMA_TELEMETRY_DIR` 下的独立 `telemetry.db`。生产把该目录挂载给 Core、Server 与 Browser Worker，但不向 Worker 暴露业务 state 或 workspace。Client、Server HTTP、Run、queue、preflight、model、tool、MCP HTTP 和 Browser 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v15/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。Trace 不保存 prompt、模型正文、完整 URL 查询、Cookie、Token 或原始工具参数。资源快照和诊断报告分别通过 `/api/v15/reports/resources` 与 `/api/v15/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
+Core 的业务数据使用 schema 22 `state.db`；Trace 写入 `UMA_TELEMETRY_DIR` 下的独立 `telemetry.db`。生产把该目录挂载给 Core、Server 与 Browser Worker，但不向 Worker 暴露业务 state 或 workspace。Client、Server HTTP、Run、queue、preflight、model、tool、MCP HTTP 和 Browser 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v15/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。Trace 不保存 prompt、模型正文、完整 URL 查询、Cookie、Token 或原始工具参数。资源快照和诊断报告分别通过 `/api/v15/reports/resources` 与 `/api/v15/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
 
 真实测试只接受明确的 UmaAgent 环境变量，并在临时目录生成隔离配置、state、workspace、用户和令牌。它不读取 MiniAgent 配置，也不得使用生产保护 PAT。缺少授权或密钥时命令直接失败，不切换 Faux：
 
@@ -351,4 +323,4 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 第二个 Core 无法获取同一状态目录锁。
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v15 和 schema 21，保留可回滚 release 与同版本备份。
+- [ ] 确认当前应用版本、Protocol v15 和 schema 22，保留可回滚 release 与同版本备份。

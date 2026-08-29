@@ -394,6 +394,12 @@ export class AuditEvaluationRepository {
       trace: {
         spans: 0,
         incomplete: 0,
+        active: 0,
+        errorRate: 0,
+        writeFailures: 0,
+        otlpExportFailures: 0,
+        services: [],
+        stageLatencyMs: {},
         latencyMs: { p50: 0, p95: 0, p99: 0 },
       },
     };

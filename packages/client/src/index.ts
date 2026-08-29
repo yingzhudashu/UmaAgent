@@ -701,10 +701,11 @@ export class UmaClient {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/compact`, { method: "POST" });
   }
 
-  async upload(file: Blob, name: string, sessionId?: string): Promise<Attachment> {
+  async upload(file: Blob, name: string, sessionId?: string, purpose?: "avatar"): Promise<Attachment> {
     const form = new FormData();
     form.append("file", file, name);
     if (sessionId) form.append("sessionId", sessionId);
+    if (purpose) form.append("purpose", purpose);
     return this.request("/uploads", { method: "POST", body: form });
   }
 

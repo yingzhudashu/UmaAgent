@@ -13,7 +13,7 @@
 | FTS5 知识库 | implemented | Knowledge ingest/search/reindex 测试 | 以 Recall@8 结果决定是否扩展 |
 | Embedding 语义知识检索 | implemented | OpenAI-compatible provider、批量缓存、余弦检索与 FTS 回退 | 增加真实 provider smoke |
 | schedule/background task | implemented | Scheduler 重启、occurrence、API 测试 | soak 验证无重叠和无重复 |
-| SKILL.md 生命周期 | implemented | 内置 Web/StackExchange/Skill Creator/Vetter 基线、MiniAgent frontmatter 门控、staging、审查、enable/disable、refresh 测试 | 可执行 Skill 继续通过隔离 Worker 验证 |
+| SKILL.md 生命周期 | implemented | 内置 Web/StackExchange/Skill Creator/Vetter 基线、MiniAgent frontmatter 门控、staging、审查、enable/disable、refresh 测试；可执行代码包直接拒绝 | 持续补充静态 Skill 边界样本 |
 | MCP stdio/HTTP | implemented | MCP 状态、审批、超时测试 | 保持 Core/Worker 隔离 |
 | `/test` 与评测趋势 | implemented | Eval Runner Faux、趋势 API、CLI/Web 趋势展示和失败分类测试 | 持续用真实 Provider 验证 |
 | trace/diagnostics/stats | implemented | SQLite Trace spans、Run 查询、资源快照、p50/p95/p99 diagnostics | 持续用真实 Provider 和 soak 验证 |

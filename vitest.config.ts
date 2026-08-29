@@ -17,14 +17,12 @@ export default defineConfig({
         "apps/server/src/**/*.ts",
         "apps/browser-worker/src/**/*.ts",
         "apps/eval-runner/src/**/*.ts",
-        "apps/skill-worker/src/loader.ts",
       ],
       exclude: [
         "**/*.d.ts",
         "apps/server/src/main.ts",
         "apps/browser-worker/src/main.ts",
         "apps/eval-runner/src/main.ts",
-        "apps/skill-worker/src/main.ts",
         "packages/core/src/document-worker.ts",
       ],
       thresholds: {
@@ -37,7 +35,6 @@ export default defineConfig({
         "apps/server/src/**": { branches: 67 },
         "apps/browser-worker/src/**": { branches: 80 },
         "apps/eval-runner/src/**": { branches: 80 },
-        "apps/skill-worker/src/loader.ts": { branches: 80 },
       },
     },
   },

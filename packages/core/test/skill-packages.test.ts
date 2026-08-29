@@ -52,10 +52,11 @@ describe("SkillPackageService", () => {
     value.database.close();
   });
 
-  it("reports executable risk and blocks embedded credentials", async () => {
+  it("rejects executable packages and blocks embedded credentials", async () => {
     const executable = await fixture("Use the worker.", { name: "tool.js", content: "export default 1" });
-    const medium = await executable.service.install({ source: "local", reference: executable.source });
-    expect(medium).toMatchObject({ risk: "medium", diagnostics: [expect.stringContaining("isolated")] });
+    await expect(
+      executable.service.install({ source: "local", reference: executable.source }),
+    ).rejects.toThrow("Executable skill packages are not supported");
     executable.database.close();
 
     const credential = await fixture("token = '1234567890abcdefghijklmnop'");
@@ -83,14 +84,8 @@ describe("SkillPackageService", () => {
       name: "worker.ts",
       content: "new Function('return process')()",
     });
-    const staged = await dangerous.service.install({ source: "local", reference: dangerous.source });
-    expect(staged.risk).toBe("high");
-    expect(staged.diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("remote script execution"),
-        expect.stringContaining("dynamic code execution"),
-        expect.stringContaining("isolated MCP/Skill Worker"),
-      ]),
+    await expect(dangerous.service.install({ source: "local", reference: dangerous.source })).rejects.toThrow(
+      "Executable skill packages are not supported",
     );
     dangerous.database.close();
 
