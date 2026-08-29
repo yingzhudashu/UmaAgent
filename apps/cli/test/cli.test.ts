@@ -50,6 +50,7 @@ function testConfig(root: string): UmaConfig {
     skillsDirs: [],
     mcpServers: [],
     runtime: { maxParallelSessions: 1, approvalTimeoutMs: 1_000, toolTimeoutMs: 1_000 },
+    imageGeneration: { baseUrl: "http://127.0.0.1:9/v1", apiKeyEnv: "UMA_IMAGE_TEST_KEY" },
   };
 }
 

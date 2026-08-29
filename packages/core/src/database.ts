@@ -1046,11 +1046,6 @@ export class UmaDatabase {
     // response 会被前端当作“孤立历史响应”重新渲染出来。
     const activeMessageIds = new Set(allVisible.map((item) => item.id));
     const activeRunIds = new Set(allVisible.flatMap((item) => (item.runId ? [item.runId] : [])));
-    const supersededMessageIds = new Set(
-      allVisible
-        .filter((item) => item.role === "user" && item.parentMessageId)
-        .map((item) => item.parentMessageId as string),
-    );
     return {
       session,
       transcript,
@@ -1062,9 +1057,7 @@ export class UmaDatabase {
         hasMoreBefore,
       },
       responses: this.listResponses(sessionId).filter(
-        (response) =>
-          !supersededMessageIds.has(response.messageId) &&
-          (activeMessageIds.has(response.messageId) || activeRunIds.has(response.runId)),
+        (response) => activeMessageIds.has(response.messageId) || activeRunIds.has(response.runId),
       ),
       branches: this.listBranches(sessionId),
       queue: this.listQueuedRuns(sessionId).flatMap((run, index) => {

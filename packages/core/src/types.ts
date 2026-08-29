@@ -49,8 +49,14 @@ export interface UmaConfig {
   mcpServers: McpServerConfig[];
   runtime: { maxParallelSessions: number; approvalTimeoutMs: number; toolTimeoutMs: number };
   roles: { default: ModelRef; reasoning: ModelRef; fast: ModelRef; vision: ModelRef };
+  imageGeneration: ImageGenerationConfig;
   embedding: EmbeddingConfig;
   xianyu?: { adapterUrl: string; controlTokenEnv: string };
+}
+
+export interface ImageGenerationConfig {
+  baseUrl: string;
+  apiKeyEnv: string;
 }
 
 export interface EmbeddingConfig {

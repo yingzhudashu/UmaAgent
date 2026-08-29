@@ -60,12 +60,28 @@ test("two devices converge on one session and offline mode is read-only", async 
   await first.getByRole("button", { name: "发送" }).click();
   await expect(first.getByText("Faux Core received: multi device hello")).toBeVisible();
   await expect(second.getByText("Faux Core received: multi device hello")).toBeVisible();
+  const desktopAvatar = await first
+    .locator(".message-avatar")
+    .first()
+    .evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    });
+  expect(desktopAvatar).toEqual({ width: 64, height: 64 });
 
   await secondContext.setOffline(true);
   await expect(second.getByPlaceholder("向 UmaAgent 发送消息")).toBeDisabled();
   await expect(second.getByText("Faux Core received: multi device hello")).toBeVisible();
 
   await first.setViewportSize({ width: 390, height: 844 });
+  const mobileAvatar = await first
+    .locator(".message-avatar")
+    .first()
+    .evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { width: rect.width, height: rect.height };
+    });
+  expect(mobileAvatar).toEqual({ width: 56, height: 56 });
   await first.getByRole("button", { name: "会话设置" }).click();
   const settings = first.getByRole("dialog", { name: "会话设置" });
   await expect(settings.getByRole("heading", { name: "后台任务" })).toBeVisible();

@@ -8,12 +8,15 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai";
 import type { Run, SessionSnapshot } from "@uma-agent/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ImageGenerationService } from "../src/image-generation.js";
 import { UmaRuntime } from "../src/runtime.js";
 import type { UmaConfig } from "../src/types.js";
 
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
+  delete process.env.UMA_IMAGE_TEST_KEY;
+  vi.restoreAllMocks();
   for (const action of cleanup.splice(0).reverse()) await action();
 });
 
@@ -70,6 +73,7 @@ async function runtimeWith(responses: FauxResponseStep[]): Promise<UmaRuntime> {
       fast: { provider: "faux", id: "model" },
       vision: { provider: "faux", id: "model" },
     },
+    imageGeneration: { baseUrl: "http://127.0.0.1:9/v1", apiKeyEnv: "UMA_IMAGE_TEST_KEY" },
   };
   const runtime = new UmaRuntime(config);
   const faux = fauxProvider({
@@ -159,11 +163,114 @@ async function runOnce(
 }
 
 describe("UmaRuntime preflight", () => {
+  it("replaces an edited message on the active branch and hides its former descendants", async () => {
+    const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("edited answer")]);
+    const session = await runtime.createSession();
+    const createCompletedUser = (id: string, content: string, parentMessageId?: string) => {
+      const created = runtime.database.createRun(
+        session.id,
+        id,
+        runtime.models.snapshot(session.model),
+        session.thinkingLevel,
+        "agent",
+        "agent",
+      ).run;
+      runtime.database.updateRun(created.id, { status: "completed" });
+      runtime.database.insertMessage({
+        id,
+        sessionId: session.id,
+        runId: created.id,
+        role: "user",
+        status: "complete",
+        content,
+        ...(parentMessageId ? { parentMessageId } : {}),
+      });
+      runtime.database.createResponse({ sessionId: session.id, runId: created.id, messageId: id });
+      return created;
+    };
+    createCompletedUser("message-a", "A");
+    createCompletedUser("message-b", "B", "message-a");
+    createCompletedUser("message-c", "C", "message-b");
+    const mainBranch = runtime.database.listBranches(session.id).find((branch) => branch.active);
+    runtime.database.db
+      .prepare("UPDATE conversation_branches SET head_message_id=?,updated_at=? WHERE id=?")
+      .run("message-c", Date.now(), mainBranch?.id);
+
+    const edited = runtime.editMessage(session.id, "message-b", "B2");
+    const editedMessage = runtime.database.getMessage(edited.messageId);
+    const active = runtime.getSnapshot(session.id);
+
+    expect(editedMessage.parentMessageId).toBe("message-a");
+    expect(active.transcript.filter((item) => item.role === "user").map((item) => item.content)).toEqual([
+      "A",
+      "B2",
+    ]);
+    expect(active.transcript.map((item) => item.id)).not.toContain("message-b");
+    expect(active.transcript.map((item) => item.id)).not.toContain("message-c");
+    expect(active.responses?.map((item) => item.runId)).not.toContain(
+      runtime.database.getMessage("message-b").runId,
+    );
+    await waitForRunTerminal(runtime, edited.id);
+  });
+
+  it("edits a queued message in place without adding another run", async () => {
+    const runtime = await runtimeWith([]);
+    const session = await runtime.createSession();
+    const queued = runtime.database.createRun(
+      session.id,
+      "queued-message",
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+      "agent",
+      "agent",
+    ).run;
+    runtime.database.insertMessage({
+      id: "queued-message",
+      sessionId: session.id,
+      runId: queued.id,
+      role: "user",
+      status: "complete",
+      content: "before edit",
+    });
+
+    const edited = runtime.editMessage(session.id, "queued-message", "after edit");
+
+    expect(edited.id).toBe(queued.id);
+    expect(runtime.database.listRuns(session.id)).toHaveLength(1);
+    expect(runtime.listQueue(session.id)).toMatchObject([
+      { run: { id: queued.id }, message: { id: "queued-message", content: "after edit" }, position: 1 },
+    ]);
+  });
+
   it("runs direct tasks through the Pi agent loop", async () => {
     const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("finished")]);
     const { run, snapshot } = await runOnce(runtime);
     expect(run.status, run.error).toBe("completed");
     expect(snapshot.transcript.at(-1)?.content).toBe("finished");
+  });
+
+  it("uses the dedicated image generation service instead of the selected model credentials", async () => {
+    process.env.UMA_IMAGE_TEST_KEY = "image-key";
+    const generate = vi.spyOn(ImageGenerationService.prototype, "generate").mockResolvedValue({
+      data: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      mimeType: "image/png",
+    });
+    const runtime = await runtimeWith([
+      classification("simple"),
+      fauxAssistantMessage([fauxToolCall("image_generate", { prompt: "a test image" })]),
+      fauxAssistantMessage("image complete"),
+    ]);
+
+    const { run } = await runOnce(runtime);
+
+    expect(run.status, run.error).toBe("completed");
+    expect(generate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://127.0.0.1:9/v1",
+        apiKey: "image-key",
+        prompt: "a test image",
+      }),
+    );
   });
 
   it("continues the HTTP trace and records queue wait before execution", async () => {

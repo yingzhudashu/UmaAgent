@@ -24,8 +24,20 @@ export function buildConversationEntries(
   responses: Response[],
   runs: Run[],
 ): ConversationEntry[] {
-  const byMessageId = new Map(responses.map((response) => [response.messageId, response]));
-  const byRunId = new Map(responses.map((response) => [response.runId, response]));
+  // A response is a run projection. Normalize the input first so a snapshot
+  // merged with response events can never render two cards for one run.
+  const responseByRunId = new Map<string, Response>();
+  for (const response of responses) {
+    const current = responseByRunId.get(response.runId);
+    if (!current || response.updatedAt >= current.updatedAt) responseByRunId.set(response.runId, response);
+  }
+  const canonicalResponses = [...responseByRunId.values()].sort(
+    (left, right) => left.createdAt - right.createdAt || left.updatedAt - right.updatedAt,
+  );
+  const byMessageId = new Map(
+    responses.map((response) => [response.messageId, responseByRunId.get(response.runId) as Response]),
+  );
+  const byRunId = responseByRunId;
   const runsById = new Map(runs.map((run) => [run.id, run]));
   const itemsByRun = new Map<string, TranscriptItem[]>();
   for (const item of transcript) {
@@ -85,7 +97,7 @@ export function buildConversationEntries(
     appendEntry({ kind: "message", item }, item.sequence);
   }
 
-  for (const response of responses) {
+  for (const response of canonicalResponses) {
     const runItems = itemsByRun.get(response.runId) ?? [];
     if (!runItems.some((item) => item.role === "user")) {
       const firstVisible = runItems[0];

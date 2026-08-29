@@ -70,6 +70,10 @@ const config = {
   roles: Object.fromEntries(
     ["default", "reasoning", "fast", "vision"].map((role) => [role, { provider: providerId, id: modelKey }]),
   ),
+  imageGeneration: {
+    baseUrl: process.env.UMA_REAL_IMAGE_BASE_URL?.trim() || "http://127.0.0.1:9/v1",
+    apiKeyEnv: process.env.UMA_REAL_IMAGE_API_KEY_ENV?.trim() || "UMA_IMAGE_TEST_KEY",
+  },
   embedding: {
     enabled: false,
     baseUrl: "http://127.0.0.1:9/v1",

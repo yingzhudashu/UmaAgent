@@ -1,6 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import type { McpServerConfig, UmaConfig, UmaModelConfig } from "./types.js";
+import type { ImageGenerationConfig, McpServerConfig, UmaConfig, UmaModelConfig } from "./types.js";
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -148,6 +148,7 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
       "mcpServers",
       "runtime",
       "roles",
+      "imageGeneration",
       "embedding",
       "xianyu",
     ],
@@ -159,6 +160,8 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
   const modelProfiles = record(root.models, "models");
   const runtime = record(root.runtime ?? {}, "runtime");
   const roles = record(root.roles, "roles");
+  const imageGeneration = record(root.imageGeneration, "imageGeneration");
+  assertKeys(imageGeneration, ["baseUrl", "apiKeyEnv"], "imageGeneration");
   const embedding = record(root.embedding ?? {}, "embedding");
   const xianyuValue = root.xianyu === undefined ? undefined : record(root.xianyu, "xianyu");
   if (xianyuValue) assertKeys(xianyuValue, ["adapterUrl", "controlTokenEnv"], "xianyu");
@@ -233,6 +236,10 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
       fast: resultModelRef(roles.fast, "roles.fast"),
       vision: resultModelRef(roles.vision, "roles.vision"),
     },
+    imageGeneration: {
+      baseUrl: httpUrl(imageGeneration.baseUrl, "imageGeneration.baseUrl"),
+      apiKeyEnv: stringValue(imageGeneration.apiKeyEnv, "imageGeneration.apiKeyEnv"),
+    } satisfies ImageGenerationConfig,
     embedding: {
       enabled: embedding.enabled === true,
       baseUrl: httpUrl(embedding.baseUrl ?? "https://api.siliconflow.cn/v1", "embedding.baseUrl"),
@@ -271,6 +278,8 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
   for (const model of result.models) {
     if (!process.env[model.apiKeyEnv]?.trim()) throw new Error(`Missing model API key: ${model.apiKeyEnv}`);
   }
+  if (!process.env[result.imageGeneration.apiKeyEnv]?.trim())
+    throw new Error(`Missing image generation API key: ${result.imageGeneration.apiKeyEnv}`);
   if (result.embedding.enabled && !process.env[result.embedding.apiKeyEnv]?.trim())
     throw new Error(`Missing embedding API key: ${result.embedding.apiKeyEnv}`);
   if (result.xianyu && !process.env[result.xianyu.controlTokenEnv]?.trim())

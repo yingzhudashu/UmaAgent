@@ -327,6 +327,7 @@ export class UmaRuntime {
     if (changed(this.config.server, next.server)) restartRequired.push("server");
     if (changed(this.config.auth, next.auth)) restartRequired.push("auth");
     if (changed(this.config.runtime, next.runtime)) restartRequired.push("runtime");
+    if (changed(this.config.imageGeneration, next.imageGeneration)) restartRequired.push("imageGeneration");
     if (changed(this.config.embedding, next.embedding)) restartRequired.push("embedding");
     const modelChanged = changed(
       {
@@ -876,18 +877,14 @@ export class UmaRuntime {
             status,
             ...(run.error ? { content: run.error } : {}),
           });
-          this.database.addResponseActivity({
+          const activity = this.database.addResponseActivity({
             responseId: response.id,
             kind: "status",
             status,
             ...(run.error ? { text: run.error } : {}),
           });
           this.events.emit(sessionId, runId, "response.updated", updated);
-          this.events.emit(sessionId, runId, "response.activity", {
-            responseId: response.id,
-            status,
-            ...(run.error ? { text: run.error } : {}),
-          });
+          this.events.emit(sessionId, runId, "response.activity", { responseId: response.id, activity });
         }
       }
       return run;
@@ -1218,11 +1215,19 @@ export class UmaRuntime {
     return this.events.transaction(() => {
       const now = Date.now();
       const branchId = randomUUID();
+      const parentMessageId = original.parentMessageId;
       this.database.db
         .prepare(
           "INSERT INTO conversation_branches(id,session_id,name,head_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
         )
-        .run(branchId, sessionId, `编辑分支 ${new Date(now).toLocaleString("zh-CN")}`, messageId, now, now);
+        .run(
+          branchId,
+          sessionId,
+          `编辑分支 ${new Date(now).toLocaleString("zh-CN")}`,
+          parentMessageId ?? null,
+          now,
+          now,
+        );
       this.database.db
         .prepare("UPDATE sessions SET active_branch_id=?,updated_at=? WHERE id=?")
         .run(branchId, now, sessionId);
@@ -1232,7 +1237,7 @@ export class UmaRuntime {
           messageId: randomUUID(),
           text,
           mode: "agent",
-          parentMessageId: messageId,
+          ...(parentMessageId ? { parentMessageId } : {}),
         },
         traceParent,
       );
@@ -1550,13 +1555,14 @@ export class UmaRuntime {
           const response = this.database.responseForRun(runId);
           if (response) {
             const updated = this.database.updateResponse(response.id, { status: "awaiting_confirmation" });
-            this.database.addResponseActivity({
+            const activity = this.database.addResponseActivity({
               responseId: response.id,
               kind: "status",
               status: "awaiting_confirmation",
               text: "等待确认执行计划",
             });
             this.events.emit(session.id, runId, "response.updated", updated);
+            this.events.emit(session.id, runId, "response.activity", { responseId: response.id, activity });
           }
           this.events.emit(session.id, runId, "run.updated", awaiting);
           this.events.emit(session.id, runId, "run.awaiting_input", {
@@ -1902,22 +1908,18 @@ export class UmaRuntime {
         imageGenerate: async (prompt, signal) => {
           const response = runId ? this.database.responseForRun(runId) : undefined;
           if (!response) throw new Error("Image generation requires an active response");
-          const model = this.models.get(session.model);
-          const configured = this.config.models.find(
-            (entry) => entry.provider === session.model.provider && entry.id === session.model.id,
-          );
-          if (!configured) throw new Error(`Unknown model ${session.model.provider}/${session.model.id}`);
-          const apiKey = process.env[configured.apiKeyEnv]?.trim();
-          if (!apiKey) throw new Error(`Missing model API key: ${configured.apiKeyEnv}`);
+          const apiKey = process.env[this.config.imageGeneration.apiKeyEnv]?.trim();
+          if (!apiKey)
+            throw new Error(`Missing image generation API key: ${this.config.imageGeneration.apiKeyEnv}`);
           const span = runId
             ? this.activeTraces.get(runId)?.child("provider.image_generate", "model", {
-                provider: model.provider,
+                provider: "image-generation",
                 model: "gpt-image-2",
               })
             : undefined;
           try {
             const image = await this.imageGeneration.generate({
-              baseUrl: model.baseUrl,
+              baseUrl: this.config.imageGeneration.baseUrl,
               apiKey,
               prompt,
               signal: signal ?? new AbortController().signal,
@@ -2448,13 +2450,15 @@ export class UmaRuntime {
           });
           streamedLength = item.content.length;
           this.events.emit(sessionId, runId, "message.started", item);
-          if (responseId)
-            this.events.emit(sessionId, runId, "response.activity", {
+          if (responseId) {
+            const activity = this.database.addResponseActivity({
               responseId,
               kind: "status",
               status: "thinking",
               text: "正在生成回复",
             });
+            this.events.emit(sessionId, runId, "response.activity", { responseId, activity });
+          }
           return item;
         });
       } else if (event.type === "message_update" && event.message.role === "assistant" && assistantItem) {
@@ -2512,11 +2516,7 @@ export class UmaRuntime {
             contextSummarySequence: this.database.getContextSummary(sessionId)?.throughSequence,
             safeToResume: true,
           });
-          this.events.emit(sessionId, runId, "message.completed", {
-            messageId: item.id,
-            status: item.status,
-            updatedAt: item.updatedAt,
-          });
+          this.events.emit(sessionId, runId, "message.completed", item);
         });
         injectRuntimeFault("model.completed");
         activeModelCall = undefined;
@@ -2564,19 +2564,14 @@ export class UmaRuntime {
             input: event.args,
           });
           if (responseId) {
-            this.database.addResponseActivity({
+            const activity = this.database.addResponseActivity({
               responseId,
               kind: "tool",
               toolName: event.toolName,
               text: "正在调用工具",
               status: "executing",
             });
-            this.events.emit(sessionId, runId, "response.activity", {
-              responseId,
-              kind: "tool",
-              toolName: event.toolName,
-              status: "executing",
-            });
+            this.events.emit(sessionId, runId, "response.activity", { responseId, activity });
           }
           return { actionId: action.id, messageId: item.id };
         });
@@ -2626,6 +2621,7 @@ export class UmaRuntime {
               safeToResume: !event.isError,
             });
             this.events.emit(sessionId, runId, "tool.completed", {
+              item,
               messageId: item.id,
               toolCallId: event.toolCallId,
               toolName: event.toolName,
@@ -2633,19 +2629,14 @@ export class UmaRuntime {
               ...(event.isError ? { errorCategory: "tool_execution" } : {}),
             });
             if (responseId) {
-              this.database.addResponseActivity({
+              const activity = this.database.addResponseActivity({
                 responseId,
                 kind: "tool",
                 toolName: event.toolName,
                 text: event.isError ? "工具执行失败" : "工具执行完成",
                 status: event.isError ? "failed" : "completed",
               });
-              this.events.emit(sessionId, runId, "response.activity", {
-                responseId,
-                kind: "tool",
-                toolName: event.toolName,
-                status: event.isError ? "failed" : "completed",
-              });
+              this.events.emit(sessionId, runId, "response.activity", { responseId, activity });
             }
             toolTraces.get(event.toolCallId)?.finish({ status: event.isError ? "error" : "ok" });
             toolTraces.delete(event.toolCallId);

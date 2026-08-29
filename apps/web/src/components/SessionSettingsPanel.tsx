@@ -1,7 +1,7 @@
 import type { AgentProfile, Health, OperationsReport, PublicConfig, Session } from "@uma-agent/protocol";
 import { ImagePlus, RotateCcw, Save } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
-import defaultAvatarUrl from "../assets/cat-avatar.jpg";
+import defaultAvatarUrl from "../assets/cat-avatar.png";
 
 export function SessionSettingsPanel({
   session,

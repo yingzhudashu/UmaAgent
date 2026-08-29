@@ -36,6 +36,7 @@ const config = (): UmaConfig => ({
     fast: { provider: "openai", id: "model" },
     vision: { provider: "openai", id: "model" },
   },
+  imageGeneration: { baseUrl: "https://images.example/v1", apiKeyEnv: "IMAGE_GENERATION_API_KEY" },
   skillsDirs: [],
   mcpServers: [],
   runtime: { maxParallelSessions: 1, approvalTimeoutMs: 1_000, toolTimeoutMs: 1_000 },

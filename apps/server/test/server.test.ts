@@ -63,6 +63,7 @@ describe("server", () => {
         vision: { provider: "test", id: "model" },
       },
       xianyu: { adapterUrl: "http://127.0.0.1:3250", controlTokenEnv: "UMA_TEST_XIANYU_TOKEN" },
+      imageGeneration: { baseUrl: "http://127.0.0.1:9/v1", apiKeyEnv: "UMA_IMAGE_TEST_KEY" },
     };
     const previousToken = process.env.UMA_TEST_XIANYU_TOKEN;
     const previousPassword = process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH;

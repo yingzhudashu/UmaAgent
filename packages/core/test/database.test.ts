@@ -255,7 +255,7 @@ describe("UmaDatabase", () => {
     db.createResponse({ sessionId: session.id, runId: branchRun.id, messageId: branchMessageId });
 
     const snapshot = db.getSnapshot(session.id);
-    expect(snapshot.responses.map((response) => response.runId)).toEqual([branchRun.id]);
+    expect(snapshot.responses.map((response) => response.runId)).toEqual([mainRun.id, branchRun.id]);
     db.close();
   });
 

@@ -4,6 +4,7 @@ export type { EventListener } from "./events.js";
 export { PermissionPolicy } from "./permissions.js";
 export { UmaRuntime } from "./runtime.js";
 export type {
+  ImageGenerationConfig,
   McpServerConfig,
   PreflightDecision,
   RuntimeHealth,

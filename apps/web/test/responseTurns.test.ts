@@ -80,6 +80,24 @@ describe("buildConversationEntries", () => {
     expect(entries.filter((entry) => entry.kind === "response")).toHaveLength(1);
   });
 
+  it("keeps one response card when an event and snapshot contain the same run", () => {
+    const transcript = [item({ id: "user-1", sequence: 1, role: "user", runId: "run-1" })];
+    const entries = buildConversationEntries(
+      transcript,
+      [
+        response({ id: "response-from-event", runId: "run-1", messageId: "user-1", updatedAt: 2 }),
+        response({ id: "response-from-snapshot", runId: "run-1", messageId: "user-1", updatedAt: 3 }),
+      ],
+      [run("run-1")],
+    );
+    const responseEntries = entries.filter((entry) => entry.kind === "response");
+    expect(responseEntries).toHaveLength(1);
+    expect(responseEntries[0]).toMatchObject({
+      kind: "response",
+      response: { id: "response-from-snapshot", runId: "run-1" },
+    });
+  });
+
   it("keeps multiple assistant updates in the single run response", () => {
     const transcript = [
       item({ id: "user-1", sequence: 1, role: "user", runId: "run-1" }),

@@ -57,6 +57,7 @@ const config = {
   skillsDirs: [],
   mcpServers: [],
   runtime: { maxParallelSessions: 1, approvalTimeoutMs: 5_000, toolTimeoutMs: 5_000 },
+  imageGeneration: { baseUrl: "http://127.0.0.1:9/v1", apiKeyEnv: "UMA_IMAGE_TEST_KEY" },
 };
 
 const runtime = new UmaRuntime(config);

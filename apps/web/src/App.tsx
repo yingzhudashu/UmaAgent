@@ -16,7 +16,6 @@ import type {
 import {
   ArrowDown,
   Bot,
-  ChevronRight,
   CircleStop,
   FilePlus2,
   Menu,
@@ -57,13 +56,14 @@ import { InspectorDrawer } from "./components/InspectorDrawer.js";
 import { ApprovalPanel, ConnectionPanel, SyncPanel } from "./components/InspectorStatusPanels.js";
 import { MessageBubble } from "./components/MessageBubble.js";
 import { ModeSelector } from "./components/ModeSelector.js";
+import { QueueDock } from "./components/QueueDock.js";
 import { ResponseCard } from "./components/ResponseCard.js";
 import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
 import { Login } from "./Login.js";
 import { useQualityHistory } from "./quality-history.js";
 import { buildConversationEntries } from "./responseTurns.js";
-import { applyStreamingEvent } from "./streaming.js";
+import { applyDurableEvent, applyStreamingEvent, mergeSessionSnapshot } from "./streaming.js";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -82,23 +82,6 @@ export interface AppProps {
   client: UmaClient;
   embedded?: boolean;
   theme?: "light" | "dark";
-}
-
-function preserveStreamingContent(
-  current: SessionSnapshot | undefined,
-  next: SessionSnapshot,
-): SessionSnapshot {
-  if (!current) return next;
-  const previous = new Map(current.transcript.map((item) => [item.id, item]));
-  return {
-    ...next,
-    transcript: next.transcript.map((item) => {
-      const old = previous.get(item.id);
-      return old?.status === "streaming" && old.content.length > item.content.length
-        ? { ...item, content: old.content, updatedAt: old.updatedAt }
-        : item;
-    }),
-  };
 }
 
 export function App({ client, embedded = false, theme = "light" }: AppProps) {
@@ -255,6 +238,12 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     enabled: Boolean(selected && selected !== "undefined") && authenticated,
     refetchInterval: false,
   });
+  const queue = useQuery({
+    queryKey: ["queue", selected],
+    queryFn: () => client.listQueue(selected as string),
+    enabled: Boolean(selected && selected !== "undefined") && authenticated,
+    refetchInterval: false,
+  });
   useQualityHistory(
     client,
     snapshot.data?.transcript,
@@ -354,19 +343,23 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               ]);
             if (event.type === "approval.resolved")
               setApprovals((items) => items.filter((item) => item.id !== (event.payload as Approval).id));
-            if (event.type === "session.snapshot")
-              queryClient.setQueryData<SessionSnapshot>(
-                ["snapshot", selected, (event.payload as SessionSnapshot).session.activeBranchId],
-                (current) => preserveStreamingContent(current, event.payload as SessionSnapshot),
-              );
             if (event.type === "session.snapshot") {
-              void cacheSnapshot(event.payload as SessionSnapshot);
+              const value = event.payload as SessionSnapshot;
+              const key = ["snapshot", selected, value.session.activeBranchId] as const;
+              const merged = mergeSessionSnapshot(queryClient.getQueryData<SessionSnapshot>(key), value);
+              queryClient.setQueryData(key, merged);
+              void cacheSnapshot(merged);
+              queryClient.setQueryData(["queue", selected], value.queue);
             } else if (event.type === "message.delta") {
               applyStreamingEvent(queryClient, selected, event, activeBranchId);
+            } else if (event.type === "queue.updated") {
+              void queryClient.invalidateQueries({ queryKey: ["queue", selected] });
             } else {
-              void queryClient.invalidateQueries({ queryKey: ["snapshot", selected] });
+              applyDurableEvent(queryClient, selected, event, activeBranchId);
+              if (event.type === "run.updated")
+                void queryClient.invalidateQueries({ queryKey: ["queue", selected] });
             }
-            if (event.type !== "message.delta")
+            if (event.type !== "message.delta" && event.type !== "queue.updated")
               void queryClient.invalidateQueries({ queryKey: ["sessions"] });
           },
         );
@@ -470,7 +463,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     onSuccess: () => {
       setPrompt("");
       setAttachments([]);
-      void queryClient.invalidateQueries({ queryKey: ["snapshot", selected] });
+      void queryClient.invalidateQueries({ queryKey: ["queue", selected] });
     },
   });
   const updateSession = useMutation({
@@ -488,12 +481,18 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       void queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
+  const recentRuns = snapshot.data?.recentRuns ?? [];
+  const runningRun = [...recentRuns]
+    .reverse()
+    .find((run) => ["preflight", "running", "verifying"].includes(run.status));
   const currentRun =
-    [...(snapshot.data?.recentRuns ?? [])]
+    runningRun ??
+    [...recentRuns]
       .reverse()
       .find(
         (run) => !["completed", "failed", "cancelled", "interrupted", "awaiting_input"].includes(run.status),
-      ) ?? snapshot.data?.recentRuns.at(-1);
+      ) ??
+    recentRuns.at(-1);
   const busy = currentRun && ["queued", "preflight", "running", "verifying"].includes(currentRun.status);
   const checkpoints = useQuery({
     queryKey: ["checkpoints", currentRun?.id],
@@ -561,7 +560,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
         mode,
         ...(ids.length ? { attachmentIds: ids } : {}),
       })
-      .then(() => queryClient.invalidateQueries({ queryKey: ["snapshot", selected] }));
+      .then(() => queryClient.invalidateQueries({ queryKey: ["queue", selected] }));
   };
   const retryMessage = (item: TranscriptItem) => {
     if (item.role !== "user" || !selected) return;
@@ -570,7 +569,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     const ids = item.attachments.map((attachment) => attachment.id);
     void client
       .sendMessage(selected, item.content, { mode, ...(ids.length ? { attachmentIds: ids } : {}) })
-      .then(() => queryClient.invalidateQueries({ queryKey: ["snapshot", selected] }));
+      .then(() => queryClient.invalidateQueries({ queryKey: ["queue", selected] }));
   };
   const editMessage = async (item: TranscriptItem, text: string): Promise<void> => {
     if (!selected || item.role !== "user") throw new Error("当前会话不可用");
@@ -581,7 +580,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       // 否则重新获取快照时会与新分支内容合并显示。
       setHistorical([]);
       setHistoryHasMore(undefined);
-      await cacheHistory(sessionId, []);
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       await queryClient.invalidateQueries({ queryKey: ["snapshot", sessionId] });
       await client.waitForRun(result.runId);
@@ -931,70 +929,31 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             </button>
           )}
           <div className="composer-wrap">
-            {(snapshot.data?.queue?.length ?? 0) > 0 && (
-              <details className="queue-panel" open>
-                <summary className="queue-panel__heading">
-                  <strong>排队中</strong>
-                  <span>{snapshot.data?.queue.length} 条</span>
-                </summary>
-                <div className="queue-panel__list">
-                  {snapshot.data?.queue.map((item, index, queue) => (
-                    <div className="queue-item" key={item.run.id}>
-                      <span className="queue-item__position">{item.position}</span>
-                      <span className="queue-item__text" title={item.message.content}>
-                        {item.message.content}
-                      </span>
-                      <button
-                        type="button"
-                        className="icon"
-                        title="移至队首"
-                        aria-label="移至队首"
-                        onClick={() => void client.prioritizeRun(item.run.id).then(() => snapshot.refetch())}
-                      >
-                        <ArrowDown size={14} className="queue-move-first" />
-                      </button>
-                      <button
-                        type="button"
-                        className="icon"
-                        title="上移"
-                        aria-label="上移"
-                        disabled={index === 0}
-                        onClick={() => {
-                          const ids = queue.map((entry) => entry.run.id);
-                          [ids[index - 1], ids[index]] = [ids[index] as string, ids[index - 1] as string];
-                          void client.reorderQueue(selected as string, ids).then(() => snapshot.refetch());
-                        }}
-                      >
-                        <ChevronRight size={14} className="queue-up" />
-                      </button>
-                      <button
-                        type="button"
-                        className="icon"
-                        title="下移"
-                        aria-label="下移"
-                        disabled={index === queue.length - 1}
-                        onClick={() => {
-                          const ids = queue.map((entry) => entry.run.id);
-                          [ids[index], ids[index + 1]] = [ids[index + 1] as string, ids[index] as string];
-                          void client.reorderQueue(selected as string, ids).then(() => snapshot.refetch());
-                        }}
-                      >
-                        <ChevronRight size={14} className="queue-down" />
-                      </button>
-                      <button
-                        type="button"
-                        className="icon"
-                        title="取消"
-                        aria-label="取消"
-                        onClick={() => void client.cancelRun(item.run.id).then(() => snapshot.refetch())}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            )}
+            <QueueDock
+              running={runningRun}
+              {...(runningRun
+                ? { runningMessage: transcript.find((item) => item.id === runningRun.messageId) }
+                : {})}
+              queue={queue.data ?? []}
+              disabled={offline}
+              reorder={async (runIds) => {
+                if (!selected) return;
+                await client.reorderQueue(selected, runIds);
+                await queue.refetch();
+              }}
+              prioritize={async (runId) => {
+                await client.prioritizeRun(runId);
+                await queue.refetch();
+              }}
+              cancel={async (runId) => {
+                await client.cancelRun(runId);
+                await queue.refetch();
+              }}
+              edit={async (item, text) => {
+                await client.editMessage(item.message.id, text);
+                await queue.refetch();
+              }}
+            />
             {connectionMessage && <p className="connection-notice">{connectionMessage}</p>}
             {sendMessage.isError && (
               <div className="composer-error" role="alert">

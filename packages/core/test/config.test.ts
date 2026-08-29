@@ -7,6 +7,7 @@ import { loadConfig } from "../src/config.js";
 const temporary: string[] = [];
 afterEach(async () => {
   delete process.env.UMA_CONFIG_KEY;
+  delete process.env.UMA_CONFIG_IMAGE_KEY;
   delete process.env.UMA_CONFIG_MCP_TOKEN;
   delete process.env.UMA_CONFIG_XIANYU_TOKEN;
   delete process.env.UMA_CONFIG_STATE;
@@ -47,6 +48,10 @@ async function configFile(server: { host: string; webOrigins: string[] }): Promi
         fast: { provider: "test", id: "model" },
         vision: { provider: "test", id: "model" },
       },
+      imageGeneration: {
+        baseUrl: "https://images.example/v1",
+        apiKeyEnv: "UMA_CONFIG_IMAGE_KEY",
+      },
       defaultThinkingLevel: "off",
       skillsDirs: [],
       mcpServers: [],
@@ -70,6 +75,7 @@ async function mutateConfig(
 describe("loadConfig", () => {
   it("rejects public listeners without an explicit web origin", async () => {
     process.env.UMA_CONFIG_KEY = "key";
+    process.env.UMA_CONFIG_IMAGE_KEY = "image-key";
     process.env.UMA_CONFIG_MCP_TOKEN = "mcp-secret";
     await expect(loadConfig(await configFile({ host: "0.0.0.0", webOrigins: [] }))).rejects.toThrow(
       "Public server hosts require",
@@ -80,6 +86,7 @@ describe("loadConfig", () => {
     const missingKey = await configFile({ host: "127.0.0.1", webOrigins: [] });
     await expect(loadConfig(missingKey)).rejects.toThrow("Missing model API key");
     process.env.UMA_CONFIG_KEY = "key";
+    process.env.UMA_CONFIG_IMAGE_KEY = "image-key";
     const originWithPath = await configFile({
       host: "0.0.0.0",
       webOrigins: ["https://web.example/path"],
@@ -87,8 +94,23 @@ describe("loadConfig", () => {
     await expect(loadConfig(originWithPath)).rejects.toThrow("exact origins");
   });
 
+  it("requires a dedicated image generation credential", async () => {
+    process.env.UMA_CONFIG_KEY = "key";
+    await expect(loadConfig(await configFile({ host: "127.0.0.1", webOrigins: [] }))).rejects.toThrow(
+      "Missing image generation API key",
+    );
+    process.env.UMA_CONFIG_IMAGE_KEY = "image-key";
+    await expect(loadConfig(await configFile({ host: "127.0.0.1", webOrigins: [] }))).resolves.toMatchObject({
+      imageGeneration: {
+        baseUrl: "https://images.example/v1",
+        apiKeyEnv: "UMA_CONFIG_IMAGE_KEY",
+      },
+    });
+  });
+
   it("rejects whitespace-only secrets", async () => {
     process.env.UMA_CONFIG_KEY = "key";
+    process.env.UMA_CONFIG_IMAGE_KEY = "image-key";
     process.env.UMA_CONFIG_KEY = "\t";
     await expect(loadConfig(await configFile({ host: "127.0.0.1", webOrigins: [] }))).rejects.toThrow(
       "Missing model API key",
@@ -97,6 +119,7 @@ describe("loadConfig", () => {
 
   it("loads defaults, resolves relative paths, removes duplicate origins, and parses MCP transports", async () => {
     process.env.UMA_CONFIG_KEY = "key";
+    process.env.UMA_CONFIG_IMAGE_KEY = "image-key";
     process.env.UMA_CONFIG_MCP_TOKEN = "mcp-secret";
     const path = await mutateConfig((value) => {
       const server = value.server as Record<string, unknown>;
@@ -206,6 +229,7 @@ describe("loadConfig", () => {
 
   it("validates the optional Xianyu adapter configuration", async () => {
     process.env.UMA_CONFIG_KEY = "key";
+    process.env.UMA_CONFIG_IMAGE_KEY = "image-key";
     process.env.UMA_CONFIG_XIANYU_TOKEN = "adapter-token";
     const path = await mutateConfig((value) => {
       value.xianyu = { adapterUrl: "http://127.0.0.1:3250/", controlTokenEnv: "UMA_CONFIG_XIANYU_TOKEN" };
@@ -244,6 +268,7 @@ describe("loadConfig", () => {
 
   it("expands configured data paths and rejects missing path variables", async () => {
     process.env.UMA_CONFIG_KEY = "key";
+    process.env.UMA_CONFIG_IMAGE_KEY = "image-key";
     process.env.UMA_CONFIG_STATE = "external-state";
     const expanded = await loadConfig(
       await mutateConfig((value) => {
