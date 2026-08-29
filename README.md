@@ -39,7 +39,7 @@ $env:OPENAI_API_KEY = "你的模型密钥"
 npm run build
 npm start
 ```
-需要手动使用备用 Provider 时，复制 `uma.config.backup.example.json` 为未跟踪的 `uma.config.backup.json`，设置 `$env:UMA_BACKUP_OPENAI_API_KEY`，并通过 `$env:UMA_CONFIG=uma.config.backup.json` 或 `--config=uma.config.backup.json` 启动。
+默认配置使用 tcvps Provider。需要手动使用备用 Provider 时，复制 `uma.config.backup.example.json` 为未跟踪的 `uma.config.backup.json`，将 `$env:OPENAI_API_KEY` 设置为备用 Provider 的密钥，并通过 `$env:UMA_CONFIG=uma.config.backup.json` 或 `--config=uma.config.backup.json` 启动。
 打开 `http://127.0.0.1:3210`。CLI 使用：
 
 ```powershell

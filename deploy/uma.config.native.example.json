@@ -15,7 +15,7 @@
   "providers": {
     "openai": {
       "driver": "openai",
-      "baseUrl": "https://www.fastaitoken.com/v1",
+      "baseUrl": "https://api.tcvps.cn/v1",
       "apiKeyEnv": "OPENAI_API_KEY"
     }
   },

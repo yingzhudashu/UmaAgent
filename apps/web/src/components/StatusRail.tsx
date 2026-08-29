@@ -1,6 +1,6 @@
 import { Activity, BellRing, Cloud, Settings2, Wifi } from "lucide-react";
 
-export type InspectorSection = "connection" | "run" | "approvals" | "sync" | "settings";
+export type InspectorSection = "connection" | "run" | "approvals" | "sync" | "settings" | "xianyu";
 
 export function StatusRail({
   online,

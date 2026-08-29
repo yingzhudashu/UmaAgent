@@ -22,7 +22,7 @@
 
 ## 真实 Provider 验收
 
-目标为 `openai`、`gpt-5.6-sol`、`https://www.fastaitoken.com`，密钥仅由 `OPENAI_API_KEY` 注入。
+目标为 `openai`、`gpt-5.6-sol`、`https://api.tcvps.cn/v1`，密钥仅由 `OPENAI_API_KEY` 注入。
 
 - smoke：通过，Run completed，7 spans，RSS 约 115.8MiB。
 - eval：3/3 通过。

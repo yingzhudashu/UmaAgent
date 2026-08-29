@@ -8,6 +8,7 @@ export type ToolClass =
   | "attachment_read"
   | "memory_write"
   | "schedule"
+  | "image_generate"
   | "mcp";
 
 export interface PermissionDecision {
@@ -48,6 +49,7 @@ export class PermissionPolicy {
     if (toolName === "attachment_read") return "attachment_read";
     if (toolName === "memory_write") return "memory_write";
     if (toolName === "schedule_manage") return "schedule";
+    if (toolName === "image_generate") return "image_generate";
     return "mcp";
   }
 
@@ -71,6 +73,13 @@ export class PermissionPolicy {
     }
     if (kind === "write") {
       return { allowed: true, requiresApproval: true, reason: "Workspace changes require approval" };
+    }
+    if (kind === "image_generate") {
+      return {
+        allowed: true,
+        requiresApproval: false,
+        reason: "Image generation is enabled by the session policy",
+      };
     }
     return {
       allowed: true,

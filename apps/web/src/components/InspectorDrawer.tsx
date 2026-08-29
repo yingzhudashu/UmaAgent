@@ -9,6 +9,7 @@ const titles: Record<InspectorSection, string> = {
   approvals: "待审批",
   sync: "同步与连接",
   settings: "会话设置",
+  xianyu: "咸鱼控制台",
 };
 
 export function InspectorDrawer({

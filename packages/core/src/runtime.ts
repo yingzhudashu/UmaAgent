@@ -46,6 +46,7 @@ import { ContextManager } from "./context-manager.js";
 import { UmaDatabase } from "./database.js";
 import { EmbeddingService } from "./embedding.js";
 import { EventHub, type EventListener, type ResourceListener } from "./events.js";
+import { ImageGenerationService } from "./image-generation.js";
 import { KnowledgeService } from "./knowledge.js";
 import { McpManager } from "./mcp.js";
 import { ModelCallService } from "./model-calls.js";
@@ -111,6 +112,7 @@ export class UmaRuntime {
   private readonly preemptedRuns = new Set<string>();
   private readonly approvals: RunApprovals;
   private readonly smath = SmathWorkerClient.fromEnvironment();
+  private readonly imageGeneration = new ImageGenerationService();
   private readonly stateLock: StateLock;
   readonly permissions = new PermissionPolicy();
   private readonly taskSemaphore = new Semaphore(4);
@@ -529,16 +531,20 @@ export class UmaRuntime {
       this.watchResumedBackgroundTask(backgroundTask.id, runId);
       this.scheduler.onRunResumed(runId);
     }
-    this.orchestrator.enqueue(session.id, async () => {
-      await this.replaySafeActions(run);
-      await this.executeRun(
-        session,
-        runId,
-        { messageId: message.id, text: message.content, mode: run.interactionMode },
-        undefined,
-        true,
-      );
-    });
+    this.orchestrator.enqueue(
+      session.id,
+      async () => {
+        await this.replaySafeActions(run);
+        await this.executeRun(
+          session,
+          runId,
+          { messageId: message.id, text: message.content, mode: run.interactionMode },
+          undefined,
+          true,
+        );
+      },
+      runId,
+    );
     return resumed;
   }
 
@@ -552,14 +558,17 @@ export class UmaRuntime {
       this.events.emit(session.id, runId, "run.resumed", value);
       return value;
     });
-    this.orchestrator.enqueue(session.id, () =>
-      this.executeRun(
-        session,
-        runId,
-        { messageId: message.id, text: message.content, mode: "plan" },
-        undefined,
-        true,
-      ),
+    this.orchestrator.enqueue(
+      session.id,
+      () =>
+        this.executeRun(
+          session,
+          runId,
+          { messageId: message.id, text: message.content, mode: "plan" },
+          undefined,
+          true,
+        ),
+      runId,
     );
     return confirmed;
   }
@@ -1175,7 +1184,7 @@ export class UmaRuntime {
       traceParent,
     );
     this.activeTraces.set(run.id, queuedTrace.root);
-    enqueue(sessionId, () => queuedTrace.run(() => this.executeRun(session, run.id, input)));
+    enqueue(sessionId, () => queuedTrace.run(() => this.executeRun(session, run.id, input)), run.id);
     if (continuation) this.orchestrator.resume(sessionId);
     return run;
   }
@@ -1243,6 +1252,7 @@ export class UmaRuntime {
   reorderQueue(sessionId: string, runIds: string[]) {
     return this.events.transaction(() => {
       const runs = this.database.reorderQueuedRuns(sessionId, runIds);
+      this.orchestrator.reorder(sessionId, runIds);
       this.events.emit(sessionId, undefined, "queue.updated", runs);
       return this.listQueue(sessionId);
     });
@@ -1252,6 +1262,7 @@ export class UmaRuntime {
     const run = this.database.getRun(runId);
     return this.events.transaction(() => {
       const prioritized = this.database.prioritizeQueuedRun(runId);
+      this.orchestrator.prioritize(run.sessionId, runId);
       this.events.emit(run.sessionId, runId, "queue.updated", this.listQueue(run.sessionId));
       return prioritized;
     });
@@ -1282,6 +1293,14 @@ export class UmaRuntime {
     const run = this.database.getRun(runId);
     if (["completed", "failed", "cancelled"].includes(run.status)) return run;
     if (run.status === "queued") {
+      this.orchestrator.remove(run.sessionId, runId);
+      this.trace.cancelQueued(runId);
+      const queuedTrace = this.activeTraces.get(runId);
+      queuedTrace?.finish({
+        status: "error",
+        error: { name: "RunCancelled", message: "Cancelled before execution" },
+      });
+      this.activeTraces.delete(runId);
       return this.events.transaction(() => {
         const cancelled = this.database.updateRun(runId, {
           status: "cancelled",
@@ -1328,18 +1347,25 @@ export class UmaRuntime {
     await mkdir(directory, { recursive: true });
     const safeName = input.name.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
     const storagePath = join(directory, safeName);
-    await import("node:fs/promises").then((fs) => fs.writeFile(storagePath, input.data));
-    const attachment = this.database.addAttachment({
-      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-      ...(input.responseId ? { responseId: input.responseId } : {}),
-      ...(ownerId ? { ownerUserId: ownerId } : {}),
-      name: safeName,
-      mimeType: input.mimeType,
-      size: input.data.byteLength,
-      storagePath,
-      sha256: createHash("sha256").update(input.data).digest("hex"),
-      status: "ready",
-    });
+    const fs = await import("node:fs/promises");
+    let attachment: Attachment;
+    try {
+      await fs.writeFile(storagePath, input.data);
+      attachment = this.database.addAttachment({
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        ...(input.responseId ? { responseId: input.responseId } : {}),
+        ...(ownerId ? { ownerUserId: ownerId } : {}),
+        name: safeName,
+        mimeType: input.mimeType,
+        size: input.data.byteLength,
+        storagePath,
+        sha256: createHash("sha256").update(input.data).digest("hex"),
+        status: "ready",
+      });
+    } catch (error) {
+      await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
     if (input.responseId && input.sessionId) {
       this.events.transaction(() => {
         const response = this.database.getResponse(input.responseId as string);
@@ -1872,6 +1898,51 @@ export class UmaRuntime {
             mimeType,
             data,
           });
+        },
+        imageGenerate: async (prompt, signal) => {
+          const response = runId ? this.database.responseForRun(runId) : undefined;
+          if (!response) throw new Error("Image generation requires an active response");
+          const model = this.models.get(session.model);
+          const configured = this.config.models.find(
+            (entry) => entry.provider === session.model.provider && entry.id === session.model.id,
+          );
+          if (!configured) throw new Error(`Unknown model ${session.model.provider}/${session.model.id}`);
+          const apiKey = process.env[configured.apiKeyEnv]?.trim();
+          if (!apiKey) throw new Error(`Missing model API key: ${configured.apiKeyEnv}`);
+          const span = runId
+            ? this.activeTraces.get(runId)?.child("provider.image_generate", "model", {
+                provider: model.provider,
+                model: "gpt-image-2",
+              })
+            : undefined;
+          try {
+            const image = await this.imageGeneration.generate({
+              baseUrl: model.baseUrl,
+              apiKey,
+              prompt,
+              signal: signal ?? new AbortController().signal,
+              timeoutMs: this.config.runtime.toolTimeoutMs,
+              maxBytes: this.config.server.maxUploadBytes,
+            });
+            const attachment = await this.addAttachment({
+              sessionId: session.id,
+              responseId: response.id,
+              name: `generated-${Date.now()}.png`,
+              mimeType: image.mimeType,
+              data: image.data,
+            });
+            span?.finish({ status: "ok" });
+            return attachment;
+          } catch (error) {
+            span?.finish({
+              status: "error",
+              error: {
+                name: error instanceof Error ? error.name : "ImageGenerationError",
+                message: "image generation failed",
+              },
+            });
+            throw error;
+          }
         },
         ...(this.smath
           ? {

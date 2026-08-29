@@ -5,11 +5,12 @@ export function applyStreamingEvent(
   queryClient: QueryClient,
   sessionId: string,
   event: AgentEventEnvelope,
+  activeBranchId?: string,
 ): void {
   if (event.type !== "message.delta") return;
   const payload = event.payload as MessageDelta;
   if (typeof payload.messageId !== "string" || typeof payload.append !== "string") return;
-  queryClient.setQueryData<SessionSnapshot>(["snapshot", sessionId], (current) => {
+  queryClient.setQueryData<SessionSnapshot>(["snapshot", sessionId, activeBranchId], (current) => {
     if (!current) return current;
     return {
       ...current,

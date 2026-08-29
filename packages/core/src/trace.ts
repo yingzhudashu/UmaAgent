@@ -18,6 +18,7 @@ export type QueuedTrace = {
 
 export class TraceService extends SharedTraceService {
   override readonly store: TelemetryStore;
+  private readonly queuedWaits = new Map<string, TraceContext>();
   constructor(database: UmaDatabase) {
     const store = new TelemetryStore(telemetryDirectory(database.stateDir), "core");
     super(store, "core");
@@ -41,13 +42,24 @@ export class TraceService extends SharedTraceService {
   ): QueuedTrace {
     const root = this.startRoot(runId, sessionId, name, attributes, parent);
     const wait = root.child("queue.wait", "queue");
+    this.queuedWaits.set(runId, wait);
+    const service = this;
     return {
       root,
       run(operation) {
         wait.finish({ status: "ok" });
+        service.queuedWaits.delete(runId);
         return operation(root);
       },
     };
+  }
+  cancelQueued(runId: string): void {
+    const wait = this.queuedWaits.get(runId);
+    wait?.finish({
+      status: "error",
+      error: { name: "RunCancelled", message: "Cancelled before execution" },
+    });
+    this.queuedWaits.delete(runId);
   }
   listTrace(query: TraceQuery): TraceQueryPage {
     const page = this.store.listSpans(query as TelemetrySpanQuery);

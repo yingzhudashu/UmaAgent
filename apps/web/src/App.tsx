@@ -16,10 +16,10 @@ import type {
 import {
   ArrowDown,
   Bot,
+  ChevronRight,
   CircleStop,
   FilePlus2,
   Menu,
-  PanelRight,
   Pencil,
   RefreshCw,
   RotateCcw,
@@ -84,6 +84,23 @@ export interface AppProps {
   theme?: "light" | "dark";
 }
 
+function preserveStreamingContent(
+  current: SessionSnapshot | undefined,
+  next: SessionSnapshot,
+): SessionSnapshot {
+  if (!current) return next;
+  const previous = new Map(current.transcript.map((item) => [item.id, item]));
+  return {
+    ...next,
+    transcript: next.transcript.map((item) => {
+      const old = previous.get(item.id);
+      return old?.status === "streaming" && old.content.length > item.content.length
+        ? { ...item, content: old.content, updatedAt: old.updatedAt }
+        : item;
+    }),
+  };
+}
+
 export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<string>();
@@ -109,7 +126,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const scrollFrameRef = useRef<number | undefined>(undefined);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
-  const [xianyuOpen, setXianyuOpen] = useState(false);
   const [qualityOperations, setQualityOperations] = useState<Record<string, QualityOperation>>({});
   const mergeQualityHistory = useCallback((restored: Record<string, QualityOperation>) => {
     setQualityOperations((current) => {
@@ -220,8 +236,10 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     queryFn: () => client.listKnowledge(),
     enabled: authenticated,
   });
+  const selectedSession = sessions.data?.find((item) => item.id === selected);
+  const activeBranchId = selectedSession?.activeBranchId;
   const snapshot = useQuery({
-    queryKey: ["snapshot", selected],
+    queryKey: ["snapshot", selected, activeBranchId],
     queryFn: async () => {
       const sessionId = selected as string;
       try {
@@ -229,7 +247,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
         await cacheSnapshot(value);
         return value;
       } catch (error) {
-        const cached = await cachedSnapshot(sessionId);
+        const cached = await cachedSnapshot(sessionId, activeBranchId);
         if (cached) return cached;
         throw error;
       }
@@ -310,7 +328,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     if (!selected || selected === "undefined") return;
     let unsubscribe: (() => void) | undefined;
     let cancelled = false;
-    void Promise.all([cachedCursor(selected), cachedHistory(selected)])
+    void Promise.all([cachedCursor(selected), cachedHistory(selected, activeBranchId)])
       .catch(() => undefined)
       .then((cached) => {
         if (cancelled) return;
@@ -337,11 +355,14 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             if (event.type === "approval.resolved")
               setApprovals((items) => items.filter((item) => item.id !== (event.payload as Approval).id));
             if (event.type === "session.snapshot")
-              queryClient.setQueryData(["snapshot", selected], event.payload as SessionSnapshot);
+              queryClient.setQueryData<SessionSnapshot>(
+                ["snapshot", selected, (event.payload as SessionSnapshot).session.activeBranchId],
+                (current) => preserveStreamingContent(current, event.payload as SessionSnapshot),
+              );
             if (event.type === "session.snapshot") {
               void cacheSnapshot(event.payload as SessionSnapshot);
             } else if (event.type === "message.delta") {
-              applyStreamingEvent(queryClient, selected, event);
+              applyStreamingEvent(queryClient, selected, event, activeBranchId);
             } else {
               void queryClient.invalidateQueries({ queryKey: ["snapshot", selected] });
             }
@@ -354,7 +375,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [selected, queryClient, client]);
+  }, [selected, activeBranchId, queryClient, client]);
   const transcript = useMemo(() => {
     const items = [...historical, ...(snapshot.data?.transcript ?? [])];
     const unique = [...new Map(items.map((item) => [item.id, item])).values()].sort(
@@ -428,9 +449,9 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       setInteractionMode("agent");
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       const value = await client.getSession(session.id);
-      queryClient.setQueryData(["snapshot", session.id], value);
+      queryClient.setQueryData(["snapshot", session.id, value.session.activeBranchId], value);
       await cacheSnapshot(value);
-      await cacheHistory(session.id, []);
+      await cacheHistory(session.id, [], value.session.activeBranchId);
       await cacheCursor(session.id, value.snapshotSequence);
       setSyncCursor(value.snapshotSequence);
       setLastSyncAt(Date.now());
@@ -741,8 +762,10 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               </button>
               <button
                 type="button"
-                className={`icon ${xianyuOpen ? "active" : ""}`}
-                onClick={() => setXianyuOpen((value) => !value)}
+                className={`icon ${inspectorSection === "xianyu" ? "active" : ""}`}
+                onClick={() =>
+                  setInspectorSection((current) => (current === "xianyu" ? undefined : "xianyu"))
+                }
                 title="咸鱼控制台"
               >
                 <Store />
@@ -779,14 +802,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               >
                 <RotateCcw />
               </button>
-              <button
-                type="button"
-                className={`icon ${inspectorSection ? "active" : ""}`}
-                onClick={() => setInspectorSection((value) => (value ? undefined : "run"))}
-                title="打开详情"
-              >
-                <PanelRight />
-              </button>
             </div>
           </header>
           <section
@@ -813,7 +828,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                     );
                     setHistorical(unique);
                     setHistoryHasMore(page.hasMore);
-                    void cacheHistory(selected, unique);
+                    void cacheHistory(selected, unique, activeBranchId);
                     requestAnimationFrame(() => {
                       const current = transcriptRef.current;
                       if (current) current.scrollTop = current.scrollHeight - previousHeight + previousTop;
@@ -902,66 +917,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 />
               ),
             )}
-            {(snapshot.data?.queue?.length ?? 0) > 0 && (
-              <section className="queue-panel" aria-label="排队消息">
-                <div className="queue-panel__heading">
-                  <strong>排队中</strong>
-                  <span>{snapshot.data?.queue.length} 条</span>
-                </div>
-                {snapshot.data?.queue.map((item, index, queue) => (
-                  <div className="queue-item" key={item.run.id}>
-                    <span className="queue-item__position">{item.position}</span>
-                    <span className="queue-item__text">{item.message.content}</span>
-                    <button
-                      type="button"
-                      className="text-action"
-                      title="立即执行"
-                      onClick={() => void client.prioritizeRun(item.run.id).then(() => snapshot.refetch())}
-                    >
-                      立即执行
-                    </button>
-                    <button
-                      type="button"
-                      className="text-action"
-                      title="上移"
-                      disabled={index === 0}
-                      onClick={() => {
-                        const ids = queue.map((entry) => entry.run.id);
-                        const previous = ids[index - 1] as string;
-                        ids[index - 1] = ids[index] as string;
-                        ids[index] = previous;
-                        void client.reorderQueue(selected as string, ids).then(() => snapshot.refetch());
-                      }}
-                    >
-                      上移
-                    </button>
-                    <button
-                      type="button"
-                      className="text-action"
-                      title="下移"
-                      disabled={index === queue.length - 1}
-                      onClick={() => {
-                        const ids = queue.map((entry) => entry.run.id);
-                        const next = ids[index + 1] as string;
-                        ids[index + 1] = ids[index] as string;
-                        ids[index] = next;
-                        void client.reorderQueue(selected as string, ids).then(() => snapshot.refetch());
-                      }}
-                    >
-                      下移
-                    </button>
-                    <button
-                      type="button"
-                      className="text-action"
-                      title="取消"
-                      onClick={() => void client.cancelRun(item.run.id).then(() => snapshot.refetch())}
-                    >
-                      取消
-                    </button>
-                  </div>
-                ))}
-              </section>
-            )}
             <div aria-hidden="true" />
           </section>
           {showJumpToLatest && (
@@ -976,6 +931,70 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             </button>
           )}
           <div className="composer-wrap">
+            {(snapshot.data?.queue?.length ?? 0) > 0 && (
+              <details className="queue-panel" open>
+                <summary className="queue-panel__heading">
+                  <strong>排队中</strong>
+                  <span>{snapshot.data?.queue.length} 条</span>
+                </summary>
+                <div className="queue-panel__list">
+                  {snapshot.data?.queue.map((item, index, queue) => (
+                    <div className="queue-item" key={item.run.id}>
+                      <span className="queue-item__position">{item.position}</span>
+                      <span className="queue-item__text" title={item.message.content}>
+                        {item.message.content}
+                      </span>
+                      <button
+                        type="button"
+                        className="icon"
+                        title="移至队首"
+                        aria-label="移至队首"
+                        onClick={() => void client.prioritizeRun(item.run.id).then(() => snapshot.refetch())}
+                      >
+                        <ArrowDown size={14} className="queue-move-first" />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon"
+                        title="上移"
+                        aria-label="上移"
+                        disabled={index === 0}
+                        onClick={() => {
+                          const ids = queue.map((entry) => entry.run.id);
+                          [ids[index - 1], ids[index]] = [ids[index] as string, ids[index - 1] as string];
+                          void client.reorderQueue(selected as string, ids).then(() => snapshot.refetch());
+                        }}
+                      >
+                        <ChevronRight size={14} className="queue-up" />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon"
+                        title="下移"
+                        aria-label="下移"
+                        disabled={index === queue.length - 1}
+                        onClick={() => {
+                          const ids = queue.map((entry) => entry.run.id);
+                          [ids[index], ids[index + 1]] = [ids[index + 1] as string, ids[index] as string];
+                          void client.reorderQueue(selected as string, ids).then(() => snapshot.refetch());
+                        }}
+                      >
+                        <ChevronRight size={14} className="queue-down" />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon"
+                        title="取消"
+                        aria-label="取消"
+                        onClick={() => void client.cancelRun(item.run.id).then(() => snapshot.refetch())}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
             {connectionMessage && <p className="connection-notice">{connectionMessage}</p>}
             {sendMessage.isError && (
               <div className="composer-error" role="alert">
@@ -1090,7 +1109,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             </form>
           </div>
         </Workspace>
-        {xianyuOpen && <XianyuArea client={client} onClose={() => setXianyuOpen(false)} />}
         <CommandPaletteHost
           open={commandOpen}
           client={client}
@@ -1124,6 +1142,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             }}
           >
             <InspectorContent>
+              {inspectorSection === "xianyu" && <XianyuArea client={client} />}
               {inspectorSection === "connection" && <ConnectionPanel health={health.data} />}
               {inspectorSection === "sync" && (
                 <SyncPanel

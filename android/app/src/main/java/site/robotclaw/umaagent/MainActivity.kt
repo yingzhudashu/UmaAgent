@@ -11,7 +11,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import android.graphics.BitmapFactory
@@ -29,6 +33,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.AndroidViewModel
@@ -598,15 +603,26 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
                 else "当前头像附件：" + selectedSession.assistantAvatarAttachmentId,
                 Modifier.fillMaxWidth(),
             )
-            state.assistantAvatarBytes?.let { bytes ->
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { bitmap ->
-                    Image(
-                        bitmap.asImageBitmap(),
-                        contentDescription = "助手头像预览",
-                        modifier = Modifier.fillMaxWidth(),
-                        contentScale = ContentScale.Fit,
-                    )
-                }
+            val avatarModifier = Modifier
+                .size(36.dp)
+                .padding(vertical = 4.dp)
+                .clip(CircleShape)
+            val avatarBytes = state.assistantAvatarBytes
+            val avatarBitmap = avatarBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+            if (avatarBitmap != null) {
+                Image(
+                    avatarBitmap.asImageBitmap(),
+                    contentDescription = "助手头像预览",
+                    modifier = avatarModifier,
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Image(
+                    painter = painterResource(R.drawable.cat_avatar),
+                    contentDescription = "默认助手头像",
+                    modifier = avatarModifier,
+                    contentScale = ContentScale.Crop,
+                )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button({ model.renameSession(newTitle); newTitle = "" }, enabled = !state.offline && newTitle.isNotBlank() && state.selectedSessionId != null) { Text("重命名") }
@@ -623,11 +639,20 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
                             "tool" -> "工具"
                             else -> state.sessions.firstOrNull { it.id == state.selectedSessionId }?.assistantName ?: "UmaAgent"
                         }
-                        Text(
-                            "$label${if (item.status == "streaming") "（生成中）" else ""}: ${item.content}" +
-                                if (item.attachmentCount > 0) "\n附件 ${item.attachmentCount} 个" else "",
-                            Modifier.fillMaxWidth(),
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            if (item.role == "assistant") {
+                                if (avatarBitmap != null) {
+                                    Image(avatarBitmap.asImageBitmap(), "助手头像", Modifier.size(36.dp).clip(CircleShape))
+                                } else {
+                                    Image(painterResource(R.drawable.cat_avatar), "默认助手头像", Modifier.size(36.dp).clip(CircleShape))
+                                }
+                            }
+                            Text(
+                                "$label${if (item.status == "streaming") "（生成中）" else ""}: ${item.content}" +
+                                    if (item.attachmentCount > 0) "\n附件 ${item.attachmentCount} 个" else "",
+                                Modifier.weight(1f).padding(start = 8.dp),
+                            )
+                        }
                     }
                 }
             } else if (!state.offline) {

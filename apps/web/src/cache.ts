@@ -71,12 +71,16 @@ async function get<T>(store: string, key: string): Promise<T | undefined> {
   return value;
 }
 
+function sessionKey(sessionId: string, activeBranchId?: string): string {
+  return `${sessionId}|${activeBranchId ?? "main"}`;
+}
+
 export async function cacheSnapshot(snapshot: SessionSnapshot): Promise<void> {
   const database = await openDatabase();
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction([SNAPSHOTS, CURSORS], "readwrite");
     const snapshots = transaction.objectStore(SNAPSHOTS);
-    const snapshotKey = key(snapshot.session.id);
+    const snapshotKey = key(sessionKey(snapshot.session.id, snapshot.session.activeBranchId));
     const existingSnapshot = snapshots.get(snapshotKey);
     existingSnapshot.onsuccess = () => {
       const current = existingSnapshot.result as SessionSnapshot | undefined;
@@ -97,7 +101,8 @@ export async function cacheSnapshot(snapshot: SessionSnapshot): Promise<void> {
   database.close();
 }
 
-export const cachedSnapshot = (sessionId: string) => get<SessionSnapshot>(SNAPSHOTS, key(sessionId));
+export const cachedSnapshot = (sessionId: string, activeBranchId?: string) =>
+  get<SessionSnapshot>(SNAPSHOTS, key(sessionKey(sessionId, activeBranchId)));
 export async function cacheCursor(sessionId: string, sequence: number): Promise<void> {
   const database = await openDatabase();
   await new Promise<void>((resolve, reject) => {
@@ -112,8 +117,9 @@ export async function cacheCursor(sessionId: string, sequence: number): Promise<
   database.close();
 }
 export const cachedCursor = (sessionId: string) => get<number>(CURSORS, key(sessionId));
-export const cacheHistory = (sessionId: string, items: TranscriptItem[]) =>
-  put(HISTORY, key(sessionId), items);
-export const cachedHistory = (sessionId: string) => get<TranscriptItem[]>(HISTORY, key(sessionId));
+export const cacheHistory = (sessionId: string, items: TranscriptItem[], activeBranchId?: string) =>
+  put(HISTORY, key(sessionKey(sessionId, activeBranchId)), items);
+export const cachedHistory = (sessionId: string, activeBranchId?: string) =>
+  get<TranscriptItem[]>(HISTORY, key(sessionKey(sessionId, activeBranchId)));
 export const cacheSessions = (sessions: Session[]) => put(SESSIONS, key("list"), sessions);
 export const cachedSessions = () => get<Session[]>(SESSIONS, key("list"));

@@ -1,15 +1,26 @@
 import type { UmaClient } from "@uma-agent/client";
 import { UmaClientError } from "@uma-agent/client";
-import { KeyRound, Pause, Play, RefreshCw, Search, Send, Square, Store, X } from "lucide-react";
+import { KeyRound, Pause, Play, RefreshCw, Search, Send, Square, Store } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 type Conversation = { sessionId: string; conversation: Record<string, unknown> };
 
-function readable(value: unknown): string {
-  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+function StructuredData({ value }: { value: unknown }) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return <p className="settings-empty">{typeof value === "string" ? value : JSON.stringify(value)}</p>;
+  return (
+    <dl className="xianyu-data-list">
+      {Object.entries(value as Record<string, unknown>).map(([key, entry]) => (
+        <div key={key}>
+          <dt>{key}</dt>
+          <dd>{typeof entry === "object" ? JSON.stringify(entry) : String(entry)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
 }
 
-export function XianyuArea({ client, onClose }: { client: UmaClient; onClose: () => void }) {
+export function XianyuArea({ client }: { client: UmaClient }) {
   const [password, setPassword] = useState("");
   const [grant, setGrant] = useState<string>();
   const [expiresAt, setExpiresAt] = useState<number>();
@@ -102,141 +113,130 @@ export function XianyuArea({ client, onClose }: { client: UmaClient; onClose: ()
     });
 
   return (
-    <aside className="inspector-drawer" aria-label="咸鱼控制台">
-      <header className="inspector-header">
-        <h2>
-          <Store size={16} /> 咸鱼
-        </h2>
-        <button type="button" className="icon" onClick={onClose} title="关闭">
-          <X size={16} />
-        </button>
-      </header>
-      <div className="inspector-content">
-        {!grant ? (
+    <div className="xianyu-panel">
+      <div className="xianyu-panel__title">
+        <Store size={16} /> 咸鱼
+      </div>
+      {!grant ? (
+        <div className="inspector-group">
+          <p>需要独立管理员密码解锁。</p>
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="管理员密码"
+          />
+          <button type="button" className="run-action" onClick={unlock} disabled={!password || loading}>
+            <KeyRound size={15} /> {loading ? "解锁中" : "解锁"}
+          </button>
+        </div>
+      ) : (
+        <>
           <div className="inspector-group">
-            <p>需要独立管理员密码解锁。</p>
+            <p>状态：{String(status?.status ?? "unknown")}</p>
+            <p>连接：{status?.connected ? "正常" : "断开"}</p>
+            <p>Grant：{expiresAt ? new Date(expiresAt).toLocaleTimeString() : "未知"} 过期</p>
+            <div className="button-row">
+              <button
+                type="button"
+                className="icon"
+                onClick={() => action("start")}
+                disabled={loading}
+                title="启动"
+              >
+                <Play size={15} />
+              </button>
+              <button
+                type="button"
+                className="icon"
+                onClick={() => action("pause")}
+                disabled={loading}
+                title="暂停"
+              >
+                <Pause size={15} />
+              </button>
+              <button
+                type="button"
+                className="icon"
+                onClick={() => action("resume")}
+                disabled={loading}
+                title="恢复"
+              >
+                <Play size={15} />
+              </button>
+              <button
+                type="button"
+                className="icon"
+                onClick={() => action("stop")}
+                disabled={loading}
+                title="停止"
+              >
+                <Square size={15} />
+              </button>
+              <button type="button" className="icon" onClick={refresh} disabled={loading} title="刷新">
+                <RefreshCw size={15} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-group">
+            <h3>会话</h3>
+            <select
+              value={selectedConversation}
+              onChange={(event) => setSelectedConversation(event.target.value)}
+            >
+              <option value="">选择会话</option>
+              {conversations.map((entry) => {
+                const id = String(entry.conversation?.conversationId ?? entry.sessionId);
+                return (
+                  <option key={entry.sessionId} value={id}>
+                    {entry.sessionId}
+                  </option>
+                );
+              })}
+            </select>
+            <button
+              type="button"
+              className="run-action"
+              onClick={loadHistory}
+              disabled={!selectedConversation || loading}
+            >
+              <Search size={15} /> 查看历史
+            </button>
+            {history !== undefined && <StructuredData value={history} />}
+          </div>
+          <div className="inspector-group">
+            <h3>商品详情</h3>
+            <input value={itemId} onChange={(event) => setItemId(event.target.value)} placeholder="商品 ID" />
+            <button
+              type="button"
+              className="run-action"
+              onClick={loadItem}
+              disabled={!itemId.trim() || loading}
+            >
+              <Search size={15} /> 查询商品
+            </button>
+            {item !== undefined && <StructuredData value={item} />}
+          </div>
+          <div className="inspector-group">
+            <h3>建聊</h3>
             <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="管理员密码"
+              value={receiverId}
+              onChange={(event) => setReceiverId(event.target.value)}
+              placeholder="买家 ID"
             />
-            <button type="button" className="run-action" onClick={unlock} disabled={!password || loading}>
-              <KeyRound size={15} /> {loading ? "解锁中" : "解锁"}
+            <input
+              value={chatItemId}
+              onChange={(event) => setChatItemId(event.target.value)}
+              placeholder="商品 ID"
+            />
+            <button type="button" className="run-action" onClick={createChat} disabled={loading}>
+              <Send size={15} /> 建立会话
             </button>
           </div>
-        ) : (
-          <>
-            <div className="inspector-group">
-              <p>状态：{String(status?.status ?? "unknown")}</p>
-              <p>连接：{status?.connected ? "正常" : "断开"}</p>
-              <p>Grant：{expiresAt ? new Date(expiresAt).toLocaleTimeString() : "未知"} 过期</p>
-              <div className="button-row">
-                <button
-                  type="button"
-                  className="icon"
-                  onClick={() => action("start")}
-                  disabled={loading}
-                  title="启动"
-                >
-                  <Play size={15} />
-                </button>
-                <button
-                  type="button"
-                  className="icon"
-                  onClick={() => action("pause")}
-                  disabled={loading}
-                  title="暂停"
-                >
-                  <Pause size={15} />
-                </button>
-                <button
-                  type="button"
-                  className="icon"
-                  onClick={() => action("resume")}
-                  disabled={loading}
-                  title="恢复"
-                >
-                  <Play size={15} />
-                </button>
-                <button
-                  type="button"
-                  className="icon"
-                  onClick={() => action("stop")}
-                  disabled={loading}
-                  title="停止"
-                >
-                  <Square size={15} />
-                </button>
-                <button type="button" className="icon" onClick={refresh} disabled={loading} title="刷新">
-                  <RefreshCw size={15} />
-                </button>
-              </div>
-            </div>
-            <div className="inspector-group">
-              <h3>会话</h3>
-              <select
-                value={selectedConversation}
-                onChange={(event) => setSelectedConversation(event.target.value)}
-              >
-                <option value="">选择会话</option>
-                {conversations.map((entry) => {
-                  const id = String(entry.conversation?.conversationId ?? entry.sessionId);
-                  return (
-                    <option key={entry.sessionId} value={id}>
-                      {entry.sessionId}
-                    </option>
-                  );
-                })}
-              </select>
-              <button
-                type="button"
-                className="run-action"
-                onClick={loadHistory}
-                disabled={!selectedConversation || loading}
-              >
-                <Search size={15} /> 查看历史
-              </button>
-              {history !== undefined && <pre>{readable(history)}</pre>}
-            </div>
-            <div className="inspector-group">
-              <h3>商品详情</h3>
-              <input
-                value={itemId}
-                onChange={(event) => setItemId(event.target.value)}
-                placeholder="商品 ID"
-              />
-              <button
-                type="button"
-                className="run-action"
-                onClick={loadItem}
-                disabled={!itemId.trim() || loading}
-              >
-                <Search size={15} /> 查询商品
-              </button>
-              {item !== undefined && <pre>{readable(item)}</pre>}
-            </div>
-            <div className="inspector-group">
-              <h3>建聊</h3>
-              <input
-                value={receiverId}
-                onChange={(event) => setReceiverId(event.target.value)}
-                placeholder="买家 ID"
-              />
-              <input
-                value={chatItemId}
-                onChange={(event) => setChatItemId(event.target.value)}
-                placeholder="商品 ID"
-              />
-              <button type="button" className="run-action" onClick={createChat} disabled={loading}>
-                <Send size={15} /> 建立会话
-              </button>
-            </div>
-          </>
-        )}
-        {notice && <p className="action-status">{notice}</p>}
-        {error && <p className="error-text">{error}</p>}
-      </div>
-    </aside>
+        </>
+      )}
+      {notice && <p className="action-status">{notice}</p>}
+      {error && <p className="error-text">{error}</p>}
+    </div>
   );
 }

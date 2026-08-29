@@ -95,13 +95,15 @@ export class UmaDatabase {
       this.withTransaction(operation),
     );
     const interrupted = rows(
-      this.db.prepare("SELECT id,session_id FROM runs WHERE status IN ('preflight','running','verifying')"),
+      this.db.prepare(
+        "SELECT id,session_id FROM runs WHERE status IN ('queued','preflight','running','verifying')",
+      ),
     );
     this.withTransaction(() => {
       const now = Date.now();
       this.db
         .prepare(
-          "UPDATE runs SET status = 'interrupted', error = 'Server restarted during execution', updated_at = ? WHERE status IN ('preflight','running','verifying')",
+          "UPDATE runs SET status = 'interrupted', error = 'Server restarted during execution', updated_at = ? WHERE status IN ('queued','preflight','running','verifying')",
         )
         .run(now);
       this.db
@@ -1044,6 +1046,11 @@ export class UmaDatabase {
     // response 会被前端当作“孤立历史响应”重新渲染出来。
     const activeMessageIds = new Set(allVisible.map((item) => item.id));
     const activeRunIds = new Set(allVisible.flatMap((item) => (item.runId ? [item.runId] : [])));
+    const supersededMessageIds = new Set(
+      allVisible
+        .filter((item) => item.role === "user" && item.parentMessageId)
+        .map((item) => item.parentMessageId as string),
+    );
     return {
       session,
       transcript,
@@ -1055,7 +1062,9 @@ export class UmaDatabase {
         hasMoreBefore,
       },
       responses: this.listResponses(sessionId).filter(
-        (response) => activeMessageIds.has(response.messageId) || activeRunIds.has(response.runId),
+        (response) =>
+          !supersededMessageIds.has(response.messageId) &&
+          (activeMessageIds.has(response.messageId) || activeRunIds.has(response.runId)),
       ),
       branches: this.listBranches(sessionId),
       queue: this.listQueuedRuns(sessionId).flatMap((run, index) => {

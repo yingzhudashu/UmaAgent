@@ -208,6 +208,10 @@ export function createBuiltinTools(input: {
   scheduleManage: (input: Record<string, unknown>) => unknown;
   memoryWrite: (scope: "global" | "session", content: string) => ReturnType<UmaDatabase["addMemoryFact"]>;
   attachmentCreateFromWorkspace?: (path: string) => Promise<{ id: string; name: string }>;
+  imageGenerate?: (
+    prompt: string,
+    signal: AbortSignal,
+  ) => Promise<{ id: string; name: string; size: number }>;
   smath?: SmathWorkerClient;
 }): AgentTool[] {
   const {
@@ -221,6 +225,7 @@ export function createBuiltinTools(input: {
     scheduleManage,
     memoryWrite,
     attachmentCreateFromWorkspace,
+    imageGenerate,
     smath,
   } = input;
   const webSearchTool = () =>
@@ -581,6 +586,21 @@ export function createBuiltinTools(input: {
         return result(await readTextFile(path), { name: attachment.name });
       },
     }),
+    ...(imageGenerate
+      ? [
+          defineTool({
+            name: "image_generate",
+            label: "Generate image",
+            description: "Generate one PNG image from a text prompt and attach it to the current response.",
+            parameters: Type.Object({ prompt: Type.String({ minLength: 1, maxLength: 32_000 }) }),
+            executionMode: "parallel",
+            async execute(_id, params, signal) {
+              const attachment = await imageGenerate(params.prompt, signal ?? new AbortController().signal);
+              return result(`Generated image ${attachment.name}`, { attachment });
+            },
+          }),
+        ]
+      : []),
     ...(attachmentCreateFromWorkspace
       ? [
           defineTool({

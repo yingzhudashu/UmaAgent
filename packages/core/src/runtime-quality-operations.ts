@@ -73,8 +73,10 @@ export class RuntimeQualityOperations {
       { "run.kind": kind },
       traceParent,
     );
-    orchestrator.enqueue(session.id, () =>
-      queuedTrace.run((root) => this.execute(session, run.id, target, kind, options, undefined, root)),
+    orchestrator.enqueue(
+      session.id,
+      () => queuedTrace.run((root) => this.execute(session, run.id, target, kind, options, undefined, root)),
+      run.id,
     );
     return run;
   }

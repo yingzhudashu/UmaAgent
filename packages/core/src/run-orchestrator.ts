@@ -3,6 +3,7 @@ import { Semaphore } from "./runtime-support.js";
 type Operation = () => Promise<void>;
 
 type QueueEntry = {
+  runId?: string;
   operation: Operation;
 };
 
@@ -22,12 +23,48 @@ export class RunOrchestrator {
     this.semaphore = new Semaphore(maxParallelSessions);
   }
 
-  enqueue(sessionId: string, operation: Operation): void {
-    this.enqueueEntry(sessionId, { operation }, false);
+  enqueue(sessionId: string, operation: Operation, runId?: string): void {
+    this.enqueueEntry(sessionId, { operation, ...(runId ? { runId } : {}) }, false);
   }
 
-  enqueueFirst(sessionId: string, operation: Operation): void {
-    this.enqueueEntry(sessionId, { operation }, true);
+  enqueueFirst(sessionId: string, operation: Operation, runId?: string): void {
+    this.enqueueEntry(sessionId, { operation, ...(runId ? { runId } : {}) }, true);
+  }
+
+  remove(sessionId: string, runId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    const index = session.pending.findIndex((entry) => entry.runId === runId);
+    if (index < 0) return false;
+    session.pending.splice(index, 1);
+    if (!session.running && session.pending.length === 0) this.sessions.delete(sessionId);
+    this.resolveIdleWaiters();
+    return true;
+  }
+
+  /** Reorders only pending work; the currently running operation is untouched. */
+  reorder(sessionId: string, runIds: string[]): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.pending.length === 0) return;
+    const pending = session.pending;
+    const byId = new Map(pending.flatMap((entry) => (entry.runId ? [[entry.runId, entry] as const] : [])));
+    if (
+      byId.size !== pending.length ||
+      runIds.length !== pending.length ||
+      runIds.some((id) => !byId.has(id))
+    )
+      throw new Error("Queue changed; reload the session snapshot");
+    session.pending = runIds.map((id) => byId.get(id) as QueueEntry);
+  }
+
+  prioritize(sessionId: string, runId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    const index = session.pending.findIndex((entry) => entry.runId === runId);
+    if (index > 0) {
+      const [entry] = session.pending.splice(index, 1);
+      if (entry) session.pending.unshift(entry);
+    }
   }
 
   pause(sessionId: string): void {

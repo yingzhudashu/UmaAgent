@@ -9,7 +9,7 @@
   },
   "auth": { "webSessionHours": 168 },
   "providers": {
-    "openai": { "driver": "openai", "baseUrl": "https://www.fastaitoken.com", "apiKeyEnv": "OPENAI_API_KEY" }
+    "openai": { "driver": "openai", "baseUrl": "https://api.tcvps.cn/v1", "apiKeyEnv": "OPENAI_API_KEY" }
   },
   "models": {
     "gpt-5.6-sol": {

@@ -1,6 +1,6 @@
 import type { Response, ResponseStatus, Run, Session, TranscriptItem } from "@uma-agent/protocol";
 import { Check, ChevronRight, Copy, Download, FileText, LoaderCircle, Wrench } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import defaultAvatarUrl from "../assets/cat-avatar.jpg";
 import { Markdown } from "../Markdown.js";
 import { responseStatusLabels } from "../statusLabels.js";
@@ -27,6 +27,7 @@ function toolLabel(name?: string): string {
     mcp_browser_fill: "填写网页表单",
     mcp_browser_screenshot: "网页截图",
     mcp_browser_close: "关闭网页",
+    image_generate: "生成图片",
   };
   return labels[name ?? ""] ?? name ?? "工具";
 }
@@ -67,6 +68,9 @@ export function ResponseCard({
   onQualityRetry?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [previewAttachment, setPreviewAttachment] = useState<string>();
+  const [previewError, setPreviewError] = useState(false);
+  const previewRef = useRef<HTMLDialogElement>(null);
   const assistantItems = items.filter((item) => item.role === "assistant");
   const finalAssistant = assistantItems.at(-1);
   const finalContent = finalAssistant?.content || response.content || "";
@@ -97,6 +101,12 @@ export function ResponseCard({
     window.setTimeout(() => setCopied(false), 1200);
   };
   const updatedAt = response.updatedAt || response.createdAt;
+  useEffect(() => {
+    const dialog = previewRef.current;
+    if (!dialog) return;
+    if (previewAttachment && !dialog.open) dialog.showModal();
+    if (!previewAttachment && dialog.open) dialog.close();
+  }, [previewAttachment]);
 
   return (
     <article className="message-row message-row--assistant response-card" aria-live="polite">
@@ -246,24 +256,80 @@ export function ResponseCard({
 
         {response.attachments.length > 0 && (
           <div className="response-files">
-            {response.attachments.map((attachment) => (
-              <button
-                type="button"
-                className="response-file"
-                key={attachment.id}
-                onClick={() => onDownload(attachment.id)}
-                title="下载文件"
-              >
-                <FileText size={16} aria-hidden="true" />
-                <span className="response-file__name">{attachment.name}</span>
-                <small className="response-file__size">
-                  {Math.ceil(attachment.size / 1024).toLocaleString()} KB
-                </small>
-                <Download size={14} aria-hidden="true" />
-              </button>
-            ))}
+            {response.attachments.map((attachment) =>
+              attachment.mimeType.startsWith("image/") ? (
+                <figure className="response-image" key={attachment.id}>
+                  <button
+                    type="button"
+                    className="response-image__button"
+                    onClick={() => {
+                      setPreviewError(false);
+                      setPreviewAttachment(attachment.id);
+                    }}
+                    title="预览图片"
+                  >
+                    <img
+                      src={`/api/v15/attachments/${encodeURIComponent(attachment.id)}/content`}
+                      alt={attachment.name}
+                      loading="lazy"
+                      decoding="async"
+                      onError={() => setPreviewError(true)}
+                    />
+                  </button>
+                  <figcaption>
+                    <span className="response-file__name">{attachment.name}</span>
+                    <button
+                      type="button"
+                      className="icon"
+                      onClick={() => onDownload(attachment.id)}
+                      title="下载图片"
+                    >
+                      <Download size={14} aria-hidden="true" />
+                    </button>
+                  </figcaption>
+                </figure>
+              ) : (
+                <button
+                  type="button"
+                  className="response-file"
+                  key={attachment.id}
+                  onClick={() => onDownload(attachment.id)}
+                  title="下载文件"
+                >
+                  <FileText size={16} aria-hidden="true" />
+                  <span className="response-file__name">{attachment.name}</span>
+                  <small className="response-file__size">
+                    {Math.ceil(attachment.size / 1024).toLocaleString()} KB
+                  </small>
+                  <Download size={14} aria-hidden="true" />
+                </button>
+              ),
+            )}
           </div>
         )}
+        <dialog
+          ref={previewRef}
+          className="response-image-dialog"
+          onClose={() => setPreviewAttachment(undefined)}
+        >
+          {previewAttachment && !previewError ? (
+            <img
+              src={`/api/v15/attachments/${encodeURIComponent(previewAttachment)}/content`}
+              alt="原图预览"
+              onError={() => setPreviewError(true)}
+            />
+          ) : (
+            <p className="error-text">图片加载失败。</p>
+          )}
+          <button
+            type="button"
+            className="icon"
+            title="关闭预览"
+            onClick={() => setPreviewAttachment(undefined)}
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        </dialog>
       </div>
     </article>
   );

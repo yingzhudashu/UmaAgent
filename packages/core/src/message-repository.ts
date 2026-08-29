@@ -77,6 +77,8 @@ export class MessageRepository {
     if (!head) return all;
     if (text(branch?.name ?? "") === "主分支") return all;
 
+    // 分支投影只保留活动 head 的祖先链，以及这些用户消息对应 Run 的
+    // 助手/工具消息。这样编辑点本身不会丢失，旧分支的回复也不会回灌。
     const byId = new Map(all.map((value) => [text(value.id), value]));
     const ancestry = new Set<string>();
     let cursor: Row | undefined = head;
@@ -86,49 +88,24 @@ export class MessageRepository {
       ancestry.add(id);
       cursor = cursor.parent_message_id ? byId.get(text(cursor.parent_message_id)) : undefined;
     }
-    const branchCreatedAt = integer(branch?.branch_created_at ?? 0);
-    const branchUsers = all.filter(
-      (value) => text(value.role) === "user" && integer(value.created_at) >= branchCreatedAt,
+    const activeRunIds = new Set(
+      all.filter((value) => ancestry.has(text(value.id)) && value.run_id).map((value) => text(value.run_id)),
     );
-    const forkChild = branchUsers.find((value) => Boolean(value.parent_message_id));
-    const forkParent = forkChild?.parent_message_id ? byId.get(text(forkChild.parent_message_id)) : undefined;
-    const rootSequence = forkParent ? integer(forkParent.sequence) : integer(head.sequence);
-    const firstBranchSequence = forkChild ? integer(forkChild.sequence) : rootSequence + 1;
-    const activeRunIds = new Set<string>();
-    const activeUsers = new Set<string>();
-    for (const value of all) {
-      if (text(value.role) !== "user") continue;
-      const sequence = integer(value.sequence);
-      const id = text(value.id);
-      const linked = ancestry.has(id) || ancestry.has(text(value.parent_message_id ?? ""));
-      const laterUnlinkedUser =
-        !value.parent_message_id &&
-        sequence >= firstBranchSequence &&
-        integer(value.created_at) >= branchCreatedAt;
-      if ((linked && sequence >= firstBranchSequence) || laterUnlinkedUser) {
-        activeUsers.add(id);
-        if (value.run_id) activeRunIds.add(text(value.run_id));
-      }
-    }
     const qualityRunIds = new Set(
       rows(
         this.db.prepare(
-          "SELECT id FROM runs WHERE target_message_id IN (SELECT id FROM messages WHERE session_id=? AND id IN (" +
+          "SELECT id FROM runs WHERE target_message_id IN (" +
             [...ancestry].map(() => "?").join(",") +
-            ")) AND kind IN ('review','improve')",
+            ") AND kind IN ('review','improve')",
         ),
-        sessionId,
         ...ancestry,
       ).map((value) => text(value.id)),
     );
-    return all.filter((value) => {
-      const sequence = integer(value.sequence);
-      return (
-        sequence < rootSequence ||
-        activeUsers.has(text(value.id)) ||
-        (value.run_id && (activeRunIds.has(text(value.run_id)) || qualityRunIds.has(text(value.run_id))))
-      );
-    });
+    return all.filter(
+      (value) =>
+        ancestry.has(text(value.id)) ||
+        (value.run_id && (activeRunIds.has(text(value.run_id)) || qualityRunIds.has(text(value.run_id)))),
+    );
   }
 
   listAgentMessages(

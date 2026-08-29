@@ -75,6 +75,7 @@ export class RunQualityService {
       systemPrompt,
       messages: base,
       signal: context.signal,
+      jsonMode: true,
       ...(context.contextSummarySequence !== undefined
         ? { contextSummarySequence: context.contextSummarySequence }
         : {}),
@@ -101,6 +102,7 @@ export class RunQualityService {
           instruction("Return only one JSON value matching the requested schema. No Markdown or commentary."),
         ],
         signal: context.signal,
+        jsonMode: true,
         ...(context.contextSummarySequence !== undefined
           ? { contextSummarySequence: context.contextSummarySequence }
           : {}),

@@ -79,8 +79,10 @@ export class RuntimeCommandOperations {
       traceParent,
     );
     deps.activeTraces.set(run.id, queuedTrace.root);
-    deps.orchestrator.enqueue(sessionId, () =>
-      queuedTrace.run(() => this.execute(session, run.id, normalized)),
+    deps.orchestrator.enqueue(
+      sessionId,
+      () => queuedTrace.run(() => this.execute(session, run.id, normalized)),
+      run.id,
     );
     return run;
   }
