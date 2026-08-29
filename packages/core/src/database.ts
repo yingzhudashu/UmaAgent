@@ -1040,6 +1040,10 @@ export class UmaDatabase {
     const visible = allVisible.slice(Math.max(0, allVisible.length - 100));
     const hasMoreBefore = allVisible.length > visible.length;
     const transcript = visible;
+    // 响应记录也必须遵循活动分支。否则编辑消息创建新分支后，旧分支的
+    // response 会被前端当作“孤立历史响应”重新渲染出来。
+    const activeMessageIds = new Set(allVisible.map((item) => item.id));
+    const activeRunIds = new Set(allVisible.flatMap((item) => (item.runId ? [item.runId] : [])));
     return {
       session,
       transcript,
@@ -1050,7 +1054,9 @@ export class UmaDatabase {
         oldestMessageSequence: visible.length ? integer(visible[0]?.sequence) : 0,
         hasMoreBefore,
       },
-      responses: this.listResponses(sessionId),
+      responses: this.listResponses(sessionId).filter(
+        (response) => activeMessageIds.has(response.messageId) || activeRunIds.has(response.runId),
+      ),
       branches: this.listBranches(sessionId),
       queue: this.listQueuedRuns(sessionId).flatMap((run, index) => {
         const value = row(this.db.prepare("SELECT id FROM messages WHERE id=?"), run.messageId);

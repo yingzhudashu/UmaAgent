@@ -556,6 +556,11 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     const sessionId = selected;
     try {
       const result = await client.editMessage(item.id, text);
+      // 编辑会话切换了活动分支；旧分页记录属于旧分支，必须立即丢弃，
+      // 否则重新获取快照时会与新分支内容合并显示。
+      setHistorical([]);
+      setHistoryHasMore(undefined);
+      await cacheHistory(sessionId, []);
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       await queryClient.invalidateQueries({ queryKey: ["snapshot", sessionId] });
       await client.waitForRun(result.runId);

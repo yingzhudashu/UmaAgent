@@ -200,6 +200,65 @@ describe("UmaDatabase", () => {
     db.close();
   });
 
+  it("only returns responses attached to the active conversation branch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-response-branch-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    const session = db.createSession({
+      title: "branches",
+      workspace: root,
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const mainMessageId = "main-message";
+    const mainRun = db.createRun(session.id, mainMessageId, modelSnapshot, "off", "agent", "agent").run;
+    db.insertMessage({
+      id: mainMessageId,
+      sessionId: session.id,
+      runId: mainRun.id,
+      role: "user",
+      status: "complete",
+      content: "当前分支",
+    });
+    db.createResponse({ sessionId: session.id, runId: mainRun.id, messageId: mainMessageId });
+    const oldRun = db.createRun(session.id, "old-message", modelSnapshot, "off", "agent", "agent").run;
+    db.insertMessage({
+      id: "old-message",
+      sessionId: session.id,
+      runId: oldRun.id,
+      role: "assistant",
+      status: "complete",
+      content: "旧回复",
+      parentMessageId: mainMessageId,
+    });
+    db.createResponse({ sessionId: session.id, runId: oldRun.id, messageId: "old-message" });
+    db.db
+      .prepare(
+        "INSERT INTO conversation_branches(id,session_id,name,head_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+      )
+      .run("edit-branch", session.id, "编辑分支", mainMessageId, Date.now(), Date.now());
+    db.db.prepare("UPDATE sessions SET active_branch_id=? WHERE id=?").run("edit-branch", session.id);
+    const branchMessageId = "branch-message";
+    const branchRun = db.createRun(session.id, branchMessageId, modelSnapshot, "off", "agent", "agent").run;
+    db.insertMessage({
+      id: branchMessageId,
+      sessionId: session.id,
+      runId: branchRun.id,
+      role: "user",
+      status: "complete",
+      content: "编辑后的问题",
+      parentMessageId: mainMessageId,
+    });
+    db.db
+      .prepare("UPDATE conversation_branches SET head_message_id=?,updated_at=? WHERE id=?")
+      .run(branchMessageId, Date.now(), "edit-branch");
+    db.createResponse({ sessionId: session.id, runId: branchRun.id, messageId: branchMessageId });
+
+    const snapshot = db.getSnapshot(session.id);
+    expect(snapshot.responses.map((response) => response.runId)).toEqual([branchRun.id]);
+    db.close();
+  });
+
   it("loads message attachments in one projection without dropping metadata", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-message-repository-"));
     temporary.push(root);
