@@ -604,7 +604,7 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
                 Modifier.fillMaxWidth(),
             )
             val avatarModifier = Modifier
-                .size(36.dp)
+                .size(48.dp)
                 .padding(vertical = 4.dp)
                 .clip(CircleShape)
             val avatarBytes = state.assistantAvatarBytes
@@ -642,9 +642,9 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             if (item.role == "assistant") {
                                 if (avatarBitmap != null) {
-                                    Image(avatarBitmap.asImageBitmap(), "助手头像", Modifier.size(36.dp).clip(CircleShape))
+                                    Image(avatarBitmap.asImageBitmap(), "助手头像", Modifier.size(48.dp).clip(CircleShape))
                                 } else {
-                                    Image(painterResource(R.drawable.cat_avatar), "默认助手头像", Modifier.size(36.dp).clip(CircleShape))
+                                    Image(painterResource(R.drawable.cat_avatar), "默认助手头像", Modifier.size(48.dp).clip(CircleShape))
                                 }
                             }
                             Text(

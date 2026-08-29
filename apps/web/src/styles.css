@@ -997,8 +997,8 @@
   align-items: flex-start;
 }
 .assistant-avatar-preview {
-  width: 64px;
-  height: 64px;
+  width: 84px;
+  height: 84px;
   border-radius: 12px;
   background: var(--surface-2, #eef1f0);
 }
@@ -1566,7 +1566,7 @@
 }
 .uma-embed .message-row {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, 1fr);
   gap: 12px;
   padding: 18px 0;
   max-width: 860px;
@@ -1575,8 +1575,8 @@
   min-width: 0;
 }
 .uma-embed .message-avatar {
-  width: 36px;
-  height: 36px;
+  width: 48px;
+  height: 48px;
   display: grid;
   place-items: center;
   border-radius: 9px;
@@ -1585,7 +1585,7 @@
   margin-top: 2px;
 }
 .uma-embed .message-row--user {
-  grid-template-columns: minmax(0, 1fr) 36px;
+  grid-template-columns: minmax(0, 1fr) 48px;
 }
 .uma-embed .message-row--user .message-avatar {
   grid-column: 2;
@@ -2505,11 +2505,15 @@
     padding: 8px 10px 14px;
   }
   .uma-embed .message-row {
-    grid-template-columns: 26px minmax(0, 1fr);
+    grid-template-columns: 40px minmax(0, 1fr);
     gap: 8px;
   }
   .uma-embed .message-row--user {
-    grid-template-columns: minmax(0, 1fr) 26px;
+    grid-template-columns: minmax(0, 1fr) 40px;
+  }
+  .uma-embed .message-avatar {
+    width: 40px;
+    height: 40px;
   }
   .uma-embed .message-row--user .message-content {
     max-width: 88%;
