@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -83,31 +83,10 @@ const config = {
 };
 await writeFile(configPath, JSON.stringify(config, null, 2));
 
-async function bootstrapAdminToken() {
-  const { UmaDatabase } = await import("../packages/core/dist/index.js");
-  const database = new UmaDatabase(stateDir);
-  try {
-    const user = database.createUser("admin");
-    const tokenId = randomUUID();
-    const secret = randomBytes(32).toString("base64url");
-    database.putAuthToken({
-      id: tokenId,
-      userId: user.id,
-      tokenHash: createHash("sha256").update(secret).digest("hex"),
-      label: `real-${mode}`,
-      scopes: ["user"],
-      expiresAt: Date.now() + 86_400_000,
-    });
-    return `uma_pat_${tokenId}_${secret}`;
-  } finally {
-    database.close();
-  }
-}
-
-const token = await bootstrapAdminToken();
+let token = "";
 const server = spawn(process.execPath, ["apps/server/dist/main.js", `--config=${configPath}`], {
   cwd: resolve("."),
-  env: { ...process.env, UMA_CONFIG: configPath },
+  env: { ...process.env, UMA_CONFIG: configPath, UMA_IMAGE_TEST_KEY: "disabled" },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let serverOutput = "";
@@ -122,18 +101,20 @@ async function request(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
     ...options,
     headers: {
-      authorization: `Bearer ${token}`,
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(options.body ? { "content-type": "application/json" } : {}),
       ...options.headers,
     },
   });
   if (!response.ok)
-    throw new Error(`${options.method ?? "GET"} ${path}: HTTP ${response.status} ${await response.text()}`);
+    throw new Error(
+      `${options.method ?? "GET"} ${path}: HTTP ${response.status} ${errorSummary(await response.text())}`,
+    );
   return response.status === 204 ? undefined : response.json();
 }
 async function waitReady() {
   for (let attempt = 0; attempt < 240; attempt++) {
-    if (server.exitCode !== null) throw new Error(`Real Core exited early: ${serverOutput}`);
+    if (server.exitCode !== null) throw new Error(`Real Core exited early: ${errorSummary(serverOutput)}`);
     try {
       if ((await fetch(`${base}/health/ready`)).ok) return;
     } catch {
@@ -141,7 +122,7 @@ async function waitReady() {
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
   }
-  throw new Error(`Real Core did not become ready: ${serverOutput}`);
+  throw new Error(`Real Core did not become ready on port ${port}: ${errorSummary(serverOutput)}`);
 }
 async function waitRun(runId) {
   for (let attempt = 0; attempt < 1_200; attempt++) {
@@ -193,6 +174,14 @@ function errorSummary(value) {
   return String(value ?? "")
     .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
     .replaceAll(process.env[apiKeyEnv] ?? "", "[REDACTED]")
+    .replace(
+      /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|body)\s*[:=]\s*)\S+/gi,
+      "$1[REDACTED]",
+    )
+    .replace(
+      /([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token)=)[^&#\s]*/gi,
+      "$1[REDACTED]",
+    )
     .slice(0, 300);
 }
 function usageSummary(audits) {
@@ -217,7 +206,13 @@ async function runOne(sessionId, text, modeName = "agent") {
   const run = await waitRun(accepted.runId);
   const trace = await request(`/traces?runId=${encodeURIComponent(run.id)}&limit=500`);
   const audits = await request(`/audit/runs/${encodeURIComponent(run.id)}`);
-  const resources = await request("/reports/resources?from=0&limit=500");
+  let resources;
+  try {
+    resources = await request("/reports/resources?from=0&limit=500");
+  } catch (error) {
+    if (!String(error).includes("HTTP 403")) throw error;
+    resources = [];
+  }
   const latestResource = resources[0];
   return {
     run,
@@ -300,8 +295,18 @@ async function runEval() {
     const trace = await request(`/traces?runId=${encodeURIComponent(item.runId)}&limit=1`);
     if (trace.traceId) traceIds.push(trace.traceId);
   }
-  const diagnostics = await request("/reports/diagnostics?from=0");
-  const resources = await request("/reports/resources?from=0&limit=1");
+  let diagnostics = null;
+  try {
+    diagnostics = await request("/reports/diagnostics?from=0");
+  } catch (error) {
+    if (!String(error).includes("HTTP 403")) throw error;
+  }
+  let resources = [];
+  try {
+    resources = await request("/reports/resources?from=0&limit=1");
+  } catch (error) {
+    if (!String(error).includes("HTTP 403")) throw error;
+  }
   console.log(
     JSON.stringify({
       passed: exitCode === 0,
@@ -317,6 +322,15 @@ async function runEval() {
 }
 try {
   await waitReady();
+  const registration = await fetch(`${base}/auth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label: `real-${mode}` }),
+  });
+  if (!registration.ok) throw new Error(`POST /auth/register: HTTP ${registration.status}`);
+  const registered = await registration.json();
+  if (!registered.token) throw new Error("POST /auth/register did not return a token");
+  token = registered.token;
   const session = await request("/sessions", {
     method: "POST",
     body: JSON.stringify({ title: `Real ${mode}` }),

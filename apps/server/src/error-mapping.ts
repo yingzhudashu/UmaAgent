@@ -1,8 +1,10 @@
+import { redactErrorMessage } from "@uma-agent/telemetry";
+
 export function mapServerError(
   error: Error,
   secrets: string[],
 ): { code: string; status: number; message: string; retryable: boolean } {
-  let message = error.message.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]");
+  let message = redactErrorMessage(error.message) ?? "Internal server error";
   for (const secret of secrets) message = message.split(secret).join("[REDACTED]");
   const schemaMismatch = /schema_mismatch|unsupported database schema/i.test(error.message);
   const databaseFailure = /SQLITE_|constraint failed|database is locked|database disk image/i.test(

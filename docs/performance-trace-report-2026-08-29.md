@@ -42,3 +42,15 @@ Trace 具备 HTTP、Run、队列、模型、工具、审批、MCP 和 Browser Wo
 本次修改后的复核结果：`npm run check`、`npm test`（48 文件/258 项）、`npm run build`、Faux Eval（6/6）、短时 Faux soak（41 条消息）、Web Playwright（4/4）和 Android 离线 `test lint assembleDebug` 均通过。最新 Faux 性能为 API p95 22.64ms、事件 p95 8.26ms、RSS 峰值 167,219,200 bytes、WAL 峰值 4,161,232 bytes。当前执行环境未注入 `OPENAI_API_KEY`，真实 API 测试按安全策略跳过，未将 Faux 结果冒充真实结果。
 
 二次复核再次通过 `npm run check`、`npm test`（48 文件/258 项）和 `npm run test:perf`；本次性能为 API p95 26.04ms、事件 p95 24.59ms、RSS 峰值 173,944,832 bytes、WAL 峰值 4,132,392 bytes，仍满足既定预算。
+
+## 2026-09-02 性能与 Trace 增强复核
+
+- `npm run check`：通过；架构检查、Biome 和 TypeScript 均通过。
+- `npm test`：51 个测试文件、273 项测试通过。
+- `npm run build`：通过；Web 仅保留既有 bundle 大小提示。
+- `npm run test:perf`：20 requests；API p50/p95/p99 = 13.10/25.95/26.52ms，事件 p50/p95/p99 = 7.38/15.01/44.95ms，峰值 RSS 176,345,088 bytes，WAL 4,194,192 bytes。
+- `npm run test:soak:faux`：短时 12 条消息通过；RSS 142,737,408 -> 145,539,072 bytes，WAL 1,965,272 bytes。测试夹具现在按测试时长动态配置 faux 响应预算，避免长测因固定响应数耗尽而误报。
+- 服务器真实 API smoke：通过。使用服务器固定 Node 22、真实 `openai/gpt-5.6-sol`（网关 `https://api.tcvps.cn/v1`），真实注册、模型调用、Run 完成和 Trace 查询均成功；耗时 49.9s，7 spans，输入/输出/总 token 为 5756/8/5764。测试使用临时端口、state、workspace 和用户，结束后已清理，生产服务未重启。
+- 二次服务器真实 API smoke：通过。使用新隔离端口 35212，真实注册、模型调用、Run 完成和 Trace 查询均成功；耗时 166.8s，7 spans，输入/输出/总 token 为 921/12/6437。临时资源已清理，生产服务未重启。
+
+本轮修复：Telemetry 摘要分位数改为单次 SQLite 窗口查询；错误文本在落库、Trace API、OTLP 异常和服务器日志出口统一做 Bearer、Cookie、API key、Token、Prompt、Body、URL 查询参数脱敏；结束的子 Span 从父集合移除，降低长运行内存保留。旧 core schema 中的 `trace_spans` 与 `resource_snapshots` 仍被资源快照接口和 schema 校验使用，未进行破坏性删除或迁移。

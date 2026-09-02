@@ -1,5 +1,6 @@
 import type { UmaRuntime } from "@uma-agent/core";
 import type { Run } from "@uma-agent/protocol";
+import { redactErrorMessage } from "@uma-agent/telemetry";
 import type { FastifyInstance } from "fastify";
 
 function redactToolSummary(value: string): string {
@@ -24,7 +25,8 @@ export function installRuntimeLogging(runtime: UmaRuntime, app: FastifyInstance)
       if (payload.isError === true) {
         const summary =
           typeof payload.item?.content === "string"
-            ? redactToolSummary(payload.item.content.slice(0, 512))
+            ? (redactErrorMessage(redactToolSummary(payload.item.content.slice(0, 512))) ??
+              "tool execution failed")
             : "tool execution failed";
         app.log.warn(
           {
@@ -54,7 +56,7 @@ export function installRuntimeLogging(runtime: UmaRuntime, app: FastifyInstance)
         status: run.status,
         phase: run.phase,
         durationMs: Math.max(0, run.updatedAt - run.createdAt),
-        ...(run.error ? { error: run.error } : {}),
+        ...(run.error ? { error: redactErrorMessage(run.error) } : {}),
       },
       "run state changed",
     );

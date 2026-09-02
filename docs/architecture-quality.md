@@ -27,10 +27,12 @@
 | Core Runtime/Database | 状态、事务、资源释放和恢复路径已审查；大文件只按职责边界继续拆分 | `npm run check`、Core tests |
 | Server/Client | API v15、统一错误映射、权限和分页已审查 | Server/Client tests |
 | Web | React Query、事件重连、离线只读缓存和移动布局已审查 | Playwright E2E |
-| Trace/Diagnostics | 父子关系、脱敏、分页、资源快照和 p50/p95/p99 已审查 | Trace/diagnostics tests |
+| Trace/Diagnostics | 父子关系、值级错误脱敏、分页、资源快照和单次窗口分位数查询已审查 | `packages/telemetry/test`、`apps/server/test/error-mapping.test.ts` |
 | 文档/配置 | README、部署、基线、功能矩阵和示例配置按当前代码核对 | 本文档与 `docs/README.md` |
 
 当前尺寸基线记录在 `scripts/architecture-baseline.json`。本次升级新增了严格 Protocol 类型、优化应用持久化、趋势查询和 Web 管理区域；`runtime.ts`、`database.ts`、Server、CLI、Web 和 Protocol 的进一步拆分必须由 Trace/profiler 证据驱动，禁止为了降低行数进行行为不变但风险不明的拆分。
+
+2026-09-02 逐文件复核重点覆盖 `packages/telemetry/src/index.ts`、`packages/core/src/trace.ts`、`packages/core/src/runtime.ts`、`packages/core/src/mcp.ts`、`apps/server/src/httpTelemetry.ts`、`apps/server/src/runtimeLogging.ts`、`apps/server/src/error-mapping.ts`、`apps/browser-worker/src/main.ts` 和 `apps/browser-worker/src/network.ts`。确认 HTTP、Run、queue、preflight、model、tool、approval、MCP、Browser Worker 的 traceparent 传播路径；并发、取消、失败和重启路径均有终态处理。大文件尺寸债务保留，未做无证据拆分。
 
 ## 已复现基线
 

@@ -117,7 +117,10 @@ const response = (context) => {
   if (requestText.includes("Execute only plan step 2")) return fauxAssistantMessage("FAUX_PLAN_STEP_2");
   return fauxAssistantMessage(`Faux Core received: ${requestText.slice(0, 300)}`);
 };
-faux.setResponses(Array.from({ length: 500 }, () => response));
+const responseBudget = Number(process.env.UMA_FAUX_RESPONSES ?? 500);
+if (!Number.isInteger(responseBudget) || responseBudget < 1)
+  throw new Error("UMA_FAUX_RESPONSES must be a positive integer");
+faux.setResponses(Array.from({ length: responseBudget }, () => response));
 runtime.models.models.setProvider(faux.provider);
 await runtime.start();
 const fauxUser = runtime.database.createUser("admin");

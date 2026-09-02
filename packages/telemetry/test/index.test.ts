@@ -2,7 +2,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { formatTraceparent, parseTraceparent, TelemetryStore, TraceService } from "../src/index.js";
+import {
+  formatTraceparent,
+  parseTraceparent,
+  redactErrorMessage,
+  TelemetryStore,
+  TraceService,
+} from "../src/index.js";
 
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
@@ -145,6 +151,52 @@ describe("TelemetryStore", () => {
     await store.close();
   });
 
+  it("redacts secrets embedded in error messages without hiding ordinary diagnostics", async () => {
+    expect(
+      redactErrorMessage(
+        'request failed: Authorization: Bearer abc.def; cookie: sid=private; api_key="secret-value" prompt="private prompt" https://example.test/?token=query-secret sk-test-secret-value',
+      ),
+    ).toBe(
+      "request failed: Authorization: [REDACTED]; cookie: [REDACTED]; api_key=[REDACTED] prompt=[REDACTED] https://example.test/?token=[REDACTED] [REDACTED]",
+    );
+    expect(redactErrorMessage("ECONNRESET while calling provider")).toBe("ECONNRESET while calling provider");
+
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-errors-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "test");
+    store.start({
+      traceId: "trace-error",
+      spanId: "span-error",
+      service: "test",
+      name: "request",
+      kind: "http",
+      startedAt: 1,
+      attributes: {},
+    });
+    store.finish({
+      traceId: "trace-error",
+      spanId: "span-error",
+      service: "test",
+      name: "request",
+      kind: "http",
+      status: "error",
+      startedAt: 1,
+      endedAt: 2,
+      durationMs: 1,
+      attributes: {},
+      errorType: "ProviderError",
+      errorMessage: "Bearer abc.def; api_key=secret-value; ECONNRESET",
+      events: [],
+    });
+    const span = store.listSpans({ traceId: "trace-error" }).spans[0];
+    expect(span?.errorMessage).toBe("[REDACTED]; api_key=[REDACTED]; ECONNRESET");
+    const stored = store.db.prepare("SELECT error_message FROM spans WHERE span_id=?").get("span-error") as {
+      error_message?: unknown;
+    };
+    expect(String(stored.error_message ?? "")).not.toContain("abc.def");
+    await store.close();
+  });
+
   it("finishes a span at most once even when the store API is called repeatedly", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-telemetry-idempotent-"));
     roots.push(root);
@@ -167,6 +219,51 @@ describe("TelemetryStore", () => {
     store.finish(record);
     expect(store.db.prepare("SELECT COUNT(*) AS count FROM span_events").get()).toEqual({ count: 1 });
     expect(store.summarize(0, 10).spans).toBe(1);
+    await store.close();
+  });
+
+  it("computes overall and per-kind percentiles in one consistent rank order", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-percentiles-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "test");
+    const spans = [
+      ["a-1", "a", 1],
+      ["a-2", "a", 5],
+      ["a-3", "a", 9],
+      ["b-1", "b", 2],
+      ["b-2", "b", 8],
+    ] as const;
+    for (const [spanId, kind, duration] of spans) {
+      store.start({
+        traceId: "trace-percentiles",
+        spanId,
+        service: "test",
+        name: kind,
+        kind,
+        startedAt: 1,
+        attributes: {},
+      });
+      store.finish({
+        traceId: "trace-percentiles",
+        spanId,
+        service: "test",
+        name: kind,
+        kind,
+        status: "ok",
+        startedAt: 1,
+        endedAt: duration + 1,
+        durationMs: duration,
+        attributes: {},
+        events: [],
+      });
+    }
+    expect(store.summarize(0, 10)).toMatchObject({
+      latencyMs: { p50: 5, p95: 9, p99: 9 },
+      stageLatencyMs: {
+        a: { p50: 5, p95: 9, p99: 9 },
+        b: { p50: 2, p95: 8, p99: 8 },
+      },
+    });
     await store.close();
   });
 

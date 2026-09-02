@@ -84,6 +84,25 @@ export type ResourceSample = {
 const REDACTED = "[REDACTED]";
 const sensitive = /(authorization|cookie|api[_-]?key|password|secret|token|prompt|completion|body)/i;
 const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
+const errorSecretPatterns = [
+  /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
+  /(\bcookie\s*:\s*)[^;\r\n]+/gi,
+  /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|request[_-]?body|body)\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*?\}|\[[\s\S]*?\}|[^\s,;&}]+)/gi,
+  /(["']?(?:authorization|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|body)["']?\s*:\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*?\}|\[[\s\S]*?\}|[^\s,;&}]+)/gi,
+  /([?&](?:api[_-]?key|access[_-]?token|password|secret|token)=)[^&#\s]*/gi,
+  /\b(?:sk-[A-Za-z0-9][A-Za-z0-9_-]{9,}|ghp_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
+];
+
+export function redactErrorMessage(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  let redacted = value;
+  for (const pattern of errorSecretPatterns)
+    redacted = redacted.replace(pattern, (...matches: unknown[]) => {
+      const prefix = typeof matches[1] === "string" ? matches[1] : "";
+      return `${prefix}${REDACTED}`;
+    });
+  return redacted.slice(0, 2_000);
+}
 
 export function parseTraceparent(value: string | undefined): TraceParent | undefined {
   if (!value) return undefined;
@@ -279,7 +298,7 @@ export class TelemetryStore {
       if (record.status === "error")
         otelSpan.recordException({
           name: record.errorType ?? "Error",
-          message: record.errorMessage ?? "Telemetry span failed",
+          message: redactErrorMessage(record.errorMessage) ?? "Telemetry span failed",
         });
       otelSpan.setStatus({ code: record.status === "error" ? 2 : 1 });
       otelSpan.end(record.endedAt);
@@ -294,7 +313,7 @@ export class TelemetryStore {
           record.durationMs ?? null,
           JSON.stringify(safeAttributes(record.attributes)),
           record.errorType ?? null,
-          record.errorMessage?.slice(0, 2000) ?? null,
+          redactErrorMessage(record.errorMessage) ?? null,
           record.spanId,
         );
       if (record.events.length === 0) {
@@ -448,7 +467,9 @@ export class TelemetryStore {
           }
         })(),
         ...(value.error_type ? { errorType: String(value.error_type) } : {}),
-        ...(value.error_message ? { errorMessage: String(value.error_message) } : {}),
+        ...(value.error_message
+          ? { errorMessage: redactErrorMessage(String(value.error_message)) as string }
+          : {}),
         events: eventsBySpan.get(String(value.span_id)) ?? [],
       })),
       hasMore: values.length > limit,
@@ -488,46 +509,46 @@ export class TelemetryStore {
       errors: Number(row.errors ?? 0),
     }));
     const stageLatencyMs: Record<string, { p50: number; p95: number; p99: number }> = {};
-    const kinds = this.db
-      .prepare("SELECT DISTINCT kind FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ?")
+    const latencyRows = this.db
+      .prepare(
+        `WITH base AS (
+           SELECT kind,span_id,COALESCE(duration_ms,0) AS duration
+           FROM spans
+           WHERE status <> 'active' AND started_at BETWEEN ? AND ?
+         ), ranked AS (
+           SELECT kind,duration,
+                  ROW_NUMBER() OVER (PARTITION BY kind ORDER BY duration,span_id) AS kind_rank,
+                  COUNT(*) OVER (PARTITION BY kind) AS kind_count,
+                  ROW_NUMBER() OVER (ORDER BY duration,span_id) AS all_rank,
+                  COUNT(*) OVER () AS all_count
+           FROM base
+         ), kind_metrics AS (
+           SELECT kind,
+             MAX(CASE WHEN kind_rank=MAX(1,CAST(kind_count*0.50+0.999999 AS INTEGER)) THEN duration ELSE 0 END) AS p50,
+             MAX(CASE WHEN kind_rank=MAX(1,CAST(kind_count*0.95+0.999999 AS INTEGER)) THEN duration ELSE 0 END) AS p95,
+             MAX(CASE WHEN kind_rank=MAX(1,CAST(kind_count*0.99+0.999999 AS INTEGER)) THEN duration ELSE 0 END) AS p99
+           FROM ranked GROUP BY kind
+         ), overall_metrics AS (
+           SELECT
+             MAX(CASE WHEN all_rank=MAX(1,CAST(all_count*0.50+0.999999 AS INTEGER)) THEN duration ELSE 0 END) AS p50,
+             MAX(CASE WHEN all_rank=MAX(1,CAST(all_count*0.95+0.999999 AS INTEGER)) THEN duration ELSE 0 END) AS p95,
+             MAX(CASE WHEN all_rank=MAX(1,CAST(all_count*0.99+0.999999 AS INTEGER)) THEN duration ELSE 0 END) AS p99
+           FROM ranked
+         )
+         SELECT kind,p50,p95,p99 FROM kind_metrics
+         UNION ALL
+         SELECT NULL AS kind,p50,p95,p99 FROM overall_metrics`,
+      )
       .all(from, to) as Array<Record<string, unknown>>;
-    for (const row of kinds) {
-      const kind = String(row.kind);
-      const durationAtKind = (percentile: number) => {
-        const kindCount = Number(
-          (
-            this.db
-              .prepare(
-                "SELECT COUNT(*) AS count FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ? AND kind=?",
-              )
-              .get(from, to, kind) as Record<string, unknown>
-          )?.count ?? 0,
-        );
-        if (!kindCount) return 0;
-        const offset = Math.min(kindCount - 1, Math.max(0, Math.ceil((percentile / 100) * kindCount) - 1));
-        const value = this.db
-          .prepare(
-            "SELECT duration_ms FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ? AND kind=? ORDER BY duration_ms LIMIT 1 OFFSET ?",
-          )
-          .get(from, to, kind, offset) as Record<string, unknown> | undefined;
-        return Number(value?.duration_ms ?? 0);
-      };
-      stageLatencyMs[kind] = {
-        p50: durationAtKind(50),
-        p95: durationAtKind(95),
-        p99: durationAtKind(99),
+    for (const row of latencyRows) {
+      if (row.kind === null) continue;
+      stageLatencyMs[String(row.kind)] = {
+        p50: Number(row.p50 ?? 0),
+        p95: Number(row.p95 ?? 0),
+        p99: Number(row.p99 ?? 0),
       };
     }
-    const durationAt = (percentile: number) => {
-      if (!spans) return 0;
-      const offset = Math.min(spans - 1, Math.max(0, Math.ceil((percentile / 100) * spans) - 1));
-      const value = this.db
-        .prepare(
-          "SELECT duration_ms FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ? ORDER BY duration_ms LIMIT 1 OFFSET ?",
-        )
-        .get(from, to, offset) as Record<string, unknown> | undefined;
-      return Number(value?.duration_ms ?? 0);
-    };
+    const overallLatency = latencyRows.find((row) => row.kind === null);
     return {
       spans,
       incomplete: Number(summary.incomplete ?? 0),
@@ -537,7 +558,11 @@ export class TelemetryStore {
       otlpExportFailures: this.otlpExportFailures,
       services,
       stageLatencyMs,
-      latencyMs: { p50: durationAt(50), p95: durationAt(95), p99: durationAt(99) },
+      latencyMs: {
+        p50: Number(overallLatency?.p50 ?? 0),
+        p95: Number(overallLatency?.p95 ?? 0),
+        p99: Number(overallLatency?.p99 ?? 0),
+      },
     };
   }
   maintain(now = Date.now()): void {
@@ -598,6 +623,7 @@ export class TraceSpanContext implements TelemetryContext {
     private readonly kind: string,
     private readonly service: string,
     attributes?: SpanAttributes,
+    private readonly parentContext?: TraceSpanContext,
   ) {
     this.attributes = safeAttributes(attributes);
     this.store.start({
@@ -652,6 +678,7 @@ export class TraceSpanContext implements TelemetryContext {
       kind,
       this.service,
       attributes,
+      this,
     );
     this.children.add(child);
     return child;
@@ -699,6 +726,7 @@ export class TraceSpanContext implements TelemetryContext {
       ...(this.errorType ? { errorType: this.errorType } : {}),
       ...(this.errorMessage ? { errorMessage: this.errorMessage } : {}),
     });
+    this.parentContext?.children.delete(this);
   }
 }
 

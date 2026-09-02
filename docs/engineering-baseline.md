@@ -21,6 +21,7 @@
 - soak 期间 RSS 增长 < 10%
 - 分支覆盖率采用只升不降的实测 ratchet；目标为各一方包至少 80%，不得通过排除生产文件或降低既有基线通过 CI。
 - Trace Span 必须有完整父子关系，Run 终态不得遗留未结束 Span
+- Trace 错误信息必须经过值级脱敏；诊断摘要不得按 kind 执行 N+1 查询
 
 ## 验证入口
 
@@ -33,5 +34,7 @@ npm run test:perf
 npm run test:soak:faux
 npm run test:web:e2e
 ```
+
+2026-09-02 复核：51 个测试文件/273 项测试、构建、性能基线和短时 soak 通过；真实 API smoke 在服务器隔离端口通过。详见 `docs/performance-trace-report-2026-08-29.md`。
 
 Docker 和 4 小时 soak 由 CI/nightly 执行；本机没有 Docker 时只运行 Node/SQLite 级门禁。MiniAgent 差异审计见 `docs/miniagent-feature-matrix.md`，真实外部网关仅在显式授权时运行。

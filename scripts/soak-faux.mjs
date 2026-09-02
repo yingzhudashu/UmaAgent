@@ -13,6 +13,7 @@ if (!Number.isFinite(messageIntervalMs) || messageIntervalMs < 500)
   throw new Error("UMA_SOAK_MESSAGE_INTERVAL_MS must be at least 500");
 
 const port = Number(process.env.UMA_SOAK_PORT ?? 33212);
+const responseBudget = Math.ceil((hours * 60 * 60_000) / messageIntervalMs) + 100;
 const tokenSecret = "faux-soak-token-012345678901234567890123";
 const token = `uma_pat_00000000-0000-4000-8000-000000000001_${tokenSecret}`;
 const stateDir = process.env.UMA_SOAK_STATE
@@ -27,6 +28,7 @@ const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
     UMA_FAUX_TOKEN: tokenSecret,
     UMA_FAUX_STATE: stateDir,
     UMA_FAUX_RESET_STATE: "1",
+    UMA_FAUX_RESPONSES: String(responseBudget),
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
