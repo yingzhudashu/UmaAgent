@@ -1,13 +1,16 @@
 import { randomBytes, scryptSync } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type UmaConfig, UmaRuntime } from "@uma-agent/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createServer, crossOrigin, secureOrigin, shouldCloseForBufferedAmount } from "../src/app.js";
+import { createServer, shouldCloseForBufferedAmount } from "../src/app.js";
 import { AuthService } from "../src/auth.js";
+import { crossOrigin, secureOrigin, trustLoopbackProxy } from "../src/request-origin.js";
 
 const cleanup: Array<() => Promise<void>> = [];
+const loopbackSocket = { remoteAddress: "127.0.0.1" } as Socket;
 afterEach(async () => {
   for (const action of cleanup.splice(0).reverse()) await action();
 });
@@ -20,6 +23,9 @@ describe("server", () => {
     expect(crossOrigin("not a url", "localhost")).toBe(true);
     expect(secureOrigin(undefined)).toBe(false);
     expect(secureOrigin("not a url")).toBe(false);
+    expect(trustLoopbackProxy("127.0.0.1")).toBe(true);
+    expect(trustLoopbackProxy("::1")).toBe(true);
+    expect(trustLoopbackProxy("203.0.113.10")).toBe(false);
   });
 
   it("requires auth and serves authoritative snapshots", async () => {
@@ -92,6 +98,48 @@ describe("server", () => {
       version: "1.3.0",
       protocolVersion: 15,
     });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/v15/auth/register",
+            headers: { "x-forwarded-for": "198.51.100.10" },
+            payload: { label: `trusted-proxy-${attempt}` },
+          })
+        ).statusCode,
+      ).toBe(201);
+    }
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v15/auth/register",
+          headers: { "x-forwarded-for": "198.51.100.10" },
+          payload: { label: "trusted-proxy-limited" },
+        })
+      ).statusCode,
+    ).toBe(429);
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: "/api/v15/auth/register",
+          headers: { "x-forwarded-for": "198.51.100.11" },
+          payload: { label: "trusted-proxy-other-client" },
+        })
+      ).statusCode,
+    ).toBe(201);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v15/auth/register",
+        remoteAddress: "203.0.113.20",
+        headers: { "x-forwarded-for": `198.51.100.${20 + attempt}` },
+        payload: { label: `untrusted-proxy-${attempt}` },
+      });
+      expect(response.statusCode).toBe(attempt < 3 ? 201 : 429);
+    }
     expect((await app.inject({ method: "GET", url: "/api/v15/sessions" })).statusCode).toBe(401);
     const preflight = await app.inject({
       method: "OPTIONS",
@@ -146,6 +194,7 @@ describe("server", () => {
     expect(cookieSession.statusCode).toBe(200);
     const cookieSessionId = cookieSession.json<{ id: string }>().id;
     const socket = await app.injectWS("/api/v15/events", {
+      socket: loopbackSocket,
       headers: {
         cookie: `${webCookie?.name}=${webCookie?.value}`,
         origin: "https://web.example",
@@ -164,7 +213,10 @@ describe("server", () => {
     socket.terminate();
 
     await expect(
-      app.injectWS("/api/v15/events", { headers: { origin: "https://attacker.example" } }),
+      app.injectWS("/api/v15/events", {
+        socket: loopbackSocket,
+        headers: { origin: "https://attacker.example" },
+      }),
     ).rejects.toThrow("Unexpected server response: 403");
     const logout = await app.inject({
       method: "POST",

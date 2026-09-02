@@ -1,47 +1,12 @@
 package site.robotclaw.umaagent
 
 import android.app.Application
-import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.Build
-import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
-import android.graphics.BitmapFactory
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -52,7 +17,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -60,7 +24,11 @@ import kotlinx.serialization.json.put
 import okhttp3.WebSocket
 
 data class UmaUiState(
+    val stagingAccessRequired: Boolean = false,
     val tokenPresent: Boolean = false,
+    val userRole: String = "user",
+    val registrationToken: String = "",
+    val interactionMode: String = "agent",
     val sessions: List<Session> = emptyList(),
     val selectedSessionId: String? = null,
     val assistantAvatarBytes: ByteArray? = null,
@@ -69,6 +37,11 @@ data class UmaUiState(
     val xianyuData: String = "",
     val resourceData: String = "",
     val attachmentData: String = "",
+    val attachmentPreview: AttachmentPreview? = null,
+    val backgroundTasks: List<UiBackgroundTask> = emptyList(),
+    val scheduledTasks: List<UiScheduledTask> = emptyList(),
+    val scheduledRuns: Map<String, List<UiScheduledRun>> = emptyMap(),
+    val queue: List<UiQueueItem> = emptyList(),
     val pendingAttachmentIds: List<String> = emptyList(),
     val pendingAttachments: List<PendingAttachment> = emptyList(),
     val offline: Boolean = false,
@@ -82,8 +55,15 @@ data class UmaUiState(
     val updateFilePath: String? = null,
 )
 
+data class AttachmentPreview(
+    val id: String,
+    val name: String,
+    val bytes: ByteArray,
+)
+
 class UmaViewModel(application: Application) : AndroidViewModel(application) {
     private val patStore = PatStore(application)
+    private val stagingAuthStore = StagingAuthStore(application)
     private val cache = SnapshotCache(application)
     private val state = MutableStateFlow(UmaUiState())
     val uiState = state.asStateFlow()
@@ -96,25 +76,29 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     private val sequences = mutableMapOf<String, Long>()
     private val json = Json { ignoreUnknownKeys = true }
 
+    private fun stagingPassword(): String? = if (BuildConfig.STAGING_BUILD) stagingAuthStore.read() else null
+    private fun client(token: String = ""): UmaApi = UmaApi(token, BuildConfig.UMA_BASE_URL, stagingPassword())
+
     init {
         val cached = cache.read()
         if (cached != null) {
             sequences.putAll(cached.sequences)
             state.value = state.value.copy(sessions = cached.sessions)
         }
-        patStore.read()?.let {
-            api = UmaApi(it)
-            state.value = state.value.copy(tokenPresent = true, offline = cached != null)
+        val stagingAccessMissing = BuildConfig.STAGING_BUILD && stagingPassword() == null
+        state.value = state.value.copy(stagingAccessRequired = stagingAccessMissing)
+        patStore.read()?.takeIf { !stagingAccessMissing }?.let {
+            state.value = state.value.copy(tokenPresent = cached != null, offline = cached != null)
             login(it, persist = false)
         }
-        checkForUpdate()
+        if (!stagingAccessMissing) checkForUpdate()
     }
 
     fun checkForUpdate() {
         if (state.value.updateChecking || state.value.updateDownloading) return
         viewModelScope.launch {
             state.value = state.value.copy(updateChecking = true, updateError = "")
-            runCatching { UpdateService.check() }
+            runCatching { UpdateService.check(stagingPassword()) }
                 .onSuccess { manifest ->
                     state.value = state.value.copy(
                         updateManifest = manifest.takeIf { it.versionCode > BuildConfig.VERSION_CODE },
@@ -131,7 +115,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             state.value = state.value.copy(updateDownloading = true, updateProgress = 0, updateError = "", updateFilePath = null)
             runCatching {
-                UpdateService.download(getApplication(), manifest) { done, total ->
+                UpdateService.download(getApplication(), manifest, stagingPassword()) { done, total ->
                     val progress = if (total > 0) ((done * 100) / total).toInt().coerceIn(0, 100) else 0
                     state.value = state.value.copy(updateProgress = progress)
                 }
@@ -147,33 +131,93 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             state.value = state.value.copy(loading = true, error = "")
             try {
-                val client = UmaApi(token)
+                val client = client(token)
                 val bootstrap = client.bootstrap()
+                if (persist) withContext(Dispatchers.IO) { patStore.save(token) }
                 api = client
                 sessions = bootstrap.sessions
                 sequences.clear()
                 bootstrap.sessions.forEach { sequences[it.session.id] = it.lastSequence }
-                if (persist) withContext(Dispatchers.IO) { patStore.save(token) }
-                state.value = state.value.copy(tokenPresent = true, sessions = bootstrap.sessions.map { it.session }, offline = false, loading = false)
+                state.value = state.value.copy(
+                    tokenPresent = true,
+                    userRole = bootstrap.user?.role ?: "user",
+                    registrationToken = "",
+                    sessions = bootstrap.sessions.map { it.session },
+                    offline = false,
+                    loading = false,
+                )
                 val selected = state.value.selectedSessionId ?: bootstrap.sessions.firstOrNull()?.session?.id
                 if (selected != null) selectSession(selected)
                 openSocket()
             } catch (error: Throwable) {
-                state.value = state.value.copy(loading = false, offline = true, error = error.message ?: "登录失败")
+                if (error is UmaApiException && error.status == 401) {
+                    clearAuthentication("访问令牌无效或已被撤销")
+                } else {
+                    state.value = state.value.copy(
+                        loading = false,
+                        offline = state.value.tokenPresent,
+                        error = error.message ?: "登录失败",
+                    )
+                }
             }
         }
+    }
+
+    fun register(label: String) {
+        if (state.value.loading) return
+        viewModelScope.launch {
+            state.value = state.value.copy(loading = true, error = "", registrationToken = "")
+            try {
+                val issued = client().register(label.trim().ifBlank { "android" })
+                state.value = state.value.copy(loading = false, registrationToken = issued.token)
+            } catch (error: Throwable) {
+                state.value = state.value.copy(
+                    loading = false,
+                    offline = false,
+                    error = error.message ?: "注册失败",
+                )
+            }
+        }
+    }
+
+    fun clearRegistration() {
+        if (state.value.loading) return
+        state.value = state.value.copy(registrationToken = "", error = "")
+    }
+
+    fun configureStagingAccess(password: String) {
+        if (!BuildConfig.STAGING_BUILD || password.isBlank() || state.value.loading) return
+        viewModelScope.launch {
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { UmaApi(baseUrl = BuildConfig.UMA_BASE_URL, gatewayPassword = password).getJson("/health/live") }
+                .onSuccess {
+                    withContext(Dispatchers.IO) { stagingAuthStore.save(password) }
+                    state.value = state.value.copy(stagingAccessRequired = false, loading = false)
+                    patStore.read()?.let { login(it, persist = false) }
+                    checkForUpdate()
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "测试环境认证失败")
+                }
+        }
+    }
+
+    fun retryLogin() {
+        if (state.value.loading) return
+        patStore.read()?.let { login(it, persist = false) }
     }
 
     fun logout() {
         socket?.close(1000, "logout"); socket = null; reconnect?.cancel(); api = null
         grant = null; grantExpiry?.cancel(); grantExpiry = null
-        patStore.clear(); cache.clear(); sessions = emptyList(); sequences.clear(); state.value = UmaUiState()
+        patStore.clear(); stagingAuthStore.clear(); cache.clear(); sessions = emptyList(); sequences.clear()
+        state.value = UmaUiState(stagingAccessRequired = BuildConfig.STAGING_BUILD)
     }
 
     fun selectSession(id: String) {
         viewModelScope.launch {
             val client = api ?: return@launch
-            state.value = state.value.copy(selectedSessionId = id, loading = true, error = "")
+            state.value = state.value.copy(selectedSessionId = id, queue = emptyList(), loading = true, error = "")
             try {
                 val snapshot = client.snapshot(id)
                 val encoded = snapshot.toString()
@@ -185,10 +229,99 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                     cache.write(CacheEnvelope(2, state.value.sessions, next, sequences))
                 }
                 state.value = state.value.copy(snapshot = encoded, assistantAvatarBytes = avatarBytes, offline = false, loading = false)
+                state.value = state.value.copy(queue = parseQueue(encoded))
             } catch (error: Throwable) {
                 val cached = cache.read()?.snapshots?.get(id)
-                state.value = state.value.copy(snapshot = cached ?: "", assistantAvatarBytes = null, offline = true, loading = false, error = error.message ?: "无法读取会话")
+                state.value = state.value.copy(
+                    snapshot = cached ?: "",
+                    queue = parseQueue(cached.orEmpty()),
+                    assistantAvatarBytes = null,
+                    offline = true,
+                    loading = false,
+                    error = error.message ?: "无法读取会话",
+                )
             }
+        }
+    }
+
+    fun setInteractionMode(mode: String) {
+        if (mode == "agent" || mode == "plan") state.value = state.value.copy(interactionMode = mode)
+    }
+
+    fun loadQueue(sessionId: String = state.value.selectedSessionId.orEmpty()) {
+        if (state.value.offline || sessionId.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            runCatching { client.queue(sessionId.trim()) }
+                .onSuccess { queue -> state.value = state.value.copy(queue = parseQueue(queue.toString()), error = "") }
+                .onFailure { error -> state.value = state.value.copy(error = error.message ?: "队列读取失败") }
+        }
+    }
+
+    fun reorderQueue(runIds: List<String>) {
+        val sessionId = state.value.selectedSessionId ?: return
+        val normalized = runIds.map(String::trim).filter(String::isNotBlank)
+        if (state.value.offline || normalized.isEmpty()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.reorderQueue(sessionId, normalized) }
+                .onSuccess { queue -> state.value = state.value.copy(queue = parseQueue(queue.toString()), loading = false) }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "队列重排失败") }
+        }
+    }
+
+    fun prioritizeRun(runId: String) {
+        val sessionId = state.value.selectedSessionId ?: return
+        if (state.value.offline || runId.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.prioritizeRun(runId.trim()); client.queue(sessionId) }
+                .onSuccess { queue -> state.value = state.value.copy(queue = parseQueue(queue.toString()), loading = false) }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "队列置顶失败") }
+        }
+    }
+
+    fun cancelQueuedRun(runId: String) {
+        val sessionId = state.value.selectedSessionId ?: return
+        if (state.value.offline || runId.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.cancelRun(runId.trim()); client.queue(sessionId) }
+                .onSuccess { queue -> state.value = state.value.copy(queue = parseQueue(queue.toString()), loading = false) }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "队列消息取消失败") }
+        }
+    }
+
+    fun editQueuedMessage(item: UiQueueItem, text: String) {
+        val sessionId = state.value.selectedSessionId ?: return
+        val normalized = text.trim()
+        if (state.value.offline || normalized.isBlank() || item.messageId.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.editMessage(item.messageId, normalized); client.queue(sessionId) }
+                .onSuccess { queue -> state.value = state.value.copy(queue = parseQueue(queue.toString()), loading = false) }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "队列消息编辑失败") }
+        }
+    }
+
+    fun confirmPlan(runId: String) {
+        if (state.value.offline || runId.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            val sessionId = state.value.selectedSessionId ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.confirmPlan(runId.trim()) }
+                .onSuccess {
+                    state.value = state.value.copy(loading = false)
+                    selectSession(sessionId)
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "确认计划失败")
+                }
         }
     }
 
@@ -199,7 +332,12 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             val client = api ?: return@launch
             state.value = state.value.copy(loading = true, error = "")
             try {
-                client.send(id, text.ifBlank { "请分析这张图片。" }, state.value.pendingAttachmentIds)
+                client.send(
+                    id,
+                    text.ifBlank { "请分析这张图片。" },
+                    state.value.pendingAttachmentIds,
+                    state.value.interactionMode,
+                )
                 selectSession(id)
                 state.value = state.value.copy(
                     offline = false,
@@ -210,6 +348,53 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             } catch (error: Throwable) {
                 state.value = state.value.copy(loading = false, offline = true, error = error.message ?: "发送失败")
             }
+        }
+    }
+
+    fun editMessage(messageId: String, text: String) {
+        val sessionId = state.value.selectedSessionId ?: return
+        val normalized = text.trim()
+        if (state.value.offline || messageId.isBlank() || normalized.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.editMessage(messageId.trim(), normalized) }
+                .onSuccess {
+                    state.value = state.value.copy(loading = false)
+                    selectSession(sessionId)
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "消息编辑失败")
+                }
+        }
+    }
+
+    fun reviewMessage(messageId: String) = runMessageQualityAction(messageId, "审查") { client ->
+        client.reviewMessage(messageId.trim())
+    }
+
+    fun improveMessage(messageId: String) = runMessageQualityAction(messageId, "改进") { client ->
+        client.improveMessage(messageId.trim())
+    }
+
+    private fun runMessageQualityAction(
+        messageId: String,
+        action: String,
+        request: suspend (UmaApi) -> Unit,
+    ) {
+        val sessionId = state.value.selectedSessionId ?: return
+        if (state.value.offline || messageId.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { request(client) }
+                .onSuccess {
+                    state.value = state.value.copy(loading = false)
+                    selectSession(sessionId)
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "${action}失败")
+                }
         }
     }
 
@@ -261,6 +446,232 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun previewImageAttachment(attachment: UiAttachment) {
+        if (state.value.offline || attachment.id.isBlank() || !attachment.mimeType.startsWith("image/")) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.attachmentBytes(attachment.id, maxBytes = 4 * 1024 * 1024, description = "图片") }
+                .onSuccess { bytes ->
+                    state.value = state.value.copy(
+                        attachmentPreview = AttachmentPreview(attachment.id, attachment.name, bytes),
+                        loading = false,
+                    )
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "图片预览失败")
+                }
+        }
+    }
+
+    fun clearAttachmentPreview() {
+        state.value = state.value.copy(attachmentPreview = null)
+    }
+
+    fun loadBackgroundTasks() {
+        if (state.value.offline) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.tasks() }
+                .onSuccess { tasks ->
+                    state.value = state.value.copy(
+                        backgroundTasks = parseBackgroundTasks(tasks.toString()),
+                        loading = false,
+                        offline = false,
+                    )
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "后台任务读取失败")
+                }
+        }
+    }
+
+    fun createBackgroundTask(prompt: String) {
+        val parentSessionId = state.value.selectedSessionId ?: return
+        val normalized = prompt.trim()
+        if (state.value.offline || normalized.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching {
+                client.createTask(normalized, parentSessionId)
+                client.bootstrap() to client.tasks()
+            }.onSuccess { (bootstrap, tasks) ->
+                sessions = bootstrap.sessions
+                bootstrap.sessions.forEach { entry ->
+                    sequences[entry.session.id] = maxOf(sequences[entry.session.id] ?: 0L, entry.lastSequence)
+                }
+                state.value = state.value.copy(
+                    sessions = bootstrap.sessions.map { it.session },
+                    backgroundTasks = parseBackgroundTasks(tasks.toString()),
+                    loading = false,
+                    offline = false,
+                )
+                sendSubscriptions()
+            }.onFailure { error ->
+                state.value = state.value.copy(loading = false, error = error.message ?: "后台任务创建失败")
+            }
+        }
+    }
+
+    fun cancelBackgroundTask(id: String) {
+        if (state.value.offline || id.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.cancelTask(id.trim()); client.tasks() }
+                .onSuccess { tasks ->
+                    state.value = state.value.copy(
+                        backgroundTasks = parseBackgroundTasks(tasks.toString()),
+                        loading = false,
+                    )
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "后台任务取消失败")
+                }
+        }
+    }
+
+    fun deleteBackgroundTask(id: String) {
+        if (state.value.offline || id.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.deleteTask(id.trim()); client.tasks() }
+                .onSuccess { tasks ->
+                    state.value = state.value.copy(
+                        backgroundTasks = parseBackgroundTasks(tasks.toString()),
+                        loading = false,
+                    )
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "后台任务删除失败")
+                }
+        }
+    }
+
+    fun loadScheduledTasks() {
+        if (state.value.offline) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.schedules() }
+                .onSuccess { schedules ->
+                    state.value = state.value.copy(
+                        scheduledTasks = parseScheduledTasks(schedules.toString()),
+                        loading = false,
+                        offline = false,
+                    )
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "调度读取失败")
+                }
+        }
+    }
+
+    fun createScheduledTask(name: String, prompt: String, kind: String, value: String, timezone: String) {
+        val normalizedName = name.trim()
+        val normalizedPrompt = prompt.trim()
+        val normalizedValue = value.trim()
+        if (state.value.offline || normalizedName.isBlank() || normalizedPrompt.isBlank() || normalizedValue.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching {
+                client.createSchedule(normalizedName, normalizedPrompt, kind, normalizedValue, timezone.trim())
+                client.schedules()
+            }.onSuccess { schedules ->
+                state.value = state.value.copy(
+                    scheduledTasks = parseScheduledTasks(schedules.toString()),
+                    loading = false,
+                )
+            }.onFailure { error ->
+                state.value = state.value.copy(loading = false, error = error.message ?: "调度创建失败")
+            }
+        }
+    }
+
+    fun toggleScheduledTask(id: String, enabled: Boolean) {
+        if (state.value.offline || id.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.updateSchedule(id.trim(), enabled); client.schedules() }
+                .onSuccess { schedules ->
+                    state.value = state.value.copy(scheduledTasks = parseScheduledTasks(schedules.toString()), loading = false)
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "调度状态更新失败")
+                }
+        }
+    }
+
+    fun runScheduledTask(id: String) {
+        if (state.value.offline || id.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.runSchedule(id.trim()); client.schedules() }
+                .onSuccess { schedules ->
+                    state.value = state.value.copy(scheduledTasks = parseScheduledTasks(schedules.toString()), loading = false)
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "调度运行失败")
+                }
+        }
+    }
+
+    fun deleteScheduledTask(id: String) {
+        if (state.value.offline || id.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.deleteSchedule(id.trim()); client.schedules() }
+                .onSuccess { schedules ->
+                    state.value = state.value.copy(
+                        scheduledTasks = parseScheduledTasks(schedules.toString()),
+                        scheduledRuns = state.value.scheduledRuns - id.trim(),
+                        loading = false,
+                    )
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "调度删除失败")
+                }
+        }
+    }
+
+    fun loadScheduledRuns(scheduleId: String) {
+        if (state.value.offline || scheduleId.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            runCatching { client.scheduleRuns(scheduleId.trim()) }
+                .onSuccess { runs ->
+                    state.value = state.value.copy(
+                        scheduledRuns = state.value.scheduledRuns + (scheduleId.trim() to parseScheduledRuns(runs.toString())),
+                        error = "",
+                    )
+                }
+                .onFailure { error -> state.value = state.value.copy(error = error.message ?: "运行历史读取失败") }
+        }
+    }
+
+    fun cancelScheduledRun(scheduleId: String, runId: String) {
+        if (state.value.offline || runId.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.cancelScheduleRun(runId.trim()); client.scheduleRuns(scheduleId.trim()) }
+                .onSuccess { runs ->
+                    state.value = state.value.copy(
+                        scheduledRuns = state.value.scheduledRuns + (scheduleId.trim() to parseScheduledRuns(runs.toString())),
+                        loading = false,
+                    )
+                }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "调度运行取消失败") }
+        }
+    }
+
     fun createSession(title: String) {
         if (state.value.offline || title.isBlank()) return
         viewModelScope.launch {
@@ -271,6 +682,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                     sessions = sessions + BootstrapEntry(session)
                     state.value = state.value.copy(sessions = sessions.map { it.session }, selectedSessionId = session.id, loading = false)
                     persistCache()
+                    sendSubscriptions()
                     selectSession(session.id)
                 }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "创建会话失败") }
@@ -290,6 +702,24 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                     persistCache()
                 }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "重命名失败") }
+        }
+    }
+
+    fun updateQueueMode(queueMode: String) {
+        val id = state.value.selectedSessionId ?: return
+        if (state.value.offline || (queueMode != "queue" && queueMode != "preemptive")) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.updateQueueMode(id, queueMode) }
+                .onSuccess { session ->
+                    sessions = sessions.map { if (it.session.id == id) it.copy(session = session) else it }
+                    state.value = state.value.copy(sessions = sessions.map { it.session }, loading = false)
+                    persistCache()
+                }
+                .onFailure { error ->
+                    state.value = state.value.copy(loading = false, error = error.message ?: "执行策略更新失败")
+                }
         }
     }
 
@@ -316,7 +746,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             val client = api ?: return@launch
             state.value = state.value.copy(loading = true, error = "")
             runCatching {
-                val attachment = client.upload(getApplication(), uri, name, id)
+                val attachment = client.upload(getApplication(), uri, name, id, purpose = "avatar")
                 val attachmentId = attachment["id"]?.jsonPrimitive?.content ?: error("头像附件无 ID")
                 client.updateAssistantIdentity(id, avatarAttachmentId = attachmentId)
             }.onSuccess { session ->
@@ -352,8 +782,15 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { client.deleteSession(id) }
                 .onSuccess {
                     sessions = sessions.filterNot { it.session.id == id }
-                    state.value = state.value.copy(sessions = sessions.map { it.session }, selectedSessionId = null, snapshot = "", loading = false)
+                    state.value = state.value.copy(
+                        sessions = sessions.map { it.session },
+                        selectedSessionId = null,
+                        snapshot = "",
+                        queue = emptyList(),
+                        loading = false,
+                    )
                     persistCache()
+                    sendSubscriptions()
                 }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "删除会话失败") }
         }
@@ -366,6 +803,21 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             val client = api ?: return@launch
             runCatching { client.cancelSession(id) }
                 .onFailure { error -> state.value = state.value.copy(error = error.message ?: "取消失败") }
+        }
+    }
+
+    fun resolveApproval(id: String, approved: Boolean) {
+        if (state.value.offline || id.isBlank()) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            val sessionId = state.value.selectedSessionId ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.resolveApproval(id.trim(), approved) }
+                .onSuccess {
+                    state.value = state.value.copy(loading = false)
+                    selectSession(sessionId)
+                }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "审批操作失败") }
         }
     }
 
@@ -487,21 +939,60 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                 val token = patStore.read()
                 if (token != null) {
                     webSocket.send(buildJsonObject { put("type", "auth"); put("token", token) }.toString())
-                    val subscriptions = buildJsonArray {
-                        sessions.forEach { add(buildJsonObject { put("id", it.session.id); put("lastSequence", sequences[it.session.id] ?: 0) }) }
-                    }
-                    webSocket.send(buildJsonObject { put("type", "subscribe"); put("sessions", subscriptions) }.toString())
+                    sendSubscriptions(webSocket)
                 }
                 state.value = state.value.copy(offline = false)
             },
             onText = { message -> viewModelScope.launch { handleEvent(message) } },
-            onFailure = { scheduleReconnect() },
+            onFailure = { error -> handleSocketFailure(error) },
         )
+    }
+
+    private fun sendSubscriptions(target: WebSocket? = socket) {
+        target?.send(eventSubscriptionFrame(sessions.map { it.session.id to (sequences[it.session.id] ?: 0L) }))
+    }
+
+    private fun handleSocketFailure(error: Throwable) {
+        if (error is UmaWebSocketException && error.code == 1000) return
+        if (
+            error is UmaWebSocketException &&
+            error.code == 1008 &&
+            error.reason.startsWith("Authentication", ignoreCase = true)
+        ) {
+            viewModelScope.launch { clearAuthentication("访问令牌无效或已被撤销") }
+        } else {
+            scheduleReconnect()
+        }
+    }
+
+    private suspend fun clearAuthentication(message: String) {
+        val activeSocket = socket
+        socket = null
+        activeSocket?.cancel()
+        reconnect?.cancel()
+        reconnect = null
+        api = null
+        grant = null
+        grantExpiry?.cancel()
+        grantExpiry = null
+        withContext(Dispatchers.IO) {
+            patStore.clear()
+            cache.clear()
+        }
+        sessions = emptyList()
+        sequences.clear()
+        state.value = UmaUiState(error = message)
     }
 
     private suspend fun handleEvent(message: String) {
         val element = try { json.parseToJsonElement(message) } catch (_: Exception) { return }
         val objectValue = element as? JsonObject ?: return
+        val resources = invalidatedResources(objectValue)
+        if (resources.isNotEmpty()) {
+            if ("tasks" in resources) refreshBackgroundTasksSilently()
+            if ("schedules" in resources) refreshScheduledTasksSilently()
+            return
+        }
         val sessionId = objectValue["sessionId"]?.jsonPrimitive?.content ?: return
         val sequence = objectValue["sequence"]?.jsonPrimitive?.longOrNull ?: return
         if (sequence == 0L) return
@@ -537,10 +1028,26 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                 cache.write(CacheEnvelope(2, state.value.sessions, (current?.snapshots ?: emptyMap()) + (sessionId to encoded), sequences))
             }
             if (sessionId == state.value.selectedSessionId)
-                state.value = state.value.copy(snapshot = encoded, offline = false)
+                state.value = state.value.copy(snapshot = encoded, queue = parseQueue(encoded), offline = false)
         }.onFailure {
             state.value = state.value.copy(offline = true)
         }
+    }
+
+    private suspend fun refreshBackgroundTasksSilently() {
+        val client = api ?: return
+        runCatching { client.tasks() }
+            .onSuccess { tasks ->
+                state.value = state.value.copy(backgroundTasks = parseBackgroundTasks(tasks.toString()))
+            }
+    }
+
+    private suspend fun refreshScheduledTasksSilently() {
+        val client = api ?: return
+        runCatching { client.schedules() }
+            .onSuccess { schedules ->
+                state.value = state.value.copy(scheduledTasks = parseScheduledTasks(schedules.toString()))
+            }
     }
 
     private fun scheduleReconnect() {
@@ -558,246 +1065,6 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
 class MainActivity : ComponentActivity() {
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        setContent { MaterialTheme { UmaScreen() } }
-    }
-}
-
-@Composable
-fun UmaScreen(model: UmaViewModel = viewModel()) {
-    val state by model.uiState.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var token by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var message by remember { mutableStateOf("") }
-    var newTitle by remember { mutableStateOf("") }
-    var assistantName by remember { mutableStateOf("UmaAgent") }
-    var itemId by remember { mutableStateOf("") }
-    var conversationId by remember { mutableStateOf("") }
-    var receiverId by remember { mutableStateOf("") }
-    var chatItemId by remember { mutableStateOf("") }
-    var attachmentId by remember { mutableStateOf("") }
-    var pendingDownloadId by remember { mutableStateOf("") }
-    val attachmentPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) model.uploadAttachment(uri, "attachment")
-    }
-    val saveAttachmentPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream"),
-    ) { uri ->
-        if (uri != null && pendingDownloadId.isNotBlank()) model.downloadAttachment(pendingDownloadId, uri)
-        pendingDownloadId = ""
-    }
-    val avatarPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-    ) { uri -> if (uri != null) model.uploadAssistantAvatar(uri, "assistant-avatar") }
-    val selectedSession = state.sessions.firstOrNull { it.id == state.selectedSessionId }
-    LaunchedEffect(selectedSession?.id, selectedSession?.assistantName) {
-        assistantName = selectedSession?.assistantName ?: "UmaAgent"
-    }
-    LaunchedEffect(state.updateFilePath) {
-        val path = state.updateFilePath ?: return@LaunchedEffect
-        val file = java.io.File(path)
-        if (file.exists()) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
-                val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                    data = Uri.parse("package:${context.packageName}")
-                }
-                runCatching { context.startActivity(settingsIntent) }
-            } else {
-                runCatching { context.startActivity(UpdateService.installIntent(context, file)) }
-                    .onFailure { model.clearUpdateFile() }
-            }
-        }
-    }
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (!state.tokenPresent) {
-            OutlinedTextField(
-                token,
-                { token = it },
-                Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
-                label = { Text("PAT") },
-            )
-            Button({ model.login(token) }, enabled = token.isNotBlank() && !state.loading) { Text("登录") }
-            UpdatePanel(state, model, context)
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (state.offline) "离线只读" else "已连接", style = MaterialTheme.typography.titleMedium)
-                Button({ model.logout() }) { Text("退出") }
-            }
-            UpdatePanel(state, model, context)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(newTitle, { newTitle = it }, label = { Text("新会话标题") }, modifier = Modifier.weight(1f))
-                Button({ model.createSession(newTitle); newTitle = "" }, enabled = !state.offline && newTitle.isNotBlank() && !state.loading) { Text("新建") }
-            }
-            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
-                items(state.sessions) { session ->
-                    Button({ model.selectSession(session.id) }, Modifier.fillMaxWidth()) { Text(session.title) }
-                }
-            }
-            Text("助手身份", style = MaterialTheme.typography.titleMedium)
-            OutlinedTextField(
-                assistantName,
-                { assistantName = it },
-                Modifier.fillMaxWidth(),
-                label = { Text("助手名称") },
-                enabled = !state.offline && !state.loading,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    { model.updateAssistantName(assistantName) },
-                    enabled = !state.offline && assistantName.isNotBlank() && !state.loading && selectedSession != null,
-                ) { Text("保存名称") }
-                Button(
-                    { avatarPicker.launch(arrayOf("image/*")) },
-                    enabled = !state.offline && !state.loading && selectedSession != null,
-                ) { Text("上传头像") }
-                Button(
-                    { model.resetAssistantAvatar() },
-                    enabled = !state.offline && !state.loading && selectedSession?.assistantAvatarAttachmentId != null,
-                ) { Text("恢复默认") }
-            }
-            Text(
-                if (selectedSession?.assistantAvatarAttachmentId == null) "当前头像：默认 UmaAgent 头像"
-                else "当前头像附件：" + selectedSession.assistantAvatarAttachmentId,
-                Modifier.fillMaxWidth(),
-            )
-            val avatarModifier = Modifier
-                .size(48.dp)
-                .padding(vertical = 4.dp)
-                .clip(CircleShape)
-            val avatarBytes = state.assistantAvatarBytes
-            val avatarBitmap = avatarBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-            if (avatarBitmap != null) {
-                Image(
-                    avatarBitmap.asImageBitmap(),
-                    contentDescription = "助手头像预览",
-                    modifier = avatarModifier,
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Image(
-                    painter = painterResource(R.drawable.cat_avatar),
-                    contentDescription = "默认助手头像",
-                    modifier = avatarModifier,
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button({ model.renameSession(newTitle); newTitle = "" }, enabled = !state.offline && newTitle.isNotBlank() && state.selectedSessionId != null) { Text("重命名") }
-                Button({ model.deleteSelectedSession() }, enabled = !state.offline && state.selectedSessionId != null) { Text("删除") }
-                Button({ model.cancelSelectedSession() }, enabled = !state.offline && state.selectedSessionId != null) { Text("取消") }
-                Button({ model.compactSelectedSession() }, enabled = !state.offline && state.selectedSessionId != null) { Text("压缩") }
-            }
-            val messages = parseSnapshotMessages(state.snapshot)
-            if (messages.isNotEmpty()) {
-                LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(messages, key = { it.id }) { item ->
-                        val label = when (item.role) {
-                            "user" -> "你"
-                            "tool" -> "工具"
-                            else -> state.sessions.firstOrNull { it.id == state.selectedSessionId }?.assistantName ?: "UmaAgent"
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            if (item.role == "assistant") {
-                                if (avatarBitmap != null) {
-                                    Image(avatarBitmap.asImageBitmap(), "助手头像", Modifier.size(48.dp).clip(CircleShape))
-                                } else {
-                                    Image(painterResource(R.drawable.cat_avatar), "默认助手头像", Modifier.size(48.dp).clip(CircleShape))
-                                }
-                            }
-                            Text(
-                                "$label${if (item.status == "streaming") "（生成中）" else ""}: ${item.content}" +
-                                    if (item.attachmentCount > 0) "\n附件 ${item.attachmentCount} 个" else "",
-                                Modifier.weight(1f).padding(start = 8.dp),
-                            )
-                        }
-                    }
-                }
-            } else if (!state.offline) {
-                Text("暂无消息", Modifier.fillMaxWidth())
-            }
-            Button({ attachmentPicker.launch(arrayOf("*/*")) }, enabled = !state.offline && state.selectedSessionId != null && !state.loading) { Text("上传附件") }
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-                state.pendingAttachments.forEach { attachment ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-                        Text("${attachment.name} (${attachment.size} bytes)", modifier = Modifier.weight(1f))
-                        Button({ model.removePendingAttachment(attachment.id) }, enabled = !state.loading) { Text("删除") }
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(attachmentId, { attachmentId = it }, label = { Text("附件 ID") }, modifier = Modifier.weight(1f))
-                Button({ pendingDownloadId = attachmentId.trim(); saveAttachmentPicker.launch("attachment") }, enabled = !state.offline && attachmentId.isNotBlank() && !state.loading) { Text("下载") }
-            }
-            if (state.attachmentData.isNotBlank()) Text(state.attachmentData, Modifier.fillMaxWidth())
-            Text("服务端资源", style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("/models" to "模型", "/profile" to "Profile", "/tasks" to "任务", "/schedules" to "计划", "/memory" to "Memory").forEach { (path, label) ->
-                    Button({ model.loadResource(path) }, enabled = !state.offline) { Text(label) }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf("/knowledge" to "知识库", "/skills" to "Skills", "/mcp" to "MCP", "/reports/diagnostics" to "诊断", "/evaluations" to "评测").forEach { (path, label) ->
-                    Button({ model.loadResource(path) }, enabled = !state.offline) { Text(label) }
-                }
-            }
-            if (state.resourceData.isNotBlank()) Text(state.resourceData, Modifier.fillMaxWidth())
-            OutlinedTextField(message, { message = it }, Modifier.fillMaxWidth(), label = { Text("消息") })
-            Button({ model.send(message); message = "" }, enabled = !state.offline && (message.isNotBlank() || state.pendingAttachmentIds.isNotEmpty()) && !state.loading) { Text("发送") }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    password,
-                    { password = it },
-                    visualTransformation = PasswordVisualTransformation(),
-                    label = { Text("咸鱼管理员密码") },
-                )
-                Button({ model.unlockXianyu(password); password = "" }, enabled = password.isNotBlank() && !state.loading) { Text("解锁") }
-            }
-            if (state.xianyuStatus.isNotBlank()) Text(state.xianyuStatus)
-            if (state.xianyuStatus.isNotBlank()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("start" to "启动", "pause" to "暂停", "resume" to "恢复", "stop" to "停止").forEach { (action, label) ->
-                        Button({ model.xianyuAction(action) }, enabled = !state.offline && !state.loading) { Text(label) }
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(conversationId, { conversationId = it }, label = { Text("闲鱼会话 ID") }, modifier = Modifier.weight(1f))
-                    Button({ model.xianyuHistory(conversationId) }, enabled = conversationId.isNotBlank() && !state.offline) { Text("历史") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(itemId, { itemId = it }, label = { Text("商品 ID") }, modifier = Modifier.weight(1f))
-                    Button({ model.xianyuItem(itemId) }, enabled = itemId.isNotBlank() && !state.offline) { Text("商品") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(receiverId, { receiverId = it }, label = { Text("买家 ID") }, modifier = Modifier.weight(1f))
-                    OutlinedTextField(chatItemId, { chatItemId = it }, label = { Text("建聊商品 ID") }, modifier = Modifier.weight(1f))
-                    Button({ model.xianyuChat(receiverId, chatItemId) }, enabled = receiverId.isNotBlank() && chatItemId.isNotBlank() && !state.offline) { Text("建聊") }
-                }
-                if (state.xianyuData.isNotBlank()) Text(state.xianyuData, Modifier.fillMaxWidth())
-            }
-        }
-        if (state.error.isNotBlank()) Text(state.error, color = MaterialTheme.colorScheme.error)
-    }
-}
-
-@Composable
-private fun UpdatePanel(state: UmaUiState, model: UmaViewModel, context: android.content.Context) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("应用更新", style = MaterialTheme.typography.titleMedium)
-        Text("当前版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）")
-        when {
-            state.updateChecking -> Text("正在检查更新…")
-            state.updateDownloading -> Text("正在下载更新 ${state.updateProgress}%")
-            state.updateManifest != null -> {
-                Text("发现新版本 ${state.updateManifest.versionName}")
-                state.updateManifest.releaseNotes.take(3).forEach { Text("• $it") }
-                Button({ model.downloadUpdate() }) { Text("下载并安装") }
-            }
-            else -> Text("已是最新版本")
-        }
-        if (state.updateError.isNotBlank()) Text(state.updateError, color = MaterialTheme.colorScheme.error)
-        Button({ model.checkForUpdate() }, enabled = !state.updateChecking && !state.updateDownloading) { Text("检查更新") }
+        setContent { UmaAgentTheme { UmaScreen() } }
     }
 }

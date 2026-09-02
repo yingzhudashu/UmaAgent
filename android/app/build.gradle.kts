@@ -30,12 +30,48 @@ android { namespace = "site.robotclaw.umaagent"; compileSdk = 35
                 keyPassword = keyPasswordValue
             }
         }
+        create("staging") {
+            val storeFilePath = providers.gradleProperty("umaStagingStoreFile").orNull
+                ?: System.getenv("UMA_ANDROID_STAGING_KEYSTORE")
+            val storePasswordValue = providers.gradleProperty("umaStagingStorePassword").orNull
+                ?: System.getenv("UMA_ANDROID_STAGING_KEYSTORE_PASSWORD")
+            val keyPasswordValue = providers.gradleProperty("umaStagingKeyPassword").orNull
+                ?: System.getenv("UMA_ANDROID_STAGING_KEY_PASSWORD")
+            if (!storeFilePath.isNullOrBlank() && !storePasswordValue.isNullOrBlank() && !keyPasswordValue.isNullOrBlank()) {
+                storeFile = file(storeFilePath)
+                storePassword = storePasswordValue
+                keyAlias = providers.gradleProperty("umaStagingKeyAlias").orNull
+                    ?: System.getenv("UMA_ANDROID_STAGING_KEY_ALIAS")
+                    ?: "umaagent-staging"
+                keyPassword = keyPasswordValue
+            }
+        }
     }
     buildTypes {
+        getByName("debug") {
+            buildConfigField("String", "UMA_BASE_URL", "\"https://robotclaw.site\"")
+            buildConfigField("String", "UMA_UPDATE_MANIFEST_URL", "\"https://robotclaw.site/app/latest.json\"")
+            buildConfigField("boolean", "STAGING_BUILD", "false")
+        }
         getByName("release") {
             val releaseSigning = signingConfigs.getByName("release")
             if (releaseSigning.storeFile != null) signingConfig = releaseSigning
             isMinifyEnabled = false
+            buildConfigField("String", "UMA_BASE_URL", "\"https://robotclaw.site\"")
+            buildConfigField("String", "UMA_UPDATE_MANIFEST_URL", "\"https://robotclaw.site/app/latest.json\"")
+            buildConfigField("boolean", "STAGING_BUILD", "false")
+        }
+        create("staging") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".staging"
+            versionNameSuffix = "-staging"
+            signingConfig = null
+            val stagingSigning = signingConfigs.getByName("staging")
+            if (stagingSigning.storeFile != null) signingConfig = stagingSigning
+            buildConfigField("String", "UMA_BASE_URL", "\"https://staging.robotclaw.site\"")
+            buildConfigField("String", "UMA_UPDATE_MANIFEST_URL", "\"https://staging.robotclaw.site/app/latest.json\"")
+            buildConfigField("boolean", "STAGING_BUILD", "true")
+            resValue("string", "app_name", "UmaAgent 测试版")
         }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
@@ -49,7 +85,7 @@ dependencies {
     implementation(libs.okhttp); implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.core.ktx)
     debugImplementation(libs.androidx.compose.ui.tooling)
-    testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test:runner:1.6.2")
+    testImplementation(libs.junit4)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }

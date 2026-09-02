@@ -10,7 +10,7 @@ async function register(page: Page, reuse = false): Promise<string> {
   await page.goto("/");
   await page.getByRole("button", { name: "创建新账户" }).click();
   await page.getByLabel("令牌名称").fill("e2e");
-  await page.getByRole("button", { name: "注册并进入" }).click();
+  await page.getByRole("button", { name: "注册", exact: true }).click();
   const text = await page.locator(".token-result").textContent();
   const token = text?.match(/uma_pat_[A-Za-z0-9_-]+/)?.[0];
   if (!token) throw new Error("Registration did not return a personal token");
@@ -26,6 +26,28 @@ async function login(page: Page, token: string): Promise<void> {
   await page.getByRole("button", { name: "登录" }).click();
   await expect(page.getByText("Core 已连接")).toBeVisible();
 }
+
+test("registration presents a one-time token before entering the workbench", async ({ context, page }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/");
+  await page.getByRole("button", { name: "创建新账户" }).click();
+  await page.getByLabel("令牌名称").fill("e2e-registration");
+  await page.getByRole("button", { name: "注册", exact: true }).click();
+
+  const result = page.locator(".token-result");
+  await expect(result).toContainText("请立即保存此令牌");
+  const token = (await result.textContent())?.match(/uma_pat_[A-Za-z0-9_-]+/)?.[0];
+  if (!token) throw new Error("Registration did not return a personal token");
+  sharedToken = token;
+
+  await expect(page.getByLabel("令牌名称")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "注册", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "复制令牌" }).click();
+  await expect(page.getByRole("button", { name: "已复制" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(token);
+  await page.getByRole("button", { name: "继续进入" }).click();
+  await expect(page.getByText("Core 已连接")).toBeVisible();
+});
 
 test("two devices converge on one session and offline mode is read-only", async ({ browser }) => {
   const firstContext = await browser.newContext();
@@ -114,7 +136,7 @@ test("two devices converge on one session and offline mode is read-only", async 
 });
 
 test("pastes an image into the composer and sends it as an attachment", async ({ page }) => {
-  await register(page);
+  await register(page, true);
   await page.getByRole("button", { name: "新会话" }).click();
   const input = page.getByPlaceholder("向 UmaAgent 发送消息");
   await input.evaluate((element) => {

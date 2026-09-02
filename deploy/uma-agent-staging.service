@@ -1,0 +1,31 @@
+[Unit]
+Description=UmaAgent Core Server (staging)
+After=network-online.target uma-browser-worker-staging.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=umaagent
+Group=umaagent
+WorkingDirectory=/opt/uma-agent-staging/current
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/uma-agent-staging/uma.env
+ExecStartPre=/usr/bin/bash /opt/uma-agent-staging/current/deploy/verify-staging-release.sh /opt/uma-agent-staging/current /opt/uma-agent/dependencies/node_modules
+ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent-staging/current/apps/server/dist/main.js --config=/etc/uma-agent-staging/uma.config.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/uma-agent-staging/state /var/lib/uma-agent-staging/telemetry /srv/uma-workspace-staging
+UMask=0027
+LimitNOFILE=65536
+MemoryMax=768M
+CPUQuota=75%
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

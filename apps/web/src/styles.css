@@ -1225,18 +1225,18 @@
   gap: 7px;
   margin: 10px 0 0;
 }
-.xianyu-data-list > div {
+.uma-embed .xianyu-data-list > div {
   display: grid;
   grid-template-columns: minmax(90px, 0.35fr) minmax(0, 1fr);
   gap: 10px;
   padding-bottom: 7px;
   border-bottom: 1px solid var(--line);
 }
-.xianyu-data-list dt {
+.uma-embed .xianyu-data-list dt {
   color: var(--ink-muted);
   font-size: 11px;
 }
-.xianyu-data-list dd {
+.uma-embed .xianyu-data-list dd {
   margin: 0;
   overflow-wrap: anywhere;
   font-size: 12px;

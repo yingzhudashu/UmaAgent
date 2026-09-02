@@ -5,6 +5,8 @@ coverage/
 playwright-report/
 test-results/
 *.tsbuildinfo
+*.hprof
+android/.kotlin/
 dist-types/
 dist-embed/
 .uma/
@@ -19,6 +21,8 @@ config.user.json
 /workspace/
 /users/
 /.tmp-*/
+/.tmp/
+/.tmp-core-*
 /.uma-faux*/
 /.uma-perf-*/
 /.uma-soak-*/

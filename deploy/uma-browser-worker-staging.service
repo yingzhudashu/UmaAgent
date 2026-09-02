@@ -1,0 +1,32 @@
+[Unit]
+Description=UmaAgent Browser Worker (staging)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=umaagent-browser
+Group=umaagent-browser
+SupplementaryGroups=umaagent
+WorkingDirectory=/opt/uma-agent-staging/current
+Environment=NODE_ENV=production
+Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/uma-agent-staging/browser/.cache/ms-playwright
+Environment=UMA_TELEMETRY_DIR=/var/lib/uma-agent-staging/browser-telemetry
+EnvironmentFile=/etc/uma-agent-staging/browser.env
+ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent-staging/current/apps/browser-worker/dist/main.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/uma-agent-staging/browser /var/lib/uma-agent-staging/browser-telemetry
+UMask=0027
+LimitNOFILE=65536
+MemoryMax=384M
+CPUQuota=50%
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -31,6 +31,7 @@ import { type AuthPrincipal, AuthService } from "./auth.js";
 import { mapServerError } from "./error-mapping.js";
 import { installHttpTelemetry } from "./httpTelemetry.js";
 import { SERVER_LOG_REDACTIONS } from "./log-redaction.js";
+import { crossOrigin, secureOrigin, trustLoopbackProxy } from "./request-origin.js";
 import { installRuntimeLogging } from "./runtimeLogging.js";
 import {
   validateXianyuChatBody,
@@ -56,24 +57,6 @@ function allowedOrigin(origin: string, configured: string[]): boolean {
   return configured.includes(origin);
 }
 
-export function crossOrigin(origin: string | undefined, host: string | undefined): boolean {
-  if (!origin || !host) return false;
-  try {
-    return new URL(origin).host !== host;
-  } catch {
-    return true;
-  }
-}
-
-export function secureOrigin(origin: string | undefined): boolean {
-  if (!origin) return false;
-  try {
-    return new URL(origin).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 function errorBody(requestId: string, code: string, message: string, retryable = false) {
   return { error: { code, message, retryable, requestId } };
 }
@@ -89,6 +72,7 @@ export async function createServer(
   const app = Fastify({
     logger: { level: process.env.UMA_LOG_LEVEL ?? "info", redact: SERVER_LOG_REDACTIONS },
     bodyLimit: runtime.config.server.maxUploadBytes + 1024,
+    trustProxy: trustLoopbackProxy,
   });
   const maintenanceFile = join(runtime.config.server.stateDir, "maintenance.json");
   const readMaintenance = async () => {

@@ -4,6 +4,7 @@ set -euo pipefail
 release_dir=${1:?usage: verify-native-release.sh RELEASE_DIR SHARED_NODE_MODULES}
 shared_dir=${2:?usage: verify-native-release.sh RELEASE_DIR SHARED_NODE_MODULES}
 node_bin=/opt/node-v22.23.2-linux-x64/bin/node
+release_root=${UMA_RELEASE_ROOT:-/opt/uma-agent/releases}
 
 [[ -x "$node_bin" ]] || { echo "required Node runtime is missing: $node_bin" >&2; exit 1; }
 
@@ -20,8 +21,8 @@ grep -qx 'schema=22' "$release_real/RELEASE" || { echo "release schema is not 22
 [[ -d "$shared_real" ]] || { echo "missing shared dependencies: $shared_dir" >&2; exit 1; }
 
 case "$release_real" in
-  /opt/uma-agent/releases/*) ;;
-  *) echo "release resolves outside /opt/uma-agent/releases: $release_real" >&2; exit 1 ;;
+  "$release_root"/*) ;;
+  *) echo "release resolves outside $release_root: $release_real" >&2; exit 1 ;;
 esac
 
 for package in browser-worker channel-adapter cli client core eval-runner protocol server telemetry xianyu-adapter; do

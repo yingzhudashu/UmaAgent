@@ -171,7 +171,7 @@ uma xianyu history <conversation-id>
 uma xianyu item <item-id>
 ```
 
-Android 工程位于 `android/`，应用 ID 为 `site.robotclaw.umaagent`，生产 Core 地址固定为 `https://robotclaw.site`。PAT 使用 Android Keystore 加密保存，离线状态只读。
+Android 工程位于 `android/`，应用 ID 为 `site.robotclaw.umaagent`，生产 Core 地址固定为 `https://robotclaw.site`。登录页可直接注册隔离账户；注册返回的个人访问令牌仅展示一次，复制并继续后由 Android Keystore 加密保存。登录后使用对话、会话、资源和设置四个移动端视图，并跟随系统深浅色主题；离线状态只读。
 
 ## 质量、记忆与技能
 

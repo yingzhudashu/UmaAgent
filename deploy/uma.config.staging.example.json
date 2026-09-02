@@ -1,0 +1,64 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 3211,
+    "stateDir": "/var/lib/uma-agent-staging/state",
+    "workspaceRoots": ["/srv/uma-workspace-staging"],
+    "webOrigins": ["https://staging.robotclaw.site"],
+    "maxUploadBytes": 20971520
+  },
+  "auth": { "webSessionHours": 24 },
+  "providers": {
+    "openai": {
+      "driver": "openai",
+      "baseUrl": "https://api.tcvps.cn/v1",
+      "apiKeyEnv": "OPENAI_API_KEY"
+    }
+  },
+  "imageGeneration": {
+    "baseUrl": "https://newapi.stuhelper.com/v1",
+    "apiKeyEnv": "IMAGE_GENERATION_API_KEY"
+  },
+  "models": {
+    "gpt-5.6-sol": {
+      "provider": "openai",
+      "name": "GPT-5.6 Sol",
+      "api": "openai-completions",
+      "contextWindow": 258000,
+      "maxOutputTokens": 128000,
+      "capabilities": { "tools": true, "vision": true, "reasoning": true, "structuredOutput": true }
+    }
+  },
+  "roles": {
+    "default": { "provider": "openai", "id": "gpt-5.6-sol" },
+    "reasoning": { "provider": "openai", "id": "gpt-5.6-sol" },
+    "fast": { "provider": "openai", "id": "gpt-5.6-sol" },
+    "vision": { "provider": "openai", "id": "gpt-5.6-sol" }
+  },
+  "defaultThinkingLevel": "medium",
+  "embedding": {
+    "enabled": true,
+    "baseUrl": "https://api.siliconflow.cn/v1",
+    "model": "BAAI/bge-m3",
+    "apiKeyEnv": "EMBEDDING_API_KEY",
+    "timeoutMs": 30000,
+    "batchSize": 8,
+    "cacheSize": 256,
+    "maxConcurrentRequests": 1,
+    "retryAttempts": 1
+  },
+  "skillsDirs": ["/var/lib/uma-agent-staging/state/skills"],
+  "mcpServers": [
+    {
+      "name": "browser",
+      "transport": "http",
+      "url": "http://127.0.0.1:3231/mcp",
+      "authTokenEnv": "BROWSER_WORKER_TOKEN"
+    }
+  ],
+  "runtime": {
+    "maxParallelSessions": 1,
+    "approvalTimeoutMs": 120000,
+    "toolTimeoutMs": 60000
+  }
+}
