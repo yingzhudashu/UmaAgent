@@ -29,17 +29,17 @@
 4. 所有生产发布必须先备份 SQLite、执行完整性检查，并验证受保护用户的令牌元数据和对象指纹。
 5. 机器审计只能发现模式性问题，不能替代复杂状态机、取消、并发和数据保护边界的人工审查。
 
-## 本轮证据（2026-08-28）
+## 当前证据（2026-09-02）
 
 - `npm run audit:source`：完成一方源文件的模式审计；结果用于定位热路径、IO、并发和凭据边界，不冒充人工逐行结论。
-- `npm run check`：架构、Biome 和 TypeScript 通过，共检查 217 个文件；`apps/server/src/app.ts` 回到 1214 行架构基线以内。
+- `npm run check`：架构、Biome 和 TypeScript 通过，共检查 232 个文件；已记录的大文件尺寸债务均未继续增长。
 - `npm run build`：Protocol、Core、Server、CLI、Web、Xianyu Adapter、Browser Worker 全部构建通过。
-- `npm test`：48 个测试文件、258 项测试通过；新增 Trace 幂等、诊断聚合和快捷命令边界覆盖。
-- `npm run test:web:e2e`：Chromium 4 个用例全部通过；第 4 个用例复用首个测试账户以遵守测试服务器每日注册限流，未修改生产限流策略。
+- `npm test`：51 个测试文件、273 项测试通过；覆盖 Trace 幂等、诊断聚合和快捷命令边界。
+- `npm run test:web:e2e`：Chromium 5 个用例全部通过；测试复用首个测试账户以遵守测试服务器每日注册限流，未修改生产限流策略。
 - `npm run test:eval:faux`：6 个公开行为用例通过，包括澄清、Plan 确认、工具、凭据和提示注入边界。
 - `npm run test:perf`：20 个请求基准通过；最终数值记录在 `docs/architecture-quality.md`。
-- 短时 Faux soak：36.3 秒、42 条消息、504 个 durable 事件，RSS 和 WAL 均在预算内。
-- 真实 Provider：历史受控运行结果记录在 `docs/performance-trace-report-2026-08-29.md`；本次环境未注入密钥，真实命令按安全策略跳过。
+- 短时 Faux soak：36.6 秒、41 条消息、492 个事件；RSS 143,351,808 -> 145,514,496 bytes，WAL 峰值 1,961,152 bytes，均在预算内；长时 soak 仍由 CI/nightly 执行。
+- 真实 Provider：服务器隔离端口两次真实 smoke 均通过，完成注册、模型调用、Run 和 Trace 查询；测试使用临时资源并已清理，生产服务未重启。
 - 容器：当前 Windows 主机没有 Docker CLI；容器构建与 smoke 由 CI 和候选服务器继续验证。
 - Android：Gradle Wrapper 与 API 35 的 JVM 测试、lint、debug assemble 已通过；设备 instrumented 测试仍需发布环境执行。
 - 生产：本轮未连接生产服务器，未执行旧渠道运行面清理、咸鱼 secret 注入或真实账号 smoke。
@@ -57,4 +57,4 @@ npm run test:perf
 npm run test:soak:faux
 ```
 
-真实 API 测试必须使用隔离 state、workspace、临时用户和临时令牌，并显式设置 `UMA_REAL_API=1`；缺少配置时应报告跳过，不得伪造通过。
+真实 API 测试必须使用隔离 state、workspace、临时用户和临时令牌，并显式设置 `UMA_REAL_API=1`；缺少配置时必须明确报告未执行，不得把 Faux 结果冒充真实结果。

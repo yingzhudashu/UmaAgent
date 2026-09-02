@@ -304,6 +304,8 @@ export class TelemetryStore {
       otelSpan.end(record.endedAt);
       this.otelSpans.delete(record.spanId);
     }
+    // 诊断写入与业务事务解耦：即使 SQLite 或 OTLP 暂时失败，也不能
+    // 让已经完成的用户请求回滚或抛出新的业务异常。
     let persisted = false;
     try {
       const update = () =>
@@ -316,6 +318,8 @@ export class TelemetryStore {
           redactErrorMessage(record.errorMessage) ?? null,
           record.spanId,
         );
+      // 没有事件时直接更新行，避免为每个普通 Span 额外开启事务；
+      // 有事件时用同一事务保证 Span 和事件不会出现半写入状态。
       if (record.events.length === 0) {
         persisted = Number(update().changes ?? 0) > 0;
       } else {
@@ -698,6 +702,8 @@ export class TraceSpanContext implements TelemetryContext {
   }
   finish(status?: SpanStatus | { status: "cancelled" }): void {
     if (this.ended) return;
+    // 父 Span 提前结束时，未结束的子 Span 必须显式标记为不完整，
+    // 否则 Trace 会永久保留 active 节点，误导延迟和错误率统计。
     for (const child of this.children)
       if (!child.ended)
         child.finish({

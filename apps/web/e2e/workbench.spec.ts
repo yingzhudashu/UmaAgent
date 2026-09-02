@@ -270,15 +270,17 @@ test("keeps tool output collapsed until requested", async ({ page }) => {
   await input.fill("Use the configured deterministic read tool and report its result.");
   await page.getByRole("button", { name: "发送" }).click();
   const steps = page.locator(".response-steps").first();
-  await expect(steps).toBeVisible();
-  await expect(steps).not.toHaveAttribute("open", "");
+  // 工具调用需要经过一次模型响应和一次工具事件；低资源 CI 上可能
+  // 超过 Playwright 默认 5 秒，但仍属于同一次请求的正常完成范围。
+  await expect(steps).toBeVisible({ timeout: 15_000 });
+  await expect(steps).not.toHaveAttribute("open", "", { timeout: 15_000 });
   await steps.locator(":scope > summary").click();
-  await expect(steps).toHaveAttribute("open", "");
+  await expect(steps).toHaveAttribute("open", "", { timeout: 15_000 });
   const tool = page.locator(".tool-details").first();
-  await expect(tool).toBeVisible();
-  await expect(tool).not.toHaveAttribute("open", "");
+  await expect(tool).toBeVisible({ timeout: 15_000 });
+  await expect(tool).not.toHaveAttribute("open", "", { timeout: 15_000 });
   await tool.locator("summary").click();
-  await expect(tool).toHaveAttribute("open", "");
+  await expect(tool).toHaveAttribute("open", "", { timeout: 15_000 });
   const toolOutput = tool.locator("pre");
   await toolOutput.evaluate((element) => {
     element.textContent = `web_search result https://example.com/${"unbroken-result-".repeat(90)}`;

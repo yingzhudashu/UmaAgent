@@ -34,15 +34,17 @@
 
 2026-09-02 逐文件复核重点覆盖 `packages/telemetry/src/index.ts`、`packages/core/src/trace.ts`、`packages/core/src/runtime.ts`、`packages/core/src/mcp.ts`、`apps/server/src/httpTelemetry.ts`、`apps/server/src/runtimeLogging.ts`、`apps/server/src/error-mapping.ts`、`apps/browser-worker/src/main.ts` 和 `apps/browser-worker/src/network.ts`。确认 HTTP、Run、queue、preflight、model、tool、approval、MCP、Browser Worker 的 traceparent 传播路径；并发、取消、失败和重启路径均有终态处理。大文件尺寸债务保留，未做无证据拆分。
 
-## 已复现基线
+## 复核基线
 
-以下结果来自本次工作区的完整门禁，数值用于后续回归比较，不代表跨机器预算：
+2026-09-02 在本地和服务器完成复核：本地 `npm run check`、`npm test`（51 个测试文件、273 项测试）、
+`npm run build`、Faux Eval、性能基线和短时 soak 均通过；服务器真实 API smoke 两次通过，均产生完整的
+7 个 Span，Trace 查询与 Run 终态一致，临时资源已清理，生产服务未重启。最新 Faux 性能为 API p95
+25.95ms、事件 p95 15.01ms、峰值 RSS 176,345,088 bytes、WAL 4,194,192 bytes；短时 soak 的 RSS
+从 142,737,408 增至 145,539,072 bytes，WAL 峰值 1,965,272 bytes。
 
-| 场景 | 结果 | 关键指标 |
-| --- | --- | --- |
-| Faux 性能基线 | 通过 | 20 个请求、240 个 durable 事件；API p50/p95/p99 = 7.47/9.33/10.66 ms；事件 p50/p95/p99 = 3.34/4.49/5.37 ms；RSS 峰值 176,771,072 B；WAL 峰值 4,128,272 B |
-| Faux soak | 通过 | 36.3 秒、42 条消息、504 个 durable 事件；RSS 140,054,528 -> 142,737,408 B；WAL 峰值 1,882,872 B |
-| 真实 smoke/eval/perf/soak | 历史受控运行已通过；本次未注入密钥 | 目标 Provider、脱敏指标和复核状态记录在 `docs/performance-trace-report-2026-08-29.md` |
+服务器真实 smoke 使用生产同版本的隔离进程和真实 `openai/gpt-5.6-sol` 网关，第一次耗时 49.9s、
+第二次耗时 166.8s；两次均完成注册、模型调用、Run 和 Trace 查询。输入/输出 token、请求内容和
+凭据不写入代码、数据库、日志或文档。
 
 ## 验收命令
 
