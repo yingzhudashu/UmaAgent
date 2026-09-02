@@ -22,7 +22,11 @@ ProtectHome=true
 ReadWritePaths=/var/lib/uma-agent/state /srv/uma-workspace
 UMask=0027
 LimitNOFILE=65536
-MemoryMax=1536M
+MemoryHigh=1024M
+MemoryMax=1280M
+CPUQuota=125%
+TasksMax=512
+OOMScoreAdjust=-250
 StandardOutput=journal
 StandardError=journal
 

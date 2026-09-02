@@ -22,6 +22,12 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/uma-agent/browser /var/lib/uma-agent/telemetry
 UMask=0027
+LimitNOFILE=65536
+MemoryHigh=256M
+MemoryMax=384M
+CPUQuota=50%
+TasksMax=512
+OOMScoreAdjust=100
 
 [Install]
 WantedBy=multi-user.target

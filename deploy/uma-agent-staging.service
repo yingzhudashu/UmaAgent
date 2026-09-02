@@ -22,8 +22,11 @@ ProtectHome=true
 ReadWritePaths=/var/lib/uma-agent-staging/state /var/lib/uma-agent-staging/telemetry /srv/uma-workspace-staging
 UMask=0027
 LimitNOFILE=65536
-MemoryMax=768M
-CPUQuota=75%
+MemoryHigh=512M
+MemoryMax=640M
+CPUQuota=50%
+TasksMax=512
+OOMScoreAdjust=350
 StandardOutput=journal
 StandardError=journal
 

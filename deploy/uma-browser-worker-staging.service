@@ -23,8 +23,11 @@ ProtectHome=true
 ReadWritePaths=/var/lib/uma-agent-staging/browser /var/lib/uma-agent-staging/browser-telemetry
 UMask=0027
 LimitNOFILE=65536
-MemoryMax=384M
-CPUQuota=50%
+MemoryHigh=256M
+MemoryMax=320M
+CPUQuota=35%
+TasksMax=512
+OOMScoreAdjust=450
 StandardOutput=journal
 StandardError=journal
 
