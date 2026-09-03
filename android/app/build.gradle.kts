@@ -11,8 +11,8 @@ android { namespace = "site.robotclaw.umaagent"; compileSdk = 35
         applicationId = "site.robotclaw.umaagent"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.1.1"
+        versionCode = 4
+        versionName = "1.1.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
