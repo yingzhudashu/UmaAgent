@@ -511,6 +511,92 @@ describe("UmaRuntime preflight", () => {
     );
   });
 
+  it("automatically resumes a safe run after a server restart", async () => {
+    const runtime = await runtimeWith([]);
+    const session = await runtime.createSession();
+    await writeFile(join(session.workspace as string, "restart.txt"), "safe restart replay", "utf8");
+    const messageId = crypto.randomUUID();
+    const run = runtime.database.createRun(
+      session.id,
+      messageId,
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+      "agent",
+      "agent",
+    ).run;
+    runtime.database.insertMessage({
+      id: messageId,
+      sessionId: session.id,
+      runId: run.id,
+      role: "user",
+      status: "complete",
+      content: "continue after restart",
+      payload: { role: "user", content: "continue after restart", timestamp: Date.now() },
+    });
+    runtime.database.createResponse({
+      sessionId: session.id,
+      runId: run.id,
+      messageId,
+      status: "executing",
+    });
+    runtime.database.updateRun(run.id, {
+      status: "interrupted",
+      error: "Server restarted during execution",
+      route: "direct",
+      taskClass: "simple",
+    });
+    runtime.database.createCheckpoint({
+      runId: run.id,
+      phase: "tool",
+      turnCount: 1,
+      lastMessageSequence: runtime.database.latestMessageSequence(session.id),
+      safeToResume: true,
+    });
+    runtime.database.createToolCall({
+      id: "restart-read",
+      runId: run.id,
+      name: "read",
+      args: { path: "restart.txt" },
+    });
+    const action = runtime.database.createRunAction({
+      runId: run.id,
+      toolCallId: "restart-read",
+      toolName: "read",
+      toolClass: "read",
+      idempotencyKey: "restart-read-once",
+      input: { path: "restart.txt" },
+    });
+    await runtime.stop();
+
+    const restarted = new UmaRuntime(runtime.config);
+    const faux = fauxProvider({
+      provider: "faux",
+      models: [{ id: "model", contextWindow: 100_000, maxTokens: 4_096 }],
+      tokensPerSecond: 100_000,
+    });
+    faux.setResponses([fauxAssistantMessage("completed after restart")]);
+    restarted.models.models.setProvider(faux.provider);
+    cleanup.push(async () => restarted.stop());
+    const terminal = waitForRunTerminal(restarted, run.id);
+    await restarted.start();
+
+    expect((await terminal).status).toBe("completed");
+    expect(restarted.database.getRunAction(action.id).status).toBe("completed");
+    expect(restarted.database.responseForRun(run.id)).toMatchObject({
+      status: "completed",
+      content: "completed after restart",
+    });
+    expect(restarted.database.responseForRun(run.id)?.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "status",
+          status: "queued",
+          text: "已从服务器重启检查点恢复，等待继续执行",
+        }),
+      ]),
+    );
+  });
+
   it("freezes the execution model when the Run is accepted", async () => {
     const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("frozen")]);
     const session = await runtime.createSession({ model: { provider: "faux", id: "model" } });

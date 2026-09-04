@@ -62,6 +62,7 @@ import { RuntimeCommandOperations } from "./runtime-command-operations.js";
 import { RuntimeOptimizationService } from "./runtime-optimization.js";
 import { RuntimeOptimizationExecutionService } from "./runtime-optimization-execution.js";
 import { RuntimeQualityOperations } from "./runtime-quality-operations.js";
+import { recoverRestartedRuns, syncResumedResponse } from "./runtime-recovery.js";
 import { RuntimeResourceService } from "./runtime-resources.js";
 import { RuntimeShortcutService } from "./runtime-shortcuts.js";
 import {
@@ -238,11 +239,12 @@ export class UmaRuntime {
     await this.skills.refresh();
     this.skills.startWatching(() => this.invalidateResource("skills"));
     await this.mcp.connect(this.config.mcpServers, this.config.runtime.toolTimeoutMs);
+    this.started = true;
     this.scheduler.start();
     this.eventLoopDelay.enable();
     this.resourceTimer = setInterval(() => this.captureResourceSnapshot(), 30_000);
     this.captureResourceSnapshot();
-    this.started = true;
+    this.recoverRestartedRuns();
   }
 
   async stop(): Promise<void> {
@@ -516,6 +518,7 @@ export class UmaRuntime {
     const session = this.database.getSession(run.sessionId);
     const resumed = this.events.transaction(() => {
       const value = this.database.updateRun(runId, { status: "queued", error: null });
+      syncResumedResponse(this.database, this.events, session.id, runId);
       this.events.emit(session.id, runId, "run.resumed", value);
       return value;
     });
@@ -547,6 +550,10 @@ export class UmaRuntime {
       runId,
     );
     return resumed;
+  }
+
+  private recoverRestartedRuns(): void {
+    recoverRestartedRuns(this.database.listRestartRecoverableRuns(), (runId) => this.resumeRun(runId));
   }
 
   confirmPlan(runId: string): Run {

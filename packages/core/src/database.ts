@@ -61,6 +61,7 @@ import {
   toScheduledTaskRun,
 } from "./database-utils.js";
 import { MessageRepository } from "./message-repository.js";
+import { findRestartRecoverableRuns, SERVER_RESTART_ERROR } from "./run-recovery.js";
 import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
@@ -103,9 +104,9 @@ export class UmaDatabase {
       const now = Date.now();
       this.db
         .prepare(
-          "UPDATE runs SET status = 'interrupted', error = 'Server restarted during execution', updated_at = ? WHERE status IN ('queued','preflight','running','verifying')",
+          "UPDATE runs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('queued','preflight','running','verifying')",
         )
-        .run(now);
+        .run(SERVER_RESTART_ERROR, now);
       this.db
         .prepare("UPDATE messages SET status = 'cancelled', updated_at = ? WHERE status = 'streaming'")
         .run(now);
@@ -118,6 +119,8 @@ export class UmaDatabase {
         .run(now);
       for (const value of interrupted) {
         const runId = text(value.id);
+        const response = this.responseForRun(runId);
+        if (response) this.updateResponse(response.id, { status: "failed", content: SERVER_RESTART_ERROR });
         this.appendEvent(text(value.session_id), runId, "run.updated", this.getRun(runId));
       }
     });
@@ -726,8 +729,9 @@ export class UmaDatabase {
       runId,
     ).map((value) => text(value.id));
     const phase = checkpoint ? text(checkpoint.phase) : undefined;
+    const safeToResume = checkpoint ? integer(checkpoint.safe_to_resume) === 1 : false;
     const base = {
-      state: pending.length ? "needs_confirmation" : checkpoint ? "available" : "exhausted",
+      state: pending.length ? "needs_confirmation" : safeToResume ? "available" : "exhausted",
       ...(checkpoint ? { checkpointId: text(checkpoint.id) } : {}),
       pendingActionIds: pending,
     };
@@ -959,6 +963,9 @@ export class UmaDatabase {
     return rows(this.db.prepare("SELECT id FROM runs WHERE session_id=? ORDER BY created_at"), sessionId).map(
       (value) => this.getRun(text(value.id)),
     );
+  }
+  listRestartRecoverableRuns(): Run[] {
+    return findRestartRecoverableRuns(this.db, (id) => this.getRun(id));
   }
 
   listRecentRuns(sessionId: string, limit = 20): Run[] {

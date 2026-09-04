@@ -171,6 +171,72 @@ describe("UmaDatabase", () => {
     reopened.close();
   });
 
+  it("lists only safe interactive runs for automatic restart recovery", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-recoverable-runs-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    const session = db.createSession({
+      title: "recovery",
+      workspace: root,
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const safe = db.createRun(session.id, "safe-message", modelSnapshot, "off", "agent", "agent").run;
+    db.updateRun(safe.id, {
+      status: "interrupted",
+      error: "Server restarted during execution",
+      route: "direct",
+    });
+    db.createCheckpoint({
+      runId: safe.id,
+      phase: "model",
+      turnCount: 1,
+      lastMessageSequence: 0,
+      safeToResume: true,
+    });
+
+    const unsafe = db.createRun(session.id, "unsafe-message", modelSnapshot, "off", "agent", "agent").run;
+    db.updateRun(unsafe.id, {
+      status: "interrupted",
+      error: "Server restarted during execution",
+      route: "direct",
+    });
+    db.createCheckpoint({
+      runId: unsafe.id,
+      phase: "tool",
+      turnCount: 1,
+      lastMessageSequence: 0,
+      safeToResume: true,
+    });
+    db.createRunAction({
+      runId: unsafe.id,
+      toolCallId: "unsafe-shell",
+      toolName: "shell",
+      toolClass: "shell",
+      idempotencyKey: "unsafe-shell-once",
+      input: { command: "echo unsafe" },
+    });
+
+    const withoutCheckpoint = db.createRun(
+      session.id,
+      "without-checkpoint-message",
+      modelSnapshot,
+      "off",
+      "agent",
+      "agent",
+    ).run;
+    db.updateRun(withoutCheckpoint.id, {
+      status: "interrupted",
+      error: "Server restarted during execution",
+      route: "direct",
+    });
+
+    expect(db.listRestartRecoverableRuns().map((run) => run.id)).toEqual([safe.id]);
+    expect(db.getRun(unsafe.id).resume?.state).toBe("needs_confirmation");
+    expect(db.getRun(withoutCheckpoint.id).resume?.state).toBe("exhausted");
+    db.close();
+  });
+
   it("bounds snapshots while retaining every non-terminal run", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-snapshot-"));
     temporary.push(root);
