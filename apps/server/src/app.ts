@@ -61,6 +61,23 @@ function errorBody(requestId: string, code: string, message: string, retryable =
   return { error: { code, message, retryable, requestId } };
 }
 
+export function consumeRateLimit(
+  buckets: Map<string, { count: number; resetAt: number }>,
+  key: string,
+  now = Date.now(),
+  limit = 16,
+  windowMs = 60_000,
+): boolean {
+  const current = buckets.get(key);
+  if (!current || current.resetAt <= now) {
+    buckets.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (current.count >= limit) return false;
+  current.count += 1;
+  return true;
+}
+
 export function shouldCloseForBufferedAmount(bufferedAmount: number, maxBufferedBytes: number): boolean {
   return bufferedAmount > maxBufferedBytes;
 }
@@ -104,6 +121,7 @@ export async function createServer(
     : undefined;
   const xianyuGrants = new XianyuGrantStore();
   const xianyuFailures = new Map<string, number[]>();
+  const qualityReadRate = new Map<string, { count: number; resetAt: number }>();
   const xianyuPasswordHash = process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH?.trim();
   const xianyuRateAllowed = (key: string): boolean => {
     const now = Date.now();
@@ -1015,11 +1033,14 @@ export async function createServer(
       runtime.listSessionMessageQuality(request.params.id),
     ),
   );
-  app.get<{ Params: { id: string } }>("/api/v15/messages/:id/quality", async (request) =>
-    ownedResult(request, runtime.database.messageOwner(request.params.id), () =>
-      runtime.listMessageQuality(request.params.id),
-    ),
-  );
+  app.get<{ Params: { id: string } }>("/api/v15/messages/:id/quality", async (request, reply) => {
+    const principal = requireOwned(request, runtime.database.messageOwner(request.params.id));
+    if (!consumeRateLimit(qualityReadRate, principal.userId))
+      return reply
+        .code(429)
+        .send(errorBody(request.id, "rate_limited", "Use the session quality endpoint for history", true));
+    return runtime.listMessageQuality(request.params.id);
+  });
   app.post<{ Params: { id: string }; Body: { feedback?: string } }>(
     "/api/v15/messages/:id/review",
     async (request, reply) => {

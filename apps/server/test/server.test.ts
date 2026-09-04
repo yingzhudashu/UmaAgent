@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type UmaConfig, UmaRuntime } from "@uma-agent/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createServer, shouldCloseForBufferedAmount } from "../src/app.js";
+import { consumeRateLimit, createServer, shouldCloseForBufferedAmount } from "../src/app.js";
 import { AuthService } from "../src/auth.js";
 import { crossOrigin, secureOrigin, trustLoopbackProxy } from "../src/request-origin.js";
 
@@ -26,6 +26,16 @@ describe("server", () => {
     expect(trustLoopbackProxy("127.0.0.1")).toBe(true);
     expect(trustLoopbackProxy("::1")).toBe(true);
     expect(trustLoopbackProxy("203.0.113.10")).toBe(false);
+  });
+
+  it("bounds legacy per-message quality reads within a user window", () => {
+    const buckets = new Map<string, { count: number; resetAt: number }>();
+    expect(Array.from({ length: 16 }, () => consumeRateLimit(buckets, "user-1", 1_000))).toEqual(
+      Array(16).fill(true),
+    );
+    expect(consumeRateLimit(buckets, "user-1", 1_000)).toBe(false);
+    expect(consumeRateLimit(buckets, "user-1", 61_000)).toBe(true);
+    expect(consumeRateLimit(buckets, "user-2", 1_000)).toBe(true);
   });
 
   it("requires auth and serves authoritative snapshots", async () => {
