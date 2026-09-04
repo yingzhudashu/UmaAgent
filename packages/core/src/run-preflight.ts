@@ -27,6 +27,11 @@ function taskClassFromResponse(content: string): PreflightDecision["taskClass"] 
   }
 }
 
+function isInvalidClassificationContract(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /invalid task classification|classification.*contract|contract.*classification/i.test(message);
+}
+
 /** Classifies and plans a Run from the same persisted conversation used by the agent loop. */
 export class RunPreflight {
   constructor(
@@ -56,35 +61,40 @@ export class RunPreflight {
     let taskClass: PreflightDecision["taskClass"];
     if (request.mode === "plan") taskClass = "complex";
     else {
-      const classify = (messages: AgentMessage[]) =>
-        this.modelCalls.complete({
-          runId,
-          sessionId: session.id,
-          role: "fast",
-          purpose: "classify",
-          systemPrompt:
-            'Classify the latest user request using the full conversation. Return JSON only: {"taskClass":"simple|standard|complex"}. Simple is a direct answer or one obvious action; standard may need clarification; complex needs multiple ordered steps. Do not include reasoning.',
-          messages,
-          signal,
-          jsonMode: true,
-          maxTokens: 64,
-          ...(context.summary ? { contextSummarySequence: context.summary.throughSequence } : {}),
-          ...(trace ? { trace } : {}),
-        });
-      let response = await classify(baseMessages);
-      if (response.stopReason === "error" || response.stopReason === "aborted")
-        throw new Error(response.errorMessage ?? "Task classification failed");
-      let classified = taskClassFromResponse(contentText(response.content));
+      const classify = async (messages: AgentMessage[]) => {
+        try {
+          const response = await this.modelCalls.complete({
+            runId,
+            sessionId: session.id,
+            role: "fast",
+            purpose: "classify",
+            systemPrompt:
+              'Classify the latest user request using the full conversation. Return JSON only: {"taskClass":"simple|standard|complex"}. Simple is a direct answer or one obvious action; standard may need clarification; complex needs multiple ordered steps. Do not include reasoning.',
+            messages,
+            signal,
+            jsonMode: true,
+            maxTokens: 64,
+            ...(context.summary ? { contextSummarySequence: context.summary.throughSequence } : {}),
+            ...(trace ? { trace } : {}),
+          });
+          if (response.stopReason === "error" || response.stopReason === "aborted") {
+            if (isInvalidClassificationContract(response.errorMessage)) return undefined;
+            throw new Error(response.errorMessage ?? "Task classification failed");
+          }
+          return taskClassFromResponse(contentText(response.content));
+        } catch (error) {
+          if (isInvalidClassificationContract(error)) return undefined;
+          throw error;
+        }
+      };
+      let classified = await classify(baseMessages);
       if (!classified) {
-        response = await classify([
+        classified = await classify([
           ...baseMessages,
           userMessage(
             "The previous response was invalid. Return exactly one valid classification JSON object.",
           ),
         ]);
-        if (response.stopReason === "error" || response.stopReason === "aborted")
-          throw new Error(response.errorMessage ?? "Task classification repair failed");
-        classified = taskClassFromResponse(contentText(response.content));
       }
       // Classification only selects the preflight route. The conservative route keeps execution gated.
       taskClass = classified ?? "standard";

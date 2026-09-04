@@ -124,6 +124,35 @@ describe("RunPreflight", () => {
     expect(complete.mock.calls[0]?.[0]).toMatchObject({ jsonMode: true, maxTokens: 64 });
   });
 
+  it("falls back when the provider reports an invalid classification contract", async () => {
+    const { preflight, complete } = fixture();
+    complete
+      .mockReset()
+      .mockRejectedValueOnce(new Error("Provider contract error: invalid task classification"))
+      .mockRejectedValueOnce(new Error("Provider contract error: invalid task classification"))
+      .mockResolvedValueOnce(
+        fauxAssistantMessage(
+          JSON.stringify({
+            taskClass: "standard",
+            goal: "继续",
+            reasoningSummary: "需要保守预检",
+            successCriteria: ["完成"],
+            assumptions: [],
+            questions: [],
+            steps: [],
+          }),
+        ),
+      );
+    await expect(
+      preflight.decide(
+        session,
+        { messageId: "current", text: "继续", mode: "agent" },
+        new AbortController().signal,
+        "run",
+      ),
+    ).resolves.toMatchObject({ taskClass: "standard", route: "direct" });
+  });
+
   it("falls back to the guarded standard route after two invalid classifications", async () => {
     const { preflight, complete } = fixture([
       "not JSON",

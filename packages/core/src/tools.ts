@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { lookup } from "node:dns/promises";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { dirname, join, relative } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -23,9 +23,17 @@ const result = (text: string, details: Record<string, unknown> = {}) => ({
   details,
 });
 
+const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024;
+const SEARCH_CHUNK_BYTES = 64 * 1024;
+const MAX_LIST_RESULTS = 2_000;
+const MAX_SEARCH_RESULTS = 500;
+const MAX_SEARCH_MATCH_CHARS = 1_000;
+
 async function readTextFile(path: string): Promise<string> {
-  const bytes = await readFile(path);
-  const limited = bytes.subarray(0, 400_000);
+  const metadata = await stat(path);
+  if (metadata.size > 400_000) throw new Error("Attachment text file exceeds the 400 KiB read limit");
+  const limited = await readFile(path);
   let encoding = "utf-8";
   let offset = 0;
   if (limited[0] === 0xef && limited[1] === 0xbb && limited[2] === 0xbf) offset = 3;
@@ -43,7 +51,60 @@ async function readTextFile(path: string): Promise<string> {
   }
 }
 
+async function searchFile(
+  path: string,
+  relativePath: string,
+  output: string[],
+  query: RegExp,
+): Promise<void> {
+  const metadata = await stat(path).catch(() => undefined);
+  if (!metadata?.isFile() || metadata.size > MAX_SEARCH_FILE_BYTES) return;
+  const handle = await open(path, "r");
+  try {
+    const decoder = new TextDecoder("utf-8");
+    let position = 0;
+    let lineNumber = 1;
+    let pending = "";
+    let firstChunk = true;
+    while (position < metadata.size && output.length < MAX_SEARCH_RESULTS) {
+      const chunk = Buffer.alloc(Math.min(SEARCH_CHUNK_BYTES, metadata.size - position));
+      const read = await handle.read(chunk, 0, chunk.length, position);
+      if (!read.bytesRead) break;
+      position += read.bytesRead;
+      const bytes = chunk.subarray(0, read.bytesRead);
+      if (firstChunk) {
+        firstChunk = false;
+        // Workspace search is for text. Reject binary content before it can be decoded into a large string.
+        if (bytes.includes(0)) return;
+      }
+      pending += decoder.decode(bytes, { stream: position < metadata.size });
+      let newline = pending.indexOf("\n");
+      while (newline >= 0 && output.length < MAX_SEARCH_RESULTS) {
+        const line = pending.slice(0, newline).replace(/\r$/, "");
+        query.lastIndex = 0;
+        if (query.test(line))
+          output.push(`${relativePath}:${lineNumber}:${line.slice(0, MAX_SEARCH_MATCH_CHARS)}`);
+        lineNumber++;
+        pending = pending.slice(newline + 1);
+        newline = pending.indexOf("\n");
+      }
+    }
+    if (output.length >= MAX_SEARCH_RESULTS) return;
+    pending += decoder.decode();
+    if (pending) {
+      query.lastIndex = 0;
+      if (query.test(pending))
+        output.push(
+          `${relativePath}:${lineNumber}:${pending.replace(/\r$/, "").slice(0, MAX_SEARCH_MATCH_CHARS)}`,
+        );
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 async function walk(directory: string, root: string, output: string[], query?: RegExp): Promise<void> {
+  const maxResults = query ? MAX_SEARCH_RESULTS : MAX_LIST_RESULTS;
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.name === ".git" || entry.name === "node_modules" || entry.name === "dist") continue;
     const path = join(directory, entry.name);
@@ -52,14 +113,10 @@ async function walk(directory: string, root: string, output: string[], query?: R
     else if (entry.isFile()) {
       if (!query) output.push(rel);
       else {
-        const content = await readFile(path, "utf8").catch(() => "");
-        content.split(/\r?\n/).forEach((line, index) => {
-          if (query.test(line)) output.push(`${rel}:${index + 1}:${line}`);
-          query.lastIndex = 0;
-        });
+        await searchFile(path, rel, output, query).catch(() => undefined);
       }
     }
-    if (output.length >= 2_000) return;
+    if (output.length >= maxResults) return;
   }
 }
 
@@ -430,6 +487,9 @@ export function createBuiltinTools(input: {
       executionMode: "parallel",
       async execute(_id, params) {
         const path = await workspacePolicy.resolvePath(workspace, params.path);
+        const metadata = await stat(path);
+        if (metadata.size > MAX_READ_FILE_BYTES)
+          throw new Error("File exceeds the 5 MiB read limit; narrow the request or use an attachment tool");
         const lines = (await readFile(path, "utf8")).split(/\r?\n/);
         const start = (params.offset ?? 1) - 1;
         return result(lines.slice(start, start + (params.limit ?? 500)).join("\n"), {
@@ -461,6 +521,8 @@ export function createBuiltinTools(input: {
       executionMode: "sequential",
       async execute(_id, params) {
         const path = await workspacePolicy.resolvePath(workspace, params.path);
+        const metadata = await stat(path);
+        if (metadata.size > MAX_READ_FILE_BYTES) throw new Error("File exceeds the 5 MiB edit limit");
         const current = await readFile(path, "utf8");
         const first = current.indexOf(params.oldText);
         if (first < 0) throw new Error("oldText was not found");
@@ -480,7 +542,10 @@ export function createBuiltinTools(input: {
         const root = await workspacePolicy.resolvePath(workspace, params.path ?? ".");
         const output: string[] = [];
         await walk(root, root, output);
-        return result(output.join("\n") || "No files", { root, truncated: output.length >= 2_000 });
+        return result(output.join("\n") || "No files", {
+          root,
+          truncated: output.length >= MAX_LIST_RESULTS,
+        });
       },
     }),
     defineTool({
@@ -493,7 +558,10 @@ export function createBuiltinTools(input: {
         const root = await workspacePolicy.resolvePath(workspace, params.path ?? ".");
         const output: string[] = [];
         await walk(root, root, output, new RegExp(params.query, "i"));
-        return result(output.join("\n") || "No matches", { root, truncated: output.length >= 2_000 });
+        return result(output.join("\n") || "No matches", {
+          root,
+          truncated: output.length >= MAX_SEARCH_RESULTS,
+        });
       },
     }),
     defineTool({

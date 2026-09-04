@@ -62,7 +62,7 @@ import { RuntimeCommandOperations } from "./runtime-command-operations.js";
 import { RuntimeOptimizationService } from "./runtime-optimization.js";
 import { RuntimeOptimizationExecutionService } from "./runtime-optimization-execution.js";
 import { RuntimeQualityOperations } from "./runtime-quality-operations.js";
-import { recoverRestartedRuns, syncResumedResponse } from "./runtime-recovery.js";
+import { recoverRestartedRuns, syncResumedResponse, waitForRunTerminal } from "./runtime-recovery.js";
 import { RuntimeResourceService } from "./runtime-resources.js";
 import { RuntimeShortcutService } from "./runtime-shortcuts.js";
 import {
@@ -244,14 +244,19 @@ export class UmaRuntime {
     this.eventLoopDelay.enable();
     this.resourceTimer = setInterval(() => this.captureResourceSnapshot(), 30_000);
     this.captureResourceSnapshot();
-    this.recoverRestartedRuns();
+    void recoverRestartedRuns(
+      this.database.listRestartRecoverableRuns(),
+      (runId) => this.resumeRun(runId),
+      (runId) => waitForRunTerminal((id) => this.database.getRun(id), this.subscribe.bind(this), runId),
+      () => !this.stopping,
+      (runId) => this.database.addAudit({ runId, kind: "run", name: "restart_recovery", status: "started" }),
+    );
   }
 
   async stop(): Promise<void> {
     this.stopPromise ??= this.stopInternal();
     return this.stopPromise;
   }
-
   private async stopInternal(): Promise<void> {
     this.stopping = true;
     this.scheduler.stop();
@@ -550,10 +555,6 @@ export class UmaRuntime {
       runId,
     );
     return resumed;
-  }
-
-  private recoverRestartedRuns(): void {
-    recoverRestartedRuns(this.database.listRestartRecoverableRuns(), (runId) => this.resumeRun(runId));
   }
 
   confirmPlan(runId: string): Run {

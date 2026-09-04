@@ -227,6 +227,22 @@ describe("builtin tools", () => {
     );
   });
 
+  it("bounds workspace reads and skips binary or oversized search files", async () => {
+    const value = await fixture();
+    const large = join(value.root, "downloads", "large.bin");
+    await mkdir(join(value.root, "downloads"));
+    await writeFile(large, Buffer.concat([Buffer.alloc(6 * 1024 * 1024 + 1, 0x41), Buffer.from("needle")]));
+    await writeFile(
+      join(value.root, "binary.dat"),
+      Buffer.from([0x6e, 0x65, 0x65, 0x64, 0x6c, 0x65, 0x00, 0x6e, 0x65, 0x65, 0x64]),
+    );
+
+    expect(text(await execute(value.tools, "search", { query: "needle" }))).toBe("No matches");
+    await expect(execute(value.tools, "read", { path: "downloads/large.bin" })).rejects.toThrow(
+      "5 MiB read limit",
+    );
+  });
+
   it("blocks unsafe URL schemes and private IPv4 and IPv6 targets", async () => {
     await expect(safeFetch("file:///etc/passwd")).rejects.toThrow("Only HTTP");
     for (const address of [

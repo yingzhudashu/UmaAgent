@@ -232,6 +232,9 @@ describe("UmaDatabase", () => {
     });
 
     expect(db.listRestartRecoverableRuns().map((run) => run.id)).toEqual([safe.id]);
+    db.addAudit({ runId: safe.id, kind: "run", name: "restart_recovery", status: "started" });
+    db.addAudit({ runId: safe.id, kind: "run", name: "restart_recovery", status: "started" });
+    expect(db.listRestartRecoverableRuns()).toEqual([]);
     expect(db.getRun(unsafe.id).resume?.state).toBe("needs_confirmation");
     expect(db.getRun(withoutCheckpoint.id).resume?.state).toBe("exhausted");
     db.close();

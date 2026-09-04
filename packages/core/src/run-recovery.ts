@@ -3,6 +3,7 @@ import type { Run } from "@uma-agent/protocol";
 import { rows, text } from "./database-utils.js";
 
 export const SERVER_RESTART_ERROR = "Server restarted during execution";
+export const MAX_AUTOMATIC_RECOVERY_ATTEMPTS = 2;
 
 export function findRestartRecoverableRuns(db: DatabaseSync, getRun: (id: string) => Run): Run[] {
   return rows(
@@ -24,6 +25,11 @@ export function findRestartRecoverableRuns(db: DatabaseSync, getRun: (id: string
              AND a.tool_class NOT IN ('read','attachment_read')
          )
          AND NOT EXISTS (SELECT 1 FROM background_tasks b WHERE b.run_id=r.id)
+         AND (SELECT COUNT(*)
+              FROM audit_events a
+              WHERE a.run_id=r.id
+                AND a.kind='run'
+                AND a.name='restart_recovery') < ${MAX_AUTOMATIC_RECOVERY_ATTEMPTS}
        ORDER BY r.created_at, r.id`,
     ),
     SERVER_RESTART_ERROR,
