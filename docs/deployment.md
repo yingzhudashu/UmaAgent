@@ -289,7 +289,7 @@ sudo /opt/uma-agent/releases/<release>/deploy/promote-native-release.sh \
   /opt/uma-agent/releases/<release> /opt/uma-agent/dependencies/node_modules
 ```
 
-脚本先验证 candidate、执行 SQLite online backup、完整性检查和保护用户对象指纹，再原子切换 `current`、检查 live/ready 与只读认证，最后比较指纹。任一步失败只恢复上一 release 指针并重启服务，不覆盖或回滚 `state.db`。
+脚本先验证 candidate、执行 SQLite online backup、完整性检查和保护用户对象快照，再原子切换 `current`、检查 live/ready 与只读认证，最后确认保护用户与 token 元数据不变、已有对象未减少且数据库完整。新版本启动时允许为 crash recovery 写入新的运行/响应活动记录；任一步失败只恢复上一 release 指针并重启服务，不覆盖或回滚 `state.db`。
 
 ## 10. 故障排查
 

@@ -75,4 +75,45 @@ describe("release data protection", () => {
     expect(backup.prepare("SELECT value FROM records").get()).toEqual({ value: "kept" });
     backup.close();
   });
+
+  it("allows recovery writes while rejecting protected object removal", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-protected-compare-"));
+    roots.push(root);
+    const beforePath = join(root, "before.json");
+    const afterPath = join(root, "after.json");
+    const before = {
+      userId: "user-1",
+      token: { id: "token-1", hash: "hash", scopes: '["user"]', expiresAt: null, revokedAt: null },
+      counts: { sessions: 1 },
+      ids: { sessions: ["session-1"] },
+      integrity: "ok",
+      foreignKeyViolations: 0,
+    };
+    await writeFile(beforePath, JSON.stringify(before));
+    await writeFile(
+      afterPath,
+      JSON.stringify({
+        ...before,
+        counts: { sessions: 2 },
+        ids: { sessions: ["session-1", "session-2"] },
+        fingerprint: "changed-by-recovery",
+      }),
+    );
+    const preserved = spawnSync(
+      process.execPath,
+      [resolve("deploy/compare-protected-user.mjs"), beforePath, afterPath],
+      { encoding: "utf8" },
+    );
+    expect(preserved.status, preserved.stderr).toBe(0);
+    expect(preserved.stdout).toContain('"protectedUserPreserved":true');
+
+    await writeFile(afterPath, JSON.stringify({ ...before, counts: { sessions: 0 }, ids: { sessions: [] } }));
+    const removed = spawnSync(
+      process.execPath,
+      [resolve("deploy/compare-protected-user.mjs"), beforePath, afterPath],
+      { encoding: "utf8" },
+    );
+    expect(removed.status).not.toBe(0);
+    expect(`${removed.stdout}\n${removed.stderr}`).toContain("protected user object removed: sessions");
+  });
 });
