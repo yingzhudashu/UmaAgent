@@ -1,6 +1,6 @@
 import type { MessageQualityHistory, UmaClient } from "@uma-agent/client";
 import type { TranscriptItem } from "@uma-agent/protocol";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 export type RestoredQualityOperation = {
   kind: "review" | "improve";
@@ -13,20 +13,20 @@ export type RestoredQualityOperation = {
 
 export async function loadQualityHistory(
   client: UmaClient,
+  sessionId: string,
   transcript: readonly TranscriptItem[],
 ): Promise<Record<string, RestoredQualityOperation>> {
-  const messages = transcript.filter((item) => item.role === "assistant");
-  const entries = await Promise.all(
-    messages.map(async (message) => [message.id, await client.listMessageQuality(message.id)] as const),
-  );
+  const histories = await client.listSessionMessageQuality(sessionId);
   const restored: Record<string, RestoredQualityOperation> = {};
-  for (const [messageId, history] of entries) {
+  for (const message of transcript) {
+    if (message.role !== "assistant") continue;
+    const history = histories[message.id] ?? [];
     const latest = [...history]
       .reverse()
       .find((item) => ["completed", "failed", "cancelled", "interrupted"].includes(item.status));
     if (!latest) continue;
     const result = transcript.find((item) => item.id === latest.resultMessageId)?.content;
-    restored[messageId] = {
+    restored[message.id] = {
       kind: latest.kind,
       status: latest.status === "completed" ? "completed" : "failed",
       runId: latest.runId,
@@ -45,12 +45,31 @@ export function useQualityHistory(
   key: string | undefined,
   onLoaded: (value: Record<string, RestoredQualityOperation>) => void,
 ) {
+  const cached = useRef(new Map<string, Record<string, RestoredQualityOperation>>());
+  const inFlight = useRef(new Map<string, Promise<Record<string, RestoredQualityOperation>>>());
+  const cachedClient = useRef<UmaClient | undefined>(undefined);
+
   useEffect(() => {
     if (!enabled || !key || !transcript?.length) return;
+    if (cachedClient.current !== client) {
+      cached.current.clear();
+      inFlight.current.clear();
+      cachedClient.current = client;
+    }
+    if (cached.current.has(key) || inFlight.current.has(key)) return;
+    const request = loadQualityHistory(client, key, transcript);
+    inFlight.current.set(key, request);
     let cancelled = false;
-    void loadQualityHistory(client, transcript)
+    void request
       .then((value) => {
-        if (!cancelled) onLoaded(value);
+        if (cachedClient.current !== client) return;
+        cached.current.set(key, value);
+        if (!cancelled && Object.keys(value).length > 0) onLoaded(value);
+      })
+      .catch(() => undefined);
+    void request
+      .finally(() => {
+        if (inFlight.current.get(key) === request) inFlight.current.delete(key);
       })
       .catch(() => undefined);
     return () => {

@@ -992,6 +992,15 @@ describe("server", () => {
     expect(
       (
         await app.inject({
+          method: "GET",
+          url: `/api/v15/sessions/${session.id}/quality`,
+          headers: authHeaders,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
           method: "POST",
           url: "/api/v15/messages/quality-answer/review",
           headers: authHeaders,

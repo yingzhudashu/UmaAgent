@@ -1010,6 +1010,11 @@ export async function createServer(
       runtime.listQualityAssessments(request.params.id),
     ),
   );
+  app.get<{ Params: { id: string } }>("/api/v15/sessions/:id/quality", async (request) =>
+    ownedResult(request, runtime.database.sessionOwner(request.params.id), () =>
+      runtime.listSessionMessageQuality(request.params.id),
+    ),
+  );
   app.get<{ Params: { id: string } }>("/api/v15/messages/:id/quality", async (request) =>
     ownedResult(request, runtime.database.messageOwner(request.params.id), () =>
       runtime.listMessageQuality(request.params.id),

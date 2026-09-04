@@ -841,6 +841,9 @@ export class UmaRuntime {
   listMessageQuality(messageId: string) {
     return this.resources.listMessageQuality(messageId);
   }
+  listSessionMessageQuality(sessionId: string) {
+    return this.resources.listSessionMessageQuality(sessionId);
+  }
 
   private transitionRun(
     sessionId: string,

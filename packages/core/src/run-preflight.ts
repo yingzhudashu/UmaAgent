@@ -14,6 +14,19 @@ function userMessage(content: string): AgentMessage {
   return { role: "user", content, timestamp: Date.now() };
 }
 
+function taskClassFromResponse(content: string): PreflightDecision["taskClass"] | undefined {
+  try {
+    const value = extractJson(content);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const taskClass = (value as { taskClass?: unknown }).taskClass;
+    const normalized = typeof taskClass === "string" ? taskClass.trim().toLowerCase() : undefined;
+    if (!Value.Check(TaskClassificationSchema, { taskClass: normalized })) return undefined;
+    return normalized as PreflightDecision["taskClass"];
+  } catch {
+    return undefined;
+  }
+}
+
 /** Classifies and plans a Run from the same persisted conversation used by the agent loop. */
 export class RunPreflight {
   constructor(
@@ -53,17 +66,16 @@ export class RunPreflight {
             'Classify the latest user request using the full conversation. Return JSON only: {"taskClass":"simple|standard|complex"}. Simple is a direct answer or one obvious action; standard may need clarification; complex needs multiple ordered steps. Do not include reasoning.',
           messages,
           signal,
+          jsonMode: true,
+          maxTokens: 64,
           ...(context.summary ? { contextSummarySequence: context.summary.throughSequence } : {}),
           ...(trace ? { trace } : {}),
         });
       let response = await classify(baseMessages);
       if (response.stopReason === "error" || response.stopReason === "aborted")
         throw new Error(response.errorMessage ?? "Task classification failed");
-      try {
-        const value = extractJson(contentText(response.content));
-        if (!Value.Check(TaskClassificationSchema, value)) throw new Error("Invalid taskClass");
-        taskClass = value.taskClass;
-      } catch {
+      let classified = taskClassFromResponse(contentText(response.content));
+      if (!classified) {
         response = await classify([
           ...baseMessages,
           userMessage(
@@ -72,16 +84,10 @@ export class RunPreflight {
         ]);
         if (response.stopReason === "error" || response.stopReason === "aborted")
           throw new Error(response.errorMessage ?? "Task classification repair failed");
-        let value: unknown;
-        try {
-          value = extractJson(contentText(response.content));
-        } catch {
-          throw new Error("Provider contract error: invalid task classification");
-        }
-        if (!Value.Check(TaskClassificationSchema, value))
-          throw new Error("Provider contract error: invalid task classification");
-        taskClass = value.taskClass;
+        classified = taskClassFromResponse(contentText(response.content));
       }
+      // Classification only selects the preflight route. The conservative route keeps execution gated.
+      taskClass = classified ?? "standard";
     }
     if (taskClass === "simple") {
       return {

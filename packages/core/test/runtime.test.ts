@@ -526,14 +526,15 @@ describe("UmaRuntime preflight", () => {
     expect(runtime.database.getSession(session.id).model.id).toBe("model-2");
   });
 
-  it("repairs invalid structured output once and then fails the provider contract", async () => {
+  it("uses guarded standard preflight after two invalid classifications", async () => {
     const runtime = await runtimeWith([
       fauxAssistantMessage("not json"),
       fauxAssistantMessage("still invalid"),
+      decision("clarify"),
     ]);
     const { run } = await runOnce(runtime);
-    expect(run.status).toBe("failed");
-    expect(run.error).toContain("Provider contract error");
+    expect(run.status).toBe("awaiting_input");
+    expect(run.taskClass).toBe("standard");
   });
 
   it("fails a plan step that reaches forty-eight Agent turns", async () => {
@@ -1215,6 +1216,12 @@ describe("UmaRuntime preflight", () => {
       "review",
       "improve",
     ]);
+    expect(runtime.listSessionMessageQuality(session.id)).toMatchObject({
+      "quality-answer": [
+        expect.objectContaining({ kind: "review", runId: review.id }),
+        expect.objectContaining({ kind: "improve", runId: improve.id }),
+      ],
+    });
     expect(() => runtime.reviewMessage("quality-question")).toThrow("assistant message");
     const reset = runtime.improveMessage(revision?.id as string, { reset: true });
     expect((await waitForRunTerminal(runtime, reset.id)).status).toBe("completed");

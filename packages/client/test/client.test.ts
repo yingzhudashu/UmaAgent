@@ -453,6 +453,7 @@ describe("UmaClient", () => {
     await client.improveMessage("message/id");
     await client.improveMessage("message/id", { force: true, reset: true });
     await client.listRunQuality("run/id");
+    await client.listSessionMessageQuality("session/id");
     await client.sendCommand("session/id", "pwd");
     await client.sendCommand("session/id", "pwd", "message/id");
     await client.listRunActions("run/id");

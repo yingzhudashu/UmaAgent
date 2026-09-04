@@ -43,6 +43,12 @@ import type {
   UpdateSessionRequest,
 } from "@uma-agent/protocol";
 import { PROTOCOL_VERSION } from "@uma-agent/protocol";
+import type { MessageQualityHistory } from "./quality.js";
+
+export type { MessageQualityHistory } from "./quality.js";
+
+const qualityPath = (scope: "runs" | "messages" | "sessions", id: string) =>
+  `/${scope}/${encodeURIComponent(id)}/quality`;
 
 export class UmaClientError extends Error {
   constructor(
@@ -96,17 +102,6 @@ export interface MaintenanceStatus {
   message?: string;
   startedAt?: string;
   expectedVersion?: string;
-}
-
-export interface MessageQualityHistory {
-  kind: "review" | "improve";
-  runId: string;
-  status: import("@uma-agent/protocol").Run["status"];
-  resultMessageId?: string;
-  error?: string;
-  createdAt: number;
-  updatedAt: number;
-  assessments: QualityAssessment[];
 }
 
 type Listener = (event: AgentEventEnvelope) => void;
@@ -620,11 +615,14 @@ export class UmaClient {
   prioritizeRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
     return this.request(`/runs/${encodeURIComponent(runId)}/prioritize`, { method: "POST" });
   }
-  listRunQuality(runId: string): Promise<QualityAssessment[]> {
-    return this.request(`/runs/${encodeURIComponent(runId)}/quality`);
+  listRunQuality(runId: string) {
+    return this.request<QualityAssessment[]>(qualityPath("runs", runId));
   }
-  listMessageQuality(messageId: string): Promise<MessageQualityHistory[]> {
-    return this.request(`/messages/${encodeURIComponent(messageId)}/quality`);
+  listMessageQuality(messageId: string) {
+    return this.request<MessageQualityHistory[]>(qualityPath("messages", messageId));
+  }
+  listSessionMessageQuality(sessionId: string) {
+    return this.request<Record<string, MessageQualityHistory[]>>(qualityPath("sessions", sessionId));
   }
   sendCommand(sessionId: string, command: string, messageId?: string): Promise<SendMessageResponse> {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/commands`, {

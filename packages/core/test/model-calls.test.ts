@@ -22,6 +22,7 @@ function fixture() {
     service: new ModelCallService(database as never, models as never),
     database,
     completeSimple,
+    models,
   };
 }
 
@@ -68,6 +69,26 @@ describe("ModelCallService", () => {
     expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({
       maxRetries: 5,
       maxRetryDelayMs: 120_000,
+    });
+  });
+
+  it("forwards compact JSON control-call options to OpenAI-compatible providers", async () => {
+    const { service, completeSimple, models } = fixture();
+    models.forRole.mockReturnValueOnce({ ...model, api: "openai-completions" });
+    await service.complete({
+      runId: "run",
+      sessionId: "session-a",
+      role: "fast",
+      purpose: "classify",
+      systemPrompt: "Return JSON",
+      messages: [{ role: "user", content: "request", timestamp: 1 }],
+      signal: new AbortController().signal,
+      jsonMode: true,
+      maxTokens: 64,
+    });
+    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({
+      maxTokens: 64,
+      samplingParams: { response_format: { type: "json_object" } },
     });
   });
 

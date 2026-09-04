@@ -111,6 +111,44 @@ describe("RunPreflight", () => {
     expect(complete.mock.calls[1]?.[0].messages.slice(0, 3)).toEqual(complete.mock.calls[0]?.[0].messages);
   });
 
+  it("uses compact JSON output and accepts a valid classification with extra provider fields", async () => {
+    const { preflight, complete } = fixture(['classification: {"taskClass":"SIMPLE","reason":"direct"}']);
+    await expect(
+      preflight.decide(
+        session,
+        { messageId: "current", text: "继续", mode: "agent" },
+        new AbortController().signal,
+        "run",
+      ),
+    ).resolves.toMatchObject({ taskClass: "simple", route: "direct" });
+    expect(complete.mock.calls[0]?.[0]).toMatchObject({ jsonMode: true, maxTokens: 64 });
+  });
+
+  it("falls back to the guarded standard route after two invalid classifications", async () => {
+    const { preflight, complete } = fixture([
+      "not JSON",
+      "still not JSON",
+      JSON.stringify({
+        taskClass: "standard",
+        goal: "继续",
+        reasoningSummary: "需要受约束的预检",
+        successCriteria: ["完成请求"],
+        assumptions: [],
+        questions: [],
+        steps: [],
+      }),
+    ]);
+    await expect(
+      preflight.decide(
+        session,
+        { messageId: "current", text: "继续", mode: "agent" },
+        new AbortController().signal,
+        "run",
+      ),
+    ).resolves.toMatchObject({ taskClass: "standard", route: "direct" });
+    expect(complete).toHaveBeenCalledTimes(3);
+  });
+
   it("generates a plan route from structured planning output", async () => {
     const { preflight } = fixture([
       JSON.stringify({

@@ -19,6 +19,7 @@ export interface ModelCompletionInput {
   contextSummarySequence?: number;
   trace?: TraceContext;
   jsonMode?: boolean;
+  maxTokens?: number;
 }
 
 /** Single boundary for non-agent model calls, accounting, cache affinity and diagnostics. */
@@ -65,6 +66,7 @@ export class ModelCallService {
             `${input.role}:${input.purpose}:${model.provider}:${model.id}`,
           ),
           ...(input.thinkingLevel ? { reasoning: input.thinkingLevel } : {}),
+          ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
           ...(input.jsonMode && model.api === "openai-completions"
             ? { samplingParams: { response_format: { type: "json_object" } } }
             : {}),

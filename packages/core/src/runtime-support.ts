@@ -45,7 +45,33 @@ export function textFromMessage(message: AgentMessage): string {
 
 export function extractJson(text: string): unknown {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  return JSON.parse((fenced ?? text).trim());
+  const source = (fenced ?? text).trim();
+  try {
+    return JSON.parse(source);
+  } catch {
+    const start = source.search(/[[{]/);
+    if (start < 0) throw new Error("No JSON value found");
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = start; index < source.length; index++) {
+      const character = source[index];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') quoted = false;
+        continue;
+      }
+      if (character === '"') {
+        quoted = true;
+        continue;
+      }
+      if (character === "{" || character === "[") depth++;
+      if (character === "}" || character === "]") depth--;
+      if (depth === 0) return JSON.parse(source.slice(start, index + 1));
+    }
+    throw new Error("Unterminated JSON value");
+  }
 }
 
 export const TaskClassificationSchema = Type.Object(

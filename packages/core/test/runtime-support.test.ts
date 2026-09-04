@@ -60,6 +60,9 @@ describe("runtime support", () => {
   it("parses fenced and plain structured output", () => {
     expect(extractJson('{"ok":true}')).toEqual({ ok: true });
     expect(extractJson('```json\n{"ok":true}\n```')).toEqual({ ok: true });
+    expect(extractJson('Here is the result: {"ok":{"nested":"[value]"}}')).toEqual({
+      ok: { nested: "[value]" },
+    });
     expect(() => extractJson("not-json")).toThrow();
   });
 

@@ -264,4 +264,13 @@ export class RuntimeResourceService {
       }))
       .sort((a, b) => a.createdAt - b.createdAt || a.runId.localeCompare(b.runId));
   }
+
+  listSessionMessageQuality(sessionId: string) {
+    return Object.fromEntries(
+      this.deps.database
+        .listMessages(sessionId)
+        .filter((message) => message.role === "assistant")
+        .map((message) => [message.id, this.listMessageQuality(message.id)]),
+    );
+  }
 }

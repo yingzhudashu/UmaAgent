@@ -244,13 +244,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     enabled: Boolean(selected && selected !== "undefined") && authenticated,
     refetchInterval: false,
   });
-  useQualityHistory(
-    client,
-    snapshot.data?.transcript,
-    Boolean(authenticated),
-    selected && `${selected}:${snapshot.data?.snapshotSequence ?? 0}`,
-    mergeQualityHistory,
-  );
+  useQualityHistory(client, snapshot.data?.transcript, Boolean(authenticated), selected, mergeQualityHistory);
   useEffect(() => {
     const capture = (event: Event) => {
       event.preventDefault();
