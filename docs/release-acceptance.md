@@ -9,20 +9,21 @@ sign-off before a release is declared complete.
 - The Android login failure was traced to parameterless JSON requests being sent with `Content-Type: application/json` and a zero-byte body. The shared request layer now sends `{}` for empty `POST`/`PUT`/`PATCH` requests.
 - Android JVM tests passed: `:app:testDebugUnitTest`, 37 tests.
 - Local Debug APK assembly passed: `:app:assembleDebug`; SHA-256 was `ED0BFA1A1AB6CE4F82B5C533173E8BBE731E86B2A2082AC2BA982317AEC9C48`.
-- This is source-level and local build evidence only. Production still serves Android `versionCode 4`, `versionName 1.1.2`, release `4-b54f787`; the fixed APK has not been published.
-- Production publication is blocked until the original `CN=UmaAgent` release keystore is recovered. A Debug or newly generated signing key must not be used because installed production APKs would not accept the update.
+- The original release keystore was recovered at `C:\Users\16785\.umaagent\android-release.jks`; its certificate matches the production certificate `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`.
+- Signed release publication completed from commit `74e75dfc2fc5d3a7e95f834e1155152fa5514736` as release `5-74e75df`, Android `versionCode 5`, `versionName 1.1.3`.
+- Published APK SHA-256 is `e9939c2b626491cc5bcf80e042bbf8b8c02992cbe6e3f0cad6c2e8b1177d6c41`, size `7571849` bytes. Public manifest and APK download matched these values; Core live returned HTTP 200.
 
 ## R1 local baseline
 
-- Candidate commit: final reviewed commit (fill in the immutable release commit before promotion).
+- Candidate commit: `74e75dfc2fc5d3a7e95f834e1155152fa5514736` (`fix: repair Android bootstrap JSON requests`).
 - Protocol: `v15`; database schema: `22`.
 - `npm run check`: passed.
 - `npm run build`: passed.
 - `npm test`: passed (record the final test count from the release run).
 - Android `:app:testDebugUnitTest` and `:app:assembleDebug`: passed locally with SDK/target API 35 and JDK 17; instrumented device tests remain pending.
-- APK: `android/app/build/outputs/apk/debug/app-debug.apk`.
-- APK SHA-256: record the hash produced by the final Android build.
-- Release APK signing certificate: compare with the current production APK before publication; do not accept a changed certificate.
+- APK: `C:\Users\16785\AppData\Local\Temp\UmaAgent-1.1.3-5-74e75df\UmaAgent-1.1.3.apk`.
+- APK SHA-256: `e9939c2b626491cc5bcf80e042bbf8b8c02992cbe6e3f0cad6c2e8b1177d6c41`.
+- Release APK signing certificate: `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`, matching the previously published APK.
 - Legacy-channel scan: run the repository forbidden-term scan while excluding
   `.git`, dependency caches, and build caches; the result must be empty.
 
@@ -54,8 +55,8 @@ operator must attach the following evidence:
 - [ ] Core live/ready, Adapter health, and Core-proxied Xianyu status responses.
 - [ ] Web and CLI smoke results for login, unlock, status, lifecycle, history, item, chat, and publish.
 - [ ] Rollback rehearsal result, including all three active services and release pointer.
-- [ ] Original Android release keystore is available; release APK certificate matches the currently published package.
-- [ ] Android APK release directory, `latest.json`, `releases.json`, and `current` symlink were switched atomically and publicly verified.
+- [x] Original Android release keystore is available; release APK certificate matches the currently published package.
+- [x] Android APK release directory, `latest.json`, `releases.json`, and `current` symlink were switched atomically and publicly verified.
 
 Production backup stamp: `20260828013358`; retired channel archive is under
 `/srv/backups/uma-agent/retired-channel-20260828014500`.

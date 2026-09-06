@@ -34,7 +34,7 @@
 - `android/app/src/main/java/site/robotclaw/umaagent/Api.kt` 的共享请求层曾将无参数 `POST`、`PUT`、`PATCH` 编码为 0 字节 JSON body，Fastify JSON 解析器会拒绝该请求并返回 `Body cannot be empty when content-type is set to 'application/json'`。
 - 修复后无参数 JSON 请求发送 `{}`，不改变有业务参数请求、认证头或 multipart 上传协议。
 - `android/app/src/test/java/site/robotclaw/umaagent/ApiTest.kt` 已断言 bootstrap 请求的方法、JSON media type 和 `{}` body；Android `:app:testDebugUnitTest` 的 37 个测试通过。
-- 线上 APK 发布仍受正式签名 keystore 门禁约束；当前只完成源码修复和本地构建，未替换生产 APK。
+- 已使用原正式签名 keystore 完成 release 构建与发布；发布提交为 `74e75dfc2fc5d3a7e95f834e1155152fa5514736`，release 为 `5-74e75df`，生产版本为 `1.1.3 (versionCode 5)`。
 
 ## 当前证据（2026-09-02）
 
@@ -48,14 +48,15 @@
 - 短时 Faux soak：36.6 秒、41 条消息、492 个事件；RSS 143,351,808 -> 145,514,496 bytes，WAL 峰值 1,961,152 bytes，均在预算内；长时 soak 仍由 CI/nightly 执行。
 - 真实 Provider：服务器隔离端口两次真实 smoke 均通过，完成注册、模型调用、Run 和 Trace 查询；测试使用临时资源并已清理，生产服务未重启。
 - 容器：当前 Windows 主机没有 Docker CLI；容器构建与 smoke 由 CI 和候选服务器继续验证。
-- Android：Gradle Wrapper 与 API 35 的 JVM 测试 37 项、debug assemble 已通过；本次登录修复已加入回归断言，设备 instrumented 测试和正式 APK 发布仍待执行。
-- 生产：本轮未连接生产服务器，未执行旧渠道运行面清理、咸鱼 secret 注入或真实账号 smoke。
+- Android：Gradle Wrapper 与 API 35 的 JVM 测试 37 项、debug assemble、Lint 和正式 release assemble 已通过；本次登录修复已加入回归断言，设备 instrumented 测试仍待执行。
+- 生产：本轮完成 Android 静态发布物的原子切换和公网清单/APK 校验；未执行与本次 Android 修复无关的旧渠道运行面清理、咸鱼 secret 注入或真实账号 smoke。
 
 ## 追加线上核查（2026-09-06）
 
 - 只读核查 `https://robotclaw.site/api/v15/health/live` 返回 200；Core 未因本次 Android 修复重启或切换。
-- 只读核查 `/app/latest.json` 返回线上 Android `versionCode 4`、`versionName 1.1.2`、release `4-b54f787`；当前 APK 仍为旧构建，未发布本次修复。
-- 线上 APK 的正式签名主体为 `CN=UmaAgent`。本机未找到原 keystore，因此没有执行不安全的 Debug/新证书替换。
+- 线上 `/app/latest.json` 返回 Android `versionCode 5`、`versionName 1.1.3`、release `5-74e75df`；公网 APK 下载大小为 `7,571,849` bytes，SHA-256 为 `e9939c2b626491cc5bcf80e042bbf8b8c02992cbe6e3f0cad6c2e8b1177d6c41`，与清单一致。
+- 原正式 keystore `C:\Users\16785\.umaagent\android-release.jks` 已恢复并用于构建；线上 APK 签名主体为 `CN=UmaAgent`，证书 SHA-256 为 `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`。
+- 服务器 `current` 已原子切换至 `/srv/www/robotclaw/app/releases/5-74e75df`，旧版本目录保留；Core live 检查返回 HTTP 200。
 
 ## 固定验证命令
 
