@@ -72,9 +72,12 @@ else
 fi
 services=(uma-agent.service uma-browser-worker.service)
 if [[ "$xianyu_enabled" = 1 ]]; then services+=(uma-xianyu-adapter.service); fi
-for service in "${services[@]}"; do
+for service in uma-agent.service uma-browser-worker.service; do
   systemctl cat "$service" >/dev/null
 done
+if [[ "$xianyu_enabled" = 1 && "$xianyu_unit_exists" = 1 ]]; then
+  systemctl cat uma-xianyu-adapter.service >/dev/null
+fi
 rollback() {
   if [[ -n "$previous" ]]; then
     ln -sfn -- "$previous" "${current_link}.rollback"
