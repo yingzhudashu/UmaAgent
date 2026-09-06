@@ -21,6 +21,7 @@ sign-off before a release is declared complete.
 - `uma-agent.service`, `uma-browser-worker.service`, `uma-xianyu-adapter.service`, `robotclaw.service`, and `nginx.service` are active; staging UmaAgent units remain disabled.
 - Core live and ready both returned HTTP 200. The Adapter control health endpoint returned `status=stopped` with `login.status=pending_login`, which is expected while the configured Cookie is empty.
 - A temporary, immediately revoked `system` administrator probe verified admin authentication, independent Xianyu password unlock, QR generation, and login-status polling. The QR response returned `waiting_scan` and an image data URL. No token, QR payload, Cookie, or password was recorded.
+- A permanent `system` administrator console PAT was provisioned and verified for the operator; its value is intentionally omitted from repository and operational records.
 - The QR session naturally expired during the acceptance window; the Adapter then reported `login.status=expired` and remained stopped while its systemd unit stayed healthy. The actual administrator scan remains pending. Cookie persistence, authenticated Adapter recovery, account-auth-expiration stop behavior, and Feishu alert delivery therefore remain operational follow-up checks rather than completed acceptance claims.
 
 ## R1 local baseline
