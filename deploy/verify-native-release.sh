@@ -51,7 +51,7 @@ done
 
 (
   cd "$release_real"
-  "$node_bin" --input-type=module -e "await import('@uma-agent/protocol'); await import('@uma-agent/telemetry'); await import('@uma-agent/core'); await import('./apps/server/dist/app.js')"
+  "$node_bin" --input-type=module -e "await import('@uma-agent/protocol'); await import('@uma-agent/telemetry'); await import('@uma-agent/core'); await import('./apps/server/dist/app.js'); await import('./apps/xianyu-adapter/dist/main.js')"
 )
 
 printf 'UmaAgent release verified: %s\n' "$release_real"

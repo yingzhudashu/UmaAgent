@@ -79,6 +79,7 @@ if [[ "$xianyu_enabled" = 1 && "$xianyu_unit_exists" = 1 ]]; then
   systemctl cat uma-xianyu-adapter.service >/dev/null
 fi
 rollback() {
+  trap - EXIT
   if [[ -n "$previous" ]]; then
     ln -sfn -- "$previous" "${current_link}.rollback"
     mv -Tf -- "${current_link}.rollback" "$current_link"
@@ -93,11 +94,17 @@ rollback() {
     rm -f -- "$xianyu_unit"
   fi
   systemctl daemon-reload
-  systemctl restart "${services[@]}" || true
+  systemctl restart uma-agent.service uma-browser-worker.service || true
+  if [[ "$xianyu_unit_exists" = 1 ]]; then systemctl restart uma-xianyu-adapter.service || true; fi
   write_maintenance 0 || true
   rm -f -- "$unit_backup" "$browser_unit_backup" "$xianyu_unit_backup"
 }
-trap rollback ERR
+on_exit() {
+  local status=$?
+  if [[ "$status" != 0 ]]; then rollback || true; fi
+  exit "$status"
+}
+trap on_exit EXIT
 
 write_maintenance 1
 
@@ -132,10 +139,8 @@ fi
 curl --fail --silent --show-error http://127.0.0.1:3210/api/v15/health/live >/dev/null
 curl --fail --silent --show-error http://127.0.0.1:3210/api/v15/health/ready >/dev/null
 if [[ "$xianyu_enabled" = 1 ]]; then
-  set -a
-  . /etc/uma-agent/uma.env
-  set +a
-  [[ -n "${UMA_XIANYU_CONTROL_TOKEN:-}" ]] || { echo "UMA_XIANYU_CONTROL_TOKEN is missing" >&2; false; }
+  UMA_XIANYU_CONTROL_TOKEN=$(sed -n 's/^UMA_XIANYU_CONTROL_TOKEN=//p' /etc/uma-agent/uma.env | head -n 1)
+  [[ -n "$UMA_XIANYU_CONTROL_TOKEN" ]] || { echo "UMA_XIANYU_CONTROL_TOKEN is missing" >&2; false; }
   grep -q '"host"[[:space:]]*:[[:space:]]*"127\.0\.0\.1"' /etc/uma-agent/config.user.json || {
     echo "Xianyu adapter must bind to 127.0.0.1 in native deployment" >&2
     false
@@ -148,7 +153,7 @@ fi
 chmod 0600 "$after"
 "$node_bin" "$release_real/deploy/compare-protected-user.mjs" "$before" "$after" >/dev/null
 write_maintenance 0
-trap - ERR
+trap - EXIT
 rm -f -- "$unit_backup" "$browser_unit_backup" "$xianyu_unit_backup"
 printf 'Promoted UmaAgent release: %s\n' "$release_real"
 printf 'Protected state backup: %s\n' "$backup_db"
