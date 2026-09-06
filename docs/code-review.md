@@ -29,6 +29,13 @@
 4. 所有生产发布必须先备份 SQLite、执行完整性检查，并验证受保护用户的令牌元数据和对象指纹。
 5. 机器审计只能发现模式性问题，不能替代复杂状态机、取消、并发和数据保护边界的人工审查。
 
+## 移动端登录修复审查（2026-09-06）
+
+- `android/app/src/main/java/site/robotclaw/umaagent/Api.kt` 的共享请求层曾将无参数 `POST`、`PUT`、`PATCH` 编码为 0 字节 JSON body，Fastify JSON 解析器会拒绝该请求并返回 `Body cannot be empty when content-type is set to 'application/json'`。
+- 修复后无参数 JSON 请求发送 `{}`，不改变有业务参数请求、认证头或 multipart 上传协议。
+- `android/app/src/test/java/site/robotclaw/umaagent/ApiTest.kt` 已断言 bootstrap 请求的方法、JSON media type 和 `{}` body；Android `:app:testDebugUnitTest` 的 37 个测试通过。
+- 线上 APK 发布仍受正式签名 keystore 门禁约束；当前只完成源码修复和本地构建，未替换生产 APK。
+
 ## 当前证据（2026-09-02）
 
 - `npm run audit:source`：完成一方源文件的模式审计；结果用于定位热路径、IO、并发和凭据边界，不冒充人工逐行结论。
@@ -41,8 +48,14 @@
 - 短时 Faux soak：36.6 秒、41 条消息、492 个事件；RSS 143,351,808 -> 145,514,496 bytes，WAL 峰值 1,961,152 bytes，均在预算内；长时 soak 仍由 CI/nightly 执行。
 - 真实 Provider：服务器隔离端口两次真实 smoke 均通过，完成注册、模型调用、Run 和 Trace 查询；测试使用临时资源并已清理，生产服务未重启。
 - 容器：当前 Windows 主机没有 Docker CLI；容器构建与 smoke 由 CI 和候选服务器继续验证。
-- Android：Gradle Wrapper 与 API 35 的 JVM 测试、lint、debug assemble 已通过；设备 instrumented 测试仍需发布环境执行。
+- Android：Gradle Wrapper 与 API 35 的 JVM 测试 37 项、debug assemble 已通过；本次登录修复已加入回归断言，设备 instrumented 测试和正式 APK 发布仍待执行。
 - 生产：本轮未连接生产服务器，未执行旧渠道运行面清理、咸鱼 secret 注入或真实账号 smoke。
+
+## 追加线上核查（2026-09-06）
+
+- 只读核查 `https://robotclaw.site/api/v15/health/live` 返回 200；Core 未因本次 Android 修复重启或切换。
+- 只读核查 `/app/latest.json` 返回线上 Android `versionCode 4`、`versionName 1.1.2`、release `4-b54f787`；当前 APK 仍为旧构建，未发布本次修复。
+- 线上 APK 的正式签名主体为 `CN=UmaAgent`。本机未找到原 keystore，因此没有执行不安全的 Debug/新证书替换。
 
 ## 固定验证命令
 

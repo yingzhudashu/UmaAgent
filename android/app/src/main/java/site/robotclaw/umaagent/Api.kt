@@ -119,8 +119,8 @@ class UmaApi(
             if (grant != null) builder.addHeader("X-Xianyu-Grant", grant)
             if (body != null) builder.method(method, body.toRequestBody("application/json".toMediaType()))
             else if (method == "POST" || method == "PUT" || method == "PATCH") {
-                // OkHttp requires a body for POST/PUT/PATCH even when the API has no fields.
-                builder.method(method, ByteArray(0).toRequestBody("application/json".toMediaType()))
+                // Keep JSON requests parseable by servers that reject an empty JSON body.
+                builder.method(method, "{}".toRequestBody("application/json".toMediaType()))
             } else if (method == "DELETE") {
                 builder.delete()
             }

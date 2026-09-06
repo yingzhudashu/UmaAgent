@@ -1,6 +1,7 @@
 # UmaAgent 文档索引
 
 - [服务器部署、验收、备份与恢复](deployment.md)
+- Android APK 发布、签名校验与移动端登录故障排查见 [服务器部署、验收、备份与恢复](deployment.md#6-android-apk-发布)。
 - [架构、质量与性能基线](architecture-quality.md)
 - [工程边界与性能预算](engineering-baseline.md)
 - [MiniAgent 功能等价矩阵](miniagent-feature-matrix.md)

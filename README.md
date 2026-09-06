@@ -173,6 +173,12 @@ uma xianyu item <item-id>
 
 Android 工程位于 `android/`，应用 ID 为 `site.robotclaw.umaagent`，生产 Core 地址固定为 `https://robotclaw.site`。登录页可直接注册隔离账户；注册返回的个人访问令牌仅展示一次，复制并继续后由 Android Keystore 加密保存。登录后使用对话、会话、资源和设置四个移动端视图，并跟随系统深浅色主题；离线状态只读。
 
+### Android 发布与登录故障排查
+
+Android APK 是独立的静态发布物，不会随 Core Server 的 systemd 发布自动更新。生产 APK 必须使用与已发布版本相同的正式签名 keystore；Debug APK 只用于本地验证，不能替换线上包。发布时必须递增 `android/app/build.gradle.kts` 中的 `versionCode`，并让 `latest.json` 的 `versionName`、`versionCode`、`releaseId`、文件大小和 SHA-256 与实际 APK 完全一致。完整流程见 [服务器部署与验收](docs/deployment.md) 的 Android APK 发布章节。
+
+若登录页显示 `Body cannot be empty when content-type is set to 'application/json'`，这是客户端在登录后的 bootstrap 请求中发送了空 JSON 请求体导致的。无业务字段的 `POST`、`PUT`、`PATCH` 必须发送 `{}`；该约束由 `android/app/src/main/java/site/robotclaw/umaagent/Api.kt` 的共享请求层保证，并由 Android API 回归测试覆盖。
+
 ## 质量、记忆与技能
 
 ### 交互模式与执行路由

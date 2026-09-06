@@ -197,7 +197,59 @@ Core 生产容器仍绑定宿主机 `127.0.0.1:3210`，由同机 Caddy/Nginx 终
 
 Caddy 和 Nginx 样例都支持 WebSocket。证书域名必须和 `server.webOrigins` 一致。若 Web 独立部署到另一个域名，则将 Web 的 Origin 加入列表，并在构建 Web 时设置 `VITE_UMA_CORE_URL`。跨站 Web Cookie 只应运行在 HTTPS 下。
 
-## 6. 可选服务
+## 6. Android APK 发布
+
+Android APK 与 Core Server 是两个独立发布面。Core 的 systemd 发布不会更新 APK；APK 由 Nginx 从 `/srv/www/robotclaw/app` 提供：
+
+- `/srv/www/robotclaw/app/current`：当前线上 APK 发布目录的原子切换链接。
+- `/srv/www/robotclaw/app/releases/<versionCode>-<commit>/`：不可变 APK 与 `latest.json` 目录。
+- `/srv/www/robotclaw/app/releases.json`：历史发布清单。
+- `/app/latest.json` 与 `/app/releases/<releaseId>/UmaAgent-<versionName>.apk`：公网地址。
+
+### 6.1 发布前置条件
+
+1. `versionCode` 必须大于当前线上清单，不能复用旧版本号；`versionName` 应同步递增。
+2. 正式构建必须复用线上 APK 的签名证书。签名 keystore、store password、key alias 和 key password 只能从受控密钥存储注入，不得提交 Git、写入日志或放入 APK 发布目录。Gradle 支持以下属性或等价环境变量：`umaStoreFile` / `UMA_ANDROID_KEYSTORE`、`umaStorePassword` / `UMA_ANDROID_KEYSTORE_PASSWORD`、`umaKeyAlias` / `UMA_ANDROID_KEY_ALIAS`、`umaKeyPassword` / `UMA_ANDROID_KEY_PASSWORD`。
+3. 若原正式 keystore 不可用，停止发布。使用 Debug 签名或新生成的签名会阻止已安装用户覆盖升级。
+
+### 6.2 构建与校验
+
+在仓库 `android/` 目录执行，正式 keystore 参数通过未跟踪的 `gradle.properties` 或环境变量注入：
+
+```powershell
+.\gradlew.bat :app:testDebugUnitTest :app:assembleRelease --no-daemon
+$signer = "$env:LOCALAPPDATA\Android\Sdk\build-tools\35.0.0\apksigner.bat"
+& $signer verify --verbose --print-certs .\app\build\outputs\apk\release\app-release.apk
+Get-FileHash .\app\build\outputs\apk\release\app-release.apk -Algorithm SHA256
+```
+
+发布前必须将新 APK 的证书指纹与当前线上 APK 的证书指纹进行比较；指纹不一致时不得继续。随后生成 `latest.json`，其中 `apk.url` 必须严格匹配 `/app/releases/<releaseId>/UmaAgent-<versionName>.apk`，并填写实际 `sha256`、`sizeBytes`、ISO-8601 `publishedAt` 和发布说明。客户端会拒绝包名、版本、路径、大小、哈希或发布时间不合法的清单。
+
+### 6.3 上传与原子切换
+
+先将 APK 和清单上传到新的不可变目录，再由有权限的发布操作员执行原子切换。禁止直接覆盖 `current` 中的 APK 或在线编辑当前 `latest.json`：
+
+```bash
+release_id=<versionCode>-<commit>
+release_dir=/srv/www/robotclaw/app/releases/$release_id
+install -d -o root -g root -m 0755 "$release_dir"
+install -o root -g root -m 0644 UmaAgent-<versionName>.apk "$release_dir/UmaAgent-<versionName>.apk"
+install -o root -g root -m 0644 latest.json "$release_dir/latest.json"
+ln -sfn "$release_dir" /srv/www/robotclaw/app/current.next
+mv -Tf /srv/www/robotclaw/app/current.next /srv/www/robotclaw/app/current
+```
+
+`releases.json` 也必须先写入同目录临时文件、校验 JSON 后再通过同文件系统 `mv` 替换。切换后验证：
+
+```bash
+curl --fail https://robotclaw.site/app/latest.json
+curl --fail --output /tmp/UmaAgent.apk https://robotclaw.site/app/releases/<releaseId>/UmaAgent-<versionName>.apk
+sha256sum /tmp/UmaAgent.apk
+```
+
+确认公网清单中的版本、大小和 SHA-256 与构建产物一致，再在真实 Android 设备上执行更新、登录、进程重启和重新登录验证。发布失败时只切回 `current` 旧链接，不删除旧版本目录。
+
+## 7. 可选服务
 
 ### Xianyu Adapter
 
@@ -215,7 +267,7 @@ Adapter 的 `/start`、`/stop`、`/pause`、`/resume`、`/conversations`、`/his
 
 Browser Worker 容器根文件系统只读、capabilities 全部移除；它不挂载 Core state/workspace。不要自动执行第三方 `npm install`。
 
-## 7. 防火墙与安全检查
+## 8. 防火墙与安全检查
 
 - 入站只允许 SSH 管理端口及 80/443；3210、3230、3250 不对公网开放。
 - `.env` 权限设为 `0600`；日志、工单和截图中不得出现 Authorization、Cookie、API Key 或 Secret。
@@ -224,7 +276,7 @@ Browser Worker 容器根文件系统只读、capabilities 全部移除；它不�
 - 定期检查 `docker compose logs`、磁盘、`state.db-wal` 大小和容器重启次数。
 - 配置中的 Provider URL 和 MCP URL 必须是受信地址；不要在 URL 中放用户名、密码或 Token。
 
-## 8. 停机备份与恢复
+## 9. 停机备份与恢复
 
 SQLite 使用 WAL。可靠备份必须先停止写入；不要只复制正在运行的 `state.db`。
 
@@ -257,7 +309,7 @@ docker run --rm \
 
 数据库只接受 schema 22；任何非 22 版本均直接拒绝启动。升级前必须备份并完成完整性与保护用户指纹检查；失败时只切换 release 指针，不覆盖数据库。
 
-## 9. Trace、资源报告与真实 API 验证
+## 10. Trace、资源报告与真实 API 验证
 
 Core 的业务数据使用 schema 22 `state.db`；Trace 写入 `UMA_TELEMETRY_DIR` 下的独立 `telemetry.db`。生产把该目录挂载给 Core、Server 与 Browser Worker，但不向 Worker 暴露业务 state 或 workspace。Client、Server HTTP、Run、queue、preflight、model、tool、MCP HTTP 和 Browser 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v15/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。Trace 不保存 prompt、模型正文、完整 URL 查询、Cookie、Token 或原始工具参数。资源快照和诊断报告分别通过 `/api/v15/reports/resources` 与 `/api/v15/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
 
@@ -291,7 +343,7 @@ sudo /opt/uma-agent/releases/<release>/deploy/promote-native-release.sh \
 
 脚本先验证 candidate、执行 SQLite online backup、完整性检查和保护用户对象快照，再原子切换 `current`、检查 live/ready 与只读认证，最后确认保护用户与 token 元数据不变、已有对象未减少且数据库完整。新版本启动时允许为 crash recovery 写入新的运行/响应活动记录；任一步失败只恢复上一 release 指针并重启服务，不覆盖或回滚 `state.db`。
 
-## 10. 故障排查
+## 11. 故障排查
 
 ```bash
 docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml ps
@@ -309,11 +361,12 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 | readiness 503 | workspace 不可访问、模型目录为空或某个已配置 MCP 未连接 |
 | Web 403 Origin | `server.webOrigins` 未包含浏览器地址的精确 Origin |
 | Web 可打开但无法登录 | Token 错误、跨站 Cookie 未使用 HTTPS、反向代理未传递 Host/协议 |
+| Android 登录显示 `Body cannot be empty when content-type is set to 'application/json'` | 客户端无参数 JSON 请求发送了 0 字节 body；升级到包含 `{}` 请求体修复的 APK，并确认线上清单已指向新版本 |
 | CLI 401 | `UMA_TOKEN` 无效、已撤销或已过期 |
 | 模型运行失败 | Provider URL、模型 ID、API 类型、Key 或模型 capabilities 不匹配 |
 | Core readiness 等待 MCP | profile 未启动、Token 不一致、网络名/URL 错误或循环依赖配置未按本文启动 |
 
-## 11. 部署验收清单
+## 12. 部署验收清单
 
 - [ ] `.env`、生产配置和备份未被 Git 跟踪，也未进入 Docker build context。
 - [ ] `docker compose config --quiet`、镜像构建和全部容器健康检查通过。
@@ -324,3 +377,5 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
 - [ ] 确认当前应用版本、Protocol v15 和 schema 22，保留可回滚 release 与同版本备份。
+- [ ] Android APK 使用线上同一正式签名证书，`latest.json` 的版本、路径、大小和 SHA-256 与 APK 一致。
+- [ ] Android 真机完成更新、PAT 登录、进程重启、会话读取和消息发送；Debug APK 未被发布到生产。

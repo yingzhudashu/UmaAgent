@@ -47,8 +47,10 @@ class ApiTest {
 
         assertEquals("user-1", bootstrap.user?.id)
         assertEquals("admin", bootstrap.user?.role)
-        assertEquals("POST", captured.get().method)
-        assertTrue(captured.get().body != null)
+        val request = captured.get()
+        assertEquals("POST", request.method)
+        assertEquals("application/json; charset=utf-8", request.body?.contentType().toString())
+        assertEquals("{}", Buffer().also { request.body?.writeTo(it) }.readUtf8())
     }
 
     @Test
