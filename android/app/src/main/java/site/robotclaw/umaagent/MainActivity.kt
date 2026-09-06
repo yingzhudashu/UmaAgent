@@ -34,6 +34,8 @@ data class UmaUiState(
     val assistantAvatarBytes: ByteArray? = null,
     val snapshot: String = "",
     val xianyuStatus: String = "",
+    val xianyuLogin: String = "",
+    val xianyuGrantExpiresAt: Long? = null,
     val xianyuData: String = "",
     val resourceData: String = "",
     val attachmentData: String = "",
@@ -72,6 +74,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     private var reconnect: Job? = null
     private var grant: String? = null
     private var grantExpiry: Job? = null
+    private var xianyuLoginPoll: Job? = null
     private var sessions = emptyList<BootstrapEntry>()
     private val sequences = mutableMapOf<String, Long>()
     private val json = Json { ignoreUnknownKeys = true }
@@ -209,7 +212,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun logout() {
         socket?.close(1000, "logout"); socket = null; reconnect?.cancel(); api = null
-        grant = null; grantExpiry?.cancel(); grantExpiry = null
+        grant = null; grantExpiry?.cancel(); grantExpiry = null; xianyuLoginPoll?.cancel(); xianyuLoginPoll = null
         patStore.clear(); stagingAuthStore.clear(); cache.clear(); sessions = emptyList(); sequences.clear()
         state.value = UmaUiState(stagingAccessRequired = BuildConfig.STAGING_BUILD)
     }
@@ -347,6 +350,27 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                 )
             } catch (error: Throwable) {
                 state.value = state.value.copy(loading = false, offline = true, error = error.message ?: "发送失败")
+            }
+        }
+    }
+
+    fun retryMessage(item: UiMessage) {
+        val id = state.value.selectedSessionId ?: return
+        if (item.role != "user" || state.value.offline || state.value.loading) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching {
+                client.send(
+                    id,
+                    item.content.ifBlank { "请分析这张图片。" },
+                    item.attachments.map { it.id },
+                    item.interactionMode ?: state.value.interactionMode,
+                )
+            }.onSuccess {
+                selectSession(id)
+            }.onFailure { error ->
+                state.value = state.value.copy(loading = false, error = error.message ?: "重试失败")
             }
         }
     }
@@ -840,17 +864,70 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                 val unlocked = client.unlock(password)
                 grant = unlocked.grant
                 grantExpiry?.cancel()
+                xianyuLoginPoll?.cancel()
                 grantExpiry = viewModelScope.launch {
                     delay((unlocked.expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
                     grant = null
-                    state.value = state.value.copy(xianyuStatus = "")
+                    xianyuLoginPoll?.cancel()
+                    state.value = state.value.copy(
+                        xianyuStatus = "",
+                        xianyuLogin = "",
+                        xianyuGrantExpiresAt = null,
+                        xianyuData = "",
+                    )
                 }
                 val status = client.xianyuStatus(unlocked.grant)
                 val conversations = client.xianyuConversations(unlocked.grant)
-                state.value = state.value.copy(xianyuStatus = status.toString(), xianyuData = conversations.toString(), loading = false, offline = false)
+                state.value = state.value.copy(
+                    xianyuStatus = status.toString(),
+                    xianyuLogin = status["login"]?.toString().orEmpty(),
+                    xianyuGrantExpiresAt = unlocked.expiresAt,
+                    xianyuData = conversations.toString(),
+                    loading = false,
+                    offline = false,
+                )
             } catch (error: Throwable) {
                 state.value = state.value.copy(loading = false, error = error.message ?: "咸鱼解锁失败")
             }
+        }
+    }
+
+    fun xianyuStartLogin() {
+        val currentGrant = grant ?: return
+        if (state.value.offline || state.value.loading) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.xianyuLoginStart(currentGrant) }
+                .onSuccess { login ->
+                    state.value = state.value.copy(xianyuLogin = login.toString(), loading = false)
+                    xianyuLoginPoll?.cancel()
+                    xianyuLoginPoll = viewModelScope.launch {
+                        while (grant == currentGrant) {
+                            delay(3_000)
+                            try {
+                                val next = client.xianyuLoginStatus(currentGrant)
+                                state.value = state.value.copy(xianyuLogin = next.toString(), error = "")
+                                val loginStatus = next["status"]?.jsonPrimitive?.content
+                                if (loginStatus == "authenticated") {
+                                    val status = client.xianyuStatus(currentGrant)
+                                    val conversations = client.xianyuConversations(currentGrant)
+                                    state.value = state.value.copy(
+                                        xianyuStatus = status.toString(),
+                                        xianyuLogin = status["login"]?.toString() ?: next.toString(),
+                                        xianyuData = conversations.toString(),
+                                    )
+                                    return@launch
+                                }
+                                if (loginStatus == "expired" || loginStatus == "failed") return@launch
+                            } catch (error: Throwable) {
+                                state.value = state.value.copy(error = error.message ?: "咸鱼登录状态查询失败")
+                                return@launch
+                            }
+                        }
+                    }
+                }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "咸鱼二维码生成失败") }
         }
     }
 
@@ -861,39 +938,50 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             val client = api ?: return@launch
             state.value = state.value.copy(loading = true, error = "")
             runCatching { client.xianyuControl(currentGrant, action); client.xianyuStatus(currentGrant) }
-                .onSuccess { status -> state.value = state.value.copy(xianyuStatus = status.toString(), loading = false) }
+                .onSuccess { status ->
+                    state.value = state.value.copy(
+                        xianyuStatus = status.toString(),
+                        xianyuLogin = status["login"]?.toString() ?: state.value.xianyuLogin,
+                        loading = false,
+                    )
+                }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "咸鱼操作失败") }
         }
     }
 
     fun xianyuHistory(conversationId: String) {
         val currentGrant = grant ?: return
+        if (conversationId.isBlank() || state.value.offline || state.value.loading) return
         viewModelScope.launch {
             val client = api ?: return@launch
-            runCatching { client.xianyuHistory(currentGrant, conversationId) }
-                .onSuccess { value -> state.value = state.value.copy(xianyuData = value.toString(), error = "") }
-                .onFailure { error -> state.value = state.value.copy(error = error.message ?: "历史查询失败") }
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.xianyuHistory(currentGrant, conversationId.trim()) }
+                .onSuccess { value -> state.value = state.value.copy(xianyuData = value.toString(), loading = false) }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "历史查询失败") }
         }
     }
 
     fun xianyuItem(itemId: String) {
         val currentGrant = grant ?: return
+        if (itemId.isBlank() || state.value.offline || state.value.loading) return
         viewModelScope.launch {
             val client = api ?: return@launch
-            runCatching { client.xianyuItem(currentGrant, itemId) }
-                .onSuccess { value -> state.value = state.value.copy(xianyuData = value.toString(), error = "") }
-                .onFailure { error -> state.value = state.value.copy(error = error.message ?: "商品查询失败") }
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.xianyuItem(currentGrant, itemId.trim()) }
+                .onSuccess { value -> state.value = state.value.copy(xianyuData = value.toString(), loading = false) }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "商品查询失败") }
         }
     }
 
     fun xianyuChat(receiverId: String, itemId: String) {
         val currentGrant = grant ?: return
-        if (receiverId.isBlank() || itemId.isBlank() || state.value.offline) return
+        if (receiverId.isBlank() || itemId.isBlank() || state.value.offline || state.value.loading) return
         viewModelScope.launch {
             val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
             runCatching { client.xianyuChat(currentGrant, receiverId.trim(), itemId.trim()) }
-                .onSuccess { value -> state.value = state.value.copy(xianyuData = value.toString(), error = "") }
-                .onFailure { error -> state.value = state.value.copy(error = error.message ?: "建聊失败") }
+                .onSuccess { value -> state.value = state.value.copy(xianyuData = value.toString(), loading = false) }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "建聊失败") }
         }
     }
 
@@ -975,6 +1063,8 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         grant = null
         grantExpiry?.cancel()
         grantExpiry = null
+        xianyuLoginPoll?.cancel()
+        xianyuLoginPoll = null
         withContext(Dispatchers.IO) {
             patStore.clear()
             cache.clear()

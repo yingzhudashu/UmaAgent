@@ -22,7 +22,75 @@ data class UiMessage(
     val status: String,
     val content: String,
     val attachments: List<UiAttachment>,
+    val runId: String? = null,
+    val name: String? = null,
+    val sequence: Long = 0L,
+    val createdAt: Long = 0L,
+    val interactionMode: String? = null,
 )
+
+data class UiActivity(
+    val kind: String,
+    val status: String?,
+    val text: String?,
+    val toolName: String?,
+)
+
+data class UiResponse(
+    val id: String,
+    val runId: String,
+    val messageId: String,
+    val status: String,
+    val content: String,
+    val activities: List<UiActivity>,
+    val attachments: List<UiAttachment>,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+data class UiPlanStep(
+    val id: String,
+    val position: Int,
+    val title: String,
+    val status: String,
+    val error: String?,
+)
+
+data class UiRun(
+    val id: String,
+    val status: String,
+    val interactionMode: String,
+    val plan: List<UiPlanStep>,
+    val error: String?,
+)
+
+data class UiXianyuLogin(
+    val status: String,
+    val message: String? = null,
+    val qrDataUrl: String? = null,
+    val expiresAt: Long? = null,
+)
+
+sealed interface UiConversationEntry {
+    val id: String
+    val sortOrder: Double
+
+    data class MessageEntry(
+        val item: UiMessage,
+    ) : UiConversationEntry {
+        override val id: String = item.id
+        override val sortOrder: Double = item.sequence.toDouble()
+    }
+
+    data class ResponseEntry(
+        val response: UiResponse,
+        val items: List<UiMessage>,
+        val run: UiRun?,
+        val isCurrentSegment: Boolean,
+        override val sortOrder: Double,
+        override val id: String,
+    ) : UiConversationEntry
+}
 
 data class UiApproval(
     val id: String,
@@ -95,6 +163,31 @@ internal fun resourceActionsForRole(role: String): List<Pair<String, String>> =
     if (role == "admin") userResourceActions + adminResourceActions else userResourceActions
 
 private val uiJson = Json { ignoreUnknownKeys = true; isLenient = true }
+
+fun parseXianyuLogin(payload: String): UiXianyuLogin? {
+    if (payload.isBlank()) return null
+    return runCatching {
+        val value = uiJson.parseToJsonElement(payload) as? JsonObject ?: return@runCatching null
+        val login = value["login"] as? JsonObject ?: value
+        UiXianyuLogin(
+            status = login["status"]?.jsonPrimitive?.contentOrNull ?: "unknown",
+            message = login["message"]?.jsonPrimitive?.contentOrNull,
+            qrDataUrl = login["qrDataUrl"]?.jsonPrimitive?.contentOrNull,
+            expiresAt = login["expiresAt"]?.jsonPrimitive?.longOrNull,
+        )
+    }.getOrNull()
+}
+
+internal fun xianyuLoginStatusLabel(status: String): String = when (status) {
+    "pending_login" -> "待扫码"
+    "waiting_scan" -> "等待扫码"
+    "scanned" -> "已扫码，等待确认"
+    "confirmed" -> "已确认，正在登录"
+    "authenticated" -> "已登录"
+    "expired" -> "二维码已过期"
+    "failed" -> "登录失败"
+    else -> status
+}
 
 private data class SnapshotMessage(val message: UiMessage, val runId: String?)
 
@@ -281,15 +374,19 @@ fun parseSnapshotMessages(snapshot: String): List<UiMessage> {
         val root = uiJson.parseToJsonElement(snapshot) as? JsonObject ?: return@runCatching emptyList()
         val transcript = root["transcript"] as? JsonArray
             ?: return@runCatching emptyList()
-        val messages = transcript.mapNotNull { item ->
-            val value = item as? JsonObject ?: return@mapNotNull null
+        val messages = transcript.mapIndexedNotNull { index, item ->
+            val value = item as? JsonObject ?: return@mapIndexedNotNull null
             SnapshotMessage(
                 message = UiMessage(
-                    id = value["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null,
+                    id = value["id"]?.jsonPrimitive?.contentOrNull ?: return@mapIndexedNotNull null,
                     role = value["role"]?.jsonPrimitive?.contentOrNull ?: "assistant",
                     status = value["status"]?.jsonPrimitive?.contentOrNull ?: "complete",
                     content = value["content"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                     attachments = parseAttachments(value),
+                    runId = value["runId"]?.jsonPrimitive?.contentOrNull,
+                    name = value["name"]?.jsonPrimitive?.contentOrNull,
+                    sequence = value["sequence"]?.jsonPrimitive?.longOrNull ?: (index + 1).toLong(),
+                    createdAt = value["createdAt"]?.jsonPrimitive?.longOrNull ?: 0L,
                 ),
                 runId = value["runId"]?.jsonPrimitive?.contentOrNull,
             )
@@ -331,6 +428,170 @@ fun parseSnapshotMessages(snapshot: String): List<UiMessage> {
             )
         }
     }.getOrDefault(emptyList())
+}
+
+private fun parseResponse(value: JsonObject): UiResponse? {
+    val id = value["id"]?.jsonPrimitive?.contentOrNull ?: return null
+    val runId = value["runId"]?.jsonPrimitive?.contentOrNull ?: return null
+    val messageId = value["messageId"]?.jsonPrimitive?.contentOrNull ?: return null
+    val activities = (value["activities"] as? JsonArray).orEmpty().mapNotNull { item ->
+        val activity = item as? JsonObject ?: return@mapNotNull null
+        UiActivity(
+            kind = activity["kind"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null,
+            status = activity["status"]?.jsonPrimitive?.contentOrNull,
+            text = activity["text"]?.jsonPrimitive?.contentOrNull,
+            toolName = activity["toolName"]?.jsonPrimitive?.contentOrNull,
+        )
+    }
+    return UiResponse(
+        id = id,
+        runId = runId,
+        messageId = messageId,
+        status = value["status"]?.jsonPrimitive?.contentOrNull ?: "completed",
+        content = value["content"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+        activities = activities,
+        attachments = parseAttachments(value),
+        createdAt = value["createdAt"]?.jsonPrimitive?.longOrNull ?: 0L,
+        updatedAt = value["updatedAt"]?.jsonPrimitive?.longOrNull ?: 0L,
+    )
+}
+
+private fun parseRun(value: JsonObject): UiRun? {
+    val id = value["id"]?.jsonPrimitive?.contentOrNull ?: return null
+    val plan = (value["plan"] as? JsonArray).orEmpty().mapNotNull { item ->
+        val step = item as? JsonObject ?: return@mapNotNull null
+        UiPlanStep(
+            id = step["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null,
+            position = step["position"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
+            title = step["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null,
+            status = step["status"]?.jsonPrimitive?.contentOrNull ?: "pending",
+            error = step["error"]?.jsonPrimitive?.contentOrNull,
+        )
+    }.sortedBy { it.position }
+    return UiRun(
+        id = id,
+        status = value["status"]?.jsonPrimitive?.contentOrNull ?: "completed",
+        interactionMode = value["interactionMode"]?.jsonPrimitive?.contentOrNull ?: "agent",
+        plan = plan,
+        error = value["error"]?.jsonPrimitive?.contentOrNull,
+    )
+}
+
+private fun parseSnapshotResponseData(
+    snapshot: String,
+): Triple<List<UiResponse>, Map<String, UiRun>, List<UiMessage>>? {
+    if (snapshot.isBlank()) return null
+    return runCatching {
+        val root = uiJson.parseToJsonElement(snapshot) as? JsonObject ?: return@runCatching null
+        val responses = (root["responses"] as? JsonArray).orEmpty().mapNotNull { item ->
+            parseResponse(item as? JsonObject ?: return@mapNotNull null)
+        }.groupBy { it.runId }.values.mapNotNull { it.maxByOrNull { response -> response.updatedAt } }
+        val runs = (root["recentRuns"] as? JsonArray).orEmpty().mapNotNull { item ->
+            parseRun(item as? JsonObject ?: return@mapNotNull null)
+        }.associateBy { it.id }
+        Triple(responses, runs, parseSnapshotMessages(snapshot))
+    }.getOrNull()
+}
+
+fun parseSnapshotConversation(snapshot: String): List<UiConversationEntry> {
+    val parsed = parseSnapshotResponseData(snapshot) ?: return emptyList()
+    val (responses, runs, parsedMessages) = parsed
+    val messages = parsedMessages.map { item ->
+        item.copy(interactionMode = item.runId?.let { runs[it]?.interactionMode })
+    }
+    if (messages.isEmpty()) return emptyList()
+    if (responses.isEmpty()) return messages.map { UiConversationEntry.MessageEntry(it) }
+
+    val responsesByRun = responses.associateBy { it.runId }
+    val responsesByMessage = responses.associateBy { it.messageId }
+    val itemsByRun = messages.filter { !it.runId.isNullOrBlank() }.groupBy { it.runId }
+    val renderedSegments = mutableSetOf<String>()
+    val entries = mutableListOf<UiConversationEntry>()
+
+    messages.forEach { item ->
+        val response = responsesByMessage[item.id] ?: item.runId?.let { responsesByRun[it] }
+        if (response == null) {
+            entries += UiConversationEntry.MessageEntry(item)
+            return@forEach
+        }
+        if (item.role != "user") return@forEach
+        entries += UiConversationEntry.MessageEntry(item)
+        val runItems = itemsByRun[response.runId].orEmpty()
+        val nextUserSequence = runItems
+            .filter { it.role == "user" && it.sequence > item.sequence }
+            .minOfOrNull { it.sequence }
+        val segment = runItems.filter { candidate ->
+            candidate.sequence >= item.sequence &&
+                (nextUserSequence == null || candidate.sequence < nextUserSequence)
+        }
+        val segmentId = "${response.id}:${item.id}"
+        if (renderedSegments.add(segmentId)) {
+            entries += UiConversationEntry.ResponseEntry(
+                response = response,
+                items = segment,
+                run = runs[response.runId],
+                isCurrentSegment = nextUserSequence == null,
+                sortOrder = item.sequence + 0.1,
+                id = segmentId,
+            )
+        }
+    }
+
+    responses.forEach { response ->
+        if (entries.none { it is UiConversationEntry.ResponseEntry && it.response.runId == response.runId }) {
+            val items = itemsByRun[response.runId].orEmpty()
+            val first = items.firstOrNull()
+            entries += UiConversationEntry.ResponseEntry(
+                response = response,
+                items = items,
+                run = runs[response.runId],
+                isCurrentSegment = true,
+                sortOrder = (first?.sequence?.toDouble() ?: -0.1),
+                id = "${response.id}:orphan",
+            )
+        }
+    }
+    return entries.sortedBy { it.sortOrder }
+}
+
+internal fun responseStatusLabel(status: String): String = when (status) {
+    "queued" -> "等待处理"
+    "thinking", "planning" -> "正在分析"
+    "clarifying" -> "等待回复"
+    "awaiting_confirmation" -> "等待确认"
+    "executing" -> "正在执行"
+    "awaiting_approval" -> "等待审批"
+    "verifying" -> "正在验证"
+    "completed" -> "已完成"
+    "failed" -> "执行失败"
+    "cancelled" -> "已取消"
+    else -> status
+}
+
+internal fun toolStatusLabel(status: String): String = when (status) {
+    "streaming" -> "执行中"
+    "error" -> "执行失败"
+    "cancelled" -> "已取消"
+    else -> "已完成"
+}
+
+internal fun toolDisplayName(name: String?): String = when (name) {
+    "read" -> "读取文件"
+    "write" -> "写入文件"
+    "edit" -> "编辑文件"
+    "shell" -> "执行命令"
+    "skill_read" -> "读取技能说明"
+    "http_get" -> "获取网页"
+    "search" -> "搜索"
+    "mcp_browser_open" -> "打开网页"
+    "mcp_browser_extract" -> "提取网页"
+    "mcp_browser_click" -> "点击网页元素"
+    "mcp_browser_fill" -> "填写网页表单"
+    "mcp_browser_screenshot" -> "网页截图"
+    "mcp_browser_close" -> "关闭网页"
+    "image_generate" -> "生成图片"
+    null, "" -> "工具操作"
+    else -> name
 }
 
 internal fun attachmentSizeLabel(size: Long): String {

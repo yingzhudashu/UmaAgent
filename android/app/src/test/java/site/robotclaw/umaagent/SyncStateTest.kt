@@ -93,12 +93,40 @@ class SyncStateTest {
                     "complete",
                     "看图",
                     listOf(UiAttachment("a1", "diagram.png", "image/png", 1537)),
+                    sequence = 1,
                 ),
-                UiMessage("m2", "assistant", "streaming", "处理中", emptyList()),
+                UiMessage("m2", "assistant", "streaming", "处理中", emptyList(), sequence = 2),
             ),
             parseSnapshotMessages(snapshot),
         )
         assertTrue(parseSnapshotMessages("not-json").isEmpty())
+    }
+
+    @Test
+    fun responseTranscriptIsAggregatedIntoOneReadableCardWithCollapsedDetails() {
+        val entries = parseSnapshotConversation(
+            """{
+                "transcript":[
+                    {"id":"m1","sequence":1,"role":"user","status":"complete","content":"整理项目","runId":"run-1","attachments":[]},
+                    {"id":"t1","sequence":2,"role":"tool","status":"complete","name":"read","content":"大量文件内容","runId":"run-1","attachments":[]},
+                    {"id":"a1","sequence":3,"role":"assistant","status":"complete","content":"项目已整理完成。","runId":"run-1","attachments":[]}
+                ],
+                "recentRuns":[{"id":"run-1","status":"completed","interactionMode":"agent","plan":[]}],
+                "responses":[{"id":"response-1","sessionId":"session-1","runId":"run-1","messageId":"m1","status":"completed","content":"项目已整理完成。","activities":[{"id":"activity-1","responseId":"response-1","kind":"tool","toolName":"read","createdAt":3}],"attachments":[],"createdAt":1,"updatedAt":4}],
+                "pendingApprovals":[]
+            }""",
+        )
+
+        assertEquals(2, entries.size)
+        assertTrue(entries[0] is UiConversationEntry.MessageEntry)
+        assertEquals("agent", (entries[0] as UiConversationEntry.MessageEntry).item.interactionMode)
+        val response = entries[1] as UiConversationEntry.ResponseEntry
+        assertEquals("response-1", response.response.id)
+        assertEquals("项目已整理完成。", response.response.content)
+        val detailItems = response.items.filter { it.role != "user" }
+        assertEquals(listOf("tool", "assistant"), detailItems.map { it.role })
+        assertEquals("读取文件", toolDisplayName(detailItems.first().name))
+        assertEquals("已完成", toolStatusLabel(detailItems.first().status))
     }
 
     @Test
@@ -199,6 +227,19 @@ class SyncStateTest {
         )
 
         assertEquals(listOf("generated"), messages.single().attachments.map { it.id })
+    }
+
+    @Test
+    fun xianyuLoginStateAcceptsNestedHealthPayloads() {
+        val login = parseXianyuLogin(
+            """{"status":"pending_login","login":{"status":"waiting_scan","message":"请扫码","qrDataUrl":"data:image/png;base64,abc","expiresAt":1788251400000}}""",
+        )
+
+        assertEquals("waiting_scan", login?.status)
+        assertEquals("请扫码", login?.message)
+        assertEquals("data:image/png;base64,abc", login?.qrDataUrl)
+        assertEquals(1788251400000, login?.expiresAt)
+        assertEquals("等待扫码", xianyuLoginStatusLabel(login?.status.orEmpty()))
     }
 
     @Test

@@ -3,9 +3,11 @@ package site.robotclaw.umaagent
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.provider.Settings
+import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,7 +36,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,10 +56,15 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 private enum class MobileSection(val label: String) {
     Chat("对话"),
@@ -67,6 +74,8 @@ private enum class MobileSection(val label: String) {
     Resources("资源"),
     Settings("设置"),
 }
+
+private val prettyJson = Json { prettyPrint = true; ignoreUnknownKeys = true; isLenient = true }
 
 @Composable
 fun UmaScreen(model: UmaViewModel = viewModel()) {
@@ -259,7 +268,10 @@ private fun AuthenticatedScreen(state: UmaUiState, model: UmaViewModel) {
                 TextButton({ model.retryLogin() }, enabled = !state.loading) { Text("重新连接") }
             }
         }
-        TabRow(selectedTabIndex = section.ordinal) {
+        ScrollableTabRow(
+            selectedTabIndex = section.ordinal,
+            edgePadding = 12.dp,
+        ) {
             MobileSection.entries.forEach { item ->
                 Tab(
                     selected = item == section,
@@ -311,8 +323,7 @@ private fun ChatScreen(
     var editingMessageId by rememberSaveable { mutableStateOf("") }
     var editingMessageDraft by rememberSaveable { mutableStateOf("") }
     val selectedSession = state.sessions.firstOrNull { it.id == state.selectedSessionId }
-    val messages = remember(state.snapshot) { parseSnapshotMessages(state.snapshot) }
-    val pendingPlanId = remember(state.snapshot) { pendingPlanRunId(state.snapshot) }
+    val conversation = remember(state.snapshot) { parseSnapshotConversation(state.snapshot) }
     val approvals = remember(state.snapshot) { pendingApprovals(state.snapshot) }
     val listState = rememberLazyListState()
     val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -359,8 +370,8 @@ private fun ChatScreen(
         )
     }
 
-    LaunchedEffect(messages.size, selectedSession?.id) {
-        if (messages.isNotEmpty()) listState.scrollToItem(messages.lastIndex)
+    LaunchedEffect(conversation.size, selectedSession?.id) {
+        if (conversation.isNotEmpty()) listState.scrollToItem(conversation.lastIndex)
     }
     LaunchedEffect(selectedSession?.id) { model.loadQueue() }
 
@@ -386,7 +397,7 @@ private fun ChatScreen(
                 Text(selectedSession.title, style = MaterialTheme.typography.bodySmall, maxLines = 1)
             }
         }
-        if (messages.isEmpty()) {
+        if (conversation.isEmpty()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text(if (state.offline) "暂无离线消息" else "暂无消息", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -395,26 +406,41 @@ private fun ChatScreen(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(messages, key = { it.id }) { item ->
-                    MessageItem(
-                        item = item,
-                        assistantName = selectedSession.assistantName,
-                        avatarBytes = state.assistantAvatarBytes,
-                        downloadsEnabled = !state.offline && !state.loading,
-                        onEditMessage = { editable ->
-                            editingMessageId = editable.id
-                            editingMessageDraft = editable.content
-                        },
-                        onReviewMessage = model::reviewMessage,
-                        onImproveMessage = model::improveMessage,
-                        onPreviewImage = model::previewImageAttachment,
-                        onDownloadAttachment = { attachment ->
-                            pendingTranscriptDownloadId = attachment.id
-                            transcriptAttachmentSaver.launch(attachment.name)
-                        },
-                    )
+                items(conversation, key = { it.id }) { entry ->
+                    when (entry) {
+                        is UiConversationEntry.MessageEntry -> MessageItem(
+                            item = entry.item,
+                            assistantName = selectedSession.assistantName,
+                            avatarBytes = state.assistantAvatarBytes,
+                            downloadsEnabled = !state.offline && !state.loading,
+                            onEditMessage = { editable ->
+                                editingMessageId = editable.id
+                                editingMessageDraft = editable.content
+                            },
+                            onRetryMessage = model::retryMessage,
+                            onPreviewImage = model::previewImageAttachment,
+                            onDownloadAttachment = { attachment ->
+                                pendingTranscriptDownloadId = attachment.id
+                                transcriptAttachmentSaver.launch(attachment.name)
+                            },
+                        )
+                        is UiConversationEntry.ResponseEntry -> ResponseItem(
+                            entry = entry,
+                            assistantName = selectedSession.assistantName,
+                            avatarBytes = state.assistantAvatarBytes,
+                            downloadsEnabled = !state.offline && !state.loading,
+                            onConfirmPlan = model::confirmPlan,
+                            onReviewMessage = model::reviewMessage,
+                            onImproveMessage = model::improveMessage,
+                            onPreviewImage = model::previewImageAttachment,
+                            onDownloadAttachment = { attachment ->
+                                pendingTranscriptDownloadId = attachment.id
+                                transcriptAttachmentSaver.launch(attachment.name)
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -451,30 +477,6 @@ private fun ChatScreen(
             onChange = model::setInteractionMode,
             enabled = !state.offline && !state.loading,
         )
-        if (pendingPlanId != null) {
-            Surface(
-                Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = MaterialTheme.shapes.small,
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        "计划已生成，确认后开始执行",
-                        Modifier.weight(1f),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Button(
-                        { model.confirmPlan(pendingPlanId) },
-                        enabled = !state.offline && !state.loading,
-                    ) { Text("确认执行") }
-                }
-            }
-        }
         approvals.forEach { approval ->
             Surface(
                 Modifier.fillMaxWidth(),
@@ -678,16 +680,17 @@ private fun MessageItem(
     avatarBytes: ByteArray?,
     downloadsEnabled: Boolean,
     onEditMessage: (UiMessage) -> Unit,
-    onReviewMessage: (String) -> Unit,
-    onImproveMessage: (String) -> Unit,
+    onRetryMessage: (UiMessage) -> Unit,
     onPreviewImage: (UiAttachment) -> Unit,
     onDownloadAttachment: (UiAttachment) -> Unit,
 ) {
     val isUser = item.role == "user"
+    val clipboard = LocalClipboardManager.current
+    var copied by rememberSaveable(item.id) { mutableStateOf(false) }
     Column(
-        Modifier.fillMaxWidth(),
+        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (!isUser && item.role != "tool") AssistantAvatar(avatarBytes, 28.dp)
@@ -701,66 +704,412 @@ private fun MessageItem(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Surface(
-            color = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-            shape = MaterialTheme.shapes.small,
-        ) {
-            SelectionContainer {
-                Text(
-                    item.content,
-                    Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                    color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (item.attachments.isNotEmpty()) {
-            LazyRow(
-                Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(top = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+        if (item.role == "tool") {
+            CollapsibleToolItem(item)
+        } else {
+            Surface(
+                color = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium,
             ) {
-                items(item.attachments, key = { it.id }) { attachment ->
-                    if (attachment.mimeType.startsWith("image/")) {
-                        Column(horizontalAlignment = Alignment.Start) {
-                            OutlinedButton(
-                                { onPreviewImage(attachment) },
-                                enabled = downloadsEnabled,
-                            ) {
-                                AttachmentLabel(attachment)
-                            }
-                            TextButton(
-                                { onDownloadAttachment(attachment) },
-                                enabled = downloadsEnabled,
-                            ) { Text("下载") }
-                        }
-                    } else {
-                        OutlinedButton(
-                            { onDownloadAttachment(attachment) },
-                            enabled = downloadsEnabled,
-                        ) { AttachmentLabel(attachment) }
+                if (isUser) {
+                    SelectionContainer {
+                        Text(
+                            item.content,
+                            Modifier.padding(horizontal = 13.dp, vertical = 10.dp),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                } else {
+                    SelectionContainer {
+                        RichMessageContent(
+                            item.content,
+                            Modifier.padding(horizontal = 13.dp, vertical = 10.dp),
+                        )
                     }
                 }
             }
         }
+        AttachmentStrip(item.attachments, downloadsEnabled, onPreviewImage, onDownloadAttachment)
         if (isUser && item.status == "complete") {
-            TextButton(
-                onClick = { onEditMessage(item) },
-                enabled = downloadsEnabled,
-            ) { Text("编辑") }
-        }
-        if (!isUser && item.role != "tool") {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(
-                    onClick = { onReviewMessage(item.id) },
+                    onClick = {
+                        clipboard.setText(AnnotatedString(item.content))
+                        copied = true
+                    },
                     enabled = downloadsEnabled,
-                ) { Text("审查") }
-                TextButton(
-                    onClick = { onImproveMessage(item.id) },
-                    enabled = downloadsEnabled,
-                ) { Text("改进") }
+                ) { Text(if (copied) "已复制" else "复制") }
+                TextButton(onClick = { onRetryMessage(item) }, enabled = downloadsEnabled) { Text("重试") }
+                TextButton(onClick = { onEditMessage(item) }, enabled = downloadsEnabled) { Text("编辑") }
             }
         }
         if (item.status == "streaming") Text("生成中", style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun ResponseItem(
+    entry: UiConversationEntry.ResponseEntry,
+    assistantName: String,
+    avatarBytes: ByteArray?,
+    downloadsEnabled: Boolean,
+    onConfirmPlan: (String) -> Unit,
+    onReviewMessage: (String) -> Unit,
+    onImproveMessage: (String) -> Unit,
+    onPreviewImage: (UiAttachment) -> Unit,
+    onDownloadAttachment: (UiAttachment) -> Unit,
+) {
+    val clipboard = LocalClipboardManager.current
+    var copied by rememberSaveable(entry.id) { mutableStateOf(false) }
+    var detailsExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
+    val finalAssistant = entry.items.lastOrNull { it.role == "assistant" }
+    val finalContent = finalAssistant?.content?.takeIf { it.isNotBlank() }
+        ?: entry.response.content
+    val intermediateItems = entry.items.filter { item ->
+        item.role != "user" && item.id != finalAssistant?.id
+    }
+    val attachments = (entry.response.attachments + finalAssistant?.attachments.orEmpty())
+        .distinctBy { it.id }
+    val plan = entry.run?.plan.orEmpty()
+    val detailCount = plan.size + intermediateItems.size + entry.response.activities.size
+    val hasDetails = detailCount > 0 || entry.response.activities.isNotEmpty()
+
+    Surface(
+        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 1.dp,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                AssistantAvatar(avatarBytes, 30.dp)
+                Column(Modifier.weight(1f)) {
+                    Text(assistantName, style = MaterialTheme.typography.labelLarge)
+                    if (entry.isCurrentSegment) {
+                        Text(
+                            responseStatusLabel(entry.response.status),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (entry.response.status == "failed") {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                }
+                if (entry.run?.interactionMode == "plan") {
+                    Text("计划", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+                if (entry.isCurrentSegment && entry.response.status == "awaiting_confirmation") {
+                    TextButton(
+                        onClick = { onConfirmPlan(entry.response.runId) },
+                        enabled = downloadsEnabled,
+                    ) { Text("确认执行") }
+                }
+            }
+
+            if (finalContent.isBlank()) {
+                Text("正在准备回复…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                SelectionContainer {
+                    RichMessageContent(finalContent)
+                }
+            }
+            AttachmentStrip(attachments, downloadsEnabled, onPreviewImage, onDownloadAttachment)
+
+            if (hasDetails) {
+                TextButton(
+                    onClick = { detailsExpanded = !detailsExpanded },
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                ) {
+                    Text(if (detailsExpanded) "收起执行详情" else "查看执行详情 · $detailCount 项")
+                    Text(if (detailsExpanded) "⌃" else "⌄", modifier = Modifier.padding(start = 6.dp))
+                }
+                if (detailsExpanded) {
+                    ExecutionDetails(
+                        plan = plan,
+                        items = intermediateItems,
+                        responseActivityCount = entry.response.activities.size,
+                    )
+                }
+            }
+
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                TextButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(finalContent))
+                        copied = true
+                    },
+                    enabled = finalContent.isNotBlank(),
+                ) { Text(if (copied) "已复制" else "复制") }
+                if (finalAssistant != null) {
+                    TextButton(
+                        onClick = { onReviewMessage(finalAssistant.id) },
+                        enabled = downloadsEnabled,
+                    ) { Text("审查") }
+                    TextButton(
+                        onClick = { onImproveMessage(finalAssistant.id) },
+                        enabled = downloadsEnabled,
+                    ) { Text("改进") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExecutionDetails(
+    plan: List<UiPlanStep>,
+    items: List<UiMessage>,
+    responseActivityCount: Int,
+) {
+    Column(
+        Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (plan.isNotEmpty()) {
+            Text("执行计划 · ${plan.size} 步", style = MaterialTheme.typography.labelLarge)
+            plan.forEach { step ->
+                Surface(
+                    Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.Top,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("${step.position + 1}", style = MaterialTheme.typography.labelLarge)
+                            Text(step.title, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                when (step.status) {
+                                    "completed" -> "已完成"
+                                    "running" -> "进行中"
+                                    "failed" -> "失败"
+                                    else -> "待执行"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (step.status == "failed") MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        step.error?.takeIf { it.isNotBlank() }?.let {
+                            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
+        }
+        if (items.isNotEmpty()) {
+            Text("过程输出 · ${items.size} 项", style = MaterialTheme.typography.labelLarge)
+            items.forEach { item ->
+                if (item.role == "tool") {
+                    CollapsibleToolItem(item)
+                } else {
+                    Surface(
+                        Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        SelectionContainer {
+                            RichMessageContent(item.content, Modifier.padding(10.dp), compact = true)
+                        }
+                    }
+                }
+            }
+        } else if (responseActivityCount > 0) {
+            Text(
+                "执行活动 · $responseActivityCount 项",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CollapsibleToolItem(item: UiMessage) {
+    var expanded by rememberSaveable(item.id) { mutableStateOf(false) }
+    Surface(
+        Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(horizontal = 10.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(if (expanded) "⌄" else "›", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    toolDisplayName(item.name),
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    toolStatusLabel(item.status),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (item.status == "error") MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text("${item.content.length} 字", style = MaterialTheme.typography.labelSmall)
+            }
+            if (expanded && item.content.isNotBlank()) {
+                HorizontalDivider()
+                SelectionContainer {
+                    Text(
+                        item.content,
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(10.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private data class ContentBlock(val kind: String, val text: String)
+
+private fun contentBlocks(content: String): List<ContentBlock> {
+    val blocks = mutableListOf<ContentBlock>()
+    val paragraph = mutableListOf<String>()
+    val code = mutableListOf<String>()
+    var inCode = false
+    fun flushParagraph() {
+        if (paragraph.isNotEmpty()) {
+            blocks += ContentBlock("paragraph", paragraph.joinToString("\n").trim())
+            paragraph.clear()
+        }
+    }
+    fun flushCode() {
+        if (code.isNotEmpty()) {
+            blocks += ContentBlock("code", code.joinToString("\n"))
+            code.clear()
+        }
+    }
+    content.replace("\r\n", "\n").split('\n').forEach { line ->
+        val trimmed = line.trim()
+        if (trimmed.startsWith("```")) {
+            if (inCode) flushCode() else flushParagraph()
+            inCode = !inCode
+        } else if (inCode) {
+            code += line
+        } else if (trimmed.isBlank()) {
+            flushParagraph()
+        } else if (trimmed.startsWith("### ") || trimmed.startsWith("## ") || trimmed.startsWith("# ")) {
+            flushParagraph()
+            blocks += ContentBlock("heading", trimmed.trimStart('#').trim())
+        } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ")) {
+            flushParagraph()
+            blocks += ContentBlock("bullet", trimmed.drop(2).trim())
+        } else if (trimmed.matches(Regex("^\\d+[.)]\\s+.+"))) {
+            flushParagraph()
+            blocks += ContentBlock("numbered", trimmed)
+        } else {
+            paragraph += line
+        }
+    }
+    if (inCode) flushCode() else flushParagraph()
+    return blocks
+}
+
+private fun numberedParts(value: String): Pair<String, String>? {
+    val match = Regex("^\\s*(\\d+)[.)]\\s+(.+)$").matchEntire(value) ?: return null
+    return match.groupValues[1] to match.groupValues[2]
+}
+
+@Composable
+private fun RichMessageContent(content: String, modifier: Modifier = Modifier, compact: Boolean = false) {
+    val blocks = remember(content) { contentBlocks(content) }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 8.dp)) {
+        blocks.forEachIndexed { index, block ->
+            when (block.kind) {
+                "heading" -> Text(
+                    block.text,
+                    style = if (compact) MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                "bullet" -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("•", fontWeight = FontWeight.Bold)
+                    Text(block.text, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                }
+                "numbered" -> {
+                    val parts = numberedParts(block.text)
+                    if (parts == null) {
+                        Text(block.text, style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(parts.first, fontWeight = FontWeight.SemiBold)
+                            Text(parts.second, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+                "code" -> Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    Text(
+                        block.text,
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(10.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                else -> Text(
+                    block.text,
+                    style = if (compact) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+        if (blocks.isEmpty() && content.isNotEmpty()) Text(content, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun AttachmentStrip(
+    attachments: List<UiAttachment>,
+    enabled: Boolean,
+    onPreviewImage: (UiAttachment) -> Unit,
+    onDownloadAttachment: (UiAttachment) -> Unit,
+) {
+    if (attachments.isEmpty()) return
+    LazyRow(
+        Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(top = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(attachments, key = { it.id }) { attachment ->
+            if (attachment.mimeType.startsWith("image/")) {
+                Column(horizontalAlignment = Alignment.Start) {
+                    OutlinedButton({ onPreviewImage(attachment) }, enabled = enabled) {
+                        AttachmentLabel(attachment)
+                    }
+                    TextButton({ onDownloadAttachment(attachment) }, enabled = enabled) { Text("下载") }
+                }
+            } else {
+                OutlinedButton({ onDownloadAttachment(attachment) }, enabled = enabled) {
+                    AttachmentLabel(attachment)
+                }
+            }
+        }
     }
 }
 
@@ -812,6 +1161,17 @@ private fun decodePreviewBitmap(bytes: ByteArray, maxDimension: Int = 2048): and
         bytes.size,
         BitmapFactory.Options().apply { inSampleSize = sampleSize },
     )
+}
+
+private fun decodeDataUrlBitmap(dataUrl: String?): android.graphics.Bitmap? {
+    if (dataUrl.isNullOrBlank()) return null
+    val encoded = dataUrl.substringAfter("base64,", "")
+    if (encoded.isBlank() || encoded == dataUrl) return null
+    return runCatching {
+        Base64.decode(encoded, Base64.DEFAULT).let { bytes ->
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        }
+    }.getOrNull()
 }
 
 @Composable
@@ -1299,6 +1659,12 @@ private fun ResourcesScreen(state: UmaUiState, model: UmaViewModel, modifier: Mo
         pendingDownloadId = ""
     }
     val resourceActions = resourceActionsForRole(state.userRole)
+    val xianyuLogin = remember(state.xianyuLogin, state.xianyuStatus) {
+        parseXianyuLogin(state.xianyuLogin).let { explicit ->
+            explicit ?: parseXianyuLogin(state.xianyuStatus)
+        }
+    }
+    val loginQr = remember(xianyuLogin?.qrDataUrl) { decodeDataUrlBitmap(xianyuLogin?.qrDataUrl) }
 
     LazyColumn(
         modifier,
@@ -1321,7 +1687,7 @@ private fun ResourcesScreen(state: UmaUiState, model: UmaViewModel, modifier: Mo
             }
         }
         if (state.resourceData.isNotBlank()) {
-            item { ReadOnlyOutput(state.resourceData) }
+            item { ReadOnlyOutput(state.resourceData, "资源结果") }
         }
         item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
         item { Text("附件下载", style = MaterialTheme.typography.titleMedium) }
@@ -1340,7 +1706,7 @@ private fun ResourcesScreen(state: UmaUiState, model: UmaViewModel, modifier: Mo
                 ) { Text("下载") }
             }
         }
-        if (state.attachmentData.isNotBlank()) item { Text(state.attachmentData) }
+        if (state.attachmentData.isNotBlank()) item { ReadOnlyOutput(state.attachmentData, "附件状态") }
         item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
         item { Text("闲鱼控制", style = MaterialTheme.typography.titleMedium) }
         item {
@@ -1361,7 +1727,63 @@ private fun ResourcesScreen(state: UmaUiState, model: UmaViewModel, modifier: Mo
             ) { Text("解锁") }
         }
         if (state.xianyuStatus.isNotBlank()) {
-            item { ReadOnlyOutput(state.xianyuStatus) }
+            item { ReadOnlyOutput(state.xianyuStatus, "运行状态") }
+            state.xianyuGrantExpiresAt?.let { expiresAt ->
+                item {
+                    Text(
+                        "本次管理员授权有效至 ${java.text.DateFormat.getTimeInstance().format(java.util.Date(expiresAt))}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            if (xianyuLogin?.status != "authenticated") {
+                item {
+                    Surface(
+                        Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = MaterialTheme.shapes.medium,
+                    ) {
+                        Column(
+                            Modifier.fillMaxWidth().padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("扫码登录", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "当前状态：${xianyuLoginStatusLabel(xianyuLogin?.status ?: "unknown")}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                            Text(
+                                xianyuLogin?.message ?: "首次使用或登录过期后，需要管理员使用闲鱼 App 扫码。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                            if (loginQr != null) {
+                                Image(
+                                    bitmap = loginQr.asImageBitmap(),
+                                    contentDescription = "闲鱼登录二维码",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier.size(220.dp).align(Alignment.CenterHorizontally),
+                                )
+                            }
+                            Button(
+                                { model.xianyuStartLogin() },
+                                Modifier.fillMaxWidth(),
+                                enabled = !state.offline && !state.loading,
+                            ) {
+                                Text(
+                                    if (xianyuLogin?.status == "waiting_scan" || xianyuLogin?.status == "scanned" || xianyuLogin?.status == "confirmed") {
+                                        "重新生成二维码"
+                                    } else {
+                                        "生成二维码"
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             item {
                 ActionRows(
                     listOf(
@@ -1406,7 +1828,7 @@ private fun ResourcesScreen(state: UmaUiState, model: UmaViewModel, modifier: Mo
                     enabled = receiverId.isNotBlank() && chatItemId.isNotBlank() && !state.offline && !state.loading,
                 ) { Text("发起会话") }
             }
-            if (state.xianyuData.isNotBlank()) item { ReadOnlyOutput(state.xianyuData) }
+            if (state.xianyuData.isNotBlank()) item { ReadOnlyOutput(state.xianyuData, "闲鱼返回结果") }
         }
     }
 }
@@ -1498,17 +1920,44 @@ private fun ResourceQuery(
     enabled: Boolean,
     action: () -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(value, onValueChange, Modifier.weight(1f), label = { Text(label) }, singleLine = true)
-        Button(action, enabled = enabled && value.isNotBlank()) { Text(actionLabel) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedTextField(value, onValueChange, Modifier.fillMaxWidth(), label = { Text(label) }, singleLine = true)
+        Button(
+            action,
+            Modifier.align(Alignment.End),
+            enabled = enabled && value.isNotBlank(),
+        ) { Text(actionLabel) }
     }
 }
 
 @Composable
-private fun ReadOnlyOutput(value: String) {
+private fun ReadOnlyOutput(value: String, title: String = "返回结果") {
+    val formatted = remember(value) {
+        runCatching {
+            prettyJson.encodeToString(JsonElement.serializer(), prettyJson.parseToJsonElement(value))
+        }.getOrDefault(value)
+    }
+    val lines = remember(formatted) { formatted.lines() }
+    var expanded by rememberSaveable(formatted.hashCode()) { mutableStateOf(false) }
+    val preview = if (expanded || lines.size <= 16) formatted else lines.take(16).joinToString("\n")
+
     Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small) {
-        SelectionContainer {
-            Text(value, Modifier.fillMaxWidth().padding(12.dp), style = MaterialTheme.typography.bodySmall)
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(title, style = MaterialTheme.typography.labelLarge)
+            SelectionContainer {
+                Text(
+                    preview,
+                    Modifier.fillMaxWidth().padding(top = 6.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+            if (lines.size > 16) {
+                TextButton(
+                    onClick = { expanded = !expanded },
+                    contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                ) { Text(if (expanded) "收起结果" else "展开全部 ${lines.size} 行") }
+            }
         }
     }
 }

@@ -273,6 +273,12 @@ class UmaApi(
         request("/xianyu/unlock", "POST", buildJsonObject { put("password", password) }.toString()),
     )
     suspend fun xianyuStatus(grant: String): JsonObject = json.parseToJsonElement(request("/xianyu/status", grant = grant)).jsonObject
+    suspend fun xianyuLoginStart(grant: String): JsonObject = json.parseToJsonElement(
+        request("/xianyu/login/start", "POST", grant = grant),
+    ).jsonObject
+    suspend fun xianyuLoginStatus(grant: String): JsonObject = json.parseToJsonElement(
+        request("/xianyu/login/status", grant = grant),
+    ).jsonObject
     suspend fun xianyuConversations(grant: String): JsonElement = json.parseToJsonElement(request("/xianyu/conversations", grant = grant))
     suspend fun xianyuHistory(grant: String, conversationId: String): JsonElement = json.parseToJsonElement(
         request("/xianyu/history/${encode(conversationId)}", grant = grant),
