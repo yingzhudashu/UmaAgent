@@ -13,6 +13,16 @@ sign-off before a release is declared complete.
 - Signed release publication completed from commit `74e75dfc2fc5d3a7e95f834e1155152fa5514736` as release `5-74e75df`, Android `versionCode 5`, `versionName 1.1.3`.
 - Published APK SHA-256 is `e9939c2b626491cc5bcf80e042bbf8b8c02992cbe6e3f0cad6c2e8b1177d6c41`, size `7571849` bytes. Public manifest and APK download matched these values; Core live returned HTTP 200.
 
+## Managed Xianyu production release (2026-09-07)
+
+- UmaAgent release `20260906182720-032a419` was promoted from commit `032a419ff9e97e6b3d36e4e3f9710673a37b0f55`; protocol is `15` and schema is `22`.
+- `npm run check`, `npm run build`, `npm run build:web:embed`, and `npm test` passed locally. The final test run passed 53 files and 284 tests.
+- The release verifier passed before promotion. A protected production state backup was created at `/srv/backups/uma-agent/state-20260906182726.db`.
+- `uma-agent.service`, `uma-browser-worker.service`, `uma-xianyu-adapter.service`, `robotclaw.service`, and `nginx.service` are active; staging UmaAgent units remain disabled.
+- Core live and ready both returned HTTP 200. The Adapter control health endpoint returned `status=stopped` with `login.status=pending_login`, which is expected while the configured Cookie is empty.
+- A temporary, immediately revoked `system` administrator probe verified admin authentication, independent Xianyu password unlock, QR generation, and login-status polling. The QR response returned `waiting_scan` and an image data URL. No token, QR payload, Cookie, or password was recorded.
+- The QR session naturally expired during the acceptance window; the Adapter then reported `login.status=expired` and remained stopped while its systemd unit stayed healthy. The actual administrator scan remains pending. Cookie persistence, authenticated Adapter recovery, account-auth-expiration stop behavior, and Feishu alert delivery therefore remain operational follow-up checks rather than completed acceptance claims.
+
 ## R1 local baseline
 
 - Candidate commit: `74e75dfc2fc5d3a7e95f834e1155152fa5514736` (`fix: repair Android bootstrap JSON requests`).
@@ -51,19 +61,21 @@ operator must attach the following evidence:
 - [x] SQLite, telemetry, workspace, Xianyu state (absent and recorded), and config backup checksums.
 - [ ] Restore/integrity check output showing schema `22` and no foreign-key violations.
 - [x] Inventory and archive record for removed legacy services, state, and environment files.
-- [ ] Core, Browser Worker, and Xianyu Adapter systemd status after promotion.
-- [ ] Core live/ready, Adapter health, and Core-proxied Xianyu status responses.
+- [x] Core, Browser Worker, and Xianyu Adapter systemd status after promotion.
+- [x] Core live/ready, Adapter health, and Core-proxied Xianyu status responses.
 - [ ] Web and CLI smoke results for login, unlock, status, lifecycle, history, item, chat, and publish.
-- [ ] First-login QR flow with an empty configured Cookie, atomic `0600` Cookie persistence, and automatic adapter recovery.
+- [x] First-login QR generation with an empty configured Cookie and administrator unlock.
+- [ ] Actual first-login scan, atomic `0600` Cookie persistence, and automatic Adapter recovery.
 - [ ] Expired-login stop behavior and Feishu alert delivery, or an explicit record that the three Feishu credentials are not configured.
 - [ ] Rollback rehearsal result, including all three active services and release pointer.
 - [x] Original Android release keystore is available; release APK certificate matches the currently published package.
 - [x] Android APK release directory, `latest.json`, `releases.json`, and `current` symlink were switched atomically and publicly verified.
 
-Production backup stamp: `20260828013358`; retired channel archive is under
+Production backup stamp: `20260906182726`; retired channel archive is under
 `/srv/backups/uma-agent/retired-channel-20260828014500`.
-The Xianyu adapter remains disabled until real Cookie, control token, and scrypt
-administrator hash are injected by the operator; no placeholder secret was used.
+The Xianyu Adapter is enabled with the real control token, scrypt administrator hash,
+and Feishu alert configuration. The configured Cookie is intentionally empty pending
+the first administrator QR scan; no placeholder secret was used.
 
 ## R2 completion
 
