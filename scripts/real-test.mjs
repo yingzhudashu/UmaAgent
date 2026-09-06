@@ -13,20 +13,40 @@ if (!["smoke", "eval", "perf", "soak"].includes(mode))
 if (process.env.UMA_REAL_API !== "1")
   throw new Error("Real API tests are disabled. Set UMA_REAL_API=1 to authorize external requests.");
 
-const providerId = process.env.UMA_REAL_PROVIDER?.trim();
-const modelKey = process.env.UMA_REAL_MODEL?.trim();
-const baseUrl = process.env.UMA_REAL_BASE_URL?.trim();
-const apiKeyEnv = process.env.UMA_REAL_API_KEY_ENV?.trim() || "OPENAI_API_KEY";
-const apiType = process.env.UMA_REAL_API_TYPE?.trim() || "openai-responses";
+// 真实测试默认从 UmaAgent 的配置文件读取 Provider、模型和 API 类型。
+// 环境变量仍可逐项覆盖，但不会再依赖过时的手工参数组合。
+const configuredPath = process.env.UMA_REAL_CONFIG?.trim();
+let configured = {};
+if (configuredPath) configured = JSON.parse(await readFile(resolve(configuredPath), "utf8"));
+const configuredRoles = configured.roles ?? {};
+const configuredRef = configuredRoles.default ?? configured.defaultModel ?? {};
+const configuredModelKey = configuredRef.id ?? Object.keys(configured.models ?? {})[0];
+const configuredModel = configured.models?.[configuredModelKey] ?? {};
+const configuredProviderId = configuredModel.provider ?? configuredRef.provider;
+const configuredProvider = configured.providers?.[configuredProviderId] ?? {};
+const providerId = process.env.UMA_REAL_PROVIDER?.trim() || configuredProviderId;
+const modelKey = process.env.UMA_REAL_MODEL?.trim() || configuredModelKey;
+const baseUrl = process.env.UMA_REAL_BASE_URL?.trim() || configuredProvider.baseUrl?.trim();
+const apiKeyEnv =
+  process.env.UMA_REAL_API_KEY_ENV?.trim() || configuredProvider.apiKeyEnv?.trim() || "OPENAI_API_KEY";
+const apiType = process.env.UMA_REAL_API_TYPE?.trim() || configuredModel.api;
 if (!providerId || !modelKey || !baseUrl)
-  throw new Error("UMA_REAL_PROVIDER, UMA_REAL_MODEL and UMA_REAL_BASE_URL are required");
+  throw new Error(
+    "Provider settings are incomplete. Set UMA_REAL_PROVIDER/UMA_REAL_MODEL/UMA_REAL_BASE_URL or UMA_REAL_CONFIG.",
+  );
+if (!apiType)
+  throw new Error("Provider API type is missing. Set UMA_REAL_API_TYPE or configure models.<id>.api.");
 if (!process.env[apiKeyEnv]?.trim()) throw new Error(`Missing API key ${apiKeyEnv} in the environment`);
+const configuredCapabilities =
+  configuredModel.capabilities && typeof configuredModel.capabilities === "object"
+    ? configuredModel.capabilities
+    : {};
 const model = {
   model: modelKey,
   api: apiType,
-  contextWindow: Number(process.env.UMA_REAL_CONTEXT_WINDOW ?? 100_000),
-  maxOutputTokens: Number(process.env.UMA_REAL_MAX_OUTPUT_TOKENS ?? 4_096),
-  capabilities: {},
+  contextWindow: Number(process.env.UMA_REAL_CONTEXT_WINDOW ?? configuredModel.contextWindow ?? 100_000),
+  maxOutputTokens: Number(process.env.UMA_REAL_MAX_OUTPUT_TOKENS ?? configuredModel.maxOutputTokens ?? 4_096),
+  capabilities: configuredCapabilities,
 };
 
 const port = Number(process.env.UMA_REAL_PORT ?? (mode === "soak" ? 3213 : mode === "perf" ? 3212 : 3211));

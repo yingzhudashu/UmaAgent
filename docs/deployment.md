@@ -253,7 +253,24 @@ sha256sum /tmp/UmaAgent.apk
 
 ### Xianyu Adapter
 
-闲鱼 Adapter 只监听回环地址，Core 通过内部控制令牌代理访问。配置 `UMA_XIANYU_CONTROL_TOKEN`、`UMA_XIANYU_ADMIN_PASSWORD_HASH` 和用户配置中的 Cookie 后启动：
+闲鱼 Adapter 只监听回环地址，Core 通过内部控制令牌代理访问。配置 `UMA_XIANYU_CONTROL_TOKEN`、`UMA_XIANYU_ADMIN_PASSWORD_HASH` 和 `/etc/uma-agent/config.user.json` 后启动。`xianyu.cookie` 首次可以为空，Adapter 会以 `pending_login` 状态启动，不会伪造或复用旧 Cookie：
+
+```json
+{
+  "version": 1,
+  "core": { "serverUrl": "http://127.0.0.1:3210", "token": "<core-token>" },
+  "xianyu": {
+    "cookie": "",
+    "host": "127.0.0.1",
+    "port": 3250,
+    "stateDir": "/var/lib/uma-agent/channels/xianyu"
+  }
+}
+```
+
+管理员解锁后在 UmaAgent 咸鱼控制台点击登录，生成二维码并扫码；登录状态由 Core 代理到 Adapter，客户端不直连 `3250`。扫码成功后 Cookie 原子写入 `stateDir/cookie`，权限为 `0600`，Adapter 自动恢复闲鱼连接。登录过期会停止 Adapter，状态变为 `expired`，并在设置以下三项时通过知识库飞书应用发送告警：`UMA_XIANYU_FEISHU_APP_ID`、`UMA_XIANYU_FEISHU_APP_SECRET`、`UMA_XIANYU_FEISHU_CHAT_ID`。这些值只能写入 `/etc/uma-agent/uma.env`，文件权限保持 `root:root 0600`；未配置时服务仍可运行，但必须在验收记录中标明告警未启用。
+
+启用前先执行候选验证和备份，再启动：
 
 ```bash
 sudo systemctl enable --now uma-xianyu-adapter.service
@@ -261,6 +278,8 @@ curl --fail \
   -H "Authorization: Bearer ${UMA_XIANYU_CONTROL_TOKEN}" \
   http://127.0.0.1:3250/health
 ```
+
+验收至少覆盖二维码生成、轮询、扫码成功后的 Cookie 权限、Core-proxied 状态和过期停用。登录失败或二维码过期只能重新生成二维码；不得把不可用 Cookie、失败 release 或历史 APK 加入公网下载清单。发布失败时按原子 release 指针回滚，保留 Core、Browser Worker 和 Adapter 的服务状态证据。
 
 Adapter 的 `/start`、`/stop`、`/pause`、`/resume`、`/conversations`、`/history`、`/item`、`/chat` 和 `/publish` 只接受内部控制令牌；客户端不得直连 Adapter。
 

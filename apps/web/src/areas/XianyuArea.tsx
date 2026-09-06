@@ -4,6 +4,13 @@ import { KeyRound, Pause, Play, RefreshCw, Search, Send, Square, Store } from "l
 import { useCallback, useEffect, useState } from "react";
 
 type Conversation = { sessionId: string; conversation: Record<string, unknown> };
+type LoginState = {
+  status?: string;
+  message?: string;
+  qrDataUrl?: string;
+  expiresAt?: number;
+};
+type XianyuStatus = Record<string, unknown> & { login?: LoginState };
 
 function StructuredData({ value }: { value: unknown }) {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -25,6 +32,7 @@ export function XianyuArea({ client }: { client: UmaClient }) {
   const [grant, setGrant] = useState<string>();
   const [expiresAt, setExpiresAt] = useState<number>();
   const [status, setStatus] = useState<Record<string, unknown>>();
+  const [login, setLogin] = useState<LoginState>();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversation, setSelectedConversation] = useState("");
   const [history, setHistory] = useState<unknown>();
@@ -40,6 +48,7 @@ export function XianyuArea({ client }: { client: UmaClient }) {
     setGrant(undefined);
     setExpiresAt(undefined);
     setStatus(undefined);
+    setLogin(undefined);
     setConversations([]);
     setHistory(undefined);
     setItem(undefined);
@@ -70,7 +79,9 @@ export function XianyuArea({ client }: { client: UmaClient }) {
   const refresh = () =>
     grant &&
     void run(async () => {
-      setStatus(await client.xianyuStatus(grant));
+      const next = await client.xianyuStatus<XianyuStatus>(grant);
+      setStatus(next);
+      setLogin(next.login);
       setConversations(await client.xianyuConversations<Conversation[]>(grant));
     });
 
@@ -80,9 +91,40 @@ export function XianyuArea({ client }: { client: UmaClient }) {
       setGrant(result.grant);
       setExpiresAt(result.expiresAt);
       setPassword("");
-      setStatus(await client.xianyuStatus(result.grant));
+      const next = await client.xianyuStatus<XianyuStatus>(result.grant);
+      setStatus(next);
+      setLogin(next.login);
       setConversations(await client.xianyuConversations<Conversation[]>(result.grant));
     });
+
+  const startLogin = () =>
+    grant &&
+    void run(async () => {
+      setLogin(await client.xianyuLoginStart<LoginState>(grant));
+      setNotice("二维码已生成，请使用闲鱼 App 扫码并确认");
+    });
+
+  useEffect(() => {
+    if (!grant || !login || !["waiting_scan", "scanned", "confirmed"].includes(login.status ?? "")) return;
+    const timer = window.setInterval(() => {
+      void client
+        .xianyuLoginStatus<LoginState>(grant)
+        .then((next) => {
+          setLogin(next);
+          if (next.status === "authenticated") {
+            void client.xianyuStatus<XianyuStatus>(grant).then((health) => {
+              setStatus(health);
+              setLogin(health.login);
+            });
+            void client.xianyuConversations<Conversation[]>(grant).then(setConversations);
+          }
+        })
+        .catch((value) => {
+          if (value instanceof UmaClientError && (value.status === 401 || value.status === 403)) clearGrant();
+        });
+    }, 3_000);
+    return () => window.clearInterval(timer);
+  }, [client, grant, login, clearGrant]);
 
   const action = (name: "start" | "stop" | "pause" | "resume") =>
     grant &&
@@ -178,6 +220,18 @@ export function XianyuArea({ client }: { client: UmaClient }) {
               </button>
             </div>
           </div>
+          {login?.status !== "authenticated" && (
+            <div className="inspector-group xianyu-login-box">
+              <h3>扫码登录</h3>
+              <p>{login?.message ?? "首次使用或登录过期后，需要管理员扫码登录。"}</p>
+              {login?.qrDataUrl && (
+                <img className="xianyu-login-qr" src={login.qrDataUrl} alt="闲鱼登录二维码" />
+              )}
+              <button type="button" className="run-action" onClick={startLogin} disabled={loading}>
+                <RefreshCw size={15} /> {login?.status === "failed" ? "重新生成二维码" : "生成二维码"}
+              </button>
+            </div>
+          )}
           <div className="inspector-group">
             <h3>会话</h3>
             <select

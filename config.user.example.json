@@ -5,7 +5,7 @@
     "token": "填入 Core 个人访问令牌"
   },
   "xianyu": {
-    "cookie": "运行 uma xianyu login 后由 CLI 写入",
+    "cookie": "",
     "host": "127.0.0.1",
     "port": 3250,
     "stateDir": "%LOCALAPPDATA%/UmaAgent/channels/xianyu"

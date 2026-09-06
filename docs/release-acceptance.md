@@ -54,6 +54,8 @@ operator must attach the following evidence:
 - [ ] Core, Browser Worker, and Xianyu Adapter systemd status after promotion.
 - [ ] Core live/ready, Adapter health, and Core-proxied Xianyu status responses.
 - [ ] Web and CLI smoke results for login, unlock, status, lifecycle, history, item, chat, and publish.
+- [ ] First-login QR flow with an empty configured Cookie, atomic `0600` Cookie persistence, and automatic adapter recovery.
+- [ ] Expired-login stop behavior and Feishu alert delivery, or an explicit record that the three Feishu credentials are not configured.
 - [ ] Rollback rehearsal result, including all three active services and release pointer.
 - [x] Original Android release keystore is available; release APK certificate matches the currently published package.
 - [x] Android APK release directory, `latest.json`, `releases.json`, and `current` symlink were switched atomically and publicly verified.

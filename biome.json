@@ -11,7 +11,8 @@
       "!!**/test-results",
       "!!**/build",
       "!!**/.gradle",
-      "!!**/.tmp"
+      "!!**/.tmp",
+      "!!apps/xianyu-adapter/src/resources"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 110 },

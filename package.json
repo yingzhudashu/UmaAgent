@@ -27,6 +27,7 @@
     "test:real:eval": "node scripts/real-test.mjs eval",
     "test:real:perf": "node scripts/real-test.mjs perf",
     "test:real:soak": "node scripts/real-test.mjs soak",
+    "diagnose:provider": "node scripts/diagnose-provider.mjs",
     "test:watch": "vitest",
     "start": "npm run start --workspace=@uma-agent/server",
     "start:configured": "node --env-file=.env apps/server/dist/main.js",

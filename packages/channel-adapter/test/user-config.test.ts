@@ -39,9 +39,9 @@ describe("user config", () => {
     await expect(loadUserConfig(path)).rejects.toThrow("unknown fields");
   });
 
-  it("rejects missing channel credentials", async () => {
+  it("allows an empty cookie for administrator QR login", async () => {
     const path = await fixture({ version: 1, core: valid.core, xianyu: { ...valid.xianyu, cookie: "" } });
-    await expect(loadUserConfig(path)).rejects.toThrow("cookie must be a non-empty string");
+    await expect(loadUserConfig(path)).resolves.toMatchObject({ xianyu: { cookie: "" } });
   });
 
   it("does not read legacy environment credentials", async () => {

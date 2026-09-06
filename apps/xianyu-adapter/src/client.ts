@@ -30,8 +30,8 @@ function cents(value: string | number): string {
 }
 
 export class XianyuClient {
-  readonly ownerId: string;
-  readonly deviceId: string;
+  ownerId: string;
+  deviceId: string;
   private cookies: Record<string, string>;
   constructor(
     cookieHeader: string,
@@ -39,16 +39,25 @@ export class XianyuClient {
   ) {
     this.cookies = parseCookieHeader(cookieHeader);
     this.ownerId = this.cookies.unb?.trim() ?? "";
-    if (!this.ownerId) throw new XianyuAuthError("user config.xianyu.cookie 缺少 unb");
-    if (!this.cookies._m_h5_tk) throw new XianyuAuthError("user config.xianyu.cookie 缺少 _m_h5_tk");
+    if (cookieHeader.trim() && (!this.ownerId || !this.cookies._m_h5_tk))
+      throw new XianyuAuthError("闲鱼登录 Cookie 缺少必要字段");
     this.deviceId = generateDeviceId(this.ownerId);
+  }
+  setCookieHeader(cookieHeader: string): void {
+    const cookies = parseCookieHeader(cookieHeader);
+    const ownerId = cookies.unb?.trim() ?? "";
+    if (!ownerId || !cookies._m_h5_tk) throw new XianyuAuthError("闲鱼登录 Cookie 缺少必要字段");
+    this.cookies = cookies;
+    this.ownerId = ownerId;
+    this.deviceId = generateDeviceId(ownerId);
   }
   cookieHeader(): string {
     return formatCookieHeader(this.cookies);
   }
   private token(): string {
     const token = this.cookies._m_h5_tk?.split("_", 1)[0] ?? "";
-    if (!token) throw new XianyuAuthError("user config.xianyu.cookie 的 _m_h5_tk 无效");
+    if (!this.ownerId) throw new XianyuAuthError("闲鱼尚未完成扫码登录");
+    if (!token) throw new XianyuAuthError("闲鱼登录 Cookie 的 _m_h5_tk 无效");
     return token;
   }
   private async mtop(

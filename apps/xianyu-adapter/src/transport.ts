@@ -45,7 +45,11 @@ export class GoofishTransport implements XianyuTransport {
       url,
       options,
     ) => new WebSocket(url, options),
-    private readonly persistence: { seenIds?: Iterable<string>; onSeen?: (id: string) => void } = {},
+    private readonly persistence: {
+      seenIds?: Iterable<string>;
+      onSeen?: (id: string) => void;
+      onAuthExpired?: (error: XianyuAuthError) => void;
+    } = {},
   ) {
     for (const id of persistence.seenIds ?? []) this.seen.add(id);
   }
@@ -115,6 +119,7 @@ export class GoofishTransport implements XianyuTransport {
         if (error instanceof XianyuAuthError) {
           this.authenticated = false;
           this.enabled = false;
+          this.persistence.onAuthExpired?.(error);
           break;
         }
         this.reconnectAttempt += 1;

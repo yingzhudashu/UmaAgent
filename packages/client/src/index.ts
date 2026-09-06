@@ -241,6 +241,12 @@ export class UmaClient {
   xianyuStatus<T = Record<string, unknown>>(grant: string): Promise<T> {
     return this.xianyuRequest("/xianyu/status", grant);
   }
+  xianyuLoginStart<T = Record<string, unknown>>(grant: string): Promise<T> {
+    return this.xianyuRequest("/xianyu/login/start", grant, { method: "POST" });
+  }
+  xianyuLoginStatus<T = Record<string, unknown>>(grant: string): Promise<T> {
+    return this.xianyuRequest("/xianyu/login/status", grant);
+  }
   xianyuConversations<T = unknown>(grant: string): Promise<T> {
     return this.xianyuRequest("/xianyu/conversations", grant);
   }

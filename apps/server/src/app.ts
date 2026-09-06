@@ -348,7 +348,7 @@ export async function createServer(
     return xianyu;
   };
   app.post<{ Body: { password?: string } }>("/api/v15/xianyu/unlock", async (request, reply) => {
-    const principal = userPrincipal(auth, request);
+    const principal = requireAdmin(request);
     if (!xianyu || !xianyuPasswordHash) throw new Error("Xianyu service is not configured");
     const key = `${request.ip}:${principal.userId}`;
     if (!xianyuRateAllowed(key))
@@ -376,6 +376,28 @@ export async function createServer(
       requestId: request.id,
       userId: principal.userId,
       action: "xianyu.status",
+      result: "ok",
+    });
+    return result;
+  });
+  app.post("/api/v15/xianyu/login/start", async (request) => {
+    const principal = requireXianyu(request);
+    const result = await xianyuClient().loginStart();
+    request.log.info({
+      requestId: request.id,
+      userId: principal.userId,
+      action: "xianyu.login.start",
+      result: "ok",
+    });
+    return result;
+  });
+  app.get("/api/v15/xianyu/login/status", async (request) => {
+    const principal = requireXianyu(request);
+    const result = await xianyuClient().loginStatus();
+    request.log.info({
+      requestId: request.id,
+      userId: principal.userId,
+      action: "xianyu.login.status",
       result: "ok",
     });
     return result;

@@ -89,6 +89,12 @@ export class XianyuControlClient {
   health<T = Json>() {
     return this.request<T>("/health");
   }
+  loginStart<T = Json>() {
+    return this.request<T>("/login/start", { method: "POST" });
+  }
+  loginStatus<T = Json>() {
+    return this.request<T>("/login/status");
+  }
   start() {
     return this.request<void>("/start", { method: "POST" });
   }

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { loadUserConfig } from "@uma-agent/channel-adapter";
@@ -6,6 +6,8 @@ import { UmaClient } from "@uma-agent/client";
 import type { ExternalConversation, SessionSnapshot } from "@uma-agent/protocol";
 import { createXianyuAdapter, type XianyuTransport } from "./adapter.js";
 import { XianyuClient } from "./client.js";
+import { XianyuLoginController } from "./login.js";
+import { XianyuNotifier } from "./notifier.js";
 import { GoofishTransport } from "./transport.js";
 
 function requireControlToken(request: IncomingMessage, token: string): void {
@@ -242,15 +244,34 @@ function createStateWriter(path: string, state: XianyuState): () => void {
   };
 }
 
+async function loadCookie(path: string, configured: string): Promise<string> {
+  try {
+    const value = (await readFile(path, "utf8")).trim();
+    return value || configured;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return configured;
+    throw error;
+  }
+}
+
+async function persistCookie(path: string, cookie: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.tmp`;
+  await writeFile(temporary, `${cookie}\n`, { mode: 0o600 });
+  await chmod(temporary, 0o600);
+  await rename(temporary, path);
+}
+
 export async function startXianyuService(
   configPath = process.argv.find((arg) => arg.startsWith("--config="))?.slice(9) ?? "config.user.json",
 ) {
   const user = await loadUserConfig(configPath);
-  const cookie = user.xianyu.cookie;
   const controlToken = process.env.UMA_XIANYU_CONTROL_TOKEN?.trim();
   if (!controlToken) throw new Error("UMA_XIANYU_CONTROL_TOKEN is required");
   const host = user.xianyu.host;
   const port = user.xianyu.port;
+  const cookiePath = join(user.xianyu.stateDir, "cookie");
+  const cookie = await loadCookie(cookiePath, user.xianyu.cookie);
   const statePath = join(user.xianyu.stateDir, "state.json");
   const persisted = statePath
     ? await loadXianyuState(statePath)
@@ -258,6 +279,10 @@ export async function startXianyuService(
   const xianyuClient = new XianyuClient(cookie);
   const state = { ...persisted };
   const writer = statePath ? createStateWriter(statePath, state) : undefined;
+  const notifier = new XianyuNotifier({
+    warn: (message) => console.warn(message),
+    error: (message, error) => console.error(message, { error }),
+  });
   const transport = new GoofishTransport(xianyuClient, undefined, {
     seenIds: state.seenIds,
     onSeen: (id) => {
@@ -265,8 +290,29 @@ export async function startXianyuService(
       if (state.seenIds.length > 10_000) state.seenIds.splice(0, state.seenIds.length - 10_000);
       writer?.();
     },
+    onAuthExpired: (error) => {
+      if (!xianyuClient.ownerId) return;
+      loginController.markExpired();
+      queueMicrotask(() => {
+        void configured.adapter.stop().catch((stopError) => {
+          console.error("Xianyu adapter stop after auth expiration failed", {
+            error: stopError instanceof Error ? stopError.message : String(stopError),
+          });
+        });
+      });
+      void notifier.authExpired(
+        `UmaAgent 闲鱼登录已过期，服务已停用。请管理员进入 UmaAgent 咸鱼控制台重新扫码登录。原因：${error.message}`,
+      );
+    },
   });
-  const configured = createConfiguredXianyuAdapter(transport, {
+  let configured: ReturnType<typeof createConfiguredXianyuAdapter>;
+  const loginController = new XianyuLoginController(Boolean(cookie), async (nextCookie) => {
+    await configured.adapter.stop();
+    xianyuClient.setCookieHeader(nextCookie);
+    await persistCookie(cookiePath, nextCookie);
+    await configured.adapter.start();
+  });
+  configured = createConfiguredXianyuAdapter(transport, {
     initial: state,
     core: user.core,
     onChange: (next) => {
@@ -285,8 +331,21 @@ export async function startXianyuService(
             service: "xianyu-adapter",
             ...configured.adapter.health(),
             transport: transport.status(),
+            login: loginController.snapshot(),
           }),
         );
+        return;
+      }
+      if (request.url === "/login/start" && request.method === "POST") {
+        requireControlToken(request, controlToken);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(await loginController.start()));
+        return;
+      }
+      if (request.url === "/login/status" && request.method === "GET") {
+        requireControlToken(request, controlToken);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(loginController.snapshot()));
         return;
       }
       if (request.url === "/pause" && request.method === "POST") {
@@ -366,7 +425,7 @@ export async function startXianyuService(
       response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
     }
   });
-  await configured.adapter.start();
+  if (cookie) await configured.adapter.start();
   server.listen(port, host);
   const stop = async () => {
     await configured.adapter.stop();

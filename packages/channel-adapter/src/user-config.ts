@@ -31,6 +31,11 @@ function stringValue(value: unknown, label: string): string {
   return value.trim();
 }
 
+function optionalStringValue(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`${label} must be a string`);
+  return value.trim();
+}
+
 function port(value: unknown, label: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 65_535)
     throw new Error(`${label} must be a valid TCP port`);
@@ -66,7 +71,7 @@ function parse(value: unknown): UserConfig {
   const xianyu = record(root.xianyu, "user config.xianyu");
   keys(xianyu, ["cookie", "host", "port", "stateDir"], "user config.xianyu");
   result.xianyu = {
-    cookie: stringValue(xianyu.cookie, "user config.xianyu.cookie"),
+    cookie: optionalStringValue(xianyu.cookie, "user config.xianyu.cookie"),
     host: stringValue(xianyu.host, "user config.xianyu.host"),
     port: port(xianyu.port, "user config.xianyu.port"),
     stateDir: expandPath(

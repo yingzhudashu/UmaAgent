@@ -42,6 +42,18 @@ npm start
 默认配置唯一使用 tcvps Provider（`https://api.tcvps.cn/v1`）。模型密钥通过 `$env:OPENAI_API_KEY` 注入；不支持备用 Provider 或自动故障转移。
 打开 `http://127.0.0.1:3210`。CLI 使用：
 
+配置诊断和真实模型测试必须显式使用当前运行环境的配置文件与 env-file。诊断只请求 `/models`，不产生模型调用费用；`real-test` 会在临时 Core 和临时数据库中执行，绝不能连接生产 state：
+
+```powershell
+$env:UMA_PROVIDER_CONFIG = "D:\AIhub\UmaAgent\uma.config.json"
+node --env-file="D:\AIhub\UmaAgent\.env" scripts/diagnose-provider.mjs
+$env:UMA_REAL_API = "1"
+$env:UMA_REAL_CONFIG = "D:\AIhub\UmaAgent\uma.config.json"
+node --env-file="D:\AIhub\UmaAgent\.env" scripts/real-test.mjs smoke
+```
+
+`/models` 返回 200 只代表认证入口可访问；只有 `real-test` 的模型 Run 成功，才算生成通道验收通过。脚本输出不会包含密钥、Prompt 或完整响应。
+
 ```powershell
 $env:UMA_TOKEN = "个人访问令牌"
 node apps/cli/dist/main.js chat
@@ -163,7 +175,7 @@ Docker 中请改用 `docker/config.user.example.json` 生成 `docker/config.user
 
 ## 咸鱼控制台
 
-咸鱼入口由 Web、CLI 和 Android 统一调用 Core API，客户端不直接访问 Adapter。先在服务端设置 `UMA_XIANYU_CONTROL_TOKEN` 与 `UMA_XIANYU_ADMIN_PASSWORD_HASH`，再启动 `uma-xianyu-adapter`。管理员密码使用 `scrypt$N$r$p$salt$digest` 格式；登录用户解锁后获得仅存于内存、有效 30 分钟的 Grant。CLI 用法：
+咸鱼入口由 Web、CLI 和 Android 统一调用 Core API，客户端不直接访问 Adapter。先在服务端设置 `UMA_XIANYU_CONTROL_TOKEN` 与 `UMA_XIANYU_ADMIN_PASSWORD_HASH`，再启动 `uma-xianyu-adapter`。`config.user.json` 的 `xianyu.cookie` 可以为空；无 Cookie 启动会进入 `pending_login`，管理员在 UmaAgent 咸鱼控制台生成二维码并扫码。扫码成功后 Cookie 以 `0600` 权限原子保存到 `stateDir/cookie`，随后 Adapter 自动恢复连接。管理员密码使用 `scrypt$N$r$p$salt$digest` 格式；登录用户解锁后获得仅存于内存、有效 30 分钟的 Grant。登录过期会自动停用闲鱼服务，并在配置了 `UMA_XIANYU_FEISHU_APP_ID`、`UMA_XIANYU_FEISHU_APP_SECRET` 和 `UMA_XIANYU_FEISHU_CHAT_ID` 时通过知识库飞书应用告警。CLI 用法：
 
 ```text
 uma xianyu status|start|stop|pause|resume
