@@ -13,6 +13,14 @@ sign-off before a release is declared complete.
 - Signed release publication completed from commit `74e75dfc2fc5d3a7e95f834e1155152fa5514736` as release `5-74e75df`, Android `versionCode 5`, `versionName 1.1.3`.
 - Published APK SHA-256 is `e9939c2b626491cc5bcf80e042bbf8b8c02992cbe6e3f0cad6c2e8b1177d6c41`, size `7571849` bytes. Public manifest and APK download matched these values; Core live returned HTTP 200.
 
+## Current Android UI release (2026-09-07)
+
+- Signed release publication completed from commit `17518d92a95a572efc5060a9bac2e734e02d2dc6` as release `6-17518d9`, Android `versionCode 6`, `versionName 1.1.4`.
+- The release uses the existing production certificate `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`; it matches the previously published APK and remains upgrade-compatible.
+- APK SHA-256 is `14f683ee3109dea0bcf6ab750feb96a47e5e5d60ecfdcbbc9e1c6318f9397914`, size `7604617` bytes. The public manifest and downloaded APK matched these values.
+- `current` was atomically switched to `/srv/www/robotclaw/app/releases/6-17518d9`; the previous `5-74e75df` directory remains available for rollback.
+- Release notes cover response aggregation and collapsed execution details, improved mobile reading, message retry, and the Xianyu QR login console.
+
 ## Managed Xianyu production release (2026-09-07)
 
 - UmaAgent release `20260906182720-032a419` was promoted from commit `032a419ff9e97e6b3d36e4e3f9710673a37b0f55`; protocol is `15` and schema is `22`.
