@@ -102,7 +102,7 @@ function nestedData(payload: unknown): Record<string, unknown> {
 }
 
 async function generateTfstk(): Promise<string> {
-  const script = fileURLToPath(new URL("./resources/gen_tfstk.js", import.meta.url));
+  const script = fileURLToPath(new URL("./resources/gen_tfstk.cjs", import.meta.url));
   const result = await execFile(process.execPath, [script], {
     timeout: 20_000,
     maxBuffer: 1024 * 1024,

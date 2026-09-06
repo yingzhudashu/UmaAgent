@@ -1,12 +1,12 @@
-// utils/gen_tfstk.js
+// utils/gen_tfstk.cjs
 // node 补环境生成 tfstk。核心策略：
 // 1. vm.createContext + 深度 Proxy 记录 SDK 每一个属性访问
 // 2. crypto.subtle 同步化（绕 VMP setTimeout race）
 // 3. 缺失属性从 env_snapshot.json（真浏览器 dump）回填
 //
 // 用法：
-//   node utils/gen_tfstk.js              → stdout 输出 tfstk
-//   node utils/gen_tfstk.js --probe      → 输出 SDK 访问日志（用于定位缺失环境）
+//   node utils/gen_tfstk.cjs              → stdout 输出 tfstk
+//   node utils/gen_tfstk.cjs --probe      → 输出 SDK 访问日志（用于定位缺失环境）
 
 const fs   = require('fs');
 const path = require('path');
