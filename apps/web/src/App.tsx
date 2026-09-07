@@ -1095,7 +1095,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             }}
           >
             <InspectorContent>
-              {inspectorSection === "xianyu" && <XianyuArea client={client} />}
+              {inspectorSection === "xianyu" && <XianyuArea client={client} userRole={userRole} />}
               {inspectorSection === "connection" && <ConnectionPanel health={health.data} />}
               {inspectorSection === "sync" && (
                 <SyncPanel

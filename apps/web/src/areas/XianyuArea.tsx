@@ -11,6 +11,7 @@ type LoginState = {
   expiresAt?: number;
 };
 type XianyuStatus = Record<string, unknown> & { login?: LoginState };
+type XianyuAreaProps = { client: UmaClient; userRole: "admin" | "user" };
 
 function StructuredData({ value }: { value: unknown }) {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -27,7 +28,7 @@ function StructuredData({ value }: { value: unknown }) {
   );
 }
 
-export function XianyuArea({ client }: { client: UmaClient }) {
+export function XianyuArea({ client, userRole }: XianyuAreaProps) {
   const [password, setPassword] = useState("");
   const [grant, setGrant] = useState<string>();
   const [expiresAt, setExpiresAt] = useState<number>();
@@ -67,7 +68,11 @@ export function XianyuArea({ client }: { client: UmaClient }) {
       setNotice(undefined);
       await operation();
     } catch (value) {
-      if (value instanceof UmaClientError && (value.status === 401 || value.status === 403)) {
+      if (value instanceof UmaClientError && value.code === "xianyu_admin_required") {
+        setError("当前 Core 账号没有管理员权限，请切换管理员账号后再解锁。");
+      } else if (value instanceof UmaClientError && value.code === "xianyu_password_invalid") {
+        setError("咸鱼管理员密码错误，请检查后重试。");
+      } else if (value instanceof UmaClientError && (value.status === 401 || value.status === 403)) {
         clearGrant();
         setError("咸鱼授权已失效，请重新解锁。");
       } else setError(value instanceof Error ? value.message : String(value));
@@ -159,7 +164,12 @@ export function XianyuArea({ client }: { client: UmaClient }) {
       <div className="xianyu-panel__title">
         <Store size={16} /> 咸鱼
       </div>
-      {!grant ? (
+      {userRole !== "admin" ? (
+        <div className="inspector-group">
+          <p>当前 Core 账号没有管理员权限，无法解锁咸鱼控制台。</p>
+          <p>请退出后使用管理员账号登录。</p>
+        </div>
+      ) : !grant ? (
         <div className="inspector-group">
           <p>需要独立管理员密码解锁。</p>
           <input

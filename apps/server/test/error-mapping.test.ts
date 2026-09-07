@@ -12,4 +12,15 @@ describe("server error mapping", () => {
     expect(result.message).not.toContain("abc.def");
     expect(result.message).not.toContain("private-key");
   });
+
+  it("keeps Xianyu administrator and grant failures distinguishable", () => {
+    expect(mapServerError(new Error("Xianyu administrator access required"), [])).toMatchObject({
+      code: "xianyu_admin_required",
+      status: 403,
+    });
+    expect(mapServerError(new Error("Xianyu grant expired or missing"), [])).toMatchObject({
+      code: "xianyu_grant_expired",
+      status: 403,
+    });
+  });
 });

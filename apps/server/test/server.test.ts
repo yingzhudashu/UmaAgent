@@ -579,8 +579,18 @@ describe("server", () => {
           headers: authHeaders,
           payload: { password: "wrong" },
         })
-      ).statusCode,
-    ).toBe(403);
+      ).json<{ error: { code: string } }>().error.code,
+    ).toBe("xianyu_password_invalid");
+    const regularUser = runtime.database.createUser("user");
+    const regularToken = new AuthService(runtime).issueToken(regularUser.id, "regular-user").token;
+    const regularUnlock = await app.inject({
+      method: "POST",
+      url: "/api/v15/xianyu/unlock",
+      headers: { authorization: `Bearer ${regularToken}` },
+      payload: { password: "test-admin-password" },
+    });
+    expect(regularUnlock.statusCode).toBe(403);
+    expect(regularUnlock.json<{ error: { code: string } }>().error.code).toBe("xianyu_admin_required");
     const unlocked = await app.inject({
       method: "POST",
       url: "/api/v15/xianyu/unlock",

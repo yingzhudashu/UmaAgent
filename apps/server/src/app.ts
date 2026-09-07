@@ -311,9 +311,9 @@ export async function createServer(
     if (ownerId !== principal.userId) throw new Error("Resource not found");
     return principal;
   };
-  const requireAdmin = (request: FastifyRequest): AuthPrincipal => {
+  const requireAdmin = (request: FastifyRequest, message?: string): AuthPrincipal => {
     const principal = userPrincipal(auth, request);
-    if (principal.role !== "admin") throw new Error("Administrator access required");
+    if (principal.role !== "admin") throw new Error(message ?? "Administrator access required");
     return principal;
   };
   const ownedResult = <T>(request: FastifyRequest, ownerId: string | undefined, action: () => T): T => {
@@ -348,7 +348,7 @@ export async function createServer(
     return xianyu;
   };
   app.post<{ Body: { password?: string } }>("/api/v15/xianyu/unlock", async (request, reply) => {
-    const principal = requireAdmin(request);
+    const principal = requireAdmin(request, "Xianyu administrator access required");
     if (!xianyu || !xianyuPasswordHash) throw new Error("Xianyu service is not configured");
     const key = `${request.ip}:${principal.userId}`;
     if (!xianyuRateAllowed(key))
@@ -358,7 +358,7 @@ export async function createServer(
       xianyuRecordFailure(key);
       return reply
         .code(403)
-        .send(errorBody(request.id, "forbidden", "Invalid Xianyu administrator password"));
+        .send(errorBody(request.id, "xianyu_password_invalid", "Invalid Xianyu administrator password"));
     }
     const grant = xianyuGrants.issue(principal.userId);
     request.log.info({

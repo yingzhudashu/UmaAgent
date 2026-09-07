@@ -380,6 +380,9 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 | readiness 503 | workspace 不可访问、模型目录为空或某个已配置 MCP 未连接 |
 | Web 403 Origin | `server.webOrigins` 未包含浏览器地址的精确 Origin |
 | Web 可打开但无法登录 | Token 错误、跨站 Cookie 未使用 HTTPS、反向代理未传递 Host/协议 |
+| 咸鱼解锁提示没有管理员权限 | 当前 Core 账号的角色是 `user`；切换到 `admin` 账号后，再输入 `UMA_XIANYU_ADMIN_PASSWORD_HASH` 对应的密码 |
+| 咸鱼解锁提示密码错误 | 输入密码与服务端 `UMA_XIANYU_ADMIN_PASSWORD_HASH` 不匹配；不要把哈希值当作登录密码输入 |
+| 咸鱼已解锁后提示授权失效 | 仅表示内存 Grant 过期或服务端重启，重新使用 Core 管理员账号解锁即可 |
 | Android 登录显示 `Body cannot be empty when content-type is set to 'application/json'` | 客户端无参数 JSON 请求发送了 0 字节 body；升级到包含 `{}` 请求体修复的 APK，并确认线上清单已指向新版本 |
 | CLI 401 | `UMA_TOKEN` 无效、已撤销或已过期 |
 | 模型运行失败 | Provider URL、模型 ID、API 类型、Key 或模型 capabilities 不匹配 |
