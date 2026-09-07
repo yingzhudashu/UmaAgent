@@ -381,7 +381,9 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 | Web 403 Origin | `server.webOrigins` 未包含浏览器地址的精确 Origin |
 | Web 可打开但无法登录 | Token 错误、跨站 Cookie 未使用 HTTPS、反向代理未传递 Host/协议 |
 | 咸鱼工作台返回 403 | 当前 Core 账号角色是 `user`；退出后使用 `admin` 管理员 PAT 登录 |
+| 使用服务器保护 PAT 访问接口返回通用 400 | 检查 `/etc/uma-agent/protected-user-pat` 是否为单行 LF 结尾；不要让 `CR` 进入 `Authorization` 请求头。文件必须保持 `root:root 0600` |
 | 咸鱼工作台显示 Adapter 不可用 | 检查 `uma-xianyu-adapter.service`、回环地址和 `UMA_XIANYU_CONTROL_TOKEN`，客户端不应直连 3250 |
+| 咸鱼总控把状态问题当成文件工作区问题 | 确认当前 release 包含咸鱼渠道工具和 channel preflight 路由；总控应调用 `xianyu_status`，不应通过 `list` 搜索工作区 |
 | 咸鱼登录过期 | 在总控会话重新生成二维码扫码；同时检查飞书告警配置和 Adapter 日志 |
 | Android 登录显示 `Body cannot be empty when content-type is set to 'application/json'` | 客户端无参数 JSON 请求发送了 0 字节 body；升级到包含 `{}` 请求体修复的 APK，并确认线上清单已指向新版本 |
 | CLI 401 | `UMA_TOKEN` 无效、已撤销或已过期 |

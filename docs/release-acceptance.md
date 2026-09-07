@@ -4,6 +4,15 @@ This record is the gate for the two-step UmaAgent release. It must be updated wi
 the actual remote commit, CI run URLs, production backup checksums, and operator
 sign-off before a release is declared complete.
 
+## Xianyu status-tool preflight hotfix (2026-09-08)
+
+- Core release `20260908022600-0a85f01` is live from commit `0a85f01a8610c29f095523affb726dad472d3450`; protocol is `15` and schema is `23`.
+- `npm run check`, `npm test` (53 files, 287 tests), and `npm run build` passed before promotion. The release verifier passed on the server.
+- Production backup is `/srv/backups/uma-agent/state-20260907182458.db`; the promote gate preserved the protected administrator fingerprint and atomically switched `current`.
+- The Xianyu control session now bypasses generic clarification preflight for `agent` requests and enters the channel tool set. A live administrator smoke test completed with `xianyu_status`, reporting Adapter `connected=true`, login `authenticated`, and a completed natural-language response.
+- `uma-agent.service`, `uma-browser-worker.service`, `uma-xianyu-adapter.service`, `robotclaw.service`, and `nginx.service` are active; Core live/ready both returned HTTP 200.
+- The protected PAT file was normalized from CRLF to LF without changing its token value and remains `root:root 0600`. Temporary administrator probe tokens were deleted in `finally` blocks.
+
 ## Current Xianyu workspace release (2026-09-07)
 
 - Core release `20260907145346-3ecf056` and Web embed release `20260907145402-3ecf056` are live from commit `3ecf0560bb6d3958a4c31fd7998bf87a4c63a7a6`; protocol is `15` and schema is `23`.
