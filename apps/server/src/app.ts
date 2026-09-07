@@ -44,7 +44,6 @@ type SocketMessage = {
   token?: string;
   sessions?: Array<{ id?: string; lastSequence?: number }>;
 };
-
 function userPrincipal(auth: AuthService, request: FastifyRequest): AuthPrincipal {
   const principal = auth.principalFromRequest(request);
   if (!principal) throw new Error("Authentication required");
@@ -117,6 +116,7 @@ export async function createServer(
         process.env[runtime.config.xianyu.controlTokenEnv]?.trim() ?? "",
       )
     : undefined;
+  runtime.xianyuAgentApi = xianyu?.agentApi(runtime);
   const qualityReadRate = new Map<string, { count: number; resetAt: number }>();
   await app.register(cookie);
   await app.register(cors, {

@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,6 +35,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -257,38 +259,70 @@ private fun AuthScreen(state: UmaUiState, model: UmaViewModel) {
 @Composable
 private fun AuthenticatedScreen(state: UmaUiState, model: UmaViewModel) {
     var sectionName by rememberSaveable(state.workspace) { mutableStateOf(if (state.workspace == "xianyu") MobileSection.Xianyu.name else MobileSection.Chat.name) }
-    val section = MobileSection.entries.firstOrNull { it.name == sectionName } ?: MobileSection.Chat
+    val visibleSections = remember(state.userRole) {
+        MobileSection.entries.filter { it != MobileSection.Xianyu || state.userRole == "admin" }
+    }
+    val section = visibleSections.firstOrNull { it.name == sectionName } ?: visibleSections.first()
     val selectedSession = state.sessions.firstOrNull { it.id == state.selectedSessionId }
+    val workspaceTitle = if (state.workspace == "xianyu") "咸鱼工作台" else "UmaAgent"
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+        Surface(
+            Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 2.dp,
         ) {
-            Column(Modifier.weight(1f)) {
-                Text("UmaAgent", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    selectedSession?.title ?: "未选择会话",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
-            }
-            Text(
-                if (state.offline) "离线只读" else "已连接",
-                style = MaterialTheme.typography.labelLarge,
-                color = if (state.offline) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary,
-            )
-            if (state.offline) {
-                TextButton({ model.retryLogin() }, enabled = !state.loading) { Text("重新连接") }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    Modifier.size(42.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            if (state.workspace == "xianyu") "闲" else "U",
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(workspaceTitle, style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        selectedSession?.title ?: "选择一个会话开始工作",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Surface(
+                    color = if (state.offline) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    Text(
+                        if (state.offline) "离线只读" else "已连接",
+                        Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (state.offline) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+                if (state.offline) {
+                    TextButton({ model.retryLogin() }, enabled = !state.loading) { Text("重连") }
+                }
             }
         }
         ScrollableTabRow(
-            selectedTabIndex = section.ordinal,
+            selectedTabIndex = visibleSections.indexOf(section).coerceAtLeast(0),
             edgePadding = 12.dp,
+            containerColor = MaterialTheme.colorScheme.background,
         ) {
-            MobileSection.entries.filter { it != MobileSection.Xianyu || state.userRole == "admin" }.forEach { item ->
+            visibleSections.forEach { item ->
                 Tab(
                     selected = item == section,
                     onClick = { sectionName = item.name },
@@ -1813,28 +1847,142 @@ private fun SettingsScreen(state: UmaUiState, model: UmaViewModel, modifier: Mod
     LazyColumn(
         modifier,
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { UpdatePanel(state, model) }
-        item { HorizontalDivider() }
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("连接", style = MaterialTheme.typography.titleMedium)
-                Text(BuildConfig.UMA_BASE_URL, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(if (state.offline) "离线只读" else "服务正常", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Surface(
+                Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = MaterialTheme.shapes.large,
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Surface(
+                        Modifier.size(52.dp),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary,
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("U", color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("应用设置", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text(
+                            if (state.userRole == "admin") "管理员工作区" else "个人工作区",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
+                }
             }
         }
         item {
-            OutlinedButton({ model.logout() }, Modifier.fillMaxWidth()) { Text("退出登录") }
+            SettingsSection("连接") {
+                SettingsRow(
+                    badge = "网",
+                    title = "服务状态",
+                    supporting = BuildConfig.UMA_BASE_URL,
+                    trailing = {
+                        Text(
+                            if (state.offline) "离线只读" else "服务正常",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (state.offline) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary,
+                        )
+                    },
+                )
+                HorizontalDivider()
+                SettingsRow(
+                    badge = "号",
+                    title = "当前身份",
+                    supporting = if (state.userRole == "admin") "管理员，可访问咸鱼工作台" else "普通用户",
+                    trailing = { Text(if (state.workspace == "xianyu") "咸鱼" else "UmaAgent", style = MaterialTheme.typography.labelMedium) },
+                )
+            }
+        }
+        item {
+            SettingsSection("应用更新") {
+                UpdatePanel(state, model)
+            }
+        }
+        item {
+            SettingsSection("账户") {
+                SettingsRow(
+                    badge = "退",
+                    title = "退出登录",
+                    supporting = "清除本机保存的访问令牌和离线缓存",
+                    trailing = {
+                        TextButton({ model.logout() }) { Text("退出") }
+                    },
+                )
+            }
+        }
+        item {
+            Text(
+                "UmaAgent ${BuildConfig.VERSION_NAME} · Android",
+                Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
 @Composable
+private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Text(
+            title,
+            Modifier.padding(horizontal = 4.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Surface(
+            Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surface,
+            shape = MaterialTheme.shapes.medium,
+            tonalElevation = 1.dp,
+        ) {
+            Column(content = content)
+        }
+    }
+}
+
+@Composable
+private fun SettingsRow(
+    badge: String,
+    title: String,
+    supporting: String,
+    trailing: @Composable (() -> Unit)? = null,
+) {
+    ListItem(
+        leadingContent = {
+            Surface(
+                Modifier.size(34.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(badge, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                }
+            }
+        },
+        headlineContent = { Text(title) },
+        supportingContent = { Text(supporting, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        trailingContent = trailing,
+    )
+}
+
+@Composable
 private fun UpdatePanel(state: UmaUiState, model: UmaViewModel) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("应用更新", style = MaterialTheme.typography.titleMedium)
-        Text("当前版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）")
+    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("当前版本", style = MaterialTheme.typography.bodyLarge)
+            Text("${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）", style = MaterialTheme.typography.labelLarge)
+        }
         when {
             state.updateChecking -> Text("正在检查更新")
             state.updateDownloading -> Text("正在下载 ${state.updateProgress}%")

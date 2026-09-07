@@ -123,11 +123,11 @@ export class UmaRuntime {
   private previousCpu = process.cpuUsage();
   private readonly trace: TraceService;
   private readonly activeTraces = new Map<string, TraceContext>();
+  xianyuAgentApi: Parameters<typeof createBuiltinTools>[0]["xianyu"] = undefined;
   private started = false;
   private stopping = false;
   private stopPromise: Promise<void> | undefined;
   config: UmaConfig;
-
   constructor(config: UmaConfig) {
     this.config = config;
     this.stateLock = StateLock.acquire(config.server.stateDir);
@@ -230,7 +230,6 @@ export class UmaRuntime {
       listKnowledgeSearch: (query, ownerId) => this.knowledge.search(query, 20, undefined, ownerId),
     });
   }
-
   async start(): Promise<void> {
     if (this.stopping || this.stopPromise) throw new Error("UmaRuntime cannot restart after stopping");
     if (this.started) throw new Error("UmaRuntime is already started");
@@ -1962,6 +1961,7 @@ export class UmaRuntime {
               smath: this.smath,
             }
           : {}),
+        xianyu: this.xianyuAgentApi,
       }),
       ...this.mcp.tools(),
     ];

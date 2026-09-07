@@ -1,3 +1,5 @@
+import type { UmaRuntime, XianyuAgentApi } from "@uma-agent/core";
+
 type Json = Record<string, unknown> | unknown[];
 
 export function validateXianyuChatBody(body: Record<string, unknown>): Record<string, string> {
@@ -122,5 +124,28 @@ export class XianyuControlClient {
   }
   send<T = Json>(body: Json) {
     return this.request<T>("/send", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  agentApi(runtime: UmaRuntime): XianyuAgentApi {
+    return {
+      health: () => this.health(),
+      loginStatus: () => this.loginStatus(),
+      conversations: () => this.conversations(),
+      history: (conversationId) => this.history(conversationId),
+      item: (itemId) => this.item(itemId),
+      chat: (input) => this.chat(input),
+      send: (input) => this.send(input),
+      publish: (input) => this.publish(input),
+      service: (action) =>
+        this.request<void>(`/${action}`, { method: "POST" }).then(() => ({ ok: true, action })),
+      setAutoReply: async (enabled) => ({ enabled: runtime.database.setXianyuAutoReply(enabled) }),
+      workspace: () => ({
+        autoReplyEnabled: runtime.database.xianyuAutoReplyEnabled(),
+        sessions: runtime.database.listChannelSessions("xianyu").map(({ session, metadata }) => ({
+          session: { id: session.id, title: session.title, workspace: session.workspace },
+          metadata,
+        })),
+      }),
+    };
   }
 }

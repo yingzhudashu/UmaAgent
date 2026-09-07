@@ -9,6 +9,8 @@ export type ToolClass =
   | "memory_write"
   | "schedule"
   | "image_generate"
+  | "channel_control"
+  | "channel_send"
   | "mcp";
 
 export interface PermissionDecision {
@@ -29,6 +31,10 @@ const readTools = new Set([
   "history_read",
   "smath_list",
   "smath_read",
+  "xianyu_status",
+  "xianyu_conversations",
+  "xianyu_history",
+  "xianyu_item",
 ]);
 const writeTools = new Set([
   "write",
@@ -38,6 +44,8 @@ const writeTools = new Set([
   "smath_update",
   "smath_delete",
   "smath_calculate",
+  "xianyu_chat",
+  "xianyu_publish",
 ]);
 
 export class PermissionPolicy {
@@ -50,6 +58,8 @@ export class PermissionPolicy {
     if (toolName === "memory_write") return "memory_write";
     if (toolName === "schedule_manage") return "schedule";
     if (toolName === "image_generate") return "image_generate";
+    if (toolName === "xianyu_send") return "channel_send";
+    if (toolName === "xianyu_auto_reply" || toolName === "xianyu_service") return "channel_control";
     return "mcp";
   }
 
@@ -79,6 +89,13 @@ export class PermissionPolicy {
         allowed: true,
         requiresApproval: false,
         reason: "Image generation is enabled by the session policy",
+      };
+    }
+    if (kind === "channel_control" || kind === "channel_send") {
+      return {
+        allowed: true,
+        requiresApproval: false,
+        reason: "Explicit administrator channel operation",
       };
     }
     return {

@@ -3,6 +3,7 @@ export { UmaDatabase } from "./database.js";
 export type { EventListener } from "./events.js";
 export { PermissionPolicy } from "./permissions.js";
 export { UmaRuntime } from "./runtime.js";
+export type { XianyuAgentApi } from "./tools.js";
 export type {
   ImageGenerationConfig,
   McpServerConfig,

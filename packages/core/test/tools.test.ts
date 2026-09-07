@@ -41,6 +41,7 @@ async function fixture() {
   const attachments = new Map<string, { path: string; name: string; mimeType: string }>();
   const database = {
     sessionOwner: vi.fn(() => "system"),
+    isChannelSession: vi.fn(() => false),
     searchMemory: vi.fn(() => ["remembered fact"]),
     validateAttachmentForSession: vi.fn(),
     getAttachment: vi.fn((id: string) => {
@@ -130,6 +131,58 @@ describe("builtin tools", () => {
     expect(text(await execute(value.tools, "schedule_manage", { operation: "list" }))).toContain(
       '"ok": true',
     );
+  });
+
+  it("exposes Xianyu tools only to channel sessions and routes live status queries", async () => {
+    const value = await fixture();
+    const xianyu = {
+      health: vi.fn(async () => ({ status: "ok", connected: true })),
+      loginStatus: vi.fn(async () => ({ status: "authenticated" })),
+      conversations: vi.fn(async () => [{ conversationId: "buyer-1" }]),
+      history: vi.fn(async () => ({ messages: [] })),
+      item: vi.fn(async () => ({ id: "item-1" })),
+      chat: vi.fn(async () => ({ conversationId: "buyer-2" })),
+      send: vi.fn(async () => ({ ok: true })),
+      publish: vi.fn(async () => ({ itemId: "item-2" })),
+      service: vi.fn(async () => ({ ok: true })),
+      setAutoReply: vi.fn(async () => ({ enabled: true })),
+      workspace: vi.fn(() => ({ sessions: [] })),
+    };
+    const regularNames = value.tools.map((tool) => tool.name);
+    expect(regularNames).not.toContain("xianyu_status");
+
+    value.database.isChannelSession.mockReturnValue(true);
+    const channelTools = createBuiltinTools({
+      session: {
+        ...({ id: "xianyu-session" } as Session),
+        workspace: value.root,
+      },
+      database: value.database as never,
+      knowledge: value.knowledge as never,
+      skills: value.skills as never,
+      workspacePolicy: new WorkspacePolicy([value.root]),
+      toolTimeoutMs: 5_000,
+      search: value.search as never,
+      scheduleManage: value.scheduleManage,
+      memoryWrite: value.memoryWrite as never,
+      xianyu,
+    });
+    expect(channelTools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "xianyu_status",
+        "xianyu_conversations",
+        "xianyu_history",
+        "xianyu_item",
+        "xianyu_send",
+        "xianyu_auto_reply",
+        "xianyu_service",
+        "xianyu_chat",
+        "xianyu_publish",
+      ]),
+    );
+    expect(text(await execute(channelTools, "xianyu_status", {}))).toContain('"authenticated"');
+    expect(xianyu.health).toHaveBeenCalledOnce();
+    expect(xianyu.loginStatus).toHaveBeenCalledOnce();
   });
 
   it("reads owned text attachments and rejects missing or binary attachments", async () => {

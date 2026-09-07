@@ -32,6 +32,7 @@ describe("run context builder", () => {
     } as Model<"openai-responses">;
     const database = {
       sessionOwner: vi.fn(() => "system"),
+      channelSession: vi.fn(() => ({ channel: "xianyu" })),
       getMessage: vi.fn(() => ({ sequence: 7 })),
       getRun: vi.fn(() => ({ model: { ref: { provider: "test", id: "model" } } })),
       listAgentMessages: vi.fn(() => []),
@@ -115,6 +116,8 @@ describe("run context builder", () => {
     expect(context.prompt).toContain("diagram.png (id: image, type: image/png)");
     expect(context.prompt).toContain("notes.txt (id: text, type: text/plain)");
     expect(context.systemPrompt).not.toContain("persisted summary");
+    expect(context.systemPrompt).toContain("administrator-only Xianyu workbench");
+    expect(context.systemPrompt).toContain("xianyu_* tools");
     expect(context.messages[0]?.role).toBe("compactionSummary");
     expect(context.messages[0]).toMatchObject({ summary: "persisted summary" });
     expect(context.prompt).toContain("likes deterministic tests");

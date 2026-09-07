@@ -102,7 +102,12 @@ export class RunContextBuilder {
         mimeType: attachment.mimeType,
       });
     }
-    const systemPrompt = `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought. When referencing a generated file, use only [filename](uma-attachment://<real attachment id>) with an ID returned by an attachment tool. Never emit API URLs, filesystem paths, sandbox links, or invented attachment IDs.${this.skills.systemPrompt(input.session.id)}`;
+    const channelSession = this.database.channelSession?.(input.session.id);
+    const channelInstructions =
+      channelSession?.channel === "xianyu"
+        ? " You are operating in the administrator-only Xianyu workbench. For questions about Xianyu login, service, buyers, products, conversations, or automation, use the xianyu_* tools and report their returned state. Do not search the filesystem workspace to infer Xianyu status; the Xianyu workspace is an integration boundary, not a project folder."
+        : "";
+    const systemPrompt = `You are UmaAgent, a precise server-side assistant. Operate only inside the provided workspace. Use tools when needed and verify changes. Do not reveal private chain-of-thought. When referencing a generated file, use only [filename](uma-attachment://<real attachment id>) with an ID returned by an attachment tool. Never emit API URLs, filesystem paths, sandbox links, or invented attachment IDs.${channelInstructions}${this.skills.systemPrompt(input.session.id)}`;
     const prompt = [
       stableContext,
       input.promptOverride ?? input.request.text,

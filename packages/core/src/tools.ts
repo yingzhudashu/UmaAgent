@@ -23,6 +23,152 @@ const result = (text: string, details: Record<string, unknown> = {}) => ({
   details,
 });
 
+export interface XianyuAgentApi {
+  health: () => Promise<unknown>;
+  loginStatus: () => Promise<unknown>;
+  conversations: () => Promise<unknown>;
+  history: (conversationId: string) => Promise<unknown>;
+  item: (itemId: string) => Promise<unknown>;
+  chat: (input: { receiverId: string; itemId: string }) => Promise<unknown>;
+  send: (input: { sessionId: string; text: string }) => Promise<unknown>;
+  publish: (input: Record<string, unknown>) => Promise<unknown>;
+  service: (action: "start" | "stop" | "pause" | "resume") => Promise<unknown>;
+  setAutoReply: (enabled: boolean) => Promise<unknown>;
+  workspace: () => unknown;
+}
+
+function jsonToolResult(value: unknown, empty = "咸鱼 Adapter 没有返回数据") {
+  return result(typeof value === "string" ? value : JSON.stringify(value, null, 2) || empty, {
+    xianyu: true,
+  });
+}
+
+function createXianyuTools(api: XianyuAgentApi): AgentTool[] {
+  return [
+    defineTool({
+      name: "xianyu_status",
+      label: "查看咸鱼状态",
+      description:
+        "查询咸鱼服务、连接、登录状态、自动回复开关和当前咸鱼会话。咸鱼总控会话询问账号状态时必须使用此工具，不要查找文件工作区。",
+      parameters: Type.Object({}),
+      executionMode: "parallel",
+      async execute() {
+        const [health, login] = await Promise.all([api.health(), api.loginStatus()]);
+        return jsonToolResult({ workspace: api.workspace(), service: health, login });
+      },
+    }),
+    defineTool({
+      name: "xianyu_conversations",
+      label: "查看咸鱼会话",
+      description: "列出 Adapter 当前已映射的咸鱼买家会话和会话 ID。",
+      parameters: Type.Object({}),
+      executionMode: "parallel",
+      async execute() {
+        return jsonToolResult(await api.conversations());
+      },
+    }),
+    defineTool({
+      name: "xianyu_history",
+      label: "查看咸鱼历史",
+      description: "读取指定咸鱼 conversationId 的历史消息。",
+      parameters: Type.Object({ conversationId: Type.String({ minLength: 1 }) }),
+      executionMode: "parallel",
+      async execute(_id, params) {
+        return jsonToolResult(await api.history(params.conversationId));
+      },
+    }),
+    defineTool({
+      name: "xianyu_item",
+      label: "查看咸鱼商品",
+      description: "读取指定咸鱼商品 ID 的详情。",
+      parameters: Type.Object({ itemId: Type.String({ minLength: 1 }) }),
+      executionMode: "parallel",
+      async execute(_id, params) {
+        return jsonToolResult(await api.item(params.itemId));
+      },
+    }),
+    defineTool({
+      name: "xianyu_send",
+      label: "发送咸鱼回复",
+      description:
+        "向已映射的咸鱼买家会话发送一条明确指定的回复。只在管理员明确要求发送时使用；sessionId 必须来自咸鱼会话列表。",
+      parameters: Type.Object({
+        sessionId: Type.String({ minLength: 1 }),
+        text: Type.String({ minLength: 1 }),
+      }),
+      executionMode: "sequential",
+      async execute(_id, params) {
+        return jsonToolResult(await api.send({ sessionId: params.sessionId, text: params.text }));
+      },
+    }),
+    defineTool({
+      name: "xianyu_auto_reply",
+      label: "设置咸鱼自动回复",
+      description: "开启或关闭咸鱼自动回复。关闭时入站消息只生成草稿，不会直接发送给买家。",
+      parameters: Type.Object({ enabled: Type.Boolean() }),
+      executionMode: "sequential",
+      async execute(_id, params) {
+        return jsonToolResult(await api.setAutoReply(params.enabled));
+      },
+    }),
+    defineTool({
+      name: "xianyu_service",
+      label: "控制咸鱼服务",
+      description: "启动、停止、暂停或恢复咸鱼 Adapter 服务。",
+      parameters: Type.Object({
+        action: Type.Union([
+          Type.Literal("start"),
+          Type.Literal("stop"),
+          Type.Literal("pause"),
+          Type.Literal("resume"),
+        ]),
+      }),
+      executionMode: "sequential",
+      async execute(_id, params) {
+        return jsonToolResult(await api.service(params.action));
+      },
+    }),
+    defineTool({
+      name: "xianyu_chat",
+      label: "创建咸鱼会话",
+      description: "根据买家 receiverId 和商品 itemId 在咸鱼发起新会话。该操作会触发审批。",
+      parameters: Type.Object({
+        receiverId: Type.String({ minLength: 1 }),
+        itemId: Type.String({ minLength: 1 }),
+      }),
+      executionMode: "sequential",
+      async execute(_id, params) {
+        return jsonToolResult(await api.chat({ receiverId: params.receiverId, itemId: params.itemId }));
+      },
+    }),
+    defineTool({
+      name: "xianyu_publish",
+      label: "发布咸鱼商品",
+      description: "发布咸鱼商品。必须先确认商品描述、图片、价格、配送和坐标；该操作会触发审批。",
+      parameters: Type.Object({
+        description: Type.String({ minLength: 1 }),
+        imagePaths: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 20 }),
+        delivery: Type.Union([
+          Type.Literal("free_shipping"),
+          Type.Literal("distance_based"),
+          Type.Literal("fixed"),
+          Type.Literal("pickup_only"),
+        ]),
+        longitude: Type.Union([Type.String({ minLength: 1 }), Type.Number()]),
+        latitude: Type.Union([Type.String({ minLength: 1 }), Type.Number()]),
+        currentPrice: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+        originalPrice: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+        shippingFee: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+        selfPickup: Type.Optional(Type.Boolean()),
+      }),
+      executionMode: "sequential",
+      async execute(_id, params) {
+        return jsonToolResult(await api.publish(params));
+      },
+    }),
+  ];
+}
+
 const MAX_READ_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024;
 const SEARCH_CHUNK_BYTES = 64 * 1024;
@@ -270,6 +416,7 @@ export function createBuiltinTools(input: {
     signal: AbortSignal,
   ) => Promise<{ id: string; name: string; size: number }>;
   smath?: SmathWorkerClient;
+  xianyu?: XianyuAgentApi | undefined;
 }): AgentTool[] {
   const {
     session,
@@ -284,6 +431,7 @@ export function createBuiltinTools(input: {
     attachmentCreateFromWorkspace,
     imageGenerate,
     smath,
+    xianyu,
   } = input;
   const webSearchTool = () =>
     defineTool({
@@ -478,6 +626,7 @@ export function createBuiltinTools(input: {
 
   return [
     ...historyTools(),
+    ...(xianyu && database.isChannelSession(session.id, "xianyu") ? createXianyuTools(xianyu) : []),
     ...smathTools,
     defineTool({
       name: "read",
