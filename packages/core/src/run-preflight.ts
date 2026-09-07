@@ -58,6 +58,21 @@ export class RunPreflight {
       contextModel,
     );
     const baseMessages = [...context.messages, context.current.message];
+    // Channel requests already have a fixed integration boundary. Let the agent
+    // choose the channel tool directly instead of asking the generic preflight
+    // model to infer what "咸鱼" refers to from the filesystem workspace.
+    if (this.database.channelSession?.(session.id)?.channel === "xianyu" && request.mode === "agent") {
+      return {
+        taskClass: "simple",
+        route: "direct",
+        goal: request.text,
+        reasoningSummary: "Xianyu requests execute through the channel tools",
+        successCriteria: ["Use the appropriate Xianyu channel tool and report its result"],
+        assumptions: [],
+        questions: [],
+        steps: [],
+      };
+    }
     let taskClass: PreflightDecision["taskClass"];
     if (request.mode === "plan") taskClass = "complex";
     else {

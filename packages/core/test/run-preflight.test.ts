@@ -199,4 +199,23 @@ describe("RunPreflight", () => {
       ),
     ).resolves.toMatchObject({ route: "plan", steps: [expect.stringContaining("report.docx")] });
   });
+
+  it("routes Xianyu agent requests directly to channel tools", async () => {
+    const { preflight, complete, contextManager } = fixture();
+    const channelDatabase = preflight as unknown as {
+      database: { channelSession: ReturnType<typeof vi.fn> };
+    };
+    channelDatabase.database.channelSession = vi.fn(() => ({ channel: "xianyu" }));
+
+    await expect(
+      preflight.decide(
+        session,
+        { messageId: "current", text: "我的咸鱼现在是什么状态？", mode: "agent" },
+        new AbortController().signal,
+        "run",
+      ),
+    ).resolves.toMatchObject({ route: "direct", taskClass: "simple" });
+    expect(complete).not.toHaveBeenCalled();
+    expect(contextManager.buildForMessage).toHaveBeenCalledOnce();
+  });
 });
