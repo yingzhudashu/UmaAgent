@@ -4,6 +4,15 @@ This record is the gate for the two-step UmaAgent release. It must be updated wi
 the actual remote commit, CI run URLs, production backup checksums, and operator
 sign-off before a release is declared complete.
 
+## Current Xianyu workspace release (2026-09-07)
+
+- Core release `20260907145346-3ecf056` and Web embed release `20260907145402-3ecf056` are live from commit `3ecf0560bb6d3958a4c31fd7998bf87a4c63a7a6`; protocol is `15` and schema is `23`.
+- `npm run check`, `npm test` (53 files, 285 tests), `npm run build`, `npm run build:web:embed`, and Web E2E (5 tests) passed locally and in the release gate.
+- Android production release `7-3ecf056` is version `1.2.0`, versionCode `7`, signed with the recovered production keystore, and published only after manifest size/SHA-256 verification. APK SHA-256 is `b29bb89e0b52364a5f93fb9ddb5a08d158c45839b5d37e95b8a690f51886010d`.
+- v22 to v23 migration preserved the production database; `PRAGMA integrity_check` is `ok`, foreign-key violations are zero, and the production state backup is `/srv/backups/uma-agent/state-20260907145352.db`.
+- Core live/ready, Web entry points, Core/Web embed hashes, Android manifest, and all UmaAgent-related services passed post-release checks. Xianyu Adapter reports `authenticated/connected`; its Cookie file remains mode `0600`.
+- The general systemd gate reported the pre-existing independent `ai-knowledge-health.service` failure because the production knowledge snapshot trails staging by 41.7 hours. The UmaAgent production verifier now scopes failures to the services owned by this release; the AIKB freshness issue remains an operational follow-up and was not cleared by this release.
+
 ## Current mobile hotfix status (2026-09-06)
 
 - The Android login failure was traced to parameterless JSON requests being sent with `Content-Type: application/json` and a zero-byte body. The shared request layer now sends `{}` for empty `POST`/`PUT`/`PATCH` requests.
