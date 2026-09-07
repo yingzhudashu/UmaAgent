@@ -49,9 +49,6 @@ data class BootstrapUser(val id: String, val role: String = "user")
 data class Bootstrap(val user: BootstrapUser? = null, val sessions: List<BootstrapEntry> = emptyList())
 
 @Serializable
-data class Unlock(val grant: String, val expiresAt: Long)
-
-@Serializable
 data class Registration(val userId: String, val token: String, val tokenId: String)
 
 class UmaApiException(val status: Int, message: String) : Exception(message)
@@ -113,10 +110,9 @@ class UmaApi(
         return this
     }
 
-    private suspend fun request(path: String, method: String = "GET", body: String? = null, grant: String? = null): String =
+    private suspend fun request(path: String, method: String = "GET", body: String? = null): String =
         withContext(Dispatchers.IO) {
             val builder = Request.Builder().url("$baseUrl/api/v15$path").withAuthentication()
-            if (grant != null) builder.addHeader("X-Xianyu-Grant", grant)
             if (body != null) builder.method(method, body.toRequestBody("application/json".toMediaType()))
             else if (method == "POST" || method == "PUT" || method == "PATCH") {
                 // Keep JSON requests parseable by servers that reject an empty JSON body.
@@ -269,32 +265,31 @@ class UmaApi(
     suspend fun compactSession(sessionId: String): JsonObject = json.parseToJsonElement(
         request("/sessions/${encode(sessionId)}/compact", "POST"),
     ).jsonObject
-    suspend fun unlock(password: String): Unlock = json.decodeFromString(
-        request("/xianyu/unlock", "POST", buildJsonObject { put("password", password) }.toString()),
-    )
-    suspend fun xianyuStatus(grant: String): JsonObject = json.parseToJsonElement(request("/xianyu/status", grant = grant)).jsonObject
-    suspend fun xianyuLoginStart(grant: String): JsonObject = json.parseToJsonElement(
-        request("/xianyu/login/start", "POST", grant = grant),
+    suspend fun xianyuWorkspace(): JsonObject = getJson("/xianyu/workspace").jsonObject
+    suspend fun xianyuStatus(): JsonObject = getJson("/xianyu/status").jsonObject
+    suspend fun xianyuLoginStart(): JsonObject = postJson("/xianyu/login/start").jsonObject
+    suspend fun xianyuLoginStatus(): JsonObject = getJson("/xianyu/login/status").jsonObject
+    suspend fun xianyuSetAutoReply(enabled: Boolean): JsonObject = putJson(
+        "/xianyu/settings/auto-reply",
+        buildJsonObject { put("enabled", enabled) },
     ).jsonObject
-    suspend fun xianyuLoginStatus(grant: String): JsonObject = json.parseToJsonElement(
-        request("/xianyu/login/status", grant = grant),
+    suspend fun xianyuSendDraft(sessionId: String, messageId: String): JsonObject = postJson(
+        "/xianyu/sessions/${encode(sessionId)}/drafts/${encode(messageId)}/send",
     ).jsonObject
-    suspend fun xianyuConversations(grant: String): JsonElement = json.parseToJsonElement(request("/xianyu/conversations", grant = grant))
-    suspend fun xianyuHistory(grant: String, conversationId: String): JsonElement = json.parseToJsonElement(
-        request("/xianyu/history/${encode(conversationId)}", grant = grant),
+    suspend fun xianyuHistory(conversationId: String): JsonElement = json.parseToJsonElement(
+        request("/xianyu/history/${encode(conversationId)}"),
     )
-    suspend fun xianyuItem(grant: String, itemId: String): JsonElement = json.parseToJsonElement(
-        request("/xianyu/item/${encode(itemId)}", grant = grant),
+    suspend fun xianyuItem(itemId: String): JsonElement = json.parseToJsonElement(
+        request("/xianyu/item/${encode(itemId)}"),
     )
-    suspend fun xianyuControl(grant: String, action: String) {
+    suspend fun xianyuControl(action: String) {
         require(action in setOf("start", "stop", "pause", "resume"))
-        request("/xianyu/$action", "POST", grant = grant)
+        request("/xianyu/$action", "POST")
     }
-    suspend fun xianyuChat(grant: String, receiverId: String, itemId: String): JsonElement = json.parseToJsonElement(
-        request("/xianyu/chat", "POST", buildJsonObject { put("receiverId", receiverId); put("itemId", itemId) }.toString(), grant),
+    suspend fun xianyuChat(receiverId: String, itemId: String): JsonElement = json.parseToJsonElement(
+        request("/xianyu/chat", "POST", buildJsonObject { put("receiverId", receiverId); put("itemId", itemId) }.toString()),
     )
     suspend fun xianyuPublish(
-        grant: String,
         description: String,
         imagePaths: List<String>,
         delivery: String,
@@ -315,7 +310,7 @@ class UmaApi(
             originalPrice?.let { put("originalPrice", it) }
             shippingFee?.let { put("shippingFee", it) }
             selfPickup?.let { put("selfPickup", it) }
-        }.toString(), grant),
+        }.toString()),
     )
 
     suspend fun authMe(): JsonObject = getJson("/auth/me").jsonObject

@@ -178,6 +178,33 @@ fun parseXianyuLogin(payload: String): UiXianyuLogin? {
     }.getOrNull()
 }
 
+internal fun parseXianyuSessions(payload: JsonObject): List<Session> =
+    (payload["sessions"] as? JsonArray)?.mapNotNull { entry ->
+        val value = entry as? JsonObject ?: return@mapNotNull null
+        val session = value["session"] as? JsonObject ?: return@mapNotNull null
+        val id = session["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+        Session(
+            id = id,
+            title = session["title"]?.jsonPrimitive?.contentOrNull ?: "咸鱼会话",
+            workspace = session["workspace"]?.jsonPrimitive?.contentOrNull ?: "channels/xianyu",
+            assistantName = session["assistantName"]?.jsonPrimitive?.contentOrNull ?: "UmaAgent · 咸鱼",
+            assistantAvatarAttachmentId = session["assistantAvatarAttachmentId"]?.jsonPrimitive?.contentOrNull,
+            queueMode = session["queueMode"]?.jsonPrimitive?.contentOrNull ?: "queue",
+        )
+    }.orEmpty()
+
+internal fun parseXianyuDraftMessageIds(payload: JsonObject): Map<String, Set<String>> =
+    (payload["sessions"] as? JsonArray)?.mapNotNull { entry ->
+        val value = entry as? JsonObject ?: return@mapNotNull null
+        val session = value["session"] as? JsonObject ?: return@mapNotNull null
+        val sessionId = session["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+        val messageIds = (value["draftMessageIds"] as? JsonArray)
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+            ?.toSet()
+            .orEmpty()
+        sessionId to messageIds
+    }?.toMap().orEmpty()
+
 internal fun xianyuLoginStatusLabel(status: String): String = when (status) {
     "pending_login" -> "待扫码"
     "waiting_scan" -> "等待扫码"

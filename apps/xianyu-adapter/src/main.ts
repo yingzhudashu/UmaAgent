@@ -115,13 +115,13 @@ interface XianyuState {
 interface ConfiguredState {
   initial?: Partial<XianyuState>;
   onChange?: (state: XianyuState) => void;
-  core: { serverUrl: string; token: string };
+  core: { serverUrl: string; token?: string; controlToken: string };
 }
 
 export function createConfiguredXianyuAdapter(transport: XianyuTransport, state: ConfiguredState) {
   const client = new UmaClient({
     baseUrl: state.core.serverUrl,
-    token: state.core.token,
+    ...(state.core.token ? { token: state.core.token } : {}),
   });
   const sessions = new Map<string, string>(Object.entries(state.initial?.sessions ?? {}));
   const conversations = new Map<string, ExternalConversation>(
@@ -129,6 +129,19 @@ export function createConfiguredXianyuAdapter(transport: XianyuTransport, state:
   );
   const lastRendered = new Map<string, string>();
   let subscribeSession: ((sessionId: string, conversation: ExternalConversation) => void) | undefined;
+  const coreRequest = async <T>(path: string, body: Record<string, unknown>): Promise<T> => {
+    const response = await fetch(`${state.core.serverUrl.replace(/\/$/, "")}/api/v15${path}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${state.core.controlToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = (await response.json().catch(() => ({}))) as T & { error?: { message?: string } };
+    if (!response.ok) throw new Error(payload.error?.message ?? `Core 请求失败: HTTP ${response.status}`);
+    return payload;
+  };
   const keyOf = (conversation: ExternalConversation) =>
     `${conversation.tenantId}:${conversation.conversationId}:${conversation.threadId ?? ""}`;
   const adapter = createXianyuAdapter({
@@ -137,8 +150,29 @@ export function createConfiguredXianyuAdapter(transport: XianyuTransport, state:
       mapConversation: async (conversation) => {
         const key = keyOf(conversation);
         const existing = sessions.get(key);
-        if (existing) return existing;
-        const session = await client.createSession({ title: `Xianyu ${conversation.conversationId}` });
+        const body = {
+          ...(existing ? { sessionId: existing } : {}),
+          tenantId: conversation.tenantId,
+          conversationId: conversation.conversationId,
+          ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
+          displayName: `咸鱼买家 ${conversation.conversationId}`,
+        };
+        let sessionId: string;
+        try {
+          sessionId = (await coreRequest<{ sessionId: string }>("/xianyu/internal/session", body)).sessionId;
+        } catch (error) {
+          if (!existing) throw error;
+          sessions.delete(key);
+          sessionId = (
+            await coreRequest<{ sessionId: string }>("/xianyu/internal/session", {
+              tenantId: conversation.tenantId,
+              conversationId: conversation.conversationId,
+              ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
+              displayName: `咸鱼买家 ${conversation.conversationId}`,
+            })
+          ).sessionId;
+        }
+        const session = { id: sessionId } as { id: string };
         sessions.set(key, session.id);
         conversations.set(session.id, conversation);
         state.onChange?.({
@@ -176,9 +210,11 @@ export function createConfiguredXianyuAdapter(transport: XianyuTransport, state:
       },
       sendMessage: async (sessionId, text, source, attachmentIds) => {
         if (!source) throw new Error("Xianyu message source is required");
-        await client.sendMessage(sessionId, text, {
-          mode: "agent",
-          source,
+        await coreRequest("/xianyu/internal/inbound", {
+          sessionId,
+          externalMessageId: source.externalMessageId,
+          ...(source.senderId ? { senderId: source.senderId } : {}),
+          text,
           ...(attachmentIds?.length ? { attachmentIds } : {}),
         });
       },
@@ -194,7 +230,33 @@ export function createConfiguredXianyuAdapter(transport: XianyuTransport, state:
         .at(-1);
       if (!assistant || lastRendered.get(sessionId) === assistant.id || !assistant.content.trim()) return;
       lastRendered.set(sessionId, assistant.id);
-      await transport.send(conversation, assistant.content.trim());
+      const decision = await coreRequest<{
+        send?: boolean;
+        duplicate?: boolean;
+        ignored?: boolean;
+        idempotencyKey?: string;
+      }>("/xianyu/internal/outbound", {
+        sessionId,
+        messageId: assistant.id,
+        text: assistant.content.trim(),
+      });
+      if (!decision.send || decision.duplicate || decision.ignored) return;
+      try {
+        await transport.send(conversation, assistant.content.trim());
+        if (decision.idempotencyKey)
+          await coreRequest("/xianyu/internal/outbound/result", {
+            idempotencyKey: decision.idempotencyKey,
+            ok: true,
+          });
+      } catch (error) {
+        if (decision.idempotencyKey)
+          await coreRequest("/xianyu/internal/outbound/result", {
+            idempotencyKey: decision.idempotencyKey,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          }).catch(() => undefined);
+        throw error;
+      }
     });
   };
   subscribeSession = subscribe;
@@ -314,7 +376,7 @@ export async function startXianyuService(
   });
   configured = createConfiguredXianyuAdapter(transport, {
     initial: state,
-    core: user.core,
+    core: { ...user.core, controlToken },
     onChange: (next) => {
       state.sessions = next.sessions;
       state.conversations = next.conversations;
@@ -417,6 +479,19 @@ export async function startXianyuService(
         const result = await xianyuClient.publishItem(body);
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify(result));
+        return;
+      }
+      if (request.method === "POST" && request.url === "/send") {
+        requireControlToken(request, controlToken);
+        const body = await readJsonBody(request);
+        const sessionId = String(body.sessionId ?? "").trim();
+        const text = String(body.text ?? "").trim();
+        const conversation = configured.conversations.get(sessionId);
+        if (!sessionId || !text || !conversation)
+          throw new Error("sessionId, text and a mapped conversation are required");
+        await configured.adapter.send(conversation, text);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ ok: true, sessionId, messageId: String(body.messageId ?? "") }));
         return;
       }
       response.writeHead(404).end();

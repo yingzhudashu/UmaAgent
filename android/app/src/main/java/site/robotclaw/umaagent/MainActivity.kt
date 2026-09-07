@@ -1,8 +1,12 @@
 package site.robotclaw.umaagent
 
 import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import androidx.core.app.NotificationCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.AndroidViewModel
@@ -22,6 +26,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import okhttp3.WebSocket
+import android.os.Build
 
 data class UmaUiState(
     val stagingAccessRequired: Boolean = false,
@@ -35,7 +40,9 @@ data class UmaUiState(
     val snapshot: String = "",
     val xianyuStatus: String = "",
     val xianyuLogin: String = "",
-    val xianyuGrantExpiresAt: Long? = null,
+    val workspace: String = "agent",
+    val xianyuAutoReply: Boolean = false,
+    val xianyuDraftMessageIds: Map<String, Set<String>> = emptyMap(),
     val xianyuData: String = "",
     val resourceData: String = "",
     val attachmentData: String = "",
@@ -72,8 +79,6 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     private var api: UmaApi? = null
     private var socket: WebSocket? = null
     private var reconnect: Job? = null
-    private var grant: String? = null
-    private var grantExpiry: Job? = null
     private var xianyuLoginPoll: Job? = null
     private var sessions = emptyList<BootstrapEntry>()
     private val sequences = mutableMapOf<String, Long>()
@@ -139,17 +144,42 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                 if (persist) withContext(Dispatchers.IO) { patStore.save(token) }
                 api = client
                 sessions = bootstrap.sessions
+                var workspace = "agent"
+                var xianyuAutoReply = false
+                var xianyuStatus = ""
+                var xianyuLogin = ""
+                var xianyuDraftMessageIds = emptyMap<String, Set<String>>()
+                if (bootstrap.user?.role == "admin") {
+                    runCatching { client.xianyuWorkspace() }.onSuccess { workspacePayload ->
+                        val channelSessions = parseXianyuSessions(workspacePayload)
+                        xianyuDraftMessageIds = parseXianyuDraftMessageIds(workspacePayload)
+                        if (channelSessions.isNotEmpty()) {
+                            sessions = channelSessions.map { BootstrapEntry(it, 0) }
+                            workspace = "xianyu"
+                        }
+                        xianyuAutoReply = workspacePayload["autoReplyEnabled"]?.jsonPrimitive?.booleanOrNull == true
+                        xianyuStatus = workspacePayload["service"]?.toString().orEmpty()
+                        xianyuLogin = workspacePayload["login"]?.toString().orEmpty()
+                    }
+                }
                 sequences.clear()
                 bootstrap.sessions.forEach { sequences[it.session.id] = it.lastSequence }
                 state.value = state.value.copy(
                     tokenPresent = true,
                     userRole = bootstrap.user?.role ?: "user",
                     registrationToken = "",
-                    sessions = bootstrap.sessions.map { it.session },
+                    sessions = sessions.map { it.session },
+                    workspace = workspace,
+                    xianyuAutoReply = xianyuAutoReply,
+                    xianyuDraftMessageIds = xianyuDraftMessageIds,
+                    xianyuStatus = xianyuStatus,
+                    xianyuLogin = xianyuLogin,
                     offline = false,
                     loading = false,
                 )
-                val selected = state.value.selectedSessionId ?: bootstrap.sessions.firstOrNull()?.session?.id
+                val selected = state.value.selectedSessionId
+                    ?.takeIf { id -> sessions.any { it.session.id == id } }
+                    ?: sessions.firstOrNull()?.session?.id
                 if (selected != null) selectSession(selected)
                 openSocket()
             } catch (error: Throwable) {
@@ -212,7 +242,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun logout() {
         socket?.close(1000, "logout"); socket = null; reconnect?.cancel(); api = null
-        grant = null; grantExpiry?.cancel(); grantExpiry = null; xianyuLoginPoll?.cancel(); xianyuLoginPoll = null
+        xianyuLoginPoll?.cancel(); xianyuLoginPoll = null
         patStore.clear(); stagingAuthStore.clear(); cache.clear(); sessions = emptyList(); sequences.clear()
         state.value = UmaUiState(stagingAccessRequired = BuildConfig.STAGING_BUILD)
     }
@@ -855,68 +885,30 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun unlockXianyu(password: String) {
-        if (password.isBlank()) return
-        viewModelScope.launch {
-            val client = api ?: return@launch
-            state.value = state.value.copy(loading = true, error = "")
-            try {
-                val unlocked = client.unlock(password)
-                grant = unlocked.grant
-                grantExpiry?.cancel()
-                xianyuLoginPoll?.cancel()
-                grantExpiry = viewModelScope.launch {
-                    delay((unlocked.expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
-                    grant = null
-                    xianyuLoginPoll?.cancel()
-                    state.value = state.value.copy(
-                        xianyuStatus = "",
-                        xianyuLogin = "",
-                        xianyuGrantExpiresAt = null,
-                        xianyuData = "",
-                    )
-                }
-                val status = client.xianyuStatus(unlocked.grant)
-                val conversations = client.xianyuConversations(unlocked.grant)
-                state.value = state.value.copy(
-                    xianyuStatus = status.toString(),
-                    xianyuLogin = status["login"]?.toString().orEmpty(),
-                    xianyuGrantExpiresAt = unlocked.expiresAt,
-                    xianyuData = conversations.toString(),
-                    loading = false,
-                    offline = false,
-                )
-            } catch (error: Throwable) {
-                state.value = state.value.copy(loading = false, error = error.message ?: "咸鱼解锁失败")
-            }
-        }
-    }
-
     fun xianyuStartLogin() {
-        val currentGrant = grant ?: return
+        if (state.value.userRole != "admin") return
         if (state.value.offline || state.value.loading) return
         viewModelScope.launch {
             val client = api ?: return@launch
             state.value = state.value.copy(loading = true, error = "")
-            runCatching { client.xianyuLoginStart(currentGrant) }
+            runCatching { client.xianyuLoginStart() }
                 .onSuccess { login ->
                     state.value = state.value.copy(xianyuLogin = login.toString(), loading = false)
                     xianyuLoginPoll?.cancel()
                     xianyuLoginPoll = viewModelScope.launch {
-                        while (grant == currentGrant) {
+                        while (state.value.workspace == "xianyu") {
                             delay(3_000)
                             try {
-                                val next = client.xianyuLoginStatus(currentGrant)
+                                val next = client.xianyuLoginStatus()
                                 state.value = state.value.copy(xianyuLogin = next.toString(), error = "")
                                 val loginStatus = next["status"]?.jsonPrimitive?.content
                                 if (loginStatus == "authenticated") {
-                                    val status = client.xianyuStatus(currentGrant)
-                                    val conversations = client.xianyuConversations(currentGrant)
+                                    val workspace = client.xianyuWorkspace()
                                     state.value = state.value.copy(
-                                        xianyuStatus = status.toString(),
-                                        xianyuLogin = status["login"]?.toString() ?: next.toString(),
-                                        xianyuData = conversations.toString(),
+                                        xianyuStatus = workspace["service"]?.toString().orEmpty(),
+                                        xianyuLogin = workspace["login"]?.toString() ?: next.toString(),
                                     )
+                                    refreshXianyuWorkspace()
                                     return@launch
                                 }
                                 if (loginStatus == "expired" || loginStatus == "failed") return@launch
@@ -931,13 +923,70 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setXianyuAutoReply(enabled: Boolean) {
+        if (state.value.userRole != "admin" || state.value.offline) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching { client.xianyuSetAutoReply(enabled) }
+                .onSuccess { state.value = state.value.copy(xianyuAutoReply = enabled, loading = false) }
+                .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "自动回复设置失败") }
+        }
+    }
+
+    fun refreshXianyuWorkspace() {
+        if (state.value.userRole != "admin") return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+                    runCatching { client.xianyuWorkspace() }.onSuccess { payload ->
+                        val next = parseXianyuSessions(payload)
+                        if (next.isEmpty()) return@onSuccess
+                        sessions = next.map { BootstrapEntry(it, sequences[it.id] ?: 0L) }
+                        state.value = state.value.copy(
+                            workspace = "xianyu",
+                            sessions = next,
+                            xianyuDraftMessageIds = parseXianyuDraftMessageIds(payload),
+                            xianyuAutoReply = payload["autoReplyEnabled"]?.jsonPrimitive?.booleanOrNull == true,
+                    xianyuStatus = payload["service"]?.toString().orEmpty(),
+                    xianyuLogin = payload["login"]?.toString().orEmpty(),
+                )
+                sendSubscriptions()
+            }
+        }
+    }
+
+    fun sendXianyuDraft(messageId: String) {
+        val sessionId = state.value.selectedSessionId ?: return
+        if (state.value.userRole != "admin" || state.value.workspace != "xianyu" ||
+            state.value.offline || state.value.loading || messageId.isBlank()
+        ) return
+        viewModelScope.launch {
+            val client = api ?: return@launch
+            state.value = state.value.copy(loading = true, error = "")
+            runCatching {
+                client.xianyuSendDraft(sessionId, messageId.trim())
+                client.snapshot(sessionId)
+            }.onSuccess { snapshot ->
+                state.value = state.value.copy(
+                    snapshot = snapshot.toString(),
+                    queue = parseQueue(snapshot.toString()),
+                    loading = false,
+                    offline = false,
+                )
+                refreshXianyuWorkspace()
+            }.onFailure { error ->
+                state.value = state.value.copy(loading = false, error = error.message ?: "发送草稿失败")
+            }
+        }
+    }
+
     fun xianyuAction(action: String) {
-        val currentGrant = grant ?: return
+        if (state.value.userRole != "admin") return
         if (state.value.offline) return
         viewModelScope.launch {
             val client = api ?: return@launch
             state.value = state.value.copy(loading = true, error = "")
-            runCatching { client.xianyuControl(currentGrant, action); client.xianyuStatus(currentGrant) }
+            runCatching { client.xianyuControl(action); client.xianyuStatus() }
                 .onSuccess { status ->
                     state.value = state.value.copy(
                         xianyuStatus = status.toString(),
@@ -950,36 +999,33 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun xianyuHistory(conversationId: String) {
-        val currentGrant = grant ?: return
         if (conversationId.isBlank() || state.value.offline || state.value.loading) return
         viewModelScope.launch {
             val client = api ?: return@launch
             state.value = state.value.copy(loading = true, error = "")
-            runCatching { client.xianyuHistory(currentGrant, conversationId.trim()) }
+            runCatching { client.xianyuHistory(conversationId.trim()) }
                 .onSuccess { value -> state.value = state.value.copy(xianyuData = value.toString(), loading = false) }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "历史查询失败") }
         }
     }
 
     fun xianyuItem(itemId: String) {
-        val currentGrant = grant ?: return
         if (itemId.isBlank() || state.value.offline || state.value.loading) return
         viewModelScope.launch {
             val client = api ?: return@launch
             state.value = state.value.copy(loading = true, error = "")
-            runCatching { client.xianyuItem(currentGrant, itemId.trim()) }
+            runCatching { client.xianyuItem(itemId.trim()) }
                 .onSuccess { value -> state.value = state.value.copy(xianyuData = value.toString(), loading = false) }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "商品查询失败") }
         }
     }
 
     fun xianyuChat(receiverId: String, itemId: String) {
-        val currentGrant = grant ?: return
         if (receiverId.isBlank() || itemId.isBlank() || state.value.offline || state.value.loading) return
         viewModelScope.launch {
             val client = api ?: return@launch
             state.value = state.value.copy(loading = true, error = "")
-            runCatching { client.xianyuChat(currentGrant, receiverId.trim(), itemId.trim()) }
+            runCatching { client.xianyuChat(receiverId.trim(), itemId.trim()) }
                 .onSuccess { value -> state.value = state.value.copy(xianyuData = value.toString(), loading = false) }
                 .onFailure { error -> state.value = state.value.copy(loading = false, error = error.message ?: "建聊失败") }
         }
@@ -1030,6 +1076,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                     sendSubscriptions(webSocket)
                 }
                 state.value = state.value.copy(offline = false)
+                refreshXianyuWorkspace()
             },
             onText = { message -> viewModelScope.launch { handleEvent(message) } },
             onFailure = { error -> handleSocketFailure(error) },
@@ -1060,9 +1107,6 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         reconnect?.cancel()
         reconnect = null
         api = null
-        grant = null
-        grantExpiry?.cancel()
-        grantExpiry = null
         xianyuLoginPoll?.cancel()
         xianyuLoginPoll = null
         withContext(Dispatchers.IO) {
@@ -1077,6 +1121,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun handleEvent(message: String) {
         val element = try { json.parseToJsonElement(message) } catch (_: Exception) { return }
         val objectValue = element as? JsonObject ?: return
+        notifyXianyuInbound(objectValue)
         val resources = invalidatedResources(objectValue)
         if (resources.isNotEmpty()) {
             if ("tasks" in resources) refreshBackgroundTasksSilently()
@@ -1122,6 +1167,26 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         }.onFailure {
             state.value = state.value.copy(offline = true)
         }
+    }
+
+    private fun notifyXianyuInbound(event: JsonObject) {
+        if (state.value.workspace != "xianyu" || event["type"]?.jsonPrimitive?.content != "message.started") return
+        val sessionId = event["sessionId"]?.jsonPrimitive?.content ?: return
+        if (state.value.sessions.none { it.id == sessionId }) return
+        val payload = event["payload"] as? JsonObject ?: return
+        if (payload["role"]?.jsonPrimitive?.content != "user") return
+        if (Build.VERSION.SDK_INT >= 33 && getApplication<Application>().checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) return
+        val manager = getApplication<Application>().getSystemService(NotificationManager::class.java)
+        val channelId = "xianyu-inbound"
+        if (Build.VERSION.SDK_INT >= 26) manager.createNotificationChannel(NotificationChannel(channelId, "咸鱼新消息", NotificationManager.IMPORTANCE_DEFAULT))
+        val title = state.value.sessions.firstOrNull { it.id == sessionId }?.title ?: "咸鱼新消息"
+        val body = payload["content"]?.jsonPrimitive?.content?.take(120).orEmpty().ifBlank { "收到一条新的买家消息" }
+        manager.notify(sessionId.hashCode(), NotificationCompat.Builder(getApplication(), channelId)
+            .setSmallIcon(site.robotclaw.umaagent.R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setAutoCancel(true)
+            .build())
     }
 
     private suspend fun refreshBackgroundTasksSilently() {

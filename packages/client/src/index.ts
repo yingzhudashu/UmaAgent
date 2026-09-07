@@ -41,6 +41,7 @@ import type {
   TraceQueryPage,
   UpdateScheduledTaskRequest,
   UpdateSessionRequest,
+  XianyuWorkspaceBootstrap,
 } from "@uma-agent/protocol";
 import { PROTOCOL_VERSION } from "@uma-agent/protocol";
 import type { MessageQualityHistory } from "./quality.js";
@@ -90,11 +91,6 @@ export interface UmaAuthMe {
     createdAt: number;
     lastUsedAt?: number;
   }>;
-}
-
-export interface XianyuUnlock {
-  grant: string;
-  expiresAt: number;
 }
 
 export interface MaintenanceStatus {
@@ -230,49 +226,61 @@ export class UmaClient {
     return this.request("/auth/me");
   }
 
-  xianyuUnlock(password: string): Promise<XianyuUnlock> {
-    return this.request("/xianyu/unlock", { method: "POST", body: JSON.stringify({ password }) });
+  xianyuWorkspace(): Promise<XianyuWorkspaceBootstrap> {
+    return this.request("/xianyu/workspace");
   }
-  private xianyuRequest<T>(path: string, grant: string, init: RequestInit = {}): Promise<T> {
-    const headers = new Headers(init.headers);
-    headers.set("x-xianyu-grant", grant);
-    return this.request<T>(path, { ...init, headers });
+  xianyuStatus<T = Record<string, unknown>>(): Promise<T> {
+    return this.request("/xianyu/status");
   }
-  xianyuStatus<T = Record<string, unknown>>(grant: string): Promise<T> {
-    return this.xianyuRequest("/xianyu/status", grant);
+  xianyuLoginStart<T = Record<string, unknown>>(): Promise<T> {
+    return this.request("/xianyu/login/start", { method: "POST" });
   }
-  xianyuLoginStart<T = Record<string, unknown>>(grant: string): Promise<T> {
-    return this.xianyuRequest("/xianyu/login/start", grant, { method: "POST" });
+  xianyuLoginStatus<T = Record<string, unknown>>(): Promise<T> {
+    return this.request("/xianyu/login/status");
   }
-  xianyuLoginStatus<T = Record<string, unknown>>(grant: string): Promise<T> {
-    return this.xianyuRequest("/xianyu/login/status", grant);
+  xianyuConversations<T = unknown>(): Promise<T> {
+    return this.request("/xianyu/conversations");
   }
-  xianyuConversations<T = unknown>(grant: string): Promise<T> {
-    return this.xianyuRequest("/xianyu/conversations", grant);
+  xianyuStart(): Promise<{ ok: boolean }> {
+    return this.request("/xianyu/start", { method: "POST" });
   }
-  xianyuStart(grant: string): Promise<{ ok: boolean }> {
-    return this.xianyuRequest("/xianyu/start", grant, { method: "POST" });
+  xianyuStop(): Promise<{ ok: boolean }> {
+    return this.request("/xianyu/stop", { method: "POST" });
   }
-  xianyuStop(grant: string): Promise<{ ok: boolean }> {
-    return this.xianyuRequest("/xianyu/stop", grant, { method: "POST" });
+  xianyuPause(): Promise<{ ok: boolean }> {
+    return this.request("/xianyu/pause", { method: "POST" });
   }
-  xianyuPause(grant: string): Promise<{ ok: boolean }> {
-    return this.xianyuRequest("/xianyu/pause", grant, { method: "POST" });
+  xianyuResume(): Promise<{ ok: boolean }> {
+    return this.request("/xianyu/resume", { method: "POST" });
   }
-  xianyuResume(grant: string): Promise<{ ok: boolean }> {
-    return this.xianyuRequest("/xianyu/resume", grant, { method: "POST" });
+  xianyuHistory<T = unknown>(conversationId: string): Promise<T> {
+    return this.request(`/xianyu/history/${encodeURIComponent(conversationId)}`);
   }
-  xianyuHistory<T = unknown>(grant: string, conversationId: string): Promise<T> {
-    return this.xianyuRequest(`/xianyu/history/${encodeURIComponent(conversationId)}`, grant);
+  xianyuItem<T = unknown>(itemId: string): Promise<T> {
+    return this.request(`/xianyu/item/${encodeURIComponent(itemId)}`);
   }
-  xianyuItem<T = unknown>(grant: string, itemId: string): Promise<T> {
-    return this.xianyuRequest(`/xianyu/item/${encodeURIComponent(itemId)}`, grant);
+  xianyuChat<T = unknown>(body: Record<string, unknown>): Promise<T> {
+    return this.request("/xianyu/chat", { method: "POST", body: JSON.stringify(body) });
   }
-  xianyuChat<T = unknown>(grant: string, body: Record<string, unknown>): Promise<T> {
-    return this.xianyuRequest("/xianyu/chat", grant, { method: "POST", body: JSON.stringify(body) });
+  xianyuPublish<T = unknown>(body: Record<string, unknown>): Promise<T> {
+    return this.request("/xianyu/publish", { method: "POST", body: JSON.stringify(body) });
   }
-  xianyuPublish<T = unknown>(grant: string, body: Record<string, unknown>): Promise<T> {
-    return this.xianyuRequest("/xianyu/publish", grant, { method: "POST", body: JSON.stringify(body) });
+  xianyuSetAutoReply(enabled: boolean): Promise<{ enabled: boolean }> {
+    return this.request("/xianyu/settings/auto-reply", {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+  }
+  xianyuMarkRead(sessionId: string): Promise<{ ok: boolean }> {
+    return this.request(`/xianyu/sessions/${encodeURIComponent(sessionId)}/read`, { method: "POST" });
+  }
+  xianyuSendDraft(sessionId: string, messageId: string): Promise<{ ok: boolean; messageId: string }> {
+    return this.request(
+      `/xianyu/sessions/${encodeURIComponent(sessionId)}/drafts/${encodeURIComponent(messageId)}/send`,
+      {
+        method: "POST",
+      },
+    );
   }
 
   syncBootstrap(): Promise<SyncBootstrap> {

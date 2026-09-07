@@ -872,36 +872,6 @@ async function doctorCommand(): Promise<void> {
   console.log(JSON.stringify(result, null, 2));
   if (!result.ok) process.exitCode = 1;
 }
-async function readHidden(prompt: string): Promise<string> {
-  process.stdout.write(prompt);
-  const input = process.stdin;
-  if (!input.isTTY || typeof input.setRawMode !== "function") {
-    const chunks: Buffer[] = [];
-    for await (const chunk of input) chunks.push(Buffer.from(chunk));
-    process.stdout.write("\n");
-    return Buffer.concat(chunks).toString("utf8").trim();
-  }
-  input.setRawMode(true);
-  input.resume();
-  return await new Promise<string>((resolve) => {
-    const chars: string[] = [];
-    const onData = (chunk: Buffer) => {
-      for (const char of chunk.toString("utf8")) {
-        if (char === "\r" || char === "\n") {
-          input.setRawMode?.(false);
-          input.pause();
-          input.off("data", onData);
-          process.stdout.write("\n");
-          resolve(chars.join(""));
-        } else if (char === "\u0003") {
-          process.exitCode = 130;
-        } else if (char === "\u007f") chars.pop();
-        else chars.push(char);
-      }
-    };
-    input.on("data", onData);
-  });
-}
 async function main(): Promise<void> {
   if (command === "chat") return chat();
   if (command === "run") await runCommand();
@@ -918,7 +888,7 @@ async function main(): Promise<void> {
   else if (command === "eval" || command === "test") await evalCommand();
   else if (command === "sync") await syncCommand();
   else if (command === "xianyu")
-    await runXianyuCommand(client, args, positionals, valueAfter, readHidden, (value) => console.log(value));
+    await runXianyuCommand(client, args, positionals, valueAfter, (value) => console.log(value));
   else
     console.log(
       "UmaAgent CLI\n\numa chat [--session=ID] [--server=URL] [--token=TOKEN]\numa run --json <prompt>\numa run resume|checkpoints|actions|decide ...\numa sync <session-id>\numa session list|create|delete|rename\numa task start|list|show|cancel|delete\numa schedule list|create|run|history|enable|disable|delete\numa memory list|review|accept|reject\numa eval list|run|status|show|trend\numa audit run <run-id>\numa skill list|refresh\numa mcp status\numa knowledge list|mount|search|unmount|reload\numa xianyu status|start|stop|pause|resume|history <id>|item <id>|chat <receiver-id> <item-id>|publish ...\numa doctor",

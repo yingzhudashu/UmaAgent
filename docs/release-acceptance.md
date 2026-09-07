@@ -21,14 +21,14 @@ sign-off before a release is declared complete.
 - `current` was atomically switched to `/srv/www/robotclaw/app/releases/6-17518d9`; the previous `5-74e75df` directory remains available for rollback.
 - Release notes cover response aggregation and collapsed execution details, improved mobile reading, message retry, and the Xianyu QR login console.
 
-## Managed Xianyu production release (2026-09-07)
+## Previous managed Xianyu production release (superseded, 2026-09-07)
 
-- UmaAgent release `20260906182720-032a419` was promoted from commit `032a419ff9e97e6b3d36e4e3f9710673a37b0f55`; protocol is `15` and schema is `22`.
+- UmaAgent release `20260906182720-032a419` was promoted from commit `032a419ff9e97e6b3d36e4e3f9710673a37b0f55`; protocol was `15` and schema was `22`.
 - `npm run check`, `npm run build`, `npm run build:web:embed`, and `npm test` passed locally. The final test run passed 53 files and 284 tests.
 - The release verifier passed before promotion. A protected production state backup was created at `/srv/backups/uma-agent/state-20260906182726.db`.
 - `uma-agent.service`, `uma-browser-worker.service`, `uma-xianyu-adapter.service`, `robotclaw.service`, and `nginx.service` are active; staging UmaAgent units remain disabled.
 - Core live and ready both returned HTTP 200. The Adapter control health endpoint returned `status=stopped` with `login.status=pending_login`, which is expected while the configured Cookie is empty.
-- A temporary, immediately revoked `system` administrator probe verified admin authentication, independent Xianyu password unlock, QR generation, and login-status polling. The QR response returned `waiting_scan` and an image data URL. No token, QR payload, Cookie, or password was recorded.
+- A temporary, immediately revoked `system` administrator probe verified the pre-workspace administrator flow, QR generation, and login-status polling. This record is retained only as historical evidence; the password/Grant flow is no longer supported.
 - A permanent `system` administrator console PAT was provisioned and verified for the operator; its value is intentionally omitted from repository and operational records.
 - The QR session naturally expired during the acceptance window; the Adapter then reported `login.status=expired` and remained stopped while its systemd unit stayed healthy. The actual administrator scan remains pending. Cookie persistence, authenticated Adapter recovery, account-auth-expiration stop behavior, and Feishu alert delivery therefore remain operational follow-up checks rather than completed acceptance claims.
 
@@ -59,7 +59,7 @@ sign-off before a release is declared complete.
 - [ ] Duplicate, out-of-order, and missing sequence events recover without rollback.
 - [ ] Offline mode serves cached reads and disables every write action.
 - [ ] Network recovery reconnects and fills the event gap without duplicate messages.
-- [ ] Xianyu unlock and status query succeed; Grant is cleared on logout, expiry, and restart.
+- [ ] Core administrator PAT enters the Xianyu workspace; status and QR login succeed without a client password or Grant.
 
 ## Production operator gate
 
@@ -68,12 +68,12 @@ operator must attach the following evidence:
 
 - [ ] Release verifier output and `systemd-analyze verify` output.
 - [x] SQLite, telemetry, workspace, Xianyu state (absent and recorded), and config backup checksums.
-- [ ] Restore/integrity check output showing schema `22` and no foreign-key violations.
+- [ ] Restore/integrity check output showing schema `23` and no foreign-key violations; v22-to-v23 migration preserves users, tokens, sessions, and messages.
 - [x] Inventory and archive record for removed legacy services, state, and environment files.
 - [x] Core, Browser Worker, and Xianyu Adapter systemd status after promotion.
 - [x] Core live/ready, Adapter health, and Core-proxied Xianyu status responses.
-- [ ] Web and CLI smoke results for login, unlock, status, lifecycle, history, item, chat, and publish.
-- [x] First-login QR generation with an empty configured Cookie and administrator unlock.
+- [ ] Web, CLI, and Android smoke results for PAT login, workspace, status, lifecycle, history, item, chat, publish, and draft send.
+- [ ] First-login QR generation with an empty configured Cookie and administrator PAT.
 - [ ] Actual first-login scan, atomic `0600` Cookie persistence, and automatic Adapter recovery.
 - [ ] Expired-login stop behavior and Feishu alert delivery, or an explicit record that the three Feishu credentials are not configured.
 - [ ] Rollback rehearsal result, including all three active services and release pointer.
@@ -82,13 +82,13 @@ operator must attach the following evidence:
 
 Production backup stamp: `20260906182726`; retired channel archive is under
 `/srv/backups/uma-agent/retired-channel-20260828014500`.
-The Xianyu Adapter is enabled with the real control token, scrypt administrator hash,
-and Feishu alert configuration. The configured Cookie is intentionally empty pending
-the first administrator QR scan; no placeholder secret was used.
+The Xianyu Adapter is enabled with the real internal control token and Feishu alert
+configuration. The configured Cookie is intentionally empty pending the first
+administrator QR scan; no client password, Grant, or placeholder secret is used.
 
 ## R2 completion
 
-- [ ] Session/run controls, image attachments, approvals, resources, and Xianyu console are complete.
+- [ ] Session/run controls, image attachments, approvals, resources, and Xianyu workspace are complete.
 - [ ] TypeScript and Kotlin consume the same v15 fixtures and contract tests pass.
 - [ ] API 35 emulator instrumented tests pass for lifecycle, rotation, background, and offline recovery.
 - [ ] No new migration, compatibility layer, fallback, or legacy field was introduced.

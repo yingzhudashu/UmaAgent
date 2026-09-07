@@ -42,8 +42,8 @@ case "$release_real" in /opt/uma-agent/releases/*) ;; *) echo "invalid release p
 bash "$release_real/deploy/verify-native-release.sh" "$release_real" "$shared_dir"
 xianyu_enabled=$("$node_bin" -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync("/etc/uma-agent/config.user.json","utf8")); process.stdout.write(value.xianyu ? "1" : "0")')
 if [[ "$xianyu_enabled" = 1 ]]; then
-  grep -q '^UMA_XIANYU_ADMIN_PASSWORD_HASH=scrypt\$' /etc/uma-agent/uma.env || {
-    echo "Xianyu administrator password hash is missing or invalid" >&2
+  grep -q '^UMA_XIANYU_CONTROL_TOKEN=.' /etc/uma-agent/uma.env || {
+    echo "Xianyu control token is missing" >&2
     exit 1
   }
 fi

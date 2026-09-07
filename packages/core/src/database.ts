@@ -9,6 +9,7 @@ import type {
   Attachment,
   AuditRecord,
   BackgroundTask,
+  ChannelSessionMetadata,
   CreateEvaluationReport,
   DiagnosticsReport,
   EvaluationReport,
@@ -66,7 +67,47 @@ import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 22;
+const SCHEMA_VERSION = 23;
+
+const SCHEMA_22_TO_23 = `
+CREATE TABLE channel_sessions (
+  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL CHECK(channel IN ('xianyu')),
+  tenant_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK(kind IN ('control','buyer')),
+  display_name TEXT,
+  external_user_id TEXT,
+  item_id TEXT,
+  unread_count INTEGER NOT NULL DEFAULT 0 CHECK(unread_count >= 0),
+  last_inbound_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(channel,tenant_id,conversation_id,thread_id)
+);
+CREATE INDEX channel_sessions_channel_updated ON channel_sessions(channel,updated_at DESC);
+CREATE TABLE channel_settings (
+  channel TEXT PRIMARY KEY CHECK(channel IN ('xianyu')),
+  auto_reply_enabled INTEGER NOT NULL DEFAULT 0 CHECK(auto_reply_enabled IN (0,1)),
+  updated_at INTEGER NOT NULL
+);
+INSERT INTO channel_settings(channel,auto_reply_enabled,updated_at) VALUES('xianyu',0,0);
+CREATE TABLE channel_deliveries (
+  id TEXT PRIMARY KEY,
+  channel TEXT NOT NULL CHECK(channel IN ('xianyu')),
+  direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+  idempotency_key TEXT NOT NULL UNIQUE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','draft','delivered','failed')),
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  delivered_at INTEGER
+);
+CREATE INDEX channel_deliveries_session_status ON channel_deliveries(session_id,status,updated_at DESC);
+PRAGMA user_version = 23;`;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   readonly stateDir: string;
@@ -85,9 +126,18 @@ export class UmaDatabase {
     const version = integer(row(this.db.prepare("PRAGMA user_version"))?.user_version);
     if (version === 0) {
       this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    } else if (version === 22) {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.db.exec(SCHEMA_22_TO_23);
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        this.db.close();
+        throw error;
+      }
     } else if (version !== SCHEMA_VERSION) {
-      // schema 22 是唯一支持的持久化格式。启动阶段拒绝旧/未来版本，
-      // 避免未经发布验证的隐式改写影响会话、附件或认证令牌。
+      // v22 仅通过上面的显式事务迁移升级；其他旧/未来格式一律拒绝。
       this.db.close();
       throw new Error(`Unsupported database schema ${version}; expected ${SCHEMA_VERSION}.`);
     }
@@ -171,6 +221,277 @@ export class UmaDatabase {
   sessionOwner(id: string): string | undefined {
     const value = row(this.db.prepare("SELECT user_id FROM sessions WHERE id=?"), id);
     return value?.user_id ? text(value.user_id) : undefined;
+  }
+
+  isChannelSession(id: string, channel = "xianyu"): boolean {
+    return Boolean(
+      row(
+        this.db.prepare("SELECT 1 AS found FROM channel_sessions WHERE session_id=? AND channel=?"),
+        id,
+        channel,
+      ),
+    );
+  }
+
+  responseSession(id: string): string | undefined {
+    const value = row(this.db.prepare("SELECT session_id FROM responses WHERE id=?"), id);
+    return value ? text(value.session_id) : undefined;
+  }
+
+  runSession(id: string): string | undefined {
+    const value = row(this.db.prepare("SELECT session_id FROM runs WHERE id=?"), id);
+    return value ? text(value.session_id) : undefined;
+  }
+
+  approvalSession(id: string): string | undefined {
+    const value = row(this.db.prepare("SELECT session_id FROM approvals WHERE id=?"), id);
+    return value ? text(value.session_id) : undefined;
+  }
+
+  attachmentSession(id: string): string | undefined {
+    const value = row(this.db.prepare("SELECT session_id FROM attachments WHERE id=?"), id);
+    return value?.session_id ? text(value.session_id) : undefined;
+  }
+
+  channelSession(id: string): ChannelSessionMetadata | undefined {
+    const value = row(this.db.prepare("SELECT * FROM channel_sessions WHERE session_id=?"), id);
+    return value ? this.toChannelSession(value) : undefined;
+  }
+
+  listChannelSessions(channel = "xianyu"): Array<{ session: Session; metadata: ChannelSessionMetadata }> {
+    return rows(
+      this.db.prepare(
+        "SELECT s.*,c.channel,c.tenant_id,c.conversation_id,c.thread_id,c.kind,c.display_name,c.external_user_id,c.item_id,c.unread_count,c.last_inbound_at,c.created_at AS channel_created_at,c.updated_at AS channel_updated_at FROM channel_sessions c JOIN sessions s ON s.id=c.session_id WHERE c.channel=? ORDER BY c.updated_at DESC",
+      ),
+      channel,
+    ).map((value) => ({
+      session: this.sessions.get(text(value.id)),
+      metadata: this.toChannelSession(value),
+    }));
+  }
+
+  attachChannelSession(input: {
+    sessionId: string;
+    tenantId: string;
+    conversationId: string;
+    threadId?: string;
+    kind: "control" | "buyer";
+    displayName?: string;
+    externalUserId?: string;
+    itemId?: string;
+  }): ChannelSessionMetadata {
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO channel_sessions(session_id,channel,tenant_id,conversation_id,thread_id,kind,display_name,external_user_id,item_id,created_at,updated_at) VALUES(?,'xianyu',?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        input.sessionId,
+        input.tenantId,
+        input.conversationId,
+        input.threadId ?? "",
+        input.kind,
+        input.displayName ?? null,
+        input.externalUserId ?? null,
+        input.itemId ?? null,
+        now,
+        now,
+      );
+    return this.channelSession(input.sessionId) as ChannelSessionMetadata;
+  }
+
+  findChannelSession(tenantId: string, conversationId: string, threadId = ""): string | undefined {
+    const value = row(
+      this.db.prepare(
+        "SELECT session_id FROM channel_sessions WHERE channel='xianyu' AND tenant_id=? AND conversation_id=? AND thread_id=?",
+      ),
+      tenantId,
+      conversationId,
+      threadId,
+    );
+    return value ? text(value.session_id) : undefined;
+  }
+
+  updateChannelSession(input: {
+    sessionId: string;
+    displayName?: string;
+    externalUserId?: string;
+    itemId?: string;
+    inbound?: boolean;
+  }): ChannelSessionMetadata {
+    const current = this.channelSession(input.sessionId);
+    if (!current) throw new Error("Channel session not found");
+    const now = Date.now();
+    this.db
+      .prepare(
+        "UPDATE channel_sessions SET display_name=?,external_user_id=?,item_id=?,unread_count=unread_count+?,last_inbound_at=?,updated_at=? WHERE session_id=?",
+      )
+      .run(
+        input.displayName ?? current.displayName ?? null,
+        input.externalUserId ?? current.externalUserId ?? null,
+        input.itemId ?? current.itemId ?? null,
+        input.inbound ? 1 : 0,
+        input.inbound ? now : (current.lastInboundAt ?? null),
+        now,
+        input.sessionId,
+      );
+    return this.channelSession(input.sessionId) as ChannelSessionMetadata;
+  }
+
+  markChannelSessionRead(sessionId: string): void {
+    this.db
+      .prepare("UPDATE channel_sessions SET unread_count=0,updated_at=? WHERE session_id=?")
+      .run(Date.now(), sessionId);
+  }
+
+  xianyuAutoReplyEnabled(): boolean {
+    const value = row(
+      this.db.prepare("SELECT auto_reply_enabled FROM channel_settings WHERE channel='xianyu'"),
+    );
+    return integer(value?.auto_reply_enabled) === 1;
+  }
+
+  setXianyuAutoReply(enabled: boolean): boolean {
+    this.db
+      .prepare(
+        "INSERT INTO channel_settings(channel,auto_reply_enabled,updated_at) VALUES('xianyu',?,?) ON CONFLICT(channel) DO UPDATE SET auto_reply_enabled=excluded.auto_reply_enabled,updated_at=excluded.updated_at",
+      )
+      .run(enabled ? 1 : 0, Date.now());
+    return this.xianyuAutoReplyEnabled();
+  }
+
+  createChannelDelivery(input: {
+    direction: "inbound" | "outbound";
+    idempotencyKey: string;
+    sessionId: string;
+    messageId?: string;
+    status: "pending" | "draft" | "delivered" | "failed";
+  }): { created: boolean; status: string } {
+    const existing = row(
+      this.db.prepare("SELECT status FROM channel_deliveries WHERE idempotency_key=?"),
+      input.idempotencyKey,
+    );
+    if (existing) return { created: false, status: text(existing.status) };
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO channel_deliveries(id,channel,direction,idempotency_key,session_id,message_id,status,created_at,updated_at,delivered_at) VALUES(?,'xianyu',?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        randomUUID(),
+        input.direction,
+        input.idempotencyKey,
+        input.sessionId,
+        input.messageId ?? null,
+        input.status,
+        now,
+        now,
+        input.status === "delivered" ? now : null,
+      );
+    return { created: true, status: input.status };
+  }
+
+  attachChannelDeliveryMessage(idempotencyKey: string, messageId: string): void {
+    const result = this.db
+      .prepare(
+        "UPDATE channel_deliveries SET message_id=?,updated_at=? WHERE idempotency_key=? AND message_id IS NULL",
+      )
+      .run(messageId, Date.now(), idempotencyKey);
+    if (result.changes === 0) throw new Error("Channel delivery not found or already attached");
+  }
+
+  channelDelivery(idempotencyKey: string):
+    | {
+        id: string;
+        sessionId: string;
+        messageId?: string;
+        direction: "inbound" | "outbound";
+        status: "pending" | "draft" | "delivered" | "failed";
+      }
+    | undefined {
+    const value = row(
+      this.db.prepare(
+        "SELECT id,session_id,message_id,direction,status FROM channel_deliveries WHERE idempotency_key=?",
+      ),
+      idempotencyKey,
+    );
+    if (!value) return undefined;
+    return {
+      id: text(value.id),
+      sessionId: text(value.session_id),
+      ...(value.message_id ? { messageId: text(value.message_id) } : {}),
+      direction: text(value.direction) as "inbound" | "outbound",
+      status: text(value.status) as "pending" | "draft" | "delivered" | "failed",
+    };
+  }
+
+  channelDeliveryForMessage(
+    messageId: string,
+  ): { id: string; sessionId: string; status: string } | undefined {
+    const value = row(
+      this.db.prepare(
+        "SELECT id,session_id,status FROM channel_deliveries WHERE channel='xianyu' AND direction='outbound' AND message_id=?",
+      ),
+      messageId,
+    );
+    return value
+      ? { id: text(value.id), sessionId: text(value.session_id), status: text(value.status) }
+      : undefined;
+  }
+
+  listChannelDraftMessageIds(sessionId: string): string[] {
+    return rows(
+      this.db.prepare(
+        "SELECT message_id FROM channel_deliveries WHERE session_id=? AND direction='outbound' AND status='draft' AND message_id IS NOT NULL ORDER BY created_at",
+      ),
+      sessionId,
+    ).map((value) => text(value.message_id));
+  }
+
+  updateChannelDelivery(
+    messageId: string,
+    status: "pending" | "draft" | "delivered" | "failed",
+    error?: string,
+  ): void {
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        "UPDATE channel_deliveries SET status=?,error=?,updated_at=?,delivered_at=? WHERE channel='xianyu' AND direction='outbound' AND message_id=?",
+      )
+      .run(status, error ?? null, now, status === "delivered" ? now : null, messageId);
+    if (result.changes === 0) throw new Error("Channel delivery not found");
+  }
+
+  updateChannelDeliveryByKey(
+    idempotencyKey: string,
+    status: "pending" | "draft" | "delivered" | "failed",
+    error?: string,
+  ): void {
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        "UPDATE channel_deliveries SET status=?,error=?,updated_at=?,delivered_at=? WHERE idempotency_key=?",
+      )
+      .run(status, error ?? null, now, status === "delivered" ? now : null, idempotencyKey);
+    if (result.changes === 0) throw new Error("Channel delivery not found");
+  }
+
+  private toChannelSession(value: Record<string, unknown>): ChannelSessionMetadata {
+    const threadId = text(value.thread_id);
+    return {
+      channel: "xianyu",
+      tenantId: text(value.tenant_id),
+      conversationId: text(value.conversation_id),
+      ...(threadId ? { threadId } : {}),
+      kind: text(value.kind) as "control" | "buyer",
+      ...(value.display_name ? { displayName: text(value.display_name) } : {}),
+      ...(value.external_user_id ? { externalUserId: text(value.external_user_id) } : {}),
+      ...(value.item_id ? { itemId: text(value.item_id) } : {}),
+      unreadCount: integer(value.unread_count),
+      ...(value.last_inbound_at ? { lastInboundAt: integer(value.last_inbound_at) } : {}),
+      createdAt: integer(value.channel_created_at ?? value.created_at),
+      updatedAt: integer(value.channel_updated_at ?? value.updated_at),
+    };
   }
 
   runOwner(id: string): string | undefined {

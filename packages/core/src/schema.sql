@@ -550,4 +550,44 @@ CREATE TABLE resource_snapshots (
 );
 CREATE INDEX resource_snapshots_captured ON resource_snapshots(captured_at DESC);
 
-PRAGMA user_version = 22;
+CREATE TABLE channel_sessions (
+  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL CHECK(channel IN ('xianyu')),
+  tenant_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL CHECK(kind IN ('control','buyer')),
+  display_name TEXT,
+  external_user_id TEXT,
+  item_id TEXT,
+  unread_count INTEGER NOT NULL DEFAULT 0 CHECK(unread_count >= 0),
+  last_inbound_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(channel,tenant_id,conversation_id,thread_id)
+);
+CREATE INDEX channel_sessions_channel_updated ON channel_sessions(channel,updated_at DESC);
+
+CREATE TABLE channel_settings (
+  channel TEXT PRIMARY KEY CHECK(channel IN ('xianyu')),
+  auto_reply_enabled INTEGER NOT NULL DEFAULT 0 CHECK(auto_reply_enabled IN (0,1)),
+  updated_at INTEGER NOT NULL
+);
+INSERT INTO channel_settings(channel,auto_reply_enabled,updated_at) VALUES('xianyu',0,0);
+
+CREATE TABLE channel_deliveries (
+  id TEXT PRIMARY KEY,
+  channel TEXT NOT NULL CHECK(channel IN ('xianyu')),
+  direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+  idempotency_key TEXT NOT NULL UNIQUE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','draft','delivered','failed')),
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  delivered_at INTEGER
+);
+CREATE INDEX channel_deliveries_session_status ON channel_deliveries(session_id,status,updated_at DESC);
+
+PRAGMA user_version = 23;

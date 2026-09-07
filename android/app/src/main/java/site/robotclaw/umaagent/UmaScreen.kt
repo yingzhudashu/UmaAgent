@@ -1,7 +1,10 @@
 package site.robotclaw.umaagent
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.provider.Settings
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -35,6 +38,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
@@ -68,6 +72,7 @@ import kotlinx.serialization.json.JsonElement
 
 private enum class MobileSection(val label: String) {
     Chat("对话"),
+    Xianyu("咸鱼"),
     Sessions("会话"),
     Tasks("任务"),
     Schedules("调度"),
@@ -107,6 +112,17 @@ fun UmaScreen(model: UmaViewModel = viewModel()) {
         } else {
             runCatching { context.startActivity(UpdateService.installIntent(context, file)) }
                 .onFailure { model.clearUpdateFile() }
+        }
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+    LaunchedEffect(state.userRole, state.workspace) {
+        if (state.userRole == "admin" && state.workspace == "xianyu" && Build.VERSION.SDK_INT >= 33 &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
@@ -240,7 +256,7 @@ private fun AuthScreen(state: UmaUiState, model: UmaViewModel) {
 
 @Composable
 private fun AuthenticatedScreen(state: UmaUiState, model: UmaViewModel) {
-    var sectionName by rememberSaveable { mutableStateOf(MobileSection.Chat.name) }
+    var sectionName by rememberSaveable(state.workspace) { mutableStateOf(if (state.workspace == "xianyu") MobileSection.Xianyu.name else MobileSection.Chat.name) }
     val section = MobileSection.entries.firstOrNull { it.name == sectionName } ?: MobileSection.Chat
     val selectedSession = state.sessions.firstOrNull { it.id == state.selectedSessionId }
 
@@ -272,7 +288,7 @@ private fun AuthenticatedScreen(state: UmaUiState, model: UmaViewModel) {
             selectedTabIndex = section.ordinal,
             edgePadding = 12.dp,
         ) {
-            MobileSection.entries.forEach { item ->
+            MobileSection.entries.filter { it != MobileSection.Xianyu || state.userRole == "admin" }.forEach { item ->
                 Tab(
                     selected = item == section,
                     onClick = { sectionName = item.name },
@@ -289,6 +305,7 @@ private fun AuthenticatedScreen(state: UmaUiState, model: UmaViewModel) {
                 onOpenSessions = { sectionName = MobileSection.Sessions.name },
                 modifier = Modifier.weight(1f),
             )
+            MobileSection.Xianyu -> XianyuWorkspaceScreen(state, model, Modifier.weight(1f))
             MobileSection.Sessions -> SessionsScreen(
                 state,
                 model,
@@ -312,10 +329,73 @@ private fun AuthenticatedScreen(state: UmaUiState, model: UmaViewModel) {
 }
 
 @Composable
+private fun XianyuWorkspaceScreen(state: UmaUiState, model: UmaViewModel, modifier: Modifier = Modifier) {
+    val login = remember(state.xianyuLogin, state.xianyuStatus) {
+        parseXianyuLogin(state.xianyuLogin) ?: parseXianyuLogin(state.xianyuStatus)
+    }
+    val qr = remember(login?.qrDataUrl) { decodeDataUrlBitmap(login?.qrDataUrl) }
+    val buyers = state.sessions.filter { it.workspace.contains("xianyu") && !it.title.contains("总控") }
+    val control = state.sessions.firstOrNull { it.title.contains("总控") }
+    Column(modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("咸鱼工作台", style = MaterialTheme.typography.titleMedium)
+                        Text(if (state.offline) "离线只读" else "管理员会话已连接", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text("自动回复", style = MaterialTheme.typography.labelMedium)
+                    Switch(
+                        checked = state.xianyuAutoReply,
+                        onCheckedChange = model::setXianyuAutoReply,
+                        enabled = !state.offline && !state.loading,
+                    )
+                }
+                Text(
+                    if (state.xianyuAutoReply) "入站消息触发的 AI 回复会直接发送给买家" else "AI 回复会保存为草稿，发送前由管理员确认",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    control?.let { session ->
+                        OutlinedButton({ model.selectSession(session.id) }) { Text("总控") }
+                    }
+                    buyers.forEach { session ->
+                        OutlinedButton({ model.selectSession(session.id) }) { Text(session.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    }
+                }
+            }
+        }
+        if (login?.status != "authenticated") {
+            Surface(Modifier.fillMaxWidth().padding(top = 8.dp), color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.medium) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("需要扫码登录闲鱼", style = MaterialTheme.typography.titleSmall)
+                        Text(login?.message ?: "首次部署或登录过期后，请使用闲鱼 App 扫码。", style = MaterialTheme.typography.bodySmall)
+                        Button({ model.xianyuStartLogin() }, enabled = !state.offline && !state.loading) { Text(if (login?.qrDataUrl == null) "生成二维码" else "重新生成二维码") }
+                    }
+                    qr?.let { Image(it.asImageBitmap(), "闲鱼登录二维码", Modifier.size(128.dp), contentScale = ContentScale.Fit) }
+                }
+            }
+        }
+        ChatScreen(
+            state,
+            model,
+            onOpenSessions = {},
+            xianyuDraftMessageIds = state.xianyuDraftMessageIds[state.selectedSessionId].orEmpty(),
+            onSendXianyuDraft = model::sendXianyuDraft,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
 private fun ChatScreen(
     state: UmaUiState,
     model: UmaViewModel,
     onOpenSessions: () -> Unit,
+    xianyuDraftMessageIds: Set<String> = emptySet(),
+    onSendXianyuDraft: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var message by rememberSaveable { mutableStateOf("") }
@@ -426,20 +506,32 @@ private fun ChatScreen(
                                 transcriptAttachmentSaver.launch(attachment.name)
                             },
                         )
-                        is UiConversationEntry.ResponseEntry -> ResponseItem(
-                            entry = entry,
-                            assistantName = selectedSession.assistantName,
-                            avatarBytes = state.assistantAvatarBytes,
-                            downloadsEnabled = !state.offline && !state.loading,
-                            onConfirmPlan = model::confirmPlan,
-                            onReviewMessage = model::reviewMessage,
-                            onImproveMessage = model::improveMessage,
-                            onPreviewImage = model::previewImageAttachment,
-                            onDownloadAttachment = { attachment ->
-                                pendingTranscriptDownloadId = attachment.id
-                                transcriptAttachmentSaver.launch(attachment.name)
-                            },
-                        )
+                        is UiConversationEntry.ResponseEntry -> {
+                            ResponseItem(
+                                entry = entry,
+                                assistantName = selectedSession.assistantName,
+                                avatarBytes = state.assistantAvatarBytes,
+                                downloadsEnabled = !state.offline && !state.loading,
+                                onConfirmPlan = model::confirmPlan,
+                                onReviewMessage = model::reviewMessage,
+                                onImproveMessage = model::improveMessage,
+                                onPreviewImage = model::previewImageAttachment,
+                                onDownloadAttachment = { attachment ->
+                                    pendingTranscriptDownloadId = attachment.id
+                                    transcriptAttachmentSaver.launch(attachment.name)
+                                },
+                            )
+                            val draft = entry.items.asReversed().firstOrNull {
+                                it.role == "assistant" && it.status == "complete" && it.id in xianyuDraftMessageIds
+                            }
+                            val sendDraft = onSendXianyuDraft
+                            if (draft != null && sendDraft != null) {
+                                XianyuDraftAction(
+                                    enabled = !state.offline && !state.loading,
+                                    onSend = { sendDraft(draft.id) },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -526,6 +618,24 @@ private fun ChatScreen(
                 enabled = !state.offline && !state.loading &&
                     (message.isNotBlank() || state.pendingAttachmentIds.isNotEmpty()),
             ) { Text("发送") }
+        }
+    }
+}
+
+@Composable
+private fun XianyuDraftAction(enabled: Boolean, onSend: () -> Unit) {
+    Surface(
+        Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("草稿待发送", style = MaterialTheme.typography.labelMedium)
+            Button(onClick = onSend, enabled = enabled) { Text("发送给买家") }
         }
     }
 }
@@ -1647,11 +1757,6 @@ private fun SchedulesScreen(state: UmaUiState, model: UmaViewModel, modifier: Mo
 private fun ResourcesScreen(state: UmaUiState, model: UmaViewModel, modifier: Modifier = Modifier) {
     var attachmentId by rememberSaveable { mutableStateOf("") }
     var pendingDownloadId by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var conversationId by rememberSaveable { mutableStateOf("") }
-    var itemId by rememberSaveable { mutableStateOf("") }
-    var receiverId by rememberSaveable { mutableStateOf("") }
-    var chatItemId by rememberSaveable { mutableStateOf("") }
     val saveAttachmentPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
     ) { uri ->
@@ -1659,13 +1764,6 @@ private fun ResourcesScreen(state: UmaUiState, model: UmaViewModel, modifier: Mo
         pendingDownloadId = ""
     }
     val resourceActions = resourceActionsForRole(state.userRole)
-    val xianyuLogin = remember(state.xianyuLogin, state.xianyuStatus) {
-        parseXianyuLogin(state.xianyuLogin).let { explicit ->
-            explicit ?: parseXianyuLogin(state.xianyuStatus)
-        }
-    }
-    val loginQr = remember(xianyuLogin?.qrDataUrl) { decodeDataUrlBitmap(xianyuLogin?.qrDataUrl) }
-
     LazyColumn(
         modifier,
         contentPadding = PaddingValues(16.dp),
@@ -1707,129 +1805,6 @@ private fun ResourcesScreen(state: UmaUiState, model: UmaViewModel, modifier: Mo
             }
         }
         if (state.attachmentData.isNotBlank()) item { ReadOnlyOutput(state.attachmentData, "附件状态") }
-        item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
-        item { Text("闲鱼控制", style = MaterialTheme.typography.titleMedium) }
-        item {
-            OutlinedTextField(
-                password,
-                { password = it },
-                Modifier.fillMaxWidth(),
-                visualTransformation = PasswordVisualTransformation(),
-                label = { Text("管理员密码") },
-                singleLine = true,
-            )
-        }
-        item {
-            Button(
-                { model.unlockXianyu(password); password = "" },
-                Modifier.fillMaxWidth(),
-                enabled = password.isNotBlank() && !state.loading,
-            ) { Text("解锁") }
-        }
-        if (state.xianyuStatus.isNotBlank()) {
-            item { ReadOnlyOutput(state.xianyuStatus, "运行状态") }
-            state.xianyuGrantExpiresAt?.let { expiresAt ->
-                item {
-                    Text(
-                        "本次管理员授权有效至 ${java.text.DateFormat.getTimeInstance().format(java.util.Date(expiresAt))}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (xianyuLogin?.status != "authenticated") {
-                item {
-                    Surface(
-                        Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = MaterialTheme.shapes.medium,
-                    ) {
-                        Column(
-                            Modifier.fillMaxWidth().padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text("扫码登录", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                "当前状态：${xianyuLoginStatusLabel(xianyuLogin?.status ?: "unknown")}",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            )
-                            Text(
-                                xianyuLogin?.message ?: "首次使用或登录过期后，需要管理员使用闲鱼 App 扫码。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            )
-                            if (loginQr != null) {
-                                Image(
-                                    bitmap = loginQr.asImageBitmap(),
-                                    contentDescription = "闲鱼登录二维码",
-                                    contentScale = ContentScale.Fit,
-                                    modifier = Modifier.size(220.dp).align(Alignment.CenterHorizontally),
-                                )
-                            }
-                            Button(
-                                { model.xianyuStartLogin() },
-                                Modifier.fillMaxWidth(),
-                                enabled = !state.offline && !state.loading,
-                            ) {
-                                Text(
-                                    if (xianyuLogin?.status == "waiting_scan" || xianyuLogin?.status == "scanned" || xianyuLogin?.status == "confirmed") {
-                                        "重新生成二维码"
-                                    } else {
-                                        "生成二维码"
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            item {
-                ActionRows(
-                    listOf(
-                        "启动" to { model.xianyuAction("start") },
-                        "暂停" to { model.xianyuAction("pause") },
-                        "恢复" to { model.xianyuAction("resume") },
-                        "停止" to { model.xianyuAction("stop") },
-                    ),
-                    enabled = !state.offline && !state.loading,
-                )
-            }
-            item {
-                ResourceQuery(
-                    "闲鱼会话 ID",
-                    conversationId,
-                    { conversationId = it },
-                    "历史",
-                    enabled = !state.offline && !state.loading,
-                ) {
-                    model.xianyuHistory(conversationId)
-                }
-            }
-            item {
-                ResourceQuery(
-                    "商品 ID",
-                    itemId,
-                    { itemId = it },
-                    "查询",
-                    enabled = !state.offline && !state.loading,
-                ) { model.xianyuItem(itemId) }
-            }
-            item {
-                OutlinedTextField(receiverId, { receiverId = it }, Modifier.fillMaxWidth(), label = { Text("买家 ID") }, singleLine = true)
-            }
-            item {
-                OutlinedTextField(chatItemId, { chatItemId = it }, Modifier.fillMaxWidth(), label = { Text("建聊商品 ID") }, singleLine = true)
-            }
-            item {
-                Button(
-                    { model.xianyuChat(receiverId, chatItemId) },
-                    Modifier.fillMaxWidth(),
-                    enabled = receiverId.isNotBlank() && chatItemId.isNotBlank() && !state.offline && !state.loading,
-                ) { Text("发起会话") }
-            }
-            if (state.xianyuData.isNotBlank()) item { ReadOnlyOutput(state.xianyuData, "闲鱼返回结果") }
-        }
     }
 }
 

@@ -20,10 +20,7 @@ export function mapServerError(
     !providerContract && /(provider|preflight|classification|verification|model)/i.test(error.message);
   const cancelled = /cancel/i.test(error.message);
   const xianyuAdminRequired = /xianyu administrator access required/i.test(error.message);
-  const xianyuGrantExpired = /xianyu grant expired or missing/i.test(error.message);
-  const forbidden = /administrator access|required permission|forbidden|grant expired|grant missing/i.test(
-    error.message,
-  );
+  const forbidden = /administrator access|required permission|forbidden/i.test(error.message);
   const validation =
     /(invalid|required|must |unsupported|outside|escapes|exceeds|unavailable|does not support|belongs to another session)/i.test(
       error.message,
@@ -38,26 +35,24 @@ export function mapServerError(
           ? "conflict"
           : xianyuAdminRequired
             ? "xianyu_admin_required"
-            : xianyuGrantExpired
-              ? "xianyu_grant_expired"
-              : forbidden
-                ? "forbidden"
-                : providerContract
-                  ? "provider_contract_error"
-                  : cancelled
-                    ? "cancelled"
-                    : provider
-                      ? "provider_error"
-                      : validation
-                        ? "validation_failed"
-                        : "internal_error";
+            : forbidden
+              ? "forbidden"
+              : providerContract
+                ? "provider_contract_error"
+                : cancelled
+                  ? "cancelled"
+                  : provider
+                    ? "provider_error"
+                    : validation
+                      ? "validation_failed"
+                      : "internal_error";
   const status = schemaMismatch
     ? 503
     : notFound
       ? 404
       : conflict || cancelled
         ? 409
-        : xianyuAdminRequired || xianyuGrantExpired || forbidden
+        : xianyuAdminRequired || forbidden
           ? 403
           : providerContract || provider
             ? 502

@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { access, readFile } from "node:fs/promises";
+import { access, mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
@@ -23,6 +24,9 @@ import {
   SkillInstallRequestSchema,
   UpdateScheduledTaskRequestSchema,
   UpdateSessionRequestSchema,
+  XianyuAutoReplyRequestSchema,
+  XianyuInternalInboundRequestSchema,
+  XianyuInternalSessionRequestSchema,
 } from "@uma-agent/protocol";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import Value from "typebox/value";
@@ -33,13 +37,7 @@ import { installHttpTelemetry } from "./httpTelemetry.js";
 import { SERVER_LOG_REDACTIONS } from "./log-redaction.js";
 import { crossOrigin, secureOrigin, trustLoopbackProxy } from "./request-origin.js";
 import { installRuntimeLogging } from "./runtimeLogging.js";
-import {
-  validateXianyuChatBody,
-  validateXianyuPublishBody,
-  verifyXianyuPassword,
-  XianyuControlClient,
-  XianyuGrantStore,
-} from "./xianyu.js";
+import { validateXianyuChatBody, validateXianyuPublishBody, XianyuControlClient } from "./xianyu.js";
 
 type SocketMessage = {
   type?: string;
@@ -119,28 +117,14 @@ export async function createServer(
         process.env[runtime.config.xianyu.controlTokenEnv]?.trim() ?? "",
       )
     : undefined;
-  const xianyuGrants = new XianyuGrantStore();
-  const xianyuFailures = new Map<string, number[]>();
   const qualityReadRate = new Map<string, { count: number; resetAt: number }>();
-  const xianyuPasswordHash = process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH?.trim();
-  const xianyuRateAllowed = (key: string): boolean => {
-    const now = Date.now();
-    const values = (xianyuFailures.get(key) ?? []).filter((time) => now - time < 5 * 60_000);
-    xianyuFailures.set(key, values);
-    return values.length < 5;
-  };
-  const xianyuRecordFailure = (key: string): void => {
-    const values = xianyuFailures.get(key) ?? [];
-    values.push(Date.now());
-    xianyuFailures.set(key, values);
-  };
   await app.register(cookie);
   await app.register(cors, {
     origin: (origin, callback) =>
       callback(null, Boolean(origin && runtime.config.server.webOrigins.includes(origin))),
     credentials: true,
     methods: ["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type", "Traceparent", "X-Xianyu-Grant"],
+    allowedHeaders: ["Authorization", "Content-Type", "Traceparent"],
     maxAge: 600,
     strictPreflight: true,
     preflightContinue: true,
@@ -167,7 +151,8 @@ export async function createServer(
       request.url === "/api/v15/auth/authorize" ||
       request.url === "/api/v15/auth/token" ||
       request.url === "/api/v15/maintenance" ||
-      request.url === "/api/v15/events"
+      request.url === "/api/v15/events" ||
+      request.url.startsWith("/api/v15/xianyu/internal/")
     )
       return;
     if (!auth.requestAuthenticated(request))
@@ -301,14 +286,25 @@ export async function createServer(
       },
     );
   });
+  const canAccessChannelSession = (principal: AuthPrincipal, sessionId: string | undefined): boolean =>
+    Boolean(
+      sessionId && principal.role === "admin" && runtime.database.isChannelSession(sessionId, "xianyu"),
+    );
   const requireSessionOwner = (request: FastifyRequest, sessionId: string): AuthPrincipal => {
     const principal = userPrincipal(auth, request);
-    if (runtime.database.sessionOwner(sessionId) !== principal.userId) throw new Error("Session not found");
+    const ownerId = runtime.database.sessionOwner(sessionId);
+    if (ownerId !== principal.userId && !canAccessChannelSession(principal, sessionId))
+      throw new Error("Session not found");
     return principal;
   };
-  const requireOwned = (request: FastifyRequest, ownerId: string | undefined): AuthPrincipal => {
+  const requireOwned = (
+    request: FastifyRequest,
+    ownerId: string | undefined,
+    sessionId?: string,
+  ): AuthPrincipal => {
     const principal = userPrincipal(auth, request);
-    if (ownerId !== principal.userId) throw new Error("Resource not found");
+    if (ownerId !== principal.userId && !canAccessChannelSession(principal, sessionId))
+      throw new Error("Resource not found");
     return principal;
   };
   const requireAdmin = (request: FastifyRequest, message?: string): AuthPrincipal => {
@@ -316,8 +312,13 @@ export async function createServer(
     if (principal.role !== "admin") throw new Error(message ?? "Administrator access required");
     return principal;
   };
-  const ownedResult = <T>(request: FastifyRequest, ownerId: string | undefined, action: () => T): T => {
-    requireOwned(request, ownerId);
+  const ownedResult = <T>(
+    request: FastifyRequest,
+    ownerId: string | undefined,
+    action: () => T,
+    sessionId?: string,
+  ): T => {
+    requireOwned(request, ownerId, sessionId);
     return action();
   };
   const adminResult = <T>(request: FastifyRequest, action: () => T): T => {
@@ -326,49 +327,283 @@ export async function createServer(
   };
   app.post("/api/v15/auth/logout", async (request, reply) => {
     const origin = request.headers.origin;
-    const principal = auth.principalFromRequest(request);
+    auth.principalFromRequest(request);
     auth.logout(request, reply, {
       crossOrigin: crossOrigin(origin, request.headers.host),
       secure: secureOrigin(origin),
     });
-    if (principal) xianyuGrants.revoke(principal.userId);
     return reply.code(204).send();
   });
 
   const requireXianyu = (request: FastifyRequest): AuthPrincipal => {
-    const principal = userPrincipal(auth, request);
-    if (!xianyu || !xianyuPasswordHash) throw new Error("Xianyu service is not configured");
-    const grant = request.headers["x-xianyu-grant"];
-    if (typeof grant !== "string" || !xianyuGrants.valid(principal.userId, grant))
-      throw new Error("Xianyu grant expired or missing");
-    return principal;
+    if (!xianyu) throw new Error("Xianyu service is not configured");
+    return requireAdmin(request, "Xianyu administrator access required");
+  };
+  const requireInternalXianyu = (request: FastifyRequest): void => {
+    const remote = request.socket.remoteAddress ?? "";
+    if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(remote))
+      throw new Error("Xianyu internal access requires loopback");
+    const controlToken = runtime.config.xianyu
+      ? process.env[runtime.config.xianyu.controlTokenEnv]?.trim()
+      : undefined;
+    if (!controlToken || request.headers.authorization !== `Bearer ${controlToken}`)
+      throw new Error("Xianyu internal authentication required");
   };
   const xianyuClient = (): XianyuControlClient => {
     if (!xianyu) throw new Error("Xianyu service is not configured");
     return xianyu;
   };
-  app.post<{ Body: { password?: string } }>("/api/v15/xianyu/unlock", async (request, reply) => {
-    const principal = requireAdmin(request, "Xianyu administrator access required");
-    if (!xianyu || !xianyuPasswordHash) throw new Error("Xianyu service is not configured");
-    const key = `${request.ip}:${principal.userId}`;
-    if (!xianyuRateAllowed(key))
-      return reply.code(429).send(errorBody(request.id, "rate_limited", "Too many unlock attempts", true));
-    const password = request.body?.password;
-    if (typeof password !== "string" || !(await verifyXianyuPassword(password, xianyuPasswordHash))) {
-      xianyuRecordFailure(key);
-      return reply
-        .code(403)
-        .send(errorBody(request.id, "xianyu_password_invalid", "Invalid Xianyu administrator password"));
-    }
-    const grant = xianyuGrants.issue(principal.userId);
-    request.log.info({
-      requestId: request.id,
-      userId: principal.userId,
-      action: "xianyu.unlock",
-      result: "ok",
+  const channelWorkspace = join(runtime.config.server.workspaceRoots[0] as string, "channels", "xianyu");
+  const ensureXianyuSession = async (input: {
+    tenantId: string;
+    conversationId: string;
+    threadId?: string;
+    kind: "control" | "buyer";
+    displayName?: string;
+    externalUserId?: string;
+    itemId?: string;
+  }) => {
+    await mkdir(channelWorkspace, { recursive: true });
+    return runtime.database.withTransaction(() => {
+      const existing = runtime.database.findChannelSession(
+        input.tenantId,
+        input.conversationId,
+        input.threadId ?? "",
+      );
+      if (existing) {
+        runtime.database.updateChannelSession({
+          sessionId: existing,
+          ...(input.displayName ? { displayName: input.displayName } : {}),
+          ...(input.externalUserId ? { externalUserId: input.externalUserId } : {}),
+          ...(input.itemId ? { itemId: input.itemId } : {}),
+        });
+        return runtime.database.getSession(existing);
+      }
+      const session = runtime.database.createSession({
+        userId: "system",
+        title:
+          input.kind === "control"
+            ? "咸鱼总控"
+            : input.displayName?.trim() || `咸鱼买家 ${input.conversationId}`,
+        assistantName: "UmaAgent · 咸鱼",
+        workspace: channelWorkspace,
+        model: runtime.config.defaultModel,
+        thinkingLevel: runtime.config.defaultThinkingLevel,
+      });
+      runtime.database.attachChannelSession({ sessionId: session.id, ...input });
+      return session;
     });
-    return grant;
+  };
+
+  app.get("/api/v15/xianyu/workspace", async (request) => {
+    requireXianyu(request);
+    await ensureXianyuSession({
+      tenantId: "xianyu",
+      conversationId: "__control__",
+      kind: "control",
+      displayName: "咸鱼总控",
+    });
+    const [serviceResult, loginResult] = await Promise.allSettled([
+      xianyuClient().health(),
+      xianyuClient().loginStatus(),
+    ]);
+    const unavailable = (result: PromiseRejectedResult) => ({
+      status: "degraded",
+      message: result.reason instanceof Error ? result.reason.message : "咸鱼 Adapter 不可用",
+    });
+    return {
+      workspace: "xianyu",
+      autoReplyEnabled: runtime.database.xianyuAutoReplyEnabled(),
+      service: serviceResult.status === "fulfilled" ? serviceResult.value : unavailable(serviceResult),
+      login: loginResult.status === "fulfilled" ? loginResult.value : unavailable(loginResult),
+      sessions: runtime.database.listChannelSessions("xianyu").map(({ session, metadata }) => ({
+        session,
+        metadata,
+        lastSequence: runtime.listSessionEvents(session.id, 0, 1).snapshotSequence,
+        draftMessageIds: runtime.database.listChannelDraftMessageIds(session.id),
+      })),
+      serverTime: Date.now(),
+    };
   });
+  app.put<{ Body: { enabled?: boolean } }>("/api/v15/xianyu/settings/auto-reply", async (request) => {
+    requireXianyu(request);
+    if (!Value.Check(XianyuAutoReplyRequestSchema, request.body))
+      throw new Error("Invalid Xianyu auto-reply request");
+    return { enabled: runtime.database.setXianyuAutoReply(request.body.enabled) };
+  });
+  app.post<{ Params: { id: string } }>("/api/v15/xianyu/sessions/:id/read", async (request) => {
+    requireXianyu(request);
+    if (!runtime.database.isChannelSession(request.params.id)) throw new Error("Session not found");
+    runtime.database.markChannelSessionRead(request.params.id);
+    return { ok: true };
+  });
+  app.post<{ Body: Record<string, unknown> }>("/api/v15/xianyu/internal/session", async (request) => {
+    requireInternalXianyu(request);
+    if (!Value.Check(XianyuInternalSessionRequestSchema, request.body))
+      throw new Error("Invalid Xianyu internal session request");
+    const body = request.body as {
+      sessionId?: string;
+      tenantId: string;
+      conversationId: string;
+      threadId?: string;
+      displayName?: string;
+      externalUserId?: string;
+      itemId?: string;
+    };
+    if (body.sessionId) {
+      if (!runtime.database.isChannelSession(body.sessionId, "xianyu"))
+        throw new Error("Session is not an Xianyu channel session");
+      const metadata = runtime.database.channelSession(body.sessionId);
+      if (
+        !metadata ||
+        metadata.tenantId !== body.tenantId ||
+        metadata.conversationId !== body.conversationId ||
+        (metadata.threadId ?? "") !== (body.threadId ?? "")
+      )
+        throw new Error("Xianyu session mapping does not match");
+      runtime.database.updateChannelSession({
+        sessionId: body.sessionId,
+        ...(body.displayName ? { displayName: body.displayName } : {}),
+        ...(body.externalUserId ? { externalUserId: body.externalUserId } : {}),
+        ...(body.itemId ? { itemId: body.itemId } : {}),
+      });
+      return { sessionId: body.sessionId };
+    }
+    const session = await ensureXianyuSession({ ...body, kind: "buyer" });
+    return { sessionId: session.id };
+  });
+  app.post<{ Body: Record<string, unknown> }>("/api/v15/xianyu/internal/inbound", async (request) => {
+    requireInternalXianyu(request);
+    if (!Value.Check(XianyuInternalInboundRequestSchema, request.body))
+      throw new Error("Invalid Xianyu internal inbound request");
+    const body = request.body as {
+      sessionId: string;
+      externalMessageId: string;
+      senderId?: string;
+      text: string;
+      attachmentIds?: string[];
+    };
+    if (!runtime.database.isChannelSession(body.sessionId)) throw new Error("Session not found");
+    const key = `inbound:${body.sessionId}:${body.externalMessageId}`;
+    const delivery = runtime.database.createChannelDelivery({
+      direction: "inbound",
+      idempotencyKey: key,
+      sessionId: body.sessionId,
+      status: "pending",
+    });
+    if (!delivery.created) return { accepted: false, duplicate: true };
+    try {
+      const messageId = randomUUID();
+      const run = runtime.sendMessage(body.sessionId, {
+        messageId,
+        text: body.text,
+        mode: "agent",
+        source: {
+          adapter: "xianyu",
+          conversationId: runtime.database.channelSession(body.sessionId)?.conversationId ?? body.sessionId,
+          externalMessageId: body.externalMessageId,
+          ...(body.senderId ? { senderId: body.senderId } : {}),
+        },
+        ...(body.attachmentIds?.length ? { attachmentIds: body.attachmentIds } : {}),
+      });
+      runtime.database.attachChannelDeliveryMessage(key, messageId);
+      runtime.database.updateChannelSession({
+        sessionId: body.sessionId,
+        inbound: true,
+        ...(body.senderId ? { externalUserId: body.senderId } : {}),
+      });
+      runtime.database.updateChannelDeliveryByKey(key, "delivered");
+      return { accepted: true, duplicate: false, runId: run.id, messageId };
+    } catch (error) {
+      runtime.database.updateChannelDeliveryByKey(
+        key,
+        "failed",
+        error instanceof Error ? error.message : String(error),
+      );
+      throw error;
+    }
+  });
+  app.post<{ Body: { sessionId?: string; messageId?: string; externalMessageId?: string; text?: string } }>(
+    "/api/v15/xianyu/internal/outbound",
+    async (request) => {
+      requireInternalXianyu(request);
+      const body = request.body ?? {};
+      if (!body.sessionId || !body.messageId || typeof body.text !== "string")
+        throw new Error("sessionId, messageId and text are required");
+      if (!runtime.database.isChannelSession(body.sessionId)) throw new Error("Session not found");
+      const message = runtime.database.getMessage(body.messageId);
+      if (message.role !== "assistant" || message.status !== "complete")
+        throw new Error("Message is not a completed assistant reply");
+      const userMessage = runtime.database
+        .listMessages(body.sessionId)
+        .find((item) => item.runId === message.runId && item.role === "user");
+      if (!userMessage?.source || userMessage.source.adapter !== "xianyu")
+        return { send: false, ignored: true };
+      const key = `outbound:${body.sessionId}:${body.messageId}`;
+      const delivery = runtime.database.createChannelDelivery({
+        direction: "outbound",
+        idempotencyKey: key,
+        sessionId: body.sessionId,
+        messageId: body.messageId,
+        status: runtime.database.xianyuAutoReplyEnabled() ? "pending" : "draft",
+      });
+      if (!delivery.created) return { send: false, duplicate: true, status: delivery.status };
+      return {
+        send: runtime.database.xianyuAutoReplyEnabled(),
+        duplicate: false,
+        status: delivery.status,
+        idempotencyKey: key,
+      };
+    },
+  );
+  app.post<{ Body: { idempotencyKey?: string; ok?: boolean; error?: string } }>(
+    "/api/v15/xianyu/internal/outbound/result",
+    async (request) => {
+      requireInternalXianyu(request);
+      const body = request.body ?? {};
+      if (!body.idempotencyKey || typeof body.ok !== "boolean")
+        throw new Error("idempotencyKey and ok are required");
+      runtime.database.updateChannelDeliveryByKey(
+        body.idempotencyKey,
+        body.ok ? "delivered" : "failed",
+        body.error,
+      );
+      return { ok: true };
+    },
+  );
+  app.post<{ Params: { id: string; messageId: string } }>(
+    "/api/v15/xianyu/sessions/:id/drafts/:messageId/send",
+    async (request) => {
+      requireXianyu(request);
+      const { id: sessionId, messageId } = request.params;
+      if (!runtime.database.isChannelSession(sessionId, "xianyu")) throw new Error("Session not found");
+      const message = runtime.database.getMessage(messageId);
+      const messageOwner = runtime.database.findMessageOwner(messageId);
+      if (
+        messageOwner?.sessionId !== sessionId ||
+        message.role !== "assistant" ||
+        message.status !== "complete"
+      )
+        throw new Error("Message is not a completed draft reply");
+      const delivery = runtime.database.channelDeliveryForMessage(messageId);
+      if (!delivery || delivery.sessionId !== sessionId) throw new Error("Draft delivery not found");
+      if (delivery.status === "delivered") return { ok: true, messageId };
+      if (delivery.status !== "draft") throw new Error("Draft is already being delivered");
+      runtime.database.updateChannelDelivery(messageId, "pending");
+      try {
+        await xianyuClient().send({ sessionId, messageId, text: message.content });
+        runtime.database.updateChannelDelivery(messageId, "delivered");
+        return { ok: true, messageId };
+      } catch (error) {
+        runtime.database.updateChannelDelivery(
+          messageId,
+          "failed",
+          error instanceof Error ? error.message : String(error),
+        );
+        throw error;
+      }
+    },
+  );
   app.get("/api/v15/xianyu/status", async (request) => {
     const principal = requireXianyu(request);
     const result = await xianyuClient().health();
@@ -483,40 +718,57 @@ export async function createServer(
     return runtime.createSession(body, principal.userId);
   });
   app.get<{ Params: { id: string } }>("/api/v15/sessions/:id/snapshot", async (request) =>
-    ownedResult(request, runtime.database.sessionOwner(request.params.id), () =>
-      runtime.getSnapshot(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.sessionOwner(request.params.id),
+      () => runtime.getSnapshot(request.params.id),
+      request.params.id,
     ),
   );
   app.get<{ Params: { id: string } }>("/api/v15/responses/:id", async (request) =>
-    ownedResult(request, runtime.database.responseOwner(request.params.id), () =>
-      runtime.database.getResponse(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.responseOwner(request.params.id),
+      () => runtime.database.getResponse(request.params.id),
+      runtime.database.responseSession(request.params.id),
     ),
   );
   app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: string } }>(
     "/api/v15/sessions/:id/events",
     async (request) =>
-      ownedResult(request, runtime.database.sessionOwner(request.params.id), () =>
-        runtime.listSessionEvents(
-          request.params.id,
-          Math.max(0, Number(request.query.after ?? 0)),
-          Math.max(1, Math.min(1000, Number(request.query.limit ?? 500))),
-        ),
+      ownedResult(
+        request,
+        runtime.database.sessionOwner(request.params.id),
+        () =>
+          runtime.listSessionEvents(
+            request.params.id,
+            Math.max(0, Number(request.query.after ?? 0)),
+            Math.max(1, Math.min(1000, Number(request.query.limit ?? 500))),
+          ),
+        request.params.id,
       ),
   );
   app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string } }>(
     "/api/v15/sessions/:id/history",
     async (request) =>
-      ownedResult(request, runtime.database.sessionOwner(request.params.id), () =>
-        runtime.listSessionHistory(
-          request.params.id,
-          request.query.before === undefined ? undefined : Math.max(1, Number(request.query.before)),
-          Math.max(1, Math.min(500, Number(request.query.limit ?? 100))),
-        ),
+      ownedResult(
+        request,
+        runtime.database.sessionOwner(request.params.id),
+        () =>
+          runtime.listSessionHistory(
+            request.params.id,
+            request.query.before === undefined ? undefined : Math.max(1, Number(request.query.before)),
+            Math.max(1, Math.min(500, Number(request.query.limit ?? 100))),
+          ),
+        request.params.id,
       ),
   );
   app.post<{ Params: { id: string } }>("/api/v15/sessions/:id/compact", async (request) =>
-    ownedResult(request, runtime.database.sessionOwner(request.params.id), () =>
-      runtime.compactSession(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.sessionOwner(request.params.id),
+      () => runtime.compactSession(request.params.id),
+      request.params.id,
     ),
   );
   app.patch<{ Params: { id: string } }>("/api/v15/sessions/:id", async (request) => {
@@ -550,8 +802,11 @@ export async function createServer(
     },
   );
   app.get<{ Params: { id: string } }>("/api/v15/sessions/:id/queue", async (request) =>
-    ownedResult(request, runtime.database.sessionOwner(request.params.id), () =>
-      runtime.listQueue(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.sessionOwner(request.params.id),
+      () => runtime.listQueue(request.params.id),
+      request.params.id,
     ),
   );
   app.patch<{ Params: { id: string }; Body: { text?: string } }>(
@@ -562,7 +817,7 @@ export async function createServer(
       const owner = runtime.database.messageOwner(request.params.id);
       const message = runtime.database.findMessageOwner(request.params.id);
       if (!owner || !message) throw new Error("Message not found");
-      requireOwned(request, owner);
+      requireOwned(request, owner, message.sessionId);
       const run = runtime.editMessage(
         message.sessionId,
         request.params.id,
@@ -601,15 +856,22 @@ export async function createServer(
   app.get<{ Params: { id: string }; Querystring: { q?: string; limit?: string } }>(
     "/api/v15/sessions/:id/history/search",
     async (request) =>
-      ownedResult(request, runtime.database.sessionOwner(request.params.id), () =>
-        runtime.searchHistory(request.params.id, request.query.q ?? "", Number(request.query.limit ?? 20)),
+      ownedResult(
+        request,
+        runtime.database.sessionOwner(request.params.id),
+        () =>
+          runtime.searchHistory(request.params.id, request.query.q ?? "", Number(request.query.limit ?? 20)),
+        request.params.id,
       ),
   );
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
     "/api/v15/sessions/:id/activity",
     async (request) =>
-      ownedResult(request, runtime.database.sessionOwner(request.params.id), () =>
-        runtime.listActivity(request.params.id, Number(request.query.limit ?? 200)),
+      ownedResult(
+        request,
+        runtime.database.sessionOwner(request.params.id),
+        () => runtime.listActivity(request.params.id, Number(request.query.limit ?? 200)),
+        request.params.id,
       ),
   );
   app.post<{ Params: { id: string } }>("/api/v15/sessions/:id/cancel", async (request, reply) => {
@@ -620,8 +882,11 @@ export async function createServer(
   app.post<{ Params: { id: string }; Body: { approved?: boolean } }>(
     "/api/v15/approvals/:id",
     async (request) =>
-      ownedResult(request, runtime.database.approvalOwner(request.params.id), () =>
-        runtime.resolveApproval(request.params.id, request.body?.approved === true),
+      ownedResult(
+        request,
+        runtime.database.approvalOwner(request.params.id),
+        () => runtime.resolveApproval(request.params.id, request.body?.approved === true),
+        runtime.database.approvalSession(request.params.id),
       ),
   );
   app.get("/api/v15/models", async () => runtime.listModels());
@@ -1036,27 +1301,40 @@ export async function createServer(
     },
   );
   app.get<{ Params: { id: string } }>("/api/v15/runs/:id", async (request) =>
-    ownedResult(request, runtime.database.runOwner(request.params.id), () =>
-      runtime.getRun(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.runOwner(request.params.id),
+      () => runtime.getRun(request.params.id),
+      runtime.database.runSession(request.params.id),
     ),
   );
   app.post<{ Params: { id: string } }>("/api/v15/runs/:id/prioritize", async (request) =>
-    ownedResult(request, runtime.database.runOwner(request.params.id), () =>
-      runtime.prioritizeRun(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.runOwner(request.params.id),
+      () => runtime.prioritizeRun(request.params.id),
+      runtime.database.runSession(request.params.id),
     ),
   );
   app.get<{ Params: { id: string } }>("/api/v15/runs/:id/quality", async (request) =>
-    ownedResult(request, runtime.database.runOwner(request.params.id), () =>
-      runtime.listQualityAssessments(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.runOwner(request.params.id),
+      () => runtime.listQualityAssessments(request.params.id),
+      runtime.database.runSession(request.params.id),
     ),
   );
   app.get<{ Params: { id: string } }>("/api/v15/sessions/:id/quality", async (request) =>
-    ownedResult(request, runtime.database.sessionOwner(request.params.id), () =>
-      runtime.listSessionMessageQuality(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.sessionOwner(request.params.id),
+      () => runtime.listSessionMessageQuality(request.params.id),
+      request.params.id,
     ),
   );
   app.get<{ Params: { id: string } }>("/api/v15/messages/:id/quality", async (request, reply) => {
-    const principal = requireOwned(request, runtime.database.messageOwner(request.params.id));
+    const sessionId = runtime.database.findMessageOwner(request.params.id)?.sessionId;
+    const principal = requireOwned(request, runtime.database.messageOwner(request.params.id), sessionId);
     if (!consumeRateLimit(qualityReadRate, principal.userId))
       return reply
         .code(429)
@@ -1068,7 +1346,11 @@ export async function createServer(
     async (request, reply) => {
       if (!Value.Check(ReviewMessageRequestSchema, request.body ?? {}))
         throw new Error("Invalid review request");
-      requireOwned(request, runtime.database.messageOwner(request.params.id));
+      requireOwned(
+        request,
+        runtime.database.messageOwner(request.params.id),
+        runtime.database.findMessageOwner(request.params.id)?.sessionId,
+      );
       const run = runtime.reviewMessage(
         request.params.id,
         request.body?.feedback ?? "",
@@ -1082,41 +1364,65 @@ export async function createServer(
     async (request, reply) => {
       if (!Value.Check(ImproveMessageRequestSchema, request.body ?? {}))
         throw new Error("Invalid improve request");
-      requireOwned(request, runtime.database.messageOwner(request.params.id));
+      requireOwned(
+        request,
+        runtime.database.messageOwner(request.params.id),
+        runtime.database.findMessageOwner(request.params.id)?.sessionId,
+      );
       const run = runtime.improveMessage(request.params.id, request.body ?? {}, requestTrace(request));
       return reply.code(202).send({ runId: run.id, status: run.status });
     },
   );
   app.get<{ Params: { id: string } }>("/api/v15/runs/:id/checkpoints", async (request) =>
-    ownedResult(request, runtime.database.runOwner(request.params.id), () =>
-      runtime.listRunCheckpoints(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.runOwner(request.params.id),
+      () => runtime.listRunCheckpoints(request.params.id),
+      runtime.database.runSession(request.params.id),
     ),
   );
   app.get<{ Params: { id: string } }>("/api/v15/runs/:id/actions", async (request) =>
-    ownedResult(request, runtime.database.runOwner(request.params.id), () =>
-      runtime.listRunActions(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.runOwner(request.params.id),
+      () => runtime.listRunActions(request.params.id),
+      runtime.database.runSession(request.params.id),
     ),
   );
   app.post<{ Params: { id: string } }>("/api/v15/runs/:id/resume", async (request) =>
-    ownedResult(request, runtime.database.runOwner(request.params.id), () =>
-      runtime.resumeRun(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.runOwner(request.params.id),
+      () => runtime.resumeRun(request.params.id),
+      runtime.database.runSession(request.params.id),
     ),
   );
   app.post<{ Params: { id: string } }>("/api/v15/runs/:id/confirm-plan", async (request) =>
-    ownedResult(request, runtime.database.runOwner(request.params.id), () =>
-      runtime.confirmPlan(request.params.id),
+    ownedResult(
+      request,
+      runtime.database.runOwner(request.params.id),
+      () => runtime.confirmPlan(request.params.id),
+      runtime.database.runSession(request.params.id),
     ),
   );
   app.post<{ Params: { id: string; actionId: string }; Body: { decision?: string } }>(
     "/api/v15/runs/:id/actions/:actionId/decide",
     async (request) => {
       if (!Value.Check(RunActionDecisionSchema, request.body)) throw new Error("Invalid action decision");
-      requireOwned(request, runtime.database.runOwner(request.params.id));
+      requireOwned(
+        request,
+        runtime.database.runOwner(request.params.id),
+        runtime.database.runSession(request.params.id),
+      );
       return runtime.decideRunAction(request.params.id, request.params.actionId, request.body.decision);
     },
   );
   app.post<{ Params: { id: string } }>("/api/v15/runs/:id/cancel", async (request) => {
-    requireOwned(request, runtime.database.runOwner(request.params.id));
+    requireOwned(
+      request,
+      runtime.database.runOwner(request.params.id),
+      runtime.database.runSession(request.params.id),
+    );
     return runtime.cancelRun(request.params.id);
   });
   app.post("/api/v15/uploads", async (request) => {
@@ -1141,7 +1447,11 @@ export async function createServer(
   app.get<{ Params: { id: string }; Querystring: { download?: string } }>(
     "/api/v15/attachments/:id/content",
     async (request, reply) => {
-      requireOwned(request, runtime.database.attachmentOwner(request.params.id));
+      requireOwned(
+        request,
+        runtime.database.attachmentOwner(request.params.id),
+        runtime.database.attachmentSession(request.params.id),
+      );
       const attachment = runtime.getAttachment(request.params.id);
       if (!attachment) throw new Error(`Attachment not found: ${request.params.id}`);
       const data = await readFile(runtime.getAttachmentPath(request.params.id));
@@ -1246,7 +1556,11 @@ export async function createServer(
         for (const subscription of message.sessions.slice(0, 100)) {
           const id = subscription.id;
           if (!id) continue;
-          if (runtime.database.sessionOwner(id) !== principal?.userId) continue;
+          if (
+            runtime.database.sessionOwner(id) !== principal?.userId &&
+            !canAccessChannelSession(principal as AuthPrincipal, id)
+          )
+            continue;
           sessions.add(id);
           send({ type: "sync.started", sessionId: id });
           let after = Math.max(0, subscription.lastSequence ?? 0);

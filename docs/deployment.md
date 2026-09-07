@@ -253,7 +253,7 @@ sha256sum /tmp/UmaAgent.apk
 
 ### Xianyu Adapter
 
-闲鱼 Adapter 只监听回环地址，Core 通过内部控制令牌代理访问。配置 `UMA_XIANYU_CONTROL_TOKEN`、`UMA_XIANYU_ADMIN_PASSWORD_HASH` 和 `/etc/uma-agent/config.user.json` 后启动。`xianyu.cookie` 首次可以为空，Adapter 会以 `pending_login` 状态启动，不会伪造或复用旧 Cookie：
+闲鱼 Adapter 只监听回环地址，Core 通过内部控制令牌代理访问。配置 `UMA_XIANYU_CONTROL_TOKEN` 和 `/etc/uma-agent/config.user.json` 后启动。用户侧只使用 Core 管理员 PAT；不再配置咸鱼管理员密码或 Grant。`xianyu.cookie` 首次可以为空，Adapter 会以 `pending_login` 状态启动，不会伪造或复用旧 Cookie：
 
 ```json
 {
@@ -268,7 +268,7 @@ sha256sum /tmp/UmaAgent.apk
 }
 ```
 
-管理员解锁后在 UmaAgent 咸鱼控制台点击登录，生成二维码并扫码；登录状态由 Core 代理到 Adapter，客户端不直连 `3250`。扫码成功后 Cookie 原子写入 `stateDir/cookie`，权限为 `0600`，Adapter 自动恢复闲鱼连接。登录过期会停止 Adapter，状态变为 `expired`，并在设置以下三项时通过知识库飞书应用发送告警：`UMA_XIANYU_FEISHU_APP_ID`、`UMA_XIANYU_FEISHU_APP_SECRET`、`UMA_XIANYU_FEISHU_CHAT_ID`。这些值只能写入 `/etc/uma-agent/uma.env`，文件权限保持 `root:root 0600`；未配置时服务仍可运行，但必须在验收记录中标明告警未启用。
+管理员使用 Core PAT 登录后自动进入咸鱼工作台，在总控会话生成二维码并扫码；登录状态由 Core 代理到 Adapter，客户端不直连 `3250`。扫码成功后 Cookie 原子写入 `stateDir/cookie`，权限为 `0600`，Adapter 自动恢复闲鱼连接。登录过期会停止 Adapter，状态变为 `expired`，并在设置以下三项时通过知识库飞书应用发送告警：`UMA_XIANYU_FEISHU_APP_ID`、`UMA_XIANYU_FEISHU_APP_SECRET`、`UMA_XIANYU_FEISHU_CHAT_ID`。这些值只能写入 `/etc/uma-agent/uma.env`，文件权限保持 `root:root 0600`；未配置时服务仍可运行，但必须在验收记录中标明告警未启用。
 
 启用前先执行候选验证和备份，再启动：
 
@@ -326,11 +326,11 @@ docker run --rm \
 
 
 
-数据库只接受 schema 22；任何非 22 版本均直接拒绝启动。升级前必须备份并完成完整性与保护用户指纹检查；失败时只切换 release 指针，不覆盖数据库。
+数据库当前使用 schema 23；仅允许通过内置的 v22 到 v23 事务迁移升级，其他版本均直接拒绝启动。升级前必须备份并完成完整性与保护用户指纹检查；失败时只切换 release 指针，不覆盖数据库。
 
 ## 10. Trace、资源报告与真实 API 验证
 
-Core 的业务数据使用 schema 22 `state.db`；Trace 写入 `UMA_TELEMETRY_DIR` 下的独立 `telemetry.db`。生产把该目录挂载给 Core、Server 与 Browser Worker，但不向 Worker 暴露业务 state 或 workspace。Client、Server HTTP、Run、queue、preflight、model、tool、MCP HTTP 和 Browser 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v15/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。Trace 不保存 prompt、模型正文、完整 URL 查询、Cookie、Token 或原始工具参数。资源快照和诊断报告分别通过 `/api/v15/reports/resources` 与 `/api/v15/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
+Core 的业务数据使用 schema 23 `state.db`；schema 22 首次启动时由 Core 在事务中创建咸鱼渠道会话、设置和投递幂等表，保留已有用户、令牌、会话与消息。Trace 写入 `UMA_TELEMETRY_DIR` 下的独立 `telemetry.db`。生产把该目录挂载给 Core、Server 与 Browser Worker，但不向 Worker 暴露业务 state 或 workspace。Client、Server HTTP、Run、queue、preflight、model、tool、MCP HTTP 和 Browser 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v15/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。Trace 不保存 prompt、模型正文、完整 URL 查询、Cookie、Token 或原始工具参数。资源快照和诊断报告分别通过 `/api/v15/reports/resources` 与 `/api/v15/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
 
 真实测试只接受明确的 UmaAgent 环境变量，并在临时目录生成隔离配置、state、workspace、用户和令牌。它不读取 MiniAgent 配置，也不得使用生产保护 PAT。缺少授权或密钥时命令直接失败，不切换 Faux：
 
@@ -380,9 +380,9 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 | readiness 503 | workspace 不可访问、模型目录为空或某个已配置 MCP 未连接 |
 | Web 403 Origin | `server.webOrigins` 未包含浏览器地址的精确 Origin |
 | Web 可打开但无法登录 | Token 错误、跨站 Cookie 未使用 HTTPS、反向代理未传递 Host/协议 |
-| 咸鱼解锁提示没有管理员权限 | 当前 Core 账号的角色是 `user`；切换到 `admin` 账号后，再输入 `UMA_XIANYU_ADMIN_PASSWORD_HASH` 对应的密码 |
-| 咸鱼解锁提示密码错误 | 输入密码与服务端 `UMA_XIANYU_ADMIN_PASSWORD_HASH` 不匹配；不要把哈希值当作登录密码输入 |
-| 咸鱼已解锁后提示授权失效 | 仅表示内存 Grant 过期或服务端重启，重新使用 Core 管理员账号解锁即可 |
+| 咸鱼工作台返回 403 | 当前 Core 账号角色是 `user`；退出后使用 `admin` 管理员 PAT 登录 |
+| 咸鱼工作台显示 Adapter 不可用 | 检查 `uma-xianyu-adapter.service`、回环地址和 `UMA_XIANYU_CONTROL_TOKEN`，客户端不应直连 3250 |
+| 咸鱼登录过期 | 在总控会话重新生成二维码扫码；同时检查飞书告警配置和 Adapter 日志 |
 | Android 登录显示 `Body cannot be empty when content-type is set to 'application/json'` | 客户端无参数 JSON 请求发送了 0 字节 body；升级到包含 `{}` 请求体修复的 APK，并确认线上清单已指向新版本 |
 | CLI 401 | `UMA_TOKEN` 无效、已撤销或已过期 |
 | 模型运行失败 | Provider URL、模型 ID、API 类型、Key 或模型 capabilities 不匹配 |
@@ -398,6 +398,6 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 第二个 Core 无法获取同一状态目录锁。
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v15 和 schema 22，保留可回滚 release 与同版本备份。
+- [ ] 确认当前应用版本、Protocol v15 和 schema 23，确认 v22 到 v23 迁移完整性，保留可回滚 release 与同版本备份。
 - [ ] Android APK 使用线上同一正式签名证书，`latest.json` 的版本、路径、大小和 SHA-256 与 APK 一致。
 - [ ] Android 真机完成更新、PAT 登录、进程重启、会话读取和消息发送；Debug APK 未被发布到生产。

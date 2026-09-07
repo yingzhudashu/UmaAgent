@@ -1,6 +1,6 @@
 # UmaAgent
 
- UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.3.0`，协议版本为 `15`，SQLite schema 为 `22`。
+ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.3.0`，协议版本为 `15`，SQLite schema 为 `23`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -173,11 +173,13 @@ Docker 中请改用 `docker/config.user.example.json` 生成 `docker/config.user
 
 通用渠道类型、指数退避和节流工具由 `@uma-agent/channel-adapter` 提供；Core 不依赖任何渠道 SDK。
 
-## 咸鱼控制台
+## 咸鱼工作台
 
-咸鱼入口由 Web、CLI 和 Android 统一调用 Core API，客户端不直接访问 Adapter。先在服务端设置 `UMA_XIANYU_CONTROL_TOKEN` 与 `UMA_XIANYU_ADMIN_PASSWORD_HASH`，再启动 `uma-xianyu-adapter`。`config.user.json` 的 `xianyu.cookie` 可以为空；无 Cookie 启动会进入 `pending_login`，管理员在 UmaAgent 咸鱼控制台生成二维码并扫码。扫码成功后 Cookie 以 `0600` 权限原子保存到 `stateDir/cookie`，随后 Adapter 自动恢复连接。管理员密码使用 `scrypt$N$r$p$salt$digest` 格式；登录用户解锁后获得仅存于内存、有效 30 分钟的 Grant。登录过期会自动停用闲鱼服务，并在配置了 `UMA_XIANYU_FEISHU_APP_ID`、`UMA_XIANYU_FEISHU_APP_SECRET` 和 `UMA_XIANYU_FEISHU_CHAT_ID` 时通过知识库飞书应用告警。CLI 用法：
+咸鱼入口由 Web、CLI 和 Android 统一调用 Core API，客户端不直接访问 Adapter。Core 管理员 PAT 是唯一的用户授权方式：管理员登录 `/umaagent` 后默认进入咸鱼工作台，普通用户进入 UmaAgent；管理员可使用 `?workspace=agent` 显式进入普通工作台。客户端不再保存或提交咸鱼管理员密码，也不存在 Grant。
 
-只有 Core `admin` 角色可以进入咸鱼解锁流程；普通注册账号即使输入正确的咸鱼管理员密码也会被拒绝。若界面提示“当前 Core 账号没有管理员权限”，请退出后使用管理员个人令牌登录。密码错误会提示“咸鱼管理员密码错误”，已解锁后的 Grant 失效才会提示“咸鱼授权已失效”。
+Adapter 只接受回环地址和 `UMA_XIANYU_CONTROL_TOKEN`，该令牌仅供 Core 与 Adapter 的内部通信使用。`config.user.json` 的 `xianyu.cookie` 可以为空；无 Cookie 启动会进入 `pending_login`，管理员在咸鱼总控会话中生成二维码并扫码。扫码成功后 Cookie 以 `0600` 权限原子保存，随后 Adapter 自动恢复连接。登录过期会停止 Adapter，并在配置了 `UMA_XIANYU_FEISHU_APP_ID`、`UMA_XIANYU_FEISHU_APP_SECRET` 和 `UMA_XIANYU_FEISHU_CHAT_ID` 时通过知识库飞书机器人告警。
+
+工作台包含咸鱼总控会话和按买家自动创建的独立会话。自动回复首次部署默认关闭；关闭时 AI 回复保存为草稿，管理员确认后发送，开启时仅对咸鱼入站消息触发的回复直接发送。CLI 使用当前 Core 管理员 PAT：
 
 ```text
 uma xianyu status|start|stop|pause|resume

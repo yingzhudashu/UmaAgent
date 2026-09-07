@@ -17,7 +17,7 @@ shared_real=$(readlink -f -- "$shared_dir")
 [[ -d "$release_real/packages/core/dist" ]] || { echo "missing core dist in $release_real" >&2; exit 1; }
 [[ -f "$release_real/RELEASE" ]] || { echo "missing RELEASE metadata in $release_real" >&2; exit 1; }
 grep -qx 'protocol=15' "$release_real/RELEASE" || { echo "release protocol is not 15" >&2; exit 1; }
-grep -qx 'schema=22' "$release_real/RELEASE" || { echo "release schema is not 22" >&2; exit 1; }
+grep -qx 'schema=23' "$release_real/RELEASE" || { echo "release schema is not 23" >&2; exit 1; }
 [[ -d "$shared_real" ]] || { echo "missing shared dependencies: $shared_dir" >&2; exit 1; }
 
 case "$release_real" in

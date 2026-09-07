@@ -19,6 +19,9 @@ const REQUIRED_TABLES = [
   "trace_spans",
   "resource_snapshots",
   "optimization_applications",
+  "channel_sessions",
+  "channel_settings",
+  "channel_deliveries",
 ] as const;
 
 export function validateSchema(db: DatabaseSync): void {

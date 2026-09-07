@@ -19,7 +19,7 @@
 | trace/diagnostics/stats | implemented | SQLite Trace spans、Run 查询、资源快照、p50/p95/p99 diagnostics | 持续用真实 Provider 和 soak 验证 |
 | dream 维护 | implemented | 确定性 rollup/裁剪，不调用模型 | 不引入模型梦境生成 |
 | 自动修改代码/自我优化 | implemented | 提案接受、workspace 边界、持久备份、原子替换、固定验证命令、失败自动恢复和管理员 rollback 测试 | 持续以性能证据驱动提案 |
-| Xianyu 闲鱼渠道 | implemented | Cookie/MTop access token、Set-Cookie 刷新、WebSocket 注册/ACK/心跳/可中断退避重连、文本/图片入站、持久会话映射/去重、图片上传、商品详情/历史/建聊/分类推荐/位置解析/发布和出站回复；CLI/Web 管理员二维码登录、加密边界外的 0600 Cookie 持久化、过期停用、飞书告警、共享命令和控制面 Bearer 认证已实现 | 仅在显式 `UMA_REAL_XIANYU=1` 且配置真实闲鱼 Cookie 或完成 Web 扫码后运行真实账号 E2E；飞书告警需配置知识库 App 凭证与 chat ID |
+| Xianyu 闲鱼渠道 | implemented | Core v23 渠道会话/设置/投递幂等、按买家持久映射与去重、Web/CLI/Android 管理员 PAT 工作台、总控与买家会话、自动回复开关与草稿发送、二维码登录、0600 Cookie 持久化、过期停用和飞书告警；Adapter 仅接受回环内部 Bearer 令牌 | 仅在显式 `UMA_REAL_XIANYU=1` 且配置真实闲鱼 Cookie 或完成管理员扫码后运行真实账号 E2E；飞书告警需配置知识库 App 凭证与 chat ID |
 
 ## 使用规则
 

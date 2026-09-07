@@ -23,7 +23,6 @@ import {
   RefreshCw,
   RotateCcw,
   Send,
-  Store,
   TerminalSquare,
   Trash2,
 } from "lucide-react";
@@ -37,7 +36,7 @@ import { ResourceArea } from "./areas/ResourceArea.js";
 import { ApprovalBar, RunPanel } from "./areas/RunArea.js";
 import { ScheduleArea } from "./areas/ScheduleArea.js";
 import { SessionArea } from "./areas/SessionArea.js";
-import { XianyuArea } from "./areas/XianyuArea.js";
+import { XianyuWorkspace } from "./areas/XianyuWorkspace.js";
 import {
   cacheCursor,
   cachedCursor,
@@ -520,6 +519,8 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     return `${error.message}${error.requestId ? `（请求 ${error.requestId}）` : ""}`;
   };
   const Workspace = embedded ? "div" : "main";
+  const showXianyuWorkspace =
+    userRole === "admin" && new URLSearchParams(window.location.search).get("workspace") !== "agent";
   const upload = async (file: Blob, name = "pasted-image.png") => {
     if (offline || !selected) return;
     const attachment = await client.upload(file, name, selected);
@@ -666,6 +667,12 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
         />
       </div>
     );
+  if (showXianyuWorkspace)
+    return (
+      <div className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${theme}`}>
+        <XianyuWorkspace client={client} embedded={embedded} />
+      </div>
+    );
   return (
     <div className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${theme}`}>
       <div className="app-shell">
@@ -751,16 +758,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 title="快捷命令"
               >
                 <TerminalSquare />
-              </button>
-              <button
-                type="button"
-                className={`icon ${inspectorSection === "xianyu" ? "active" : ""}`}
-                onClick={() =>
-                  setInspectorSection((current) => (current === "xianyu" ? undefined : "xianyu"))
-                }
-                title="咸鱼控制台"
-              >
-                <Store />
               </button>
               <button
                 type="button"
@@ -1095,7 +1092,6 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             }}
           >
             <InspectorContent>
-              {inspectorSection === "xianyu" && <XianyuArea client={client} userRole={userRole} />}
               {inspectorSection === "connection" && <ConnectionPanel health={health.data} />}
               {inspectorSection === "sync" && (
                 <SyncPanel

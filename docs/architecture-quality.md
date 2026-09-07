@@ -1,6 +1,6 @@
 # UmaAgent 架构与质量基线
 
-当前发布版本为 `1.3.0`，Protocol v15，HTTP API `/api/v15`，SQLite schema 22。schema 22 是唯一支持格式；更旧数据库和旧 API 不兼容并直接拒绝启动。
+当前发布版本为 `1.3.0`，Protocol v15，HTTP API `/api/v15`，SQLite schema 23。schema 23 是当前格式；v22 通过显式迁移升级，更旧数据库和旧 API 直接拒绝启动。
 
 ## 事实源与分层
 

@@ -276,6 +276,63 @@ export const SyncBootstrapSchema = Strict({
 });
 export type SyncBootstrap = Static<typeof SyncBootstrapSchema>;
 
+export const ChannelSessionMetadataSchema = Strict({
+  channel: Type.Literal("xianyu"),
+  tenantId: Type.String({ minLength: 1, maxLength: 200 }),
+  conversationId: Type.String({ minLength: 1, maxLength: 500 }),
+  threadId: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+  kind: Type.Union([Type.Literal("control"), Type.Literal("buyer")]),
+  displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+  externalUserId: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+  itemId: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+  unreadCount: Type.Integer({ minimum: 0 }),
+  lastInboundAt: Type.Optional(Timestamp),
+  createdAt: Timestamp,
+  updatedAt: Timestamp,
+});
+export type ChannelSessionMetadata = Static<typeof ChannelSessionMetadataSchema>;
+
+export const XianyuWorkspaceSessionSchema = Strict({
+  session: SessionSchema,
+  metadata: ChannelSessionMetadataSchema,
+  lastSequence: Type.Integer({ minimum: 0 }),
+  draftMessageIds: Type.Array(Id),
+});
+export type XianyuWorkspaceSession = Static<typeof XianyuWorkspaceSessionSchema>;
+
+export const XianyuWorkspaceBootstrapSchema = Strict({
+  workspace: Type.Literal("xianyu"),
+  autoReplyEnabled: Type.Boolean(),
+  service: Type.Unknown(),
+  login: Type.Unknown(),
+  sessions: Type.Array(XianyuWorkspaceSessionSchema),
+  serverTime: Timestamp,
+});
+export type XianyuWorkspaceBootstrap = Static<typeof XianyuWorkspaceBootstrapSchema>;
+
+export const XianyuAutoReplyRequestSchema = Strict({ enabled: Type.Boolean() });
+export type XianyuAutoReplyRequest = Static<typeof XianyuAutoReplyRequestSchema>;
+
+export const XianyuInternalSessionRequestSchema = Strict({
+  sessionId: Type.Optional(Id),
+  tenantId: Type.String({ minLength: 1, maxLength: 200 }),
+  conversationId: Type.String({ minLength: 1, maxLength: 500 }),
+  threadId: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+  displayName: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+  externalUserId: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+  itemId: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+});
+export type XianyuInternalSessionRequest = Static<typeof XianyuInternalSessionRequestSchema>;
+
+export const XianyuInternalInboundRequestSchema = Strict({
+  sessionId: Id,
+  externalMessageId: Type.String({ minLength: 1, maxLength: 500 }),
+  senderId: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+  text: Type.String({ maxLength: 1_000_000 }),
+  attachmentIds: Type.Optional(Type.Array(Id, { maxItems: 20 })),
+});
+export type XianyuInternalInboundRequest = Static<typeof XianyuInternalInboundRequestSchema>;
+
 export const ApprovalSchema = Strict({
   id: Id,
   sessionId: Id,

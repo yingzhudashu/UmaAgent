@@ -75,11 +75,78 @@ describe("UmaDatabase", () => {
     reopened.close();
   });
 
-  it("initializes the current schema directly at version 22", async () => {
+  it("initializes the current schema directly at version 23", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-schema-18-"));
     temporary.push(root);
     const db = testDatabase(root);
-    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(22);
+    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(23);
+    db.close();
+  });
+
+  it("migrates v22 transactionally while preserving users, tokens, sessions and messages", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-schema-22-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    const session = db.createSession({
+      title: "kept",
+      workspace: root,
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    db.db.exec(
+      "DROP TABLE channel_deliveries; DROP TABLE channel_settings; DROP TABLE channel_sessions; PRAGMA user_version=22;",
+    );
+    db.close();
+    const migrated = new UmaDatabase(root);
+    expect(Number(migrated.db.prepare("PRAGMA user_version").get().user_version)).toBe(23);
+    expect(migrated.getSession(session.id).title).toBe("kept");
+    expect(migrated.xianyuAutoReplyEnabled()).toBe(false);
+    expect(migrated.db.prepare("PRAGMA integrity_check").get()).toMatchObject({ integrity_check: "ok" });
+    migrated.close();
+  });
+
+  it("maps channel sessions uniquely and persists auto-reply and delivery idempotency", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-channel-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    const session = db.createSession({
+      userId: "system",
+      title: "买家",
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    db.attachChannelSession({
+      sessionId: session.id,
+      tenantId: "owner",
+      conversationId: "buyer-1",
+      kind: "buyer",
+    });
+    expect(db.findChannelSession("owner", "buyer-1")).toBe(session.id);
+    expect(() =>
+      db.attachChannelSession({
+        sessionId: session.id,
+        tenantId: "owner",
+        conversationId: "buyer-1",
+        kind: "buyer",
+      }),
+    ).toThrow();
+    expect(db.setXianyuAutoReply(true)).toBe(true);
+    expect(
+      db.createChannelDelivery({
+        direction: "inbound",
+        idempotencyKey: "in:1",
+        sessionId: session.id,
+        status: "delivered",
+      }).created,
+    ).toBe(true);
+    expect(
+      db.createChannelDelivery({
+        direction: "inbound",
+        idempotencyKey: "in:1",
+        sessionId: session.id,
+        status: "delivered",
+      }).created,
+    ).toBe(false);
     db.close();
   });
 

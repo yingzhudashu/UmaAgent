@@ -6,7 +6,7 @@
 
 - UmaAgent 版本：1.3.0
 - Protocol：v15，HTTP API `/api/v15`
-- SQLite：schema 22 唯一支持格式；其他版本直接拒绝启动
+- SQLite：schema 23 为当前格式；schema 22 仅允许通过显式事务迁移，其他版本直接拒绝启动
 - Trace：独立 `telemetry.db`；业务状态位于 `state.db`
 
 ## 审查边界
@@ -23,7 +23,7 @@
 
 ## 重点审查结论
 
-1. 数据库启动严格要求 schema 22；没有迁移实现、降级路径或兼容层。
+1. 数据库启动严格要求 schema 23；仅包含 v22 到 v23 的显式事务迁移，不提供降级路径。
 2. 新 Trace 只写入 `telemetry.db`。`state.db` 中的 `trace_spans` 仅保留为历史结构，不得由新代码写入。
 3. Trace 属性、错误和事件均有长度限制和敏感字段脱敏；诊断失败不能改变业务结果。
 4. 所有生产发布必须先备份 SQLite、执行完整性检查，并验证受保护用户的令牌元数据和对象指纹。

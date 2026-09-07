@@ -1,4 +1,3 @@
-import { randomBytes, scryptSync } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -82,11 +81,7 @@ describe("server", () => {
       imageGeneration: { baseUrl: "http://127.0.0.1:9/v1", apiKeyEnv: "UMA_IMAGE_TEST_KEY" },
     };
     const previousToken = process.env.UMA_TEST_XIANYU_TOKEN;
-    const previousPassword = process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH;
-    const salt = randomBytes(16);
-    const digest = scryptSync("test-admin-password", salt, 32, { N: 16_384, r: 8, p: 1 });
     process.env.UMA_TEST_XIANYU_TOKEN = "adapter-test-token";
-    process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH = `scrypt$16384$8$1$${salt.toString("base64url")}$${digest.toString("base64url")}`;
     const runtime = new UmaRuntime(config);
     await runtime.start();
     const admin = runtime.database.createUser("admin");
@@ -96,8 +91,6 @@ describe("server", () => {
       vi.restoreAllMocks();
       if (previousToken === undefined) delete process.env.UMA_TEST_XIANYU_TOKEN;
       else process.env.UMA_TEST_XIANYU_TOKEN = previousToken;
-      if (previousPassword === undefined) delete process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH;
-      else process.env.UMA_XIANYU_ADMIN_PASSWORD_HASH = previousPassword;
       await app.close();
       await runtime.stop();
       await rm(root, { recursive: true, force: true });
@@ -157,13 +150,13 @@ describe("server", () => {
       headers: {
         origin: "https://web.example",
         "access-control-request-method": "POST",
-        "access-control-request-headers": "content-type, x-xianyu-grant",
+        "access-control-request-headers": "content-type, authorization",
       },
     });
     expect(preflight.statusCode).toBe(204);
     expect(preflight.headers["access-control-allow-origin"]).toBe("https://web.example");
     expect(preflight.headers["access-control-allow-credentials"]).toBe("true");
-    expect(preflight.headers["access-control-allow-headers"]).toContain("X-Xianyu-Grant");
+    expect(preflight.headers["access-control-allow-headers"]).toContain("Authorization");
     const deniedPreflight = await app.inject({
       method: "OPTIONS",
       url: "/api/v15/sessions",
@@ -568,51 +561,58 @@ describe("server", () => {
         headers: { "content-type": "application/json" },
       });
     });
+    const regularUser = runtime.database.createUser("user");
+    const regularToken = new AuthService(runtime).issueToken(regularUser.id, "regular-user").token;
+    const regularHeaders = { authorization: `Bearer ${regularToken}` };
     expect(
-      (await app.inject({ method: "GET", url: "/api/v15/xianyu/status", headers: authHeaders })).statusCode,
+      (await app.inject({ method: "GET", url: "/api/v15/xianyu/workspace", headers: regularHeaders }))
+        .statusCode,
     ).toBe(403);
+    const workspace = await app.inject({
+      method: "GET",
+      url: "/api/v15/xianyu/workspace",
+      headers: authHeaders,
+    });
+    expect(workspace.statusCode).toBe(200);
+    const workspacePayload = workspace.json<{
+      sessions: Array<{ session: { id: string }; metadata: { kind: string } }>;
+    }>();
+    const control = workspacePayload.sessions.find((item) => item.metadata.kind === "control");
+    expect(control).toBeDefined();
     expect(
       (
         await app.inject({
-          method: "POST",
-          url: "/api/v15/xianyu/unlock",
-          headers: authHeaders,
-          payload: { password: "wrong" },
+          method: "GET",
+          url: `/api/v15/sessions/${control?.session.id}/snapshot`,
+          headers: regularHeaders,
         })
-      ).json<{ error: { code: string } }>().error.code,
-    ).toBe("xianyu_password_invalid");
-    const regularUser = runtime.database.createUser("user");
-    const regularToken = new AuthService(runtime).issueToken(regularUser.id, "regular-user").token;
-    const regularUnlock = await app.inject({
-      method: "POST",
-      url: "/api/v15/xianyu/unlock",
-      headers: { authorization: `Bearer ${regularToken}` },
-      payload: { password: "test-admin-password" },
-    });
-    expect(regularUnlock.statusCode).toBe(403);
-    expect(regularUnlock.json<{ error: { code: string } }>().error.code).toBe("xianyu_admin_required");
-    const unlocked = await app.inject({
-      method: "POST",
-      url: "/api/v15/xianyu/unlock",
-      headers: authHeaders,
-      payload: { password: "test-admin-password" },
-    });
-    expect(unlocked.statusCode).toBe(200);
-    const grant = unlocked.json<{ grant: string; expiresAt: number }>();
-    expect(grant.grant).toHaveLength(43);
-    expect(grant.expiresAt).toBeGreaterThan(Date.now());
-    const xianyuHeaders = { ...authHeaders, "x-xianyu-grant": grant.grant };
-    expect(
-      (await app.inject({ method: "GET", url: "/api/v15/xianyu/status", headers: xianyuHeaders })).json(),
-    ).toMatchObject({ status: "ok" });
+      ).statusCode,
+    ).toBe(404);
     expect(
       (
-        await app.inject({ method: "GET", url: "/api/v15/xianyu/conversations", headers: xianyuHeaders })
+        await app.inject({
+          method: "GET",
+          url: `/api/v15/sessions/${control?.session.id}/snapshot`,
+          headers: authHeaders,
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "PUT",
+          url: "/api/v15/xianyu/settings/auto-reply",
+          headers: authHeaders,
+          payload: { enabled: true },
+        })
       ).json(),
-    ).toEqual([{ id: "conversation-1", sessionId: session.id }]);
+    ).toEqual({ enabled: true });
+    expect(
+      (await app.inject({ method: "GET", url: "/api/v15/xianyu/workspace", headers: authHeaders })).json(),
+    ).toMatchObject({ autoReplyEnabled: true });
     for (const action of ["start", "stop", "pause", "resume"])
       expect(
-        (await app.inject({ method: "POST", url: `/api/v15/xianyu/${action}`, headers: xianyuHeaders }))
+        (await app.inject({ method: "POST", url: `/api/v15/xianyu/${action}`, headers: authHeaders }))
           .statusCode,
       ).toBe(200);
     expect(
@@ -620,12 +620,12 @@ describe("server", () => {
         await app.inject({
           method: "GET",
           url: "/api/v15/xianyu/history/conversation-1",
-          headers: xianyuHeaders,
+          headers: authHeaders,
         })
       ).statusCode,
     ).toBe(200);
     expect(
-      (await app.inject({ method: "GET", url: "/api/v15/xianyu/item/item-1", headers: xianyuHeaders }))
+      (await app.inject({ method: "GET", url: "/api/v15/xianyu/item/item-1", headers: authHeaders }))
         .statusCode,
     ).toBe(200);
     expect(
@@ -633,7 +633,7 @@ describe("server", () => {
         await app.inject({
           method: "POST",
           url: "/api/v15/xianyu/chat",
-          headers: xianyuHeaders,
+          headers: authHeaders,
           payload: { receiverId: "buyer-1", itemId: "item-1" },
         })
       ).statusCode,
@@ -643,7 +643,7 @@ describe("server", () => {
         await app.inject({
           method: "POST",
           url: "/api/v15/xianyu/chat",
-          headers: xianyuHeaders,
+          headers: authHeaders,
           payload: { receiverId: "", itemId: "item-1" },
         })
       ).statusCode,
@@ -653,7 +653,7 @@ describe("server", () => {
         await app.inject({
           method: "POST",
           url: "/api/v15/xianyu/publish",
-          headers: xianyuHeaders,
+          headers: authHeaders,
           payload: {
             description: "item",
             imagePaths: ["/tmp/a.jpg"],
@@ -669,7 +669,7 @@ describe("server", () => {
         await app.inject({
           method: "POST",
           url: "/api/v15/xianyu/publish",
-          headers: xianyuHeaders,
+          headers: authHeaders,
           payload: {
             description: "item",
             imagePaths: [],
@@ -707,8 +707,8 @@ describe("server", () => {
       ).statusCode,
     ).toBe(204);
     expect(
-      (await app.inject({ method: "GET", url: "/api/v15/xianyu/status", headers: xianyuHeaders })).statusCode,
-    ).toBe(403);
+      (await app.inject({ method: "GET", url: "/api/v15/xianyu/status", headers: authHeaders })).statusCode,
+    ).toBe(200);
     expect(
       (await app.inject({ method: "GET", url: "/api/v15/sessions", headers: authHeaders })).json<
         Array<{ id: string }>

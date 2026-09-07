@@ -1,5 +1,3 @@
-import { scrypt as nodeScrypt, randomBytes, timingSafeEqual } from "node:crypto";
-
 type Json = Record<string, unknown> | unknown[];
 
 export function validateXianyuChatBody(body: Record<string, unknown>): Record<string, string> {
@@ -122,69 +120,7 @@ export class XianyuControlClient {
   publish<T = Json>(body: Json) {
     return this.request<T>("/publish", { method: "POST", body: JSON.stringify(body) });
   }
-}
-
-export class XianyuGrantStore {
-  private readonly grants = new Map<string, { value: string; expiresAt: number }>();
-  issue(userId: string): { grant: string; expiresAt: number } {
-    const now = Date.now();
-    for (const [id, entry] of this.grants) if (entry.expiresAt <= now) this.grants.delete(id);
-    const value = randomBytes(32).toString("base64url");
-    const expiresAt = now + 30 * 60 * 1000;
-    this.grants.set(userId, { value, expiresAt });
-    return { grant: value, expiresAt };
-  }
-  valid(userId: string, grant: string): boolean {
-    const entry = this.grants.get(userId);
-    if (!entry || entry.expiresAt <= Date.now()) {
-      this.grants.delete(userId);
-      return false;
-    }
-    const actual = Buffer.from(entry.value);
-    const supplied = Buffer.from(grant);
-    return actual.length === supplied.length && timingSafeEqual(actual, supplied);
-  }
-  revoke(userId: string): void {
-    this.grants.delete(userId);
-  }
-}
-
-export async function verifyXianyuPassword(password: string, encoded: string): Promise<boolean> {
-  const parts = encoded.split("$");
-  if (parts.length !== 6 || parts[0] !== "scrypt") return false;
-  const [, nText, rText, pText, saltText, digestText] = parts as [
-    string,
-    string,
-    string,
-    string,
-    string,
-    string,
-  ];
-  const N = Number(nText),
-    r = Number(rText),
-    p = Number(pText);
-  if (
-    ![N, r, p].every(Number.isSafeInteger) ||
-    N < 2 ||
-    N > 1_048_576 ||
-    (N & (N - 1)) !== 0 ||
-    r < 1 ||
-    r > 32 ||
-    p < 1 ||
-    p > 16
-  )
-    return false;
-  try {
-    const salt = Buffer.from(saltText, "base64url");
-    const expected = Buffer.from(digestText, "base64url");
-    if (salt.length < 8 || salt.length > 64 || expected.length < 16 || expected.length > 64) return false;
-    const derived = await new Promise<Buffer>((resolve, reject) =>
-      nodeScrypt(password, salt, expected.length, { N, r, p }, (error, value) =>
-        error ? reject(error) : resolve(value),
-      ),
-    );
-    return derived.length === expected.length && timingSafeEqual(derived, expected);
-  } catch {
-    return false;
+  send<T = Json>(body: Json) {
+    return this.request<T>("/send", { method: "POST", body: JSON.stringify(body) });
   }
 }

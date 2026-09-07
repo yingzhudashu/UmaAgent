@@ -210,12 +210,25 @@ export class SchedulerService {
       }
       await this.monitor(run);
     } catch (error) {
-      this.database.updateScheduledTaskRun(run.id, {
+      const updated = this.updateIfPresent(run.id, {
         status: "failed",
         completedAt: Date.now(),
         error: error instanceof Error ? error.message : String(error),
       });
-      this.changed();
+      if (updated) this.changed();
+    }
+  }
+
+  private updateIfPresent(
+    id: string,
+    patch: Parameters<UmaDatabase["updateScheduledTaskRun"]>[1],
+  ): ScheduledTaskRun | undefined {
+    try {
+      return this.database.updateScheduledTaskRun(id, patch);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Scheduled task run not found:"))
+        return undefined;
+      throw error;
     }
   }
 
