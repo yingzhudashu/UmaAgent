@@ -1,13 +1,17 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UmaClient } from "@uma-agent/client";
 import type { SessionSnapshot, TranscriptItem, XianyuWorkspaceBootstrap } from "@uma-agent/protocol";
-import { Check, ChevronLeft, Pause, Play, RefreshCw, Send, Square, Store } from "lucide-react";
+import { Check, ChevronLeft, LogOut, Pause, Play, RefreshCw, Send, Square, Store } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { MessageBubble } from "../components/MessageBubble.js";
 import { ResponseCard } from "../components/ResponseCard.js";
 import { buildConversationEntries } from "../responseTurns.js";
 
-type XianyuWorkspaceProps = { client: UmaClient; embedded?: boolean };
+type XianyuWorkspaceProps = {
+  client: UmaClient;
+  embedded?: boolean;
+  onSwitchAccount: () => void;
+};
 type LoginState = { status?: string; message?: string; qrDataUrl?: string; expiresAt?: number };
 
 function errorText(error: unknown): string {
@@ -18,7 +22,7 @@ function loginState(value: unknown): LoginState | undefined {
   return value && typeof value === "object" ? (value as LoginState) : undefined;
 }
 
-export function XianyuWorkspace({ client, embedded = false }: XianyuWorkspaceProps) {
+export function XianyuWorkspace({ client, embedded = false, onSwitchAccount }: XianyuWorkspaceProps) {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<string>();
   const [prompt, setPrompt] = useState("");
@@ -132,6 +136,10 @@ export function XianyuWorkspace({ client, embedded = false }: XianyuWorkspacePro
         <div className="xianyu-workspace__brand">
           <Store size={18} /> <strong>咸鱼</strong>
           <small>管理员工作台</small>
+          <button type="button" className="xianyu-account-switch" onClick={onSwitchAccount}>
+            <LogOut size={14} aria-hidden="true" />
+            <span>切换普通账号</span>
+          </button>
         </div>
         <button
           type="button"

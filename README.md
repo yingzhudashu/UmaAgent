@@ -1,6 +1,6 @@
 # UmaAgent
 
- UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.3.0`，协议版本为 `15`，SQLite schema 为 `23`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.3.0`，协议版本为 `15`，SQLite schema 为 `24`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -45,11 +45,11 @@ npm start
 配置诊断和真实模型测试必须显式使用当前运行环境的配置文件与 env-file。诊断只请求 `/models`，不产生模型调用费用；`real-test` 会在临时 Core 和临时数据库中执行，绝不能连接生产 state：
 
 ```powershell
-$env:UMA_PROVIDER_CONFIG = "D:\AIhub\UmaAgent\uma.config.json"
-node --env-file="D:\AIhub\UmaAgent\.env" scripts/diagnose-provider.mjs
+$env:UMA_PROVIDER_CONFIG = (Resolve-Path .\uma.config.json).Path
+node --env-file=.env scripts/diagnose-provider.mjs
 $env:UMA_REAL_API = "1"
-$env:UMA_REAL_CONFIG = "D:\AIhub\UmaAgent\uma.config.json"
-node --env-file="D:\AIhub\UmaAgent\.env" scripts/real-test.mjs smoke
+$env:UMA_REAL_CONFIG = (Resolve-Path .\uma.config.json).Path
+node --env-file=.env scripts/real-test.mjs smoke
 ```
 
 `/models` 返回 200 只代表认证入口可访问；只有 `real-test` 的模型 Run 成功，才算生成通道验收通过。脚本输出不会包含密钥、Prompt 或完整响应。
@@ -85,7 +85,7 @@ npm run build:web
 
 ## 嵌入现有站点
 
-RobotClaw 等宿主站点使用独立的库构建，不注册 Service Worker，也不修改宿主的 `body`：
+宿主站点使用独立的库构建，不注册 Service Worker，也不修改宿主的 `body`：
 
 ```powershell
 npm run build:web:embed
@@ -113,7 +113,7 @@ mounted.unmount()
 npm run dev:faux
 ```
 
-默认地址为 `http://127.0.0.1:3210`，默认开发令牌为 `uma-dev-token`，并允许同源 Web 与 `http://127.0.0.1:3211` Vite 开发端。可通过 `UMA_FAUX_PORT`、`UMA_FAUX_TOKEN`、`UMA_FAUX_STATE` 和逗号分隔的 `UMA_FAUX_WEB_ORIGINS` 覆盖；该入口只用于本地开发与测试。
+默认地址为 `http://127.0.0.1:3210`，Faux 入口会创建仅用于本地测试的管理员令牌，并允许同源 Web 与 `http://127.0.0.1:3211` Vite 开发端。可通过 `UMA_FAUX_PORT`、`UMA_FAUX_TOKEN`、`UMA_FAUX_STATE` 和逗号分隔的 `UMA_FAUX_WEB_ORIGINS` 覆盖；该入口只用于本地开发与测试。
 
 ## 配置
 
@@ -167,8 +167,6 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
-
-
 Docker 中请改用 `docker/config.user.example.json` 生成 `docker/config.user.json`；其中 Core 地址必须是 Compose 服务名 `http://uma:3210`。
 
 通用渠道类型、指数退避和节流工具由 `@uma-agent/channel-adapter` 提供；Core 不依赖任何渠道 SDK。
@@ -177,7 +175,9 @@ Docker 中请改用 `docker/config.user.example.json` 生成 `docker/config.user
 
 咸鱼入口由 Web、CLI 和 Android 统一调用 Core API，客户端不直接访问 Adapter。Core 管理员 PAT 是唯一的用户授权方式：管理员登录 `/umaagent` 后默认进入咸鱼工作台，普通用户进入 UmaAgent；管理员可使用 `?workspace=agent` 显式进入普通工作台。客户端不再保存或提交咸鱼管理员密码，也不存在 Grant。
 
-Adapter 只接受回环地址和 `UMA_XIANYU_CONTROL_TOKEN`，该令牌仅供 Core 与 Adapter 的内部通信使用。`config.user.json` 的 `xianyu.cookie` 可以为空；无 Cookie 启动会进入 `pending_login`，管理员在咸鱼总控会话中生成二维码并扫码。扫码成功后 Cookie 以 `0600` 权限原子保存，随后 Adapter 自动恢复连接。登录过期会停止 Adapter，并在配置了 `UMA_XIANYU_FEISHU_APP_ID`、`UMA_XIANYU_FEISHU_APP_SECRET` 和 `UMA_XIANYU_FEISHU_CHAT_ID` 时通过知识库飞书机器人告警。
+Adapter 原生部署只绑定回环地址；容器部署仅开放内部网络，所有控制请求都必须携带 `UMA_XIANYU_CONTROL_TOKEN`，该令牌仅供 Core 与 Adapter 的内部通信使用。`config.user.json` 的 `xianyu.cookie` 可以为空；无 Cookie 启动会进入 `pending_login`，管理员在咸鱼总控会话中生成二维码并扫码。扫码成功后 Cookie 以 `0600` 权限原子保存，随后 Adapter 自动恢复连接。登录过期会停止 Adapter，并在配置了 `UMA_XIANYU_FEISHU_APP_ID`、`UMA_XIANYU_FEISHU_APP_SECRET` 和 `UMA_XIANYU_FEISHU_CHAT_ID` 时通过知识库飞书机器人告警。
+
+Web 与 Android 的“切换普通账号”清理当前客户端的管理员认证、连接与缓存，由用户输入另一枚普通用户 PAT；不停止 Adapter、不关闭自动回复、不删除咸鱼 Cookie。
 
 工作台包含咸鱼总控会话和按买家自动创建的独立会话。自动回复首次部署默认关闭；关闭时 AI 回复保存为草稿，管理员确认后发送，开启时仅对咸鱼入站消息触发的回复直接发送。CLI 使用当前 Core 管理员 PAT：
 
@@ -187,7 +187,7 @@ uma xianyu history <conversation-id>
 uma xianyu item <item-id>
 ```
 
-Android 工程位于 `android/`，应用 ID 为 `site.robotclaw.umaagent`，生产 Core 地址固定为 `https://robotclaw.site`。登录页可直接注册隔离账户；注册返回的个人访问令牌仅展示一次，复制并继续后由 Android Keystore 加密保存。登录后使用对话、会话、资源和设置四个移动端视图，并跟随系统深浅色主题；离线状态只读。
+Android 工程位于 `android/`，应用 ID 为 `site.robotclaw.umaagent`；生产 Core 地址由构建配置注入。登录页可直接注册隔离账户；注册返回的个人访问令牌仅展示一次，复制并继续后由 Android Keystore 加密保存。登录后提供对话、会话、任务、调度、资源和设置，管理员还可进入咸鱼工作台。手机使用底部导航和“更多”菜单，宽屏使用 Navigation Rail；支持系统深浅色主题和 Android 12+ 动态颜色，离线状态只读。
 
 ### Android 发布与登录故障排查
 
@@ -222,7 +222,9 @@ Core 仅向上下文注入 Profile、active 事实和相关历史 rollup。事�
 Browser Worker 是独立 MCP Streamable HTTP 服务，原生启动默认只监听 `127.0.0.1:3230`；Compose 中监听容器网络但不发布宿主机端口。它不挂载 Core 业务 state 或 workspace，只共享独立 telemetry 目录。所有页面请求和重定向都执行公网地址校验；普通浏览器 MCP 操作自动执行，只有被权限策略判定为不可控高风险的动作才要求审批。原生启动后在 `mcpServers` 中配置 `http://127.0.0.1:3230/mcp`：
 
 ```powershell
-npm run build --workspace=@uma-agent/browser-worker
+$env:UMA_TELEMETRY_DIR = "D:\UmaAgentData\telemetry"
+$env:BROWSER_WORKER_AUTH_TOKEN = "独立 Worker 控制令牌"
+npm run build
 npm run start --workspace=@uma-agent/browser-worker
 ```
 
@@ -237,8 +239,6 @@ node apps/eval-runner/dist/main.js eval-suite.json
 评测只读取终态 Run 和公开 transcript，不读取数据库、隐藏思维链，也不修改代码或执行 Git。
 完成的不可变报告会通过 Client SDK 上传到 Core；CLI 的 `uma eval`/`/test` 与 Web Evaluation 区域读取同一份跨设备历史。Diagnostics 与 Optimization 区域只展示公开审计聚合和人工提案状态，不提供补丁应用入口。
 
-
-
 ## 部署
 
 生产部署不要直接复用开发 `.env` 或修改受版本控制的配置。先创建本地密钥文件和生产配置：
@@ -251,7 +251,6 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml con
 docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml up -d --build
 ```
 
-
 ## 架构边界
 
 ```text
@@ -263,7 +262,6 @@ apps/server ─> packages/core ─> Pi AI/Agent
                   └───────────> packages/protocol
 ```
 
-
 ## 质量检查
 
 ```bash
@@ -274,7 +272,8 @@ npm run build
 npx playwright install chromium
 npm run test:web:e2e
 npm run test:eval:faux
-npm run test:soak:faux # 默认 4 小时；可用 UMA_SOAK_HOURS=8 延长
+npm run test:perf # 当前 Faux 性能预算与实测结果见 docs/release-acceptance.md
+npm run test:soak:faux # 默认短时验证；长时 soak 由 CI 或专用环境执行
 npm run test:real:smoke # 需 UMA_REAL_API=1，并显式提供 UMA_REAL_* 配置
 npm run test:real:eval
 npm run test:real:perf

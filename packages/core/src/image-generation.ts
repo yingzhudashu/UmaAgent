@@ -1,5 +1,3 @@
-import OpenAI from "openai";
-
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 export interface GeneratedImage {
@@ -21,6 +19,8 @@ export class ImageGenerationService {
     timeoutMs: number;
     maxBytes: number;
   }): Promise<GeneratedImage> {
+    // 图片 SDK 只在实际生图时加载，普通对话不承担其启动和内存成本。
+    const { default: OpenAI } = await import("openai");
     const client = new OpenAI({
       apiKey: input.apiKey,
       baseURL: input.baseUrl,

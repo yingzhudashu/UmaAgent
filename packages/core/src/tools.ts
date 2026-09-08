@@ -5,8 +5,8 @@ import { isIP } from "node:net";
 import { dirname, join, relative } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Session } from "@uma-agent/protocol";
+import type { TraceParent } from "@uma-agent/telemetry";
 import Type, { type TSchema } from "typebox";
-import { Agent as HttpAgent, fetch as undiciFetch } from "undici";
 import type { UmaDatabase } from "./database.js";
 import type { KnowledgeService } from "./knowledge.js";
 import type { SearchService } from "./search.js";
@@ -359,6 +359,8 @@ export async function safeFetch(raw: string, signal?: AbortSignal): Promise<stri
       throw new Error("Private or unresolved network targets are blocked");
     const selected = resolved[0];
     if (!selected) throw new Error("Network target did not resolve");
+    // 专用 DNS 绑定传输只在网页抓取时加载，仍保留重定向和 SSRF 校验。
+    const { Agent: HttpAgent, fetch: undiciFetch } = await import("undici");
     const dispatcher = new HttpAgent({
       connect: {
         lookup(_hostname, options, callback) {
@@ -416,6 +418,7 @@ export function createBuiltinTools(input: {
     signal: AbortSignal,
   ) => Promise<{ id: string; name: string; size: number }>;
   smath?: SmathWorkerClient;
+  traceParent?: TraceParent;
   xianyu?: XianyuAgentApi | undefined;
 }): AgentTool[] {
   const {
@@ -431,6 +434,7 @@ export function createBuiltinTools(input: {
     attachmentCreateFromWorkspace,
     imageGenerate,
     smath,
+    traceParent,
     xianyu,
   } = input;
   const webSearchTool = () =>
@@ -566,6 +570,7 @@ export function createBuiltinTools(input: {
               ownerId,
               { operation: "list", ...(params.path ? { path: params.path } : {}) },
               signal,
+              traceParent,
             );
             return result(value.output ?? "No SMath worksheets", { ...value });
           },
@@ -577,7 +582,12 @@ export function createBuiltinTools(input: {
           parameters: Type.Object({ path: Type.String() }),
           executionMode: "parallel",
           async execute(_id, params, signal) {
-            const value = await smath.execute(ownerId, { operation: "read", path: params.path }, signal);
+            const value = await smath.execute(
+              ownerId,
+              { operation: "read", path: params.path },
+              signal,
+              traceParent,
+            );
             return result(value.output ?? "", { ...value });
           },
         }),
@@ -594,6 +604,7 @@ export function createBuiltinTools(input: {
                 ownerId,
                 { operation, path: params.path, content: params.content },
                 signal,
+                traceParent,
               );
               return result(value.output ?? `${operation}d ${params.path}`, { ...value });
             },
@@ -606,7 +617,12 @@ export function createBuiltinTools(input: {
           parameters: Type.Object({ path: Type.String() }),
           executionMode: "sequential",
           async execute(_id, params, signal) {
-            const value = await smath.execute(ownerId, { operation: "delete", path: params.path }, signal);
+            const value = await smath.execute(
+              ownerId,
+              { operation: "delete", path: params.path },
+              signal,
+              traceParent,
+            );
             return result(value.output ?? `Deleted ${params.path}`, { ...value });
           },
         }),
@@ -617,7 +633,12 @@ export function createBuiltinTools(input: {
           parameters: Type.Object({ path: Type.String() }),
           executionMode: "sequential",
           async execute(_id, params, signal) {
-            const value = await smath.execute(ownerId, { operation: "calculate", path: params.path }, signal);
+            const value = await smath.execute(
+              ownerId,
+              { operation: "calculate", path: params.path },
+              signal,
+              traceParent,
+            );
             return result(value.output ?? "SMath calculation completed", { ...value });
           },
         }),

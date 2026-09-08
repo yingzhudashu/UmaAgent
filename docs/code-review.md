@@ -1,12 +1,12 @@
 # UmaAgent 代码审查记录
 
-本文件是当前仓库的稳定审查入口，记录人工抽查结论、自动检查证据和未覆盖风险。自动扫描结果不等同于逐行人工审查；每次发布前必须重新运行 `npm run audit:source`、`npm run check` 和测试门禁，并在本文件补充对应 commit。
+本文件是当前仓库的稳定审查入口，记录人工抽查结论、自动检查证据和未覆盖风险。自动扫描结果不等同于逐行人工审查；每次发布前必须重新运行 `npm run audit:source`、`npm run check` 和测试门禁，以实际输出确认结果。
 
 ## 当前契约
 
 - UmaAgent 版本：1.3.0
 - Protocol：v15，HTTP API `/api/v15`
-- SQLite：schema 23 为当前格式；schema 22 仅允许通过显式事务迁移，其他版本直接拒绝启动
+- SQLite：schema 24 为当前格式；旧版本直接拒绝启动，发布前清理旧库，不提供 migration/fallback
 - Trace：独立 `telemetry.db`；业务状态位于 `state.db`
 
 ## 审查边界
@@ -23,40 +23,22 @@
 
 ## 重点审查结论
 
-1. 数据库启动严格要求 schema 23；仅包含 v22 到 v23 的显式事务迁移，不提供降级路径。
-2. 新 Trace 只写入 `telemetry.db`。`state.db` 中的 `trace_spans` 仅保留为历史结构，不得由新代码写入。
+1. 数据库启动严格要求 schema 24；旧 state.db 必须在发布前清理。
+2. Trace 与资源样本只写入 `telemetry.db`；state.db 不再包含 `trace_spans` 或 `resource_snapshots`。
 3. Trace 属性、错误和事件均有长度限制和敏感字段脱敏；诊断失败不能改变业务结果。
-4. 所有生产发布必须先备份 SQLite、执行完整性检查，并验证受保护用户的令牌元数据和对象指纹。
+4. 当前 schema 的常规发布保留业务数据并检查对象指纹；切换旧格式必须停机清理后初始化，再重新建立管理员与发布保护 PAT，不能将旧格式作为新版本回退路径。
 5. 机器审计只能发现模式性问题，不能替代复杂状态机、取消、并发和数据保护边界的人工审查。
 
-## 移动端登录修复审查（2026-09-06）
+## 当前实现与证据
 
-- `android/app/src/main/java/site/robotclaw/umaagent/Api.kt` 的共享请求层曾将无参数 `POST`、`PUT`、`PATCH` 编码为 0 字节 JSON body，Fastify JSON 解析器会拒绝该请求并返回 `Body cannot be empty when content-type is set to 'application/json'`。
-- 修复后无参数 JSON 请求发送 `{}`，不改变有业务参数请求、认证头或 multipart 上传协议。
-- `android/app/src/test/java/site/robotclaw/umaagent/ApiTest.kt` 已断言 bootstrap 请求的方法、JSON media type 和 `{}` body；Android `:app:testDebugUnitTest` 的 37 个测试通过。
-- 已使用原正式签名 keystore 完成 release 构建与发布；发布提交为 `74e75dfc2fc5d3a7e95f834e1155152fa5514736`，release 为 `5-74e75df`，生产版本为 `1.1.3 (versionCode 5)`。
-
-## 当前证据（2026-09-02）
-
-- `npm run audit:source`：完成一方源文件的模式审计；结果用于定位热路径、IO、并发和凭据边界，不冒充人工逐行结论。
-- `npm run check`：架构、Biome 和 TypeScript 通过，共检查 232 个文件；已记录的大文件尺寸债务均未继续增长。
-- `npm run build`：Protocol、Core、Server、CLI、Web、Xianyu Adapter、Browser Worker 全部构建通过。
-- `npm test`：51 个测试文件、273 项测试通过；覆盖 Trace 幂等、诊断聚合和快捷命令边界。
-- `npm run test:web:e2e`：Chromium 5 个用例全部通过；测试复用首个测试账户以遵守测试服务器每日注册限流，未修改生产限流策略。
-- `npm run test:eval:faux`：6 个公开行为用例通过，包括澄清、Plan 确认、工具、凭据和提示注入边界。
-- `npm run test:perf`：20 个请求基准通过；最终数值记录在 `docs/architecture-quality.md`。
-- 短时 Faux soak：36.6 秒、41 条消息、492 个事件；RSS 143,351,808 -> 145,514,496 bytes，WAL 峰值 1,961,152 bytes，均在预算内；长时 soak 仍由 CI/nightly 执行。
-- 真实 Provider：服务器隔离端口两次真实 smoke 均通过，完成注册、模型调用、Run 和 Trace 查询；测试使用临时资源并已清理，生产服务未重启。
-- 容器：当前 Windows 主机没有 Docker CLI；容器构建与 smoke 由 CI 和候选服务器继续验证。
-- Android：Gradle Wrapper 与 API 35 的 JVM 测试 37 项、debug assemble、Lint 和正式 release assemble 已通过；本次登录修复已加入回归断言，设备 instrumented 测试仍待执行。
-- 生产：本轮完成 Android 静态发布物的原子切换和公网清单/APK 校验；未执行与本次 Android 修复无关的旧渠道运行面清理、咸鱼 secret 注入或真实账号 smoke。
-
-## 追加线上核查（2026-09-06）
-
-- 只读核查 `https://robotclaw.site/api/v15/health/live` 返回 200；Core 未因本次 Android 修复重启或切换。
-- 线上 `/app/latest.json` 返回 Android `versionCode 5`、`versionName 1.1.3`、release `5-74e75df`；公网 APK 下载大小为 `7,571,849` bytes，SHA-256 为 `e9939c2b626491cc5bcf80e042bbf8b8c02992cbe6e3f0cad6c2e8b1177d6c41`，与清单一致。
-- 原正式 keystore `C:\Users\16785\.umaagent\android-release.jks` 已恢复并用于构建；线上 APK 签名主体为 `CN=UmaAgent`，证书 SHA-256 为 `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`。
-- 服务器 `current` 已原子切换至 `/srv/www/robotclaw/app/releases/5-74e75df`，旧版本目录保留；Core live 检查返回 HTTP 200。
+- Android 无业务字段的 JSON POST/PUT/PATCH 统一发送 `{}`，API 测试覆盖此约束。
+- Web IndexedDB 清理遍历所有记录，并在异步开始前固定账户命名空间。Client logout 取消未完成请求、断开 Socket、清除 PAT 和会话游标；新登录等待旧 Cookie 清理结束。
+- Android 账号切换传播协程取消，存储锁串行化令牌/缓存写入与清理，防止迟到写入恢复旧账户数据。此操作不调用渠道停止、退出或清 Cookie 接口。
+- Android Shell 使用 Material 3 和明确的 Insets 所有权；设备测试验证系统栏边界和账号本地清理。
+- 普通用户 Trace 查询在分页前限定为 Run 子树，防止外部复用 traceId 带出其他账号 Span；回归测试覆盖跨 Run 复用、Worker 子 Span 与分页边界。
+- Core 将资源采样及其定时器生命周期收口到 ResourceMonitor；MCP、图片 SDK、Tavily 和网页抓取传输按需加载。
+- 原生 service、Compose 和 Worker 镜像统一配置 telemetry 依赖、目录与权限。镜像仍需 Docker 环境实际构建验收。
+- 测试数量、覆盖率、性能实测与未完成验收统一见 [发布验收](release-acceptance.md)。本文件不记录过去生产 release、签名路径、线上版本或操作过程。
 
 ## 固定验证命令
 

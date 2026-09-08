@@ -1,8 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { monitorEventLoopDelay } from "node:perf_hooks";
 import { Agent, type AgentEvent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AssistantMessage,
@@ -25,7 +23,6 @@ import type {
   PublicConfig,
   QualityAssessment,
   ReloadResult,
-  ResourceSnapshot,
   Run,
   RunAction,
   RunActionDecision,
@@ -53,6 +50,7 @@ import { ModelCallService } from "./model-calls.js";
 import { modelCacheKey, transientModelRetry } from "./model-retry.js";
 import { ModelRegistry } from "./models.js";
 import { PermissionPolicy } from "./permissions.js";
+import { ResourceMonitor } from "./resource-monitor.js";
 import { RunApprovals } from "./run-approvals.js";
 import { RunContextBuilder } from "./run-context.js";
 import { RunOrchestrator } from "./run-orchestrator.js";
@@ -118,9 +116,7 @@ export class UmaRuntime {
   readonly permissions = new PermissionPolicy();
   private readonly taskSemaphore = new Semaphore(4);
   private readonly taskControllers = new Map<string, AbortController>();
-  private resourceTimer: NodeJS.Timeout | undefined;
-  private readonly eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
-  private previousCpu = process.cpuUsage();
+  private readonly resourceMonitor: ResourceMonitor;
   private readonly trace: TraceService;
   private readonly activeTraces = new Map<string, TraceContext>();
   xianyuAgentApi: Parameters<typeof createBuiltinTools>[0]["xianyu"] = undefined;
@@ -134,6 +130,9 @@ export class UmaRuntime {
     try {
       this.database = new UmaDatabase(config.server.stateDir);
       this.trace = new TraceService(this.database);
+      this.resourceMonitor = new ResourceMonitor(this.trace.store, this.database, () =>
+        this.orchestrator.activeCount(),
+      );
     } catch (error) {
       this.stateLock.release();
       throw error;
@@ -240,9 +239,7 @@ export class UmaRuntime {
     await this.mcp.connect(this.config.mcpServers, this.config.runtime.toolTimeoutMs);
     this.started = true;
     this.scheduler.start();
-    this.eventLoopDelay.enable();
-    this.resourceTimer = setInterval(() => this.captureResourceSnapshot(), 30_000);
-    this.captureResourceSnapshot();
+    this.resourceMonitor.start();
     void recoverRestartedRuns(
       this.database.listRestartRecoverableRuns(),
       (runId) => this.resumeRun(runId),
@@ -259,9 +256,7 @@ export class UmaRuntime {
   private async stopInternal(): Promise<void> {
     this.stopping = true;
     this.scheduler.stop();
-    if (this.resourceTimer) clearInterval(this.resourceTimer);
-    this.resourceTimer = undefined;
-    this.eventLoopDelay.disable();
+    this.resourceMonitor.stop();
     this.skills.stopWatching();
     this.approvals.rejectAll();
     for (const controller of this.controllers.values()) controller.abort();
@@ -280,50 +275,6 @@ export class UmaRuntime {
       started: this.started,
       databaseReady: this.database.isReady(),
     };
-  }
-
-  private captureResourceSnapshot(): void {
-    try {
-      const currentCpu = process.cpuUsage();
-      const cpuUserMicros = Math.max(0, currentCpu.user - this.previousCpu.user);
-      const cpuSystemMicros = Math.max(0, currentCpu.system - this.previousCpu.system);
-      this.previousCpu = currentCpu;
-      const memory = process.memoryUsage();
-      let walBytes = 0;
-      try {
-        walBytes = statSync(`${this.config.server.stateDir}/state.db-wal`).size;
-      } catch {
-        /* WAL may be checkpointed. */
-      }
-      const queuedRuns = this.database
-        .listSessions()
-        .reduce((sum, session) => sum + this.database.listQueuedRuns(session.id).length, 0);
-      const snapshot: ResourceSnapshot = {
-        id: randomUUID(),
-        capturedAt: Date.now(),
-        cpuUserMicros,
-        cpuSystemMicros,
-        rssBytes: memory.rss,
-        heapUsedBytes: memory.heapUsed,
-        heapTotalBytes: memory.heapTotal,
-        externalBytes: memory.external,
-        arrayBuffersBytes: memory.arrayBuffers,
-        eventLoopDelayMs: Number(this.eventLoopDelay.mean / 1e6 || 0),
-        walBytes,
-        activeRuns: this.orchestrator.activeCount(),
-        queuedRuns,
-      };
-      this.database.insertResourceSnapshot(snapshot);
-      this.trace.store.recordResource(snapshot);
-      this.eventLoopDelay.reset();
-    } catch (error) {
-      process.emitWarning(
-        `Resource snapshot failed: ${error instanceof Error ? error.name : "UnknownError"}`,
-        {
-          code: "UMA_RESOURCE_SNAPSHOT",
-        },
-      );
-    }
   }
 
   async reloadConfig(next: UmaConfig): Promise<ReloadResult> {
@@ -781,14 +732,17 @@ export class UmaRuntime {
   audit(runId: string) {
     return this.resources.audit(runId);
   }
-  listTrace(query: TraceQuery) {
-    return this.trace.listTrace(query);
+  listTrace(query: TraceQuery, scopeToRun = false) {
+    return this.trace.listTrace(query, scopeToRun);
   }
   diagnosticsReport(from: number, to: number) {
     return { ...this.database.diagnosticsReport(from, to), trace: this.trace.store.summarize(from, to) };
   }
-  listResourceSnapshots(from = 0, to = Date.now(), limit = 500) {
-    return this.database.listResourceSnapshots(from, to, limit);
+  listResourceSnapshots(from = 0, to?: number, limit = 500) {
+    this.resourceMonitor.capture();
+    return this.trace.store
+      .listResources(from, to ?? Date.now(), limit)
+      .map(({ service: _service, ...sample }) => sample);
   }
   listSkills(): SkillSummary[] {
     return this.resources.listSkills();
@@ -1959,6 +1913,15 @@ export class UmaRuntime {
         ...(this.smath
           ? {
               smath: this.smath,
+            }
+          : {}),
+        ...(runId && this.activeTraces.get(runId)
+          ? {
+              traceParent: {
+                traceId: this.activeTraces.get(runId)?.traceId as string,
+                spanId: this.activeTraces.get(runId)?.spanId as string,
+                traceFlags: 1,
+              },
             }
           : {}),
         xianyu: this.xianyuAgentApi,

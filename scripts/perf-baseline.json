@@ -1,9 +1,21 @@
 {
   "budgets": {
-    "apiP95Ms": 150,
-    "eventP95Ms": 500,
-    "rssBytes": 268435456,
-    "walBytes": 268435456
+    "apiP95Ms": 12.8,
+    "eventP95Ms": 5.9,
+    "rssBytes": 188743680,
+    "walBytes": 3355443,
+    "cpuAverageCorePercent": 5.5653,
+    "cpuPeakCorePercent": 5.568,
+    "eventLoopDelayP95Ms": 31.74
+  },
+  "resourceReference": {
+    "node": "v24.15.0",
+    "platform": "win32",
+    "logicalCpus": 16,
+    "messages": 20,
+    "cpuAverageCorePercent": 5.5653,
+    "cpuPeakCorePercent": 5.568,
+    "eventLoopDelayP95Ms": 26.45
   },
   "smokeMessages": 20
 }

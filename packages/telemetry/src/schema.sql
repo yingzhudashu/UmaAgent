@@ -39,16 +39,20 @@ CREATE TABLE IF NOT EXISTS resource_samples (
   captured_at INTEGER NOT NULL,
   cpu_user_micros INTEGER NOT NULL,
   cpu_system_micros INTEGER NOT NULL,
+  sample_duration_ms REAL NOT NULL,
+  cpu_percent REAL NOT NULL,
   rss_bytes INTEGER NOT NULL,
   heap_used_bytes INTEGER NOT NULL,
   heap_total_bytes INTEGER NOT NULL,
   external_bytes INTEGER NOT NULL,
   array_buffers_bytes INTEGER NOT NULL,
   event_loop_delay_ms REAL NOT NULL,
+  wal_bytes INTEGER NOT NULL,
   active_runs INTEGER NOT NULL,
   queued_runs INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS resource_samples_captured ON resource_samples(captured_at DESC);
+CREATE INDEX IF NOT EXISTS spans_parent_trace ON spans(parent_span_id,trace_id);
 
 CREATE TABLE IF NOT EXISTS run_trace_links (
   run_id TEXT NOT NULL,

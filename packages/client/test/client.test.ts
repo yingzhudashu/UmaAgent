@@ -58,6 +58,40 @@ const response = (body: unknown) =>
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("UmaClient", () => {
+  it("aborts old requests on logout and waits for cookie cleanup before another login", async () => {
+    let releaseLogout!: () => void;
+    const logoutReady = new Promise<void>((resolve) => {
+      releaseLogout = resolve;
+    });
+    const paths: string[] = [];
+    const client = new UmaClient({
+      baseUrl: "http://localhost:3210",
+      token: "admin-token",
+      fetch: (async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(path);
+        if (path.endsWith("/sessions"))
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+          });
+        if (path.endsWith("/auth/logout")) await logoutReady;
+        if (path.endsWith("/auth/login")) expect(new Headers(init?.headers).has("authorization")).toBe(false);
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+    });
+    const pending = client.listSessions();
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    const logout = client.logout();
+    const login = client.login("normal-user-token");
+    await rejected;
+    expect(paths).not.toContain("/api/v15/auth/login");
+    expect(paths.some((path) => path.includes("/xianyu/"))).toBe(false);
+    releaseLogout();
+    await Promise.all([logout, login]);
+    expect(paths.at(-1)).toBe("/api/v15/auth/login");
+    client.close();
+  });
+
   it("delivers transient message fragments without advancing the durable cursor", async () => {
     const fetchMock = vi.fn(() => response(snapshot));
     const socket = new FakeSocket();
@@ -371,7 +405,6 @@ describe("UmaClient", () => {
       fetch: fetchMock as typeof fetch,
     });
 
-    await client.logout();
     await client.listSessions();
     await client.createSession();
     await client.getSession("session/id");
@@ -463,6 +496,7 @@ describe("UmaClient", () => {
     await client.compactSession("session/id");
     await client.upload(new Blob(["body"], { type: "text/plain" }), "note.txt");
     await client.upload(new Blob(["body"], { type: "text/plain" }), "note.txt", "session/id");
+    await client.logout();
 
     const firstHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
     expect(firstHeaders.get("authorization")).toBe("Bearer secret");

@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本为 UmaAgent 1.3.0、Protocol v15 和 SQLite schema 23。schema 23 是当前格式；v22 只通过显式事务迁移升级，更旧或更高版本直接拒绝启动。
+当前版本为 UmaAgent 1.3.0、Protocol v15 和 SQLite schema 24。schema 24 是当前格式；旧版本数据库直接拒绝启动，发布前清理旧 state.db，不执行迁移。
 
 ## 已落地的边界
 
@@ -12,15 +12,20 @@
 
 ## 性能预算
 
-固定基线位于 `scripts/perf-baseline.json`，覆盖 100 个 Session、10 万条消息、100 万条事件、1 万知识片段和最多 5 个客户端的目标规模。短测可通过 `UMA_PERF_MESSAGES` 调整样本量；设置 `UMA_PERF_REQUIRE=1` 时预算超标会使进程失败。
+固定 Faux 基线位于 `scripts/perf-baseline.json`，默认运行 1 个 Session、20 条请求和连续事件分页，并逐 Run 检查 Trace。它不代表 100 个 Session 或百万事件的容量验证。`UMA_PERF_MESSAGES` 可用于另行压测；固定对比保持 20 条请求、同一 Node 版本和机器负载。
 
-- 非模型 API p95 < 150 ms
-- 事件分页/交付 p95 < 500 ms
-- 空闲 Core RSS < 256 MiB
-- WAL < 256 MiB
-- soak 期间 RSS 增长 < 10%
+`npm run test:perf` 超标始终返回非零退出码，无需额外开关。性能预算为：
+
+- 消息受理 API p95 ≤ 12.8 ms
+- 事件分页 p95 ≤ 5.9 ms
+- 测量期间 Core 峰值 RSS ≤ 180 MiB（包含冷启动后的首次请求；长时 Faux soak 另检查相对预热基线增长不得超过 60%）。该值为旧约 150MiB 生产基线再保留 20% 的长时运行余量，不代表理想目标。
+- state.db 与 telemetry.db 的 WAL 合计 ≤ 3.2 MiB
+- CPU 按可用逻辑核归一化；基准以单核等效百分比（归一化百分比 × 可用逻辑核数）比较，平均值 ≤ 5.5653%，采样峰值 ≤ 5.568%，恢复到参考基线。平均值按采样时长加权；峰值是采样区间 CPU 平均值的最大值，不代表瞬时峰值。
+- 事件循环指标 ≤ 31.74 ms，为参考值 26.45 ms 额外保留 20% 的 Windows 调度波动；`monitorEventLoopDelay` 采样粒度固定 20 ms，包含系统定时器调度延迟，不等同于单次阻塞的 p95。只统计时长至少 1 秒的样本，报告同时保留启动样本。
+- CPU 和事件循环参考环境为 Windows、Node 24.15.0、16 逻辑核，见基线文件 `resourceReference`；部署 Linux 的结果需要独立复测，当前达标情况见发布验收。
+- soak 期间记录 RSS 峰值和相对预热基线增长；当前 Faux 长时内存稳定性结果见发布验收，未通过的项目不得标记为已验收。
 - 分支覆盖率采用只升不降的实测 ratchet；目标为各一方包至少 80%，不得通过排除生产文件或降低既有基线通过 CI。
-- Trace Span 必须有完整父子关系，Run 终态不得遗留未结束 Span
+- Trace Span 必须有完整父子关系，Run 终态不得遗留未结束 Span；Trace 与资源样本只写入 telemetry.db
 - Trace 错误信息必须经过值级脱敏；诊断摘要不得按 kind 执行 N+1 查询
 
 ## 验证入口
@@ -35,6 +40,6 @@ npm run test:soak:faux
 npm run test:web:e2e
 ```
 
-2026-09-02 复核：51 个测试文件/273 项测试、构建、性能基线和短时 soak 通过；服务器隔离端口两次真实 API smoke 均通过。详细指标和 Trace 边界见 [架构与质量基线](architecture-quality.md)。
+本地验收结果集中记录在 [发布验收](release-acceptance.md)，避免多份文档维护不一致的测试数量和性能数字。Faux 结果只证明隔离模型下的行为，真实 Provider smoke/perf/soak 单独验收。
 
 Docker 和 4 小时 soak 由 CI/nightly 执行；本机没有 Docker 时只运行 Node/SQLite 级门禁。MiniAgent 差异审计见 `docs/miniagent-feature-matrix.md`，真实外部网关仅在显式授权时运行。

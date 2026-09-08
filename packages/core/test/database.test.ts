@@ -63,46 +63,34 @@ describe("UmaDatabase", () => {
     reopened.close();
   });
 
-  it.each([18, 19, 21, 99])("rejects unsupported schema version %s without rewriting it", async (version) => {
-    const root = await mkdtemp(join(tmpdir(), "uma-schema-"));
-    temporary.push(root);
-    const db = testDatabase(root);
-    db.db.exec(`PRAGMA user_version = ${version}`);
-    db.close();
-    expect(() => new UmaDatabase(root)).toThrow(`Unsupported database schema ${version}`);
-    const reopened = new DatabaseSync(join(root, "state.db"));
-    expect(Number(reopened.prepare("PRAGMA user_version").get().user_version)).toBe(version);
-    reopened.close();
-  });
+  it.each([18, 19, 21, 22, 23, 99])(
+    "rejects unsupported schema version %s without rewriting it",
+    async (version) => {
+      const root = await mkdtemp(join(tmpdir(), "uma-schema-"));
+      temporary.push(root);
+      const db = testDatabase(root);
+      db.db.exec(`PRAGMA user_version = ${version}`);
+      db.close();
+      expect(() => new UmaDatabase(root)).toThrow(`Unsupported database schema ${version}`);
+      const reopened = new DatabaseSync(join(root, "state.db"));
+      expect(Number(reopened.prepare("PRAGMA user_version").get().user_version)).toBe(version);
+      reopened.close();
+    },
+  );
 
-  it("initializes the current schema directly at version 23", async () => {
+  it("initializes the current schema directly at version 24", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-schema-18-"));
     temporary.push(root);
     const db = testDatabase(root);
-    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(23);
-    db.close();
-  });
-
-  it("migrates v22 transactionally while preserving users, tokens, sessions and messages", async () => {
-    const root = await mkdtemp(join(tmpdir(), "uma-schema-22-"));
-    temporary.push(root);
-    const db = testDatabase(root);
-    const session = db.createSession({
-      title: "kept",
-      workspace: root,
-      model: { provider: "test", id: "model" },
-      thinkingLevel: "off",
-    });
-    db.db.exec(
-      "DROP TABLE channel_deliveries; DROP TABLE channel_settings; DROP TABLE channel_sessions; PRAGMA user_version=22;",
+    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(24);
+    const tables = new Set(
+      (
+        db.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+      ).map((value) => value.name),
     );
+    expect(tables.has("trace_spans")).toBe(false);
+    expect(tables.has("resource_snapshots")).toBe(false);
     db.close();
-    const migrated = new UmaDatabase(root);
-    expect(Number(migrated.db.prepare("PRAGMA user_version").get().user_version)).toBe(23);
-    expect(migrated.getSession(session.id).title).toBe("kept");
-    expect(migrated.xianyuAutoReplyEnabled()).toBe(false);
-    expect(migrated.db.prepare("PRAGMA integrity_check").get()).toMatchObject({ integrity_check: "ok" });
-    migrated.close();
   });
 
   it("maps channel sessions uniquely and persists auto-reply and delivery idempotency", async () => {

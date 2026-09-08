@@ -1,7 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, extname, relative, resolve } from "node:path";
+import { parseTraceparent, TelemetryStore, TraceService, type TraceSpanContext } from "@uma-agent/telemetry";
 
 const host = "127.0.0.1";
 const port = Number(process.env.UMA_SMATH_WORKER_PORT ?? "3260");
@@ -10,6 +12,28 @@ const root = resolve(process.env.UMA_SMATH_WORKSPACE_ROOT ?? "/srv/uma-workspace
 const binary = required("UMA_SMATH_BINARY");
 const maxBytes = Number(process.env.UMA_SMATH_MAX_FILE_BYTES ?? 1_048_576);
 const timeoutMs = Number(process.env.UMA_SMATH_TIMEOUT_MS ?? 60_000);
+const telemetryPath = required("UMA_TELEMETRY_DIR");
+const telemetry = new TelemetryStore(telemetryPath, "smath-worker");
+const trace = new TraceService(telemetry, "smath-worker");
+const activeTrace = new AsyncLocalStorage<TraceSpanContext>();
+
+async function traced<T>(name: string, operation: () => Promise<T>): Promise<T> {
+  const parent = activeTrace.getStore();
+  const span =
+    parent?.child(name, "worker") ??
+    trace.startRoot(undefined, undefined, name, undefined, undefined, "worker");
+  try {
+    const result = await activeTrace.run(span, operation);
+    span.finish({ status: "ok" });
+    return result;
+  } catch (error) {
+    span.finish({
+      status: "error",
+      error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+    });
+    throw error;
+  }
+}
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -111,25 +135,50 @@ async function job(input: Record<string, unknown>) {
     return { operation, path, output: `Deleted ${path}` };
   }
   if ((await stat(file)).size > maxBytes) fail(400, "Worksheet exceeds size limit");
-  if (operation === "calculate") return { operation, path, output: await runSmath(file) };
+  if (operation === "calculate")
+    return { operation, path, output: await traced("smath.calculate", () => runSmath(file)) };
   fail(400, "Unsupported SMath operation");
 }
 
-createServer(async (request, response) => {
+const server = createServer(async (request, response) => {
+  const parent = parseTraceparent(
+    typeof request.headers.traceparent === "string" ? request.headers.traceparent : undefined,
+  );
+  const span = trace.startRoot(
+    undefined,
+    undefined,
+    `${request.method ?? ""} ${request.url === "/jobs" ? "/jobs" : "unmatched"}`,
+    { method: request.method ?? "" },
+    parent,
+    "worker.http",
+  );
   try {
-    if (request.method !== "POST" || request.url !== "/jobs") fail(404, "Not found");
-    if (request.headers.authorization !== `Bearer ${token}`) fail(401, "Unauthorized");
-    let body = "";
-    for await (const chunk of request) {
-      body += String(chunk);
-      if (Buffer.byteLength(body) > maxBytes * 2) fail(413, "Request is too large");
-    }
-    const result = await job(JSON.parse(body) as Record<string, unknown>);
-    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ result }));
+    await activeTrace.run(span, async () => {
+      if (request.method !== "POST" || request.url !== "/jobs") fail(404, "Not found");
+      if (request.headers.authorization !== `Bearer ${token}`) fail(401, "Unauthorized");
+      let body = "";
+      for await (const chunk of request) {
+        body += String(chunk);
+        if (Buffer.byteLength(body) > maxBytes * 2) fail(413, "Request is too large");
+      }
+      const result = await job(JSON.parse(body) as Record<string, unknown>);
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ result }));
+    });
+    span.finish({ status: "ok" });
   } catch (error) {
+    span.finish({
+      status: "error",
+      error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+    });
     const value = error as Error & { status?: number };
     response
       .writeHead(value.status ?? 500, { "content-type": "application/json" })
       .end(JSON.stringify({ error: value.message }));
   }
-}).listen(port, host, () => process.stdout.write(`SMath worker listening on ${host}:${port}\n`));
+});
+server.listen(port, host, () => process.stdout.write(`SMath worker listening on ${host}:${port}\n`));
+const shutdown = () => {
+  server.close(() => void telemetry.close());
+};
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);

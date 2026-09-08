@@ -8,6 +8,8 @@ import {
   cachedSnapshot,
   cacheHistory,
   cacheSnapshot,
+  clearCacheNamespace,
+  setCacheNamespace,
 } from "../src/cache.js";
 
 const snapshot = (id: string, sequence: number): SessionSnapshot => ({
@@ -27,6 +29,31 @@ const snapshot = (id: string, sequence: number): SessionSnapshot => ({
 });
 
 describe("Web offline cache", () => {
+  it("clears every entry for the departing account while a new namespace becomes active", async () => {
+    setCacheNamespace("switch-admin");
+    for (const id of ["admin-a", "admin-b", "admin-c"]) await cacheSnapshot(snapshot(id, 1));
+    const clearing = clearCacheNamespace();
+    setCacheNamespace("switch-user");
+    await cacheSnapshot(snapshot("user-session", 1));
+    await clearing;
+    expect((await cachedSnapshot("user-session"))?.session.id).toBe("user-session");
+    setCacheNamespace("switch-admin");
+    for (const id of ["admin-a", "admin-b", "admin-c"]) {
+      expect(await cachedSnapshot(id)).toBeUndefined();
+      expect(await cachedCursor(id)).toBeUndefined();
+    }
+  });
+
+  it("keeps an in-flight cache write in the account that initiated it", async () => {
+    setCacheNamespace("write-admin");
+    const writing = cacheSnapshot(snapshot("admin-private", 2));
+    setCacheNamespace("write-user");
+    await writing;
+    expect(await cachedSnapshot("admin-private")).toBeUndefined();
+    setCacheNamespace("write-admin");
+    expect((await cachedSnapshot("admin-private"))?.snapshotSequence).toBe(2);
+  });
+
   it("stores bounded snapshots and never moves a durable cursor backwards", async () => {
     const id = crypto.randomUUID();
     await cacheCursor(id, 12);

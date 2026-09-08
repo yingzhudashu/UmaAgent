@@ -1,13 +1,11 @@
-import { type TavilyClient, tavily } from "@tavily/core";
+import type { TavilyClient } from "@tavily/core";
 import type { SearchCitation } from "@uma-agent/protocol";
 import { safeFetch } from "./tools.js";
 
 export class SearchService {
-  private readonly tavilyClient: TavilyClient | undefined;
+  private tavilyClient: Promise<TavilyClient> | undefined;
 
-  constructor(apiKey = process.env.TAVILY_API_KEY?.trim()) {
-    this.tavilyClient = apiKey ? tavily({ apiKey, clientName: "uma-agent" }) : undefined;
-  }
+  constructor(private readonly apiKey = process.env.TAVILY_API_KEY?.trim()) {}
 
   async search(
     provider: "tavily" | "stackexchange",
@@ -19,8 +17,13 @@ export class SearchService {
     if (!normalized) throw new Error("Search query is required");
     const bounded = Math.max(1, Math.min(10, limit));
     if (provider === "stackexchange") return this.stackExchange(normalized, bounded, signal);
-    if (!this.tavilyClient) throw new Error("TAVILY_API_KEY is required for Tavily search");
-    const response = await this.tavilyClient.search(normalized, {
+    const apiKey = this.apiKey;
+    if (!apiKey) throw new Error("TAVILY_API_KEY is required for Tavily search");
+    // 共享首次初始化 Promise，避免并发搜索重复创建客户端。
+    this.tavilyClient ??= import("@tavily/core").then(({ tavily }) =>
+      tavily({ apiKey, clientName: "uma-agent" }),
+    );
+    const response = await (await this.tavilyClient).search(normalized, {
       searchDepth: "basic",
       maxResults: bounded,
       includeAnswer: false,

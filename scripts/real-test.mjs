@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -103,10 +103,37 @@ const config = {
 };
 await writeFile(configPath, JSON.stringify(config, null, 2));
 
+// 管理报告使用隔离测试库内的临时管理员；模型请求仍以普通用户执行。
+// 凭据仅存于进程内存，绝不修改部署库或以空报告掩盖权限错误。
+const { UmaDatabase } = await import("../packages/core/dist/database.js");
+const database = new UmaDatabase(stateDir);
+const adminTokenId = randomUUID();
+const adminSecret = randomUUID();
+const adminToken = `uma_pat_${adminTokenId}_${adminSecret}`;
+try {
+  const admin = database.createUser("admin");
+  database.putAuthToken({
+    id: adminTokenId,
+    userId: admin.id,
+    tokenHash: createHash("sha256").update(adminSecret).digest("hex"),
+    label: "isolated-real-test-reports",
+    scopes: ["user"],
+    expiresAt: Date.now() + 86_400_000,
+  });
+} finally {
+  database.close();
+}
+const reportOptions = { headers: { authorization: `Bearer ${adminToken}` } };
+
 let token = "";
 const server = spawn(process.execPath, ["apps/server/dist/main.js", `--config=${configPath}`], {
   cwd: resolve("."),
-  env: { ...process.env, UMA_CONFIG: configPath, UMA_IMAGE_TEST_KEY: "disabled" },
+  env: {
+    ...process.env,
+    UMA_CONFIG: configPath,
+    UMA_TELEMETRY_DIR: stateDir,
+    UMA_IMAGE_TEST_KEY: "disabled",
+  },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let serverOutput = "";
@@ -170,11 +197,17 @@ async function residentBytes(pid) {
   return Number(stdout.trim()) * 1024;
 }
 async function walBytes() {
-  try {
-    return (await stat(join(stateDir, "state.db-wal"))).size;
-  } catch {
-    return 0;
-  }
+  const sizes = await Promise.all(
+    ["state.db-wal", "telemetry.db-wal"].map(async (name) => {
+      try {
+        return (await stat(join(stateDir, name))).size;
+      } catch (error) {
+        if (error.code === "ENOENT") return 0;
+        throw error;
+      }
+    }),
+  );
+  return sizes.reduce((sum, size) => sum + size, 0);
 }
 function percentile(values, p) {
   const sorted = [...values].sort((a, b) => a - b);
@@ -226,13 +259,7 @@ async function runOne(sessionId, text, modeName = "agent") {
   const run = await waitRun(accepted.runId);
   const trace = await request(`/traces?runId=${encodeURIComponent(run.id)}&limit=500`);
   const audits = await request(`/audit/runs/${encodeURIComponent(run.id)}`);
-  let resources;
-  try {
-    resources = await request("/reports/resources?from=0&limit=500");
-  } catch (error) {
-    if (!String(error).includes("HTTP 403")) throw error;
-    resources = [];
-  }
+  const resources = await request("/reports/resources?from=0&limit=500", reportOptions);
   const latestResource = resources[0];
   return {
     run,
@@ -315,18 +342,8 @@ async function runEval() {
     const trace = await request(`/traces?runId=${encodeURIComponent(item.runId)}&limit=1`);
     if (trace.traceId) traceIds.push(trace.traceId);
   }
-  let diagnostics = null;
-  try {
-    diagnostics = await request("/reports/diagnostics?from=0");
-  } catch (error) {
-    if (!String(error).includes("HTTP 403")) throw error;
-  }
-  let resources = [];
-  try {
-    resources = await request("/reports/resources?from=0&limit=1");
-  } catch (error) {
-    if (!String(error).includes("HTTP 403")) throw error;
-  }
+  const diagnostics = await request("/reports/diagnostics?from=0", reportOptions);
+  const resources = await request("/reports/resources?from=0&limit=1", reportOptions);
   console.log(
     JSON.stringify({
       passed: exitCode === 0,

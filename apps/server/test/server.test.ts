@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,7 +10,7 @@ import { AuthService } from "../src/auth.js";
 import { crossOrigin, secureOrigin, trustLoopbackProxy } from "../src/request-origin.js";
 
 const cleanup: Array<() => Promise<void>> = [];
-const loopbackSocket = { remoteAddress: "127.0.0.1" } as Socket;
+const loopbackSocket = Object.assign(new EventEmitter(), { remoteAddress: "127.0.0.1" }) as Socket;
 afterEach(async () => {
   for (const action of cleanup.splice(0).reverse()) await action();
 });
@@ -197,6 +198,7 @@ describe("server", () => {
     expect(cookieSession.statusCode).toBe(200);
     const cookieSessionId = cookieSession.json<{ id: string }>().id;
     const socket = await app.injectWS("/api/v15/events", {
+      on: EventEmitter.prototype.on,
       socket: loopbackSocket,
       headers: {
         cookie: `${webCookie?.name}=${webCookie?.value}`,
@@ -217,6 +219,7 @@ describe("server", () => {
 
     await expect(
       app.injectWS("/api/v15/events", {
+        on: EventEmitter.prototype.on,
         socket: loopbackSocket,
         headers: { origin: "https://attacker.example" },
       }),
@@ -326,6 +329,7 @@ describe("server", () => {
           store: {
             start: (record: Record<string, unknown>) => void;
             finish: (record: Record<string, unknown>) => void;
+            linkRun: (runId: string, traceId: string) => void;
           };
         };
       }
@@ -405,6 +409,38 @@ describe("server", () => {
       hasMore: false,
       spans: [{ spanId: "server-model", parentSpanId: "server-root" }],
     });
+    // 外部 traceparent 不是授权凭据：复用管理员 traceId 不能读取管理员 Span。
+    const ownSession = await runtime.createSession({}, other.id);
+    const ownRun = runtime.database.createRun(
+      ownSession.id,
+      "scope-test",
+      runtime.models.snapshot(ownSession.model),
+      ownSession.thinkingLevel,
+      "agent",
+      "agent",
+    ).run;
+    const ownRecord = {
+      traceId: "server-trace",
+      spanId: "user-root",
+      parentSpanId: "server-root",
+      runId: ownRun.id,
+      sessionId: ownSession.id,
+      name: "run",
+      kind: "run",
+      service: "core",
+      startedAt: 3,
+      attributes: {},
+    };
+    telemetry.start(ownRecord);
+    telemetry.finish({ ...ownRecord, status: "ok", endedAt: 4, durationMs: 1, events: [] });
+    telemetry.linkRun(ownRun.id, "server-trace");
+    const scopedTrace = await app.inject({
+      method: "GET",
+      url: `/api/v15/traces?runId=${ownRun.id}&limit=1`,
+      headers: { authorization: `Bearer ${otherToken}` },
+    });
+    expect(scopedTrace.statusCode).toBe(200);
+    expect(scopedTrace.json()).toMatchObject({ hasMore: false, spans: [{ spanId: "user-root" }] });
     expect(
       (
         await app.inject({
@@ -489,13 +525,13 @@ describe("server", () => {
       url: "/api/v15/reports/operations?from=0",
       headers: { authorization: `Bearer ${testToken}` },
     });
-    expect(report.json()).toMatchObject({ runs: { total: 1 }, tools: { calls: 0 } });
+    expect(report.json()).toMatchObject({ runs: { total: 2 }, tools: { calls: 0 } });
     const diagnostics = await app.inject({
       method: "GET",
       url: "/api/v15/reports/diagnostics?from=0",
       headers: { authorization: `Bearer ${testToken}` },
     });
-    expect(diagnostics.json()).toMatchObject({ summary: { runs: { total: 1 } } });
+    expect(diagnostics.json()).toMatchObject({ summary: { runs: { total: 2 } } });
     const diagnosticsBody = diagnostics.json<{
       trace: { spans: number; incomplete: number; latencyMs: { p50: number; p95: number; p99: number } };
     }>();
@@ -568,6 +604,15 @@ describe("server", () => {
       (await app.inject({ method: "GET", url: "/api/v15/xianyu/workspace", headers: regularHeaders }))
         .statusCode,
     ).toBe(403);
+    for (const request of [
+      { method: "GET", url: "/api/v15/xianyu/status" },
+      { method: "GET", url: "/api/v15/xianyu/conversations" },
+      { method: "GET", url: "/api/v15/xianyu/login/status" },
+      { method: "POST", url: "/api/v15/xianyu/start" },
+      { method: "POST", url: "/api/v15/xianyu/pause" },
+      { method: "POST", url: "/api/v15/xianyu/stop" },
+    ])
+      expect((await app.inject({ ...request, headers: regularHeaders })).statusCode).toBe(403);
     const workspace = await app.inject({
       method: "GET",
       url: "/api/v15/xianyu/workspace",

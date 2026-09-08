@@ -3,7 +3,11 @@ import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const root = resolve(".");
-const files = execFileSync("git", ["ls-files", "*.ts", "*.tsx", "*.mjs", "*.js"], { encoding: "utf8" })
+const files = execFileSync(
+  "git",
+  ["ls-files", "--cached", "--others", "--exclude-standard", "*.ts", "*.tsx", "*.mjs", "*.js"],
+  { encoding: "utf8" },
+)
   .trim()
   .split(/\r?\n/)
   .filter(Boolean);

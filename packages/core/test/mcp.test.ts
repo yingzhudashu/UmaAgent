@@ -149,4 +149,29 @@ describe("McpManager", () => {
     await tracedFetch?.("https://mcp.example");
     expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).has("traceparent")).toBe(false);
   });
+
+  it("keeps concurrent stdio trace metadata isolated from other calls", async () => {
+    const manager = new McpManager();
+    await manager.connect([{ name: "local", transport: "stdio", command: "node" }], 100);
+    const tool = manager.tools()[0] as AgentTool;
+    const traceIds = ["4bf92f3577b34da6a3ce929d0e0e4736", "1bf92f3577b34da6a3ce929d0e0e4736"];
+    await Promise.all(
+      traceIds.map((traceId) =>
+        manager.withTrace({ traceId, spanId: "00f067aa0ba902b7", traceFlags: 1 }, async () => {
+          await Promise.resolve();
+          await execute(tool);
+        }),
+      ),
+    );
+    await execute(tool);
+    const calls = state.instances[0]?.callTool.mock.calls;
+    expect(calls?.[0]?.[0]).toMatchObject({
+      _meta: { traceparent: `00-${traceIds[0]}-00f067aa0ba902b7-01` },
+    });
+    expect(calls?.[1]?.[0]).toMatchObject({
+      _meta: { traceparent: `00-${traceIds[1]}-00f067aa0ba902b7-01` },
+    });
+    expect(calls?.[2]?.[0]).not.toHaveProperty("_meta");
+    await manager.close();
+  });
 });

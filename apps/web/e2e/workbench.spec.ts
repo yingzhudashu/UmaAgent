@@ -2,6 +2,55 @@ import { expect, type Page, test } from "@playwright/test";
 
 let sharedToken: string | undefined;
 
+test("switches from Xianyu admin to a normal account without stopping the adapter", async ({ page }) => {
+  const registered = await page.request.post("/api/v15/auth/register", { data: { label: "switch-user" } });
+  expect(registered.ok()).toBeTruthy();
+  const ordinary = (await registered.json()) as { token: string };
+  await page.context().clearCookies();
+  const channelRequests: string[] = [];
+  await page.route("**/api/v15/xianyu/**", async (route) => {
+    channelRequests.push(new URL(route.request().url()).pathname);
+    await route.fulfill({
+      json: {
+        workspace: "xianyu",
+        autoReplyEnabled: true,
+        service: { connected: true },
+        login: { status: "authenticated" },
+        sessions: [],
+      },
+    });
+  });
+  let socketsClosed = 0;
+  page.on("websocket", (socket) =>
+    socket.on("close", () => {
+      socketsClosed += 1;
+    }),
+  );
+  await page.goto("/");
+  await page
+    .getByLabel("访问令牌")
+    .fill("uma_pat_00000000-0000-4000-8000-000000000001_faux-local-token-012345678901234567890123");
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await expect(page.getByRole("button", { name: "切换普通账号" })).toBeVisible();
+  await expect.poll(() => channelRequests.length).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "切换普通账号" }).click();
+  await expect(page.getByLabel("访问令牌")).toBeVisible();
+  await expect.poll(() => socketsClosed).toBeGreaterThan(0);
+  const requestsAtSwitch = channelRequests.length;
+  await page.getByLabel("访问令牌").fill(ordinary.token);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await expect(page.getByText("Core 已连接")).toBeVisible();
+  await expect(page.getByRole("button", { name: "切换普通账号" })).toHaveCount(0);
+  // 覆盖一次工作台刷新周期，确认卸载后的轮询没有带着普通账号继续访问管理接口。
+  await page.waitForTimeout(10_100);
+  expect(channelRequests.length).toBe(requestsAtSwitch);
+  expect(channelRequests.some((path) => /\/(stop|pause|logout)$/.test(path))).toBe(false);
+  const forbidden = await page.request.get("/api/v15/xianyu/status", {
+    headers: { authorization: `Bearer ${ordinary.token}` },
+  });
+  expect(forbidden.status()).toBe(403);
+});
+
 async function register(page: Page, reuse = false): Promise<string> {
   if (reuse && sharedToken) {
     await login(page, sharedToken);
@@ -106,26 +155,26 @@ test("two devices converge on one session and offline mode is read-only", async 
   expect(mobileAvatar).toEqual({ width: 56, height: 56 });
   await first.getByRole("button", { name: "会话设置" }).click();
   const settings = first.getByRole("dialog", { name: "会话设置" });
-  await expect(settings.getByRole("heading", { name: "后台任务" })).toBeVisible();
-  await expect(settings.getByRole("heading", { name: "记忆" })).toBeVisible();
-  await expect(settings.getByRole("heading", { name: "调度" })).toBeVisible();
-  await expect(settings.getByRole("heading", { name: "知识库" })).toBeVisible();
-  await expect(settings.locator(".settings-section--operation")).toHaveCount(4);
-  await expect(settings.locator(".settings-section--operation .settings-panel--nested")).toHaveCount(0);
-  const widths = await settings.locator(".settings-section--operation").evaluateAll((sections) =>
-    sections.map((section) => {
-      const style = getComputedStyle(section);
-      return {
-        scrollWidth: section.scrollWidth,
-        clientWidth: section.clientWidth,
-        padding: [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft].map(
-          Number.parseFloat,
-        ),
-      };
-    }),
-  );
-  expect(widths.every(({ scrollWidth, clientWidth }) => scrollWidth <= clientWidth)).toBe(true);
-  expect(widths.every(({ padding }) => padding.every((value) => value >= 12))).toBe(true);
+  for (const [area, heading] of [
+    ["任务", "后台任务"],
+    ["记忆", "记忆"],
+    ["调度", "调度"],
+    ["资源", "知识库"],
+  ]) {
+    await settings
+      .getByRole("navigation", { name: "设置区域" })
+      .getByRole("button", { name: area, exact: true })
+      .click();
+    await expect(settings.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+    await expect(settings.locator(".settings-section--operation")).toHaveCount(1);
+    const widths = await settings
+      .locator(".settings-section--operation")
+      .evaluateAll((sections) =>
+        sections.map((section) => ({ scrollWidth: section.scrollWidth, clientWidth: section.clientWidth })),
+      );
+    expect(widths.every(({ scrollWidth, clientWidth }) => scrollWidth <= clientWidth)).toBe(true);
+  }
+  await settings.getByRole("button", { name: "会话与账号", exact: true }).click();
   first.once("dialog", (dialog) => dialog.accept());
   await settings.getByRole("button", { name: "退出登录" }).click();
   await expect(first.getByLabel("访问令牌")).toBeVisible();
@@ -154,7 +203,7 @@ test("pastes an image into the composer and sends it as an attachment", async ({
 
 test("keeps the workbench fixed while the transcript and settings scroll independently", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await register(page);
+  await register(page, true);
   await page.getByRole("button", { name: "打开导航" }).click();
   await page.getByRole("button", { name: "新会话" }).click();
   const input = page.getByPlaceholder("向 UmaAgent 发送消息");
@@ -299,4 +348,25 @@ test("keeps tool output collapsed until requested", async ({ page }) => {
     return overflowX;
   });
   expect(markdownCodeOverflow).toBe("auto");
+});
+
+test("loads settings data only when its area is opened", async ({ page }) => {
+  const paths: string[] = [];
+  page.on("request", (request) => paths.push(new URL(request.url()).pathname));
+  await register(page, true);
+  await page.getByRole("button", { name: "会话设置" }).click();
+  const settings = page.getByRole("dialog", { name: "会话设置" });
+  await expect(settings.getByText("Agent Profile")).toBeVisible();
+  expect(paths).not.toContain("/api/v15/tasks");
+  expect(paths).not.toContain("/api/v15/schedules");
+  expect(paths).not.toContain("/api/v15/knowledge");
+  const tasks = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v15/tasks");
+  await settings
+    .getByRole("navigation", { name: "设置区域" })
+    .getByRole("button", { name: "任务", exact: true })
+    .click();
+  expect((await tasks).ok()).toBe(true);
+  await expect(settings.getByRole("heading", { name: "后台任务" })).toBeVisible();
+  expect(paths).not.toContain("/api/v15/schedules");
+  expect(paths).not.toContain("/api/v15/knowledge");
 });

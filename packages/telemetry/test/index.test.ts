@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   formatTraceparent,
@@ -14,6 +15,72 @@ const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
 
 describe("TelemetryStore", () => {
+  it("rejects the obsolete resource schema without adding missing columns", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-schema-"));
+    roots.push(root);
+    const db = new DatabaseSync(join(root, "telemetry.db"));
+    db.exec("CREATE TABLE resource_samples(id TEXT PRIMARY KEY, captured_at INTEGER NOT NULL)");
+    db.close();
+    expect(() => new TelemetryStore(root, "test")).toThrow("Unsupported telemetry schema");
+    const reopened = new DatabaseSync(join(root, "telemetry.db"));
+    const columns = reopened
+      .prepare("PRAGMA table_info(resource_samples)")
+      .all()
+      .map((row) => row.name);
+    reopened.close();
+    expect(columns).toEqual(["id", "captured_at"]);
+  });
+
+  it("scopes Run pagination to its descendants even when another Run reuses the trace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-scope-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "test");
+    for (const [spanId, runId, parentSpanId] of [
+      ["foreign", "foreign-run", undefined],
+      ["own", "own-run", "foreign"],
+      ["worker", undefined, "own"],
+      ["foreign-child", "foreign-run", "own"],
+      ["foreign-worker", undefined, "foreign-child"],
+    ]) {
+      const record = {
+        traceId: "shared",
+        spanId: spanId as string,
+        runId,
+        parentSpanId,
+        name: "operation",
+        kind: "test",
+        service: "test",
+        startedAt: 1,
+        attributes: {},
+      };
+      store.start(record);
+      store.finish({ ...record, status: "ok", endedAt: 2, durationMs: 1, events: [] });
+    }
+    const first = store.listSpans({ runId: "own-run", scopeToRun: true, limit: 1 });
+    const last = store.listSpans({ runId: "own-run", scopeToRun: true, limit: 1, offset: 1 });
+    await store.close();
+    expect(first.spans.map((span) => span.spanId)).toEqual(["own"]);
+    expect(first.hasMore).toBe(true);
+    expect(last.spans.map((span) => span.spanId)).toEqual(["worker"]);
+    expect(last.hasMore).toBe(false);
+  });
+
+  it("keeps business results and exposes write failures when telemetry storage rejects writes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-failure-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "test");
+    store.db.exec(
+      "CREATE TRIGGER reject_trace BEFORE INSERT ON spans BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END",
+    );
+    const span = new TraceService(store, "test").startRoot("run-failure", "session-failure");
+    const result = await span.startSpan({ name: "business" }, async () => "business-result");
+    span.finish({ status: "ok" });
+    const summary = store.summarize(0, Date.now());
+    await store.close();
+    expect(result).toBe("business-result");
+    expect(summary.writeFailures).toBeGreaterThanOrEqual(2);
+  });
+
   it("parses and formats strict W3C traceparent values", () => {
     const value = "00-4BF92F3577B34DA6A3CE929D0E0E4736-00F067AA0BA902B7-01";
     expect(parseTraceparent(value)).toEqual({
@@ -47,6 +114,33 @@ describe("TelemetryStore", () => {
       traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
       parentSpanId: "00f067aa0ba902b7",
     });
+    await store.close();
+  });
+
+  it("stores and lists resource samples in telemetry only", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-resources-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "core");
+    store.recordResource({
+      id: "sample-1",
+      capturedAt: 100,
+      cpuUserMicros: 10,
+      cpuSystemMicros: 2,
+      sampleDurationMs: 1_000,
+      cpuPercent: 0.0003,
+      rssBytes: 1024,
+      heapUsedBytes: 512,
+      heapTotalBytes: 2048,
+      externalBytes: 8,
+      arrayBuffersBytes: 4,
+      eventLoopDelayMs: 1.5,
+      walBytes: 64,
+      activeRuns: 1,
+      queuedRuns: 2,
+    });
+    expect(store.listResources(0, 200, 10)).toMatchObject([
+      { id: "sample-1", walBytes: 64, queuedRuns: 2, sampleDurationMs: 1_000, cpuPercent: 0.0003 },
+    ]);
     await store.close();
   });
 
@@ -157,7 +251,7 @@ describe("TelemetryStore", () => {
         'request failed: Authorization: Bearer abc.def; cookie: sid=private; api_key="secret-value" prompt="private prompt" https://example.test/?token=query-secret sk-test-secret-value',
       ),
     ).toBe(
-      "request failed: Authorization: [REDACTED]; cookie: [REDACTED]; api_key=[REDACTED] prompt=[REDACTED] https://example.test/?token=[REDACTED] [REDACTED]",
+      "request failed: Authorization: [REDACTED]; cookie: [REDACTED]; api_key=[REDACTED] prompt=[REDACTED] [REDACTED_URL] [REDACTED]",
     );
     expect(redactErrorMessage("ECONNRESET while calling provider")).toBe("ECONNRESET while calling provider");
 
@@ -195,6 +289,34 @@ describe("TelemetryStore", () => {
     };
     expect(String(stored.error_message ?? "")).not.toContain("abc.def");
     await store.close();
+  });
+
+  it("redacts sensitive values in attributes and events before persistence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-values-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "test");
+    const trace = new TraceService(store, "test");
+    const span = trace.startRoot("run-values", "session-values", "tool", {
+      endpoint: "https://user:password@example.test/private-path?signature=private-query",
+      detail: "request uma_pat_private-value failed",
+      toolArguments: '{"text":"private-tool-input"}',
+      count: 3,
+    });
+    span.addEvent("request.failed", { detail: "Bearer private-event-value" });
+    span.finish({ status: "ok" });
+    const record = store.listSpans({ runId: "run-values" }).spans[0];
+    const storedAttributes = JSON.stringify(store.db.prepare("SELECT attributes_json FROM spans").all());
+    const storedEvents = JSON.stringify(store.db.prepare("SELECT attributes_json FROM span_events").all());
+    await store.close();
+    expect(record?.attributes).toMatchObject({
+      endpoint: "[REDACTED_URL]",
+      detail: "request [REDACTED] failed",
+      toolArguments: "[REDACTED]",
+      count: 3,
+    });
+    expect(record?.events[0]?.attributes).toEqual({ detail: "[REDACTED]" });
+    expect(storedAttributes).not.toContain("private-");
+    expect(storedEvents).not.toContain("private-");
   });
 
   it("finishes a span at most once even when the store API is called repeatedly", async () => {

@@ -33,7 +33,11 @@ export interface XianyuCore {
  * platform-specific session and message protocol; this layer owns lifecycle,
  * pause/resume state, forwarding, and diagnostics only.
  */
-export function createXianyuAdapter(deps: { transport: XianyuTransport; core: XianyuCore }) {
+export function createXianyuAdapter(deps: {
+  transport: XianyuTransport;
+  core: XianyuCore;
+  traceInbound?: (message: XianyuInboundMessage, operation: () => Promise<void>) => Promise<void>;
+}) {
   let started = false;
   let paused = false;
   let inbound = 0;
@@ -73,7 +77,11 @@ export function createXianyuAdapter(deps: { transport: XianyuTransport; core: Xi
       if (started) return;
       started = true;
       try {
-        await deps.transport.start(handleInbound);
+        await deps.transport.start((message) =>
+          deps.traceInbound
+            ? deps.traceInbound(message, () => handleInbound(message))
+            : handleInbound(message),
+        );
       } catch (error) {
         started = false;
         throw error;

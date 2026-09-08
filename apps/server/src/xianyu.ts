@@ -1,4 +1,5 @@
 import type { UmaRuntime, XianyuAgentApi } from "@uma-agent/core";
+import { formatTraceparent, type TraceParent } from "@uma-agent/telemetry";
 
 type Json = Record<string, unknown> | unknown[];
 
@@ -69,7 +70,11 @@ export function validateXianyuPublishBody(body: Record<string, unknown>): Record
 export class XianyuControlClient {
   private readonly baseUrl: string;
   private readonly token: string;
-  constructor(adapterUrl: string, token: string) {
+  constructor(
+    adapterUrl: string,
+    token: string,
+    private readonly parent?: TraceParent,
+  ) {
     this.baseUrl = adapterUrl.replace(/\/$/, "");
     this.token = token;
   }
@@ -80,6 +85,7 @@ export class XianyuControlClient {
         authorization: `Bearer ${this.token}`,
         ...(init.body ? { "content-type": "application/json" } : {}),
         ...init.headers,
+        ...(this.parent ? { traceparent: formatTraceparent(this.parent) } : {}),
       },
     });
     if (!response.ok) throw new Error(`闲鱼 Adapter 请求失败: HTTP ${response.status}`);

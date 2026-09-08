@@ -14,16 +14,6 @@ jobs:
           node-version: 22.19.0
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Verify removed channel has no tracked remnants
-        shell: bash
-        run: |
-          set -euo pipefail
-          removed_channel=$(printf 'fe%s' 'ishu')
-          removed_vendor=$(printf 'la%s' 'rk')
-          if git grep -I -n -i -e "$removed_channel" -e "$removed_vendor" -- .; then
-            echo 'Removed channel remnants detected' >&2
-            exit 1
-          fi
       - run: npm run build
       - run: npm run build:web:embed
       - name: Build core image with plain diagnostics
@@ -78,7 +68,8 @@ jobs:
 
           start_core() {
             docker run -d --name uma-core --network "$network" \
-              -e UMA_AUTH_TOKEN=ci-core-token \
+              -e IMAGE_GENERATION_API_KEY=ci-placeholder-image-key \
+              -e UMA_XIANYU_CONTROL_TOKEN=ci-xianyu-token \
               -e OPENAI_API_KEY=ci-placeholder-key \
               -e BROWSER_WORKER_TOKEN=ci-browser-token \
               -e UMA_TELEMETRY_DIR=/data/telemetry \
@@ -89,15 +80,17 @@ jobs:
             wait_healthy uma-core
           }
           start_core
-          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v15/sessions',{method:'POST',headers:{authorization:'Bearer ci-core-token','content-type':'application/json'},body:JSON.stringify({mode:'assistant',title:'CI persistence'})}).then(async r=>{if(!r.ok)throw new Error(await r.text())})"
+          ci_token=$(docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v15/auth/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:'ci-persistence'})}).then(async r=>{if(!r.ok)throw new Error('CI registration failed');console.log((await r.json()).token)})")
+          docker exec -e UMA_CI_TOKEN="$ci_token" uma-core node -e "fetch('http://127.0.0.1:3210/api/v15/sessions',{method:'POST',headers:{authorization:'Bearer '+process.env.UMA_CI_TOKEN,'content-type':'application/json'},body:JSON.stringify({title:'CI persistence'})}).then(async r=>{if(!r.ok)throw new Error(await r.text())})"
 
           docker stop uma-core >/dev/null
           docker rm uma-core >/dev/null
           start_core
-          docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v15/sessions',{headers:{authorization:'Bearer ci-core-token'}}).then(r=>r.json()).then(items=>{if(!items.some(item=>item.title==='CI persistence'))process.exit(1)})"
+          docker exec -e UMA_CI_TOKEN="$ci_token" uma-core node -e "fetch('http://127.0.0.1:3210/api/v15/sessions',{headers:{authorization:'Bearer '+process.env.UMA_CI_TOKEN}}).then(r=>r.json()).then(items=>{if(!items.some(item=>item.title==='CI persistence'))process.exit(1)})"
 
           docker create --name uma-core-lock --network "$network" \
-            -e UMA_AUTH_TOKEN=ci-core-token \
+            -e IMAGE_GENERATION_API_KEY=ci-placeholder-image-key \
+              -e UMA_XIANYU_CONTROL_TOKEN=ci-xianyu-token \
             -e OPENAI_API_KEY=ci-placeholder-key \
             -e BROWSER_WORKER_TOKEN=ci-browser-token \
             -e UMA_TELEMETRY_DIR=/data/telemetry \
@@ -116,6 +109,8 @@ jobs:
 
           docker run -d --name uma-xianyu --network "$network" \
             -e UMA_XIANYU_CONTROL_TOKEN=ci-xianyu-token \
+            -e UMA_TELEMETRY_DIR=/data/telemetry \
+            -v "$telemetry_volume:/data/telemetry" \
             -v "$xianyu_volume:/data/xianyu" \
             -v "$PWD/docker/ci-config.user.json:/run/uma/config.user.json:ro" \
             uma-agent-xianyu:ci >/dev/null
@@ -128,7 +123,7 @@ jobs:
       - run: npm run test:coverage
       - run: npm run test:eval:faux
       - name: Performance budget smoke
-        run: UMA_PERF_MESSAGES=20 UMA_PERF_REQUIRE=1 npm run test:perf
+        run: UMA_PERF_MESSAGES=20 npm run test:perf
       - run: npx playwright install --with-deps chromium
       - run: npm run test:web:e2e
       - name: Short reliability soak

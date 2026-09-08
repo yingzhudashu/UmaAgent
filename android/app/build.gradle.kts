@@ -79,12 +79,15 @@ android { namespace = "site.robotclaw.umaagent"; compileSdk = 35
 
 dependencies {
     implementation(platform(libs.androidx.compose.bom)); implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.compose.ui); implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.ui); implementation(libs.androidx.compose.material3); implementation(libs.androidx.compose.material.icons)
     implementation(libs.androidx.navigation.compose); implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.viewmodel.ktx); implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp); implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.core.ktx)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test)
     testImplementation(libs.junit4)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)

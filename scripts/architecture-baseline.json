@@ -1,6 +1,6 @@
 {
   "maxLines": {
-    "packages/core/src/runtime.ts": 2795,
+    "packages/core/src/runtime.ts": 2801,
     "apps/web/src/App.tsx": 1320,
     "packages/core/src/database.ts": 3001,
     "apps/server/src/app.ts": 1622,

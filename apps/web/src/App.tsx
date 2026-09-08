@@ -9,7 +9,6 @@ import type {
   Approval,
   Attachment,
   InteractionMode,
-  QualityAssessment,
   SessionSnapshot,
   TranscriptItem,
 } from "@uma-agent/protocol";
@@ -26,17 +25,9 @@ import {
   TerminalSquare,
   Trash2,
 } from "lucide-react";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BackgroundTaskArea } from "./areas/BackgroundTaskArea.js";
-import { DiagnosticsArea } from "./areas/DiagnosticsArea.js";
-import { EvaluationArea } from "./areas/EvaluationArea.js";
-import { MemoryArea } from "./areas/MemoryArea.js";
-import { OptimizationArea } from "./areas/OptimizationArea.js";
-import { ResourceArea } from "./areas/ResourceArea.js";
+import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalBar, RunPanel } from "./areas/RunArea.js";
-import { ScheduleArea } from "./areas/ScheduleArea.js";
 import { SessionArea } from "./areas/SessionArea.js";
-import { XianyuWorkspace } from "./areas/XianyuWorkspace.js";
 import {
   cacheCursor,
   cachedCursor,
@@ -60,23 +51,42 @@ import { ResponseCard } from "./components/ResponseCard.js";
 import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
 import { Login } from "./Login.js";
-import { useQualityHistory } from "./quality-history.js";
+import { type QualityOperation, useQualityHistory } from "./quality-history.js";
 import { buildConversationEntries } from "./responseTurns.js";
 import { applyDurableEvent, applyStreamingEvent, mergeSessionSnapshot } from "./streaming.js";
+
+const XianyuWorkspace = lazy(() =>
+  import("./areas/XianyuWorkspace.js").then((module) => ({ default: module.XianyuWorkspace })),
+);
+const BackgroundTaskArea = lazy(() =>
+  import("./areas/BackgroundTaskArea.js").then((module) => ({ default: module.BackgroundTaskArea })),
+);
+const DiagnosticsArea = lazy(() =>
+  import("./areas/DiagnosticsArea.js").then((module) => ({ default: module.DiagnosticsArea })),
+);
+const EvaluationArea = lazy(() =>
+  import("./areas/EvaluationArea.js").then((module) => ({ default: module.EvaluationArea })),
+);
+const MemoryArea = lazy(() =>
+  import("./areas/MemoryArea.js").then((module) => ({ default: module.MemoryArea })),
+);
+const OptimizationArea = lazy(() =>
+  import("./areas/OptimizationArea.js").then((module) => ({ default: module.OptimizationArea })),
+);
+const ResourceArea = lazy(() =>
+  import("./areas/ResourceArea.js").then((module) => ({ default: module.ResourceArea })),
+);
+const ScheduleArea = lazy(() =>
+  import("./areas/ScheduleArea.js").then((module) => ({ default: module.ScheduleArea })),
+);
+
+type SettingsArea = "session" | "tasks" | "memory" | "schedules" | "resources" | "admin";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
-type QualityOperation = {
-  kind: "review" | "improve";
-  status: "running" | "completed" | "failed";
-  runId?: string;
-  error?: string;
-  assessments?: readonly QualityAssessment[];
-  result?: string;
-};
 export interface AppProps {
   client: UmaClient;
   embedded?: boolean;
@@ -93,6 +103,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const [userRole, setUserRole] = useState<"admin" | "user">("user");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorSection, setInspectorSection] = useState<InspectorSection>();
+  const [settingsArea, setSettingsArea] = useState<SettingsArea>("session");
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
@@ -137,6 +148,9 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     },
   });
   const authenticated = loginRequired === false;
+  // 设置按区域查询；打开命令面板时按原有命令需求提供数据，关闭区域不继续刷新管理资源。
+  const areaEnabled = (area: SettingsArea) =>
+    authenticated && (commandOpen || (inspectorSection === "settings" && settingsArea === area));
   const models = useQuery({
     queryKey: ["models"],
     queryFn: () => client.listModels(),
@@ -156,67 +170,67 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const tasks = useQuery({
     queryKey: ["tasks"],
     queryFn: () => client.listTasks(),
-    enabled: authenticated,
+    enabled: areaEnabled("tasks"),
   });
   const schedules = useQuery({
     queryKey: ["schedules"],
     queryFn: () => client.listSchedules(),
-    enabled: authenticated,
+    enabled: areaEnabled("schedules"),
   });
   const report = useQuery({
     queryKey: ["operations-report"],
     queryFn: () => client.operationsReport(),
-    enabled: authenticated && userRole === "admin",
+    enabled: areaEnabled("session") && userRole === "admin",
   });
   const diagnostics = useQuery({
     queryKey: ["diagnostics"],
     queryFn: () => client.diagnosticsReport(),
-    enabled: authenticated && userRole === "admin",
+    enabled: areaEnabled("admin") && userRole === "admin",
   });
   const evaluations = useQuery({
     queryKey: ["evaluations"],
     queryFn: () => client.listEvaluationReports(),
-    enabled: authenticated && userRole === "admin",
+    enabled: areaEnabled("admin") && userRole === "admin",
   });
   const evaluationTrends = useQuery({
     queryKey: ["evaluation-trends"],
     queryFn: () => client.listEvaluationTrends(Date.now() - 30 * 86_400_000, Date.now(), "day"),
-    enabled: authenticated && userRole === "admin",
+    enabled: areaEnabled("admin") && userRole === "admin",
   });
   const optimization = useQuery({
     queryKey: ["optimization"],
     queryFn: () => client.listOptimizationProposals(),
-    enabled: authenticated && userRole === "admin",
+    enabled: areaEnabled("admin") && userRole === "admin",
   });
   const publicConfig = useQuery({
     queryKey: ["config"],
     queryFn: () => client.publicConfig(),
-    enabled: authenticated && userRole === "admin",
+    enabled: areaEnabled("session") && userRole === "admin",
   });
   const memories = useQuery({
     queryKey: ["memory", "candidate"],
     queryFn: () => client.listMemoryFacts("candidate"),
-    enabled: authenticated,
+    enabled: areaEnabled("memory"),
   });
   const skills = useQuery({
     queryKey: ["skills"],
     queryFn: () => client.skillState(),
-    enabled: authenticated && userRole === "admin",
+    enabled: areaEnabled("resources") && userRole === "admin",
   });
   const profile = useQuery({
     queryKey: ["profile"],
     queryFn: () => client.getAgentProfile(),
-    enabled: authenticated,
+    enabled: areaEnabled("session"),
   });
   const mcp = useQuery({
     queryKey: ["mcp"],
     queryFn: () => client.mcpStatus(),
-    enabled: authenticated && userRole === "admin",
+    enabled: areaEnabled("resources") && userRole === "admin",
   });
   const knowledge = useQuery({
     queryKey: ["knowledge"],
     queryFn: () => client.listKnowledge(),
-    enabled: authenticated,
+    enabled: areaEnabled("resources"),
   });
   const selectedSession = sessions.data?.find((item) => item.id === selected);
   const activeBranchId = selectedSession?.activeBranchId;
@@ -632,15 +646,19 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const signOut = () => {
     const logout = client.logout();
     setLoginRequired(true);
-    client.close();
     setInteractionMode("agent");
     setSelected(undefined);
     setPrompt("");
+    setQualityOperations({});
+    setCommandOpen(false);
+    setLastSyncAt(undefined);
+    setSyncCursor(undefined);
     setApprovals([]);
     setAttachments([]);
     setHistorical([]);
     setHistoryHasMore(undefined);
     setInspectorSection(undefined);
+    setSettingsArea("session");
     setSidebarOpen(false);
     setUserRole("user");
     void queryClient.cancelQueries();
@@ -670,7 +688,9 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   if (showXianyuWorkspace)
     return (
       <div className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${theme}`}>
-        <XianyuWorkspace client={client} embedded={embedded} />
+        <Suspense fallback={<output>正在载入咸鱼工作台…</output>}>
+          <XianyuWorkspace client={client} embedded={embedded} onSwitchAccount={signOut} />
+        </Suspense>
       </div>
     );
   return (
@@ -1091,173 +1111,202 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               setInspectorSection(undefined);
             }}
           >
-            <InspectorContent>
-              {inspectorSection === "connection" && <ConnectionPanel health={health.data} />}
-              {inspectorSection === "sync" && (
-                <SyncPanel
-                  browserOnline={browserOnline}
-                  coreAvailable={!health.isError}
-                  selected={selected}
-                  eventState={eventState}
-                  lastSyncAt={lastSyncAt}
-                  cursor={syncCursor}
-                  retry={() => client.connectEvents()}
-                />
-              )}
-              {inspectorSection === "approvals" && (
-                <ApprovalPanel
-                  approvals={approvals}
-                  selected={selected}
-                  disabled={offline}
-                  resolve={(approval, approved) => void resolveApproval(approval, approved)}
-                />
-              )}
-              {inspectorSection === "run" && (
-                <RunPanel
-                  run={currentRun}
-                  checkpoints={checkpoints.data ?? []}
-                  actions={actions.data ?? []}
-                  retry={retryLast}
-                  resume={() =>
-                    currentRun && void client.resumeRun(currentRun.id).then(() => snapshot.refetch())
-                  }
-                  decide={(action, decision) =>
-                    currentRun &&
-                    void client.decideRunAction(currentRun.id, action.id, decision).then(() => {
-                      void actions.refetch();
-                      void snapshot.refetch();
-                    })
-                  }
-                  disabled={offline}
-                />
-              )}
-              {inspectorSection === "settings" && (
-                <BackgroundTaskArea
-                  tasks={tasks.data ?? []}
-                  disabled={offline}
-                  create={(prompt) => {
-                    if (!selected) return;
-                    void client.createTask(prompt, selected).then(() => tasks.refetch());
-                  }}
-                  cancel={(id) => void client.cancelTask(id).then(() => tasks.refetch())}
-                  remove={(id) => void client.deleteTask(id).then(() => tasks.refetch())}
-                  openRun={(task) => {
-                    setSelected(task.sessionId);
-                    setInspectorSection("run");
-                  }}
-                />
-              )}
-              {inspectorSection === "settings" && (
-                <MemoryArea
-                  facts={memories.data ?? []}
-                  disabled={offline}
-                  reject={(id) => void client.reviewMemoryFact(id, "rejected").then(() => memories.refetch())}
-                  accept={(id) => void client.reviewMemoryFact(id, "active").then(() => memories.refetch())}
-                />
-              )}
-              {inspectorSection === "settings" && (
-                <ScheduleArea
-                  schedules={schedules.data ?? []}
-                  disabled={offline}
-                  create={(input) => void client.createSchedule(input).then(() => schedules.refetch())}
-                  toggle={(id, enabled) =>
-                    void client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
-                  }
-                  run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
-                  remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
-                  loadRuns={(id) => client.listScheduleRuns(id)}
-                  cancelRun={(id) => void client.cancelScheduleRun(id).then(() => schedules.refetch())}
-                />
-              )}
-              {inspectorSection === "settings" && (
-                <ResourceArea
-                  admin={userRole === "admin"}
-                  packages={skills.data?.packages ?? []}
-                  mcp={mcp.data ?? []}
-                  knowledge={knowledge.data ?? []}
-                  disabled={offline}
-                  refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
-                  installSkill={(reference) =>
-                    void client.installSkill({ source: "local", reference }).then(() => skills.refetch())
-                  }
-                  setSkillStatus={(id, action) =>
-                    void client.setSkillStatus(id, action).then(() => skills.refetch())
-                  }
-                  addKnowledgePath={(name, path) =>
-                    void client.indexKnowledge(name, path).then(() => knowledge.refetch())
-                  }
-                  uploadKnowledge={(file) =>
-                    void client
-                      .upload(file, file.name, selected)
-                      .then((attachment) => {
-                        if (!selected) throw new Error("Select a session before uploading knowledge");
-                        return client.indexKnowledgeAttachment(file.name, attachment.id, selected);
-                      })
-                      .then(() => knowledge.refetch())
-                  }
-                  deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
-                  reindexKnowledge={(id) => void client.reindexKnowledge(id).then(() => knowledge.refetch())}
-                  searchKnowledge={(query, sourceId) => client.searchKnowledge(query, sourceId)}
-                />
-              )}
-              {inspectorSection === "settings" && userRole === "admin" && (
-                <section className="inspector-group">
-                  <h3>管理</h3>
-                  <EvaluationArea reports={evaluations.data ?? []} trends={evaluationTrends.data ?? []} />
-                  <DiagnosticsArea report={diagnostics.data} />
-                  <OptimizationArea
-                    proposals={optimization.data ?? []}
-                    disabled={offline}
-                    generate={() =>
-                      void client.generateOptimizationProposals().then(() => optimization.refetch())
-                    }
-                    decide={(id, status) =>
-                      void client.decideOptimizationProposal(id, status).then(() => optimization.refetch())
-                    }
-                  />
-                  <div className="operation-list">
-                    {audit.data?.map((record) => (
-                      <div key={record.id}>
-                        <strong>
-                          {record.kind} · {record.name}
-                        </strong>
-                        <small className="operation-meta">{record.status}</small>
-                        {record.error && <p className="error">{record.error}</p>}
-                      </div>
+            <Suspense fallback={<output>正在加载管理区域…</output>}>
+              <InspectorContent>
+                {inspectorSection === "settings" && (
+                  <nav aria-label="设置区域" className="settings-area-nav">
+                    {(
+                      [
+                        ["session", "会话与账号"],
+                        ["tasks", "任务"],
+                        ["schedules", "调度"],
+                        ["memory", "记忆"],
+                        ["resources", "资源"],
+                        ...(userRole === "admin" ? [["admin", "管理"]] : []),
+                      ] as [SettingsArea, string][]
+                    ).map(([area, label]) => (
+                      <button
+                        key={area}
+                        type="button"
+                        aria-pressed={settingsArea === area}
+                        onClick={() => setSettingsArea(area)}
+                      >
+                        {label}
+                      </button>
                     ))}
-                  </div>
-                </section>
-              )}
-              {inspectorSection === "settings" && (
-                <section className="inspector-group">
-                  <h3>会话设置</h3>
-                  <SessionSettingsPanel
-                    session={snapshot.data?.session}
-                    health={health.data}
-                    installAvailable={Boolean(installPrompt)}
-                    install={() => void installPrompt?.prompt()}
-                    report={report.data}
-                    profile={profile.data}
-                    saveProfile={async (content) => {
-                      await client.updateAgentProfile(content);
-                      await profile.refetch();
-                    }}
-                    logout={signOut}
-                    reloadConfig={() =>
-                      void client.reloadConfig().then(() => queryClient.invalidateQueries())
-                    }
-                    publicConfig={publicConfig.data}
-                    disabled={offline}
-                    saveSession={async (patch) => {
-                      await updateSession.mutateAsync(patch);
-                    }}
-                    uploadAvatar={async (file) =>
-                      (await client.upload(file, file.name, selected, "avatar")).id
-                    }
+                  </nav>
+                )}
+                {inspectorSection === "connection" && <ConnectionPanel health={health.data} />}
+                {inspectorSection === "sync" && (
+                  <SyncPanel
+                    browserOnline={browserOnline}
+                    coreAvailable={!health.isError}
+                    selected={selected}
+                    eventState={eventState}
+                    lastSyncAt={lastSyncAt}
+                    cursor={syncCursor}
+                    retry={() => client.connectEvents()}
                   />
-                </section>
-              )}
-            </InspectorContent>
+                )}
+                {inspectorSection === "approvals" && (
+                  <ApprovalPanel
+                    approvals={approvals}
+                    selected={selected}
+                    disabled={offline}
+                    resolve={(approval, approved) => void resolveApproval(approval, approved)}
+                  />
+                )}
+                {inspectorSection === "run" && (
+                  <RunPanel
+                    run={currentRun}
+                    checkpoints={checkpoints.data ?? []}
+                    actions={actions.data ?? []}
+                    retry={retryLast}
+                    resume={() =>
+                      currentRun && void client.resumeRun(currentRun.id).then(() => snapshot.refetch())
+                    }
+                    decide={(action, decision) =>
+                      currentRun &&
+                      void client.decideRunAction(currentRun.id, action.id, decision).then(() => {
+                        void actions.refetch();
+                        void snapshot.refetch();
+                      })
+                    }
+                    disabled={offline}
+                  />
+                )}
+                {inspectorSection === "settings" && settingsArea === "tasks" && (
+                  <BackgroundTaskArea
+                    tasks={tasks.data ?? []}
+                    disabled={offline}
+                    create={(prompt) => {
+                      if (!selected) return;
+                      void client.createTask(prompt, selected).then(() => tasks.refetch());
+                    }}
+                    cancel={(id) => void client.cancelTask(id).then(() => tasks.refetch())}
+                    remove={(id) => void client.deleteTask(id).then(() => tasks.refetch())}
+                    openRun={(task) => {
+                      setSelected(task.sessionId);
+                      setInspectorSection("run");
+                    }}
+                  />
+                )}
+                {inspectorSection === "settings" && settingsArea === "memory" && (
+                  <MemoryArea
+                    facts={memories.data ?? []}
+                    disabled={offline}
+                    reject={(id) =>
+                      void client.reviewMemoryFact(id, "rejected").then(() => memories.refetch())
+                    }
+                    accept={(id) => void client.reviewMemoryFact(id, "active").then(() => memories.refetch())}
+                  />
+                )}
+                {inspectorSection === "settings" && settingsArea === "schedules" && (
+                  <ScheduleArea
+                    schedules={schedules.data ?? []}
+                    disabled={offline}
+                    create={(input) => void client.createSchedule(input).then(() => schedules.refetch())}
+                    toggle={(id, enabled) =>
+                      void client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
+                    }
+                    run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
+                    remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
+                    loadRuns={(id) => client.listScheduleRuns(id)}
+                    cancelRun={(id) => void client.cancelScheduleRun(id).then(() => schedules.refetch())}
+                  />
+                )}
+                {inspectorSection === "settings" && settingsArea === "resources" && (
+                  <ResourceArea
+                    admin={userRole === "admin"}
+                    packages={skills.data?.packages ?? []}
+                    mcp={mcp.data ?? []}
+                    knowledge={knowledge.data ?? []}
+                    disabled={offline}
+                    refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
+                    installSkill={(reference) =>
+                      void client.installSkill({ source: "local", reference }).then(() => skills.refetch())
+                    }
+                    setSkillStatus={(id, action) =>
+                      void client.setSkillStatus(id, action).then(() => skills.refetch())
+                    }
+                    addKnowledgePath={(name, path) =>
+                      void client.indexKnowledge(name, path).then(() => knowledge.refetch())
+                    }
+                    uploadKnowledge={(file) =>
+                      void client
+                        .upload(file, file.name, selected)
+                        .then((attachment) => {
+                          if (!selected) throw new Error("Select a session before uploading knowledge");
+                          return client.indexKnowledgeAttachment(file.name, attachment.id, selected);
+                        })
+                        .then(() => knowledge.refetch())
+                    }
+                    deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
+                    reindexKnowledge={(id) =>
+                      void client.reindexKnowledge(id).then(() => knowledge.refetch())
+                    }
+                    searchKnowledge={(query, sourceId) => client.searchKnowledge(query, sourceId)}
+                  />
+                )}
+                {inspectorSection === "settings" && settingsArea === "admin" && userRole === "admin" && (
+                  <section className="inspector-group">
+                    <h3>管理</h3>
+                    <EvaluationArea reports={evaluations.data ?? []} trends={evaluationTrends.data ?? []} />
+                    <DiagnosticsArea report={diagnostics.data} />
+                    <OptimizationArea
+                      proposals={optimization.data ?? []}
+                      disabled={offline}
+                      generate={() =>
+                        void client.generateOptimizationProposals().then(() => optimization.refetch())
+                      }
+                      decide={(id, status) =>
+                        void client.decideOptimizationProposal(id, status).then(() => optimization.refetch())
+                      }
+                    />
+                    <div className="operation-list">
+                      {audit.data?.map((record) => (
+                        <div key={record.id}>
+                          <strong>
+                            {record.kind} · {record.name}
+                          </strong>
+                          <small className="operation-meta">{record.status}</small>
+                          {record.error && <p className="error">{record.error}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+                {inspectorSection === "settings" && settingsArea === "session" && (
+                  <section className="inspector-group">
+                    <h3>会话设置</h3>
+                    <SessionSettingsPanel
+                      session={snapshot.data?.session}
+                      health={health.data}
+                      installAvailable={Boolean(installPrompt)}
+                      install={() => void installPrompt?.prompt()}
+                      report={report.data}
+                      profile={profile.data}
+                      saveProfile={async (content) => {
+                        await client.updateAgentProfile(content);
+                        await profile.refetch();
+                      }}
+                      logout={signOut}
+                      reloadConfig={() =>
+                        void client.reloadConfig().then(() => queryClient.invalidateQueries())
+                      }
+                      publicConfig={publicConfig.data}
+                      disabled={offline}
+                      saveSession={async (patch) => {
+                        await updateSession.mutateAsync(patch);
+                      }}
+                      uploadAvatar={async (file) =>
+                        (await client.upload(file, file.name, selected, "avatar")).id
+                      }
+                    />
+                  </section>
+                )}
+              </InspectorContent>
+            </Suspense>
           </InspectorDrawer>
         )}
       </div>

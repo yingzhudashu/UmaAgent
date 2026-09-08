@@ -49,6 +49,8 @@ export type TelemetrySpanQuery = {
   name?: string;
   offset?: number;
   limit?: number;
+  /** 服务端普通用户查询时，仅展开指定 Run 的 Span 子树。 */
+  scopeToRun?: boolean;
 };
 export type TelemetrySpanPage = {
   spans: TelemetrySpanRecord[];
@@ -68,21 +70,26 @@ export type TelemetrySummary = {
 };
 export type ResourceSample = {
   id: string;
+  service?: string;
   capturedAt: number;
   cpuUserMicros: number;
   cpuSystemMicros: number;
+  sampleDurationMs: number;
+  cpuPercent: number;
   rssBytes: number;
   heapUsedBytes: number;
   heapTotalBytes: number;
   externalBytes: number;
   arrayBuffersBytes: number;
   eventLoopDelayMs: number;
+  walBytes: number;
   activeRuns: number;
   queuedRuns: number;
 };
 
 const REDACTED = "[REDACTED]";
-const sensitive = /(authorization|cookie|api[_-]?key|password|secret|token|prompt|completion|body)/i;
+const sensitive =
+  /(authorization|cookie|api[_-]?key|password|secret|token|prompt|completion|body|arguments|parameters|payload)/i;
 const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
 const errorSecretPatterns = [
   /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
@@ -91,11 +98,13 @@ const errorSecretPatterns = [
   /(["']?(?:authorization|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|body)["']?\s*:\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*?\}|\[[\s\S]*?\}|[^\s,;&}]+)/gi,
   /([?&](?:api[_-]?key|access[_-]?token|password|secret|token)=)[^&#\s]*/gi,
   /\b(?:sk-[A-Za-z0-9][A-Za-z0-9_-]{9,}|ghp_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
+  /\buma_pat_[A-Za-z0-9_-]+\b/g,
 ];
 
 export function redactErrorMessage(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
-  let redacted = value;
+  // URL 的路径、查询和用户信息都可能包含凭据或用户内容，不依赖参数名猜测。
+  let redacted = value.replace(/https?:\/\/[^\s<>"']+/gi, "[REDACTED_URL]");
   for (const pattern of errorSecretPatterns)
     redacted = redacted.replace(pattern, (...matches: unknown[]) => {
       const prefix = typeof matches[1] === "string" ? matches[1] : "";
@@ -139,7 +148,7 @@ function safeAttributes(attributes: SpanAttributes | undefined): Record<string, 
   for (const [key, value] of Object.entries(attributes ?? {}).slice(0, 32)) {
     if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(key) || value === undefined) continue;
     if (sensitive.test(key)) result[key] = REDACTED;
-    else if (typeof value === "string") result[key] = value.slice(0, 200);
+    else if (typeof value === "string") result[key] = (redactErrorMessage(value) ?? "").slice(0, 200);
     else if (typeof value === "number" && Number.isFinite(value)) result[key] = value;
     else if (typeof value === "boolean") result[key] = value;
   }
@@ -168,8 +177,17 @@ export class TelemetryStore {
   ) {
     mkdirSync(stateDir, { recursive: true });
     this.db = new DatabaseSync(join(stateDir, "telemetry.db"));
-    this.db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;");
+    this.db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=350;");
     this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    const resourceColumns = new Set(
+      (this.db.prepare("PRAGMA table_info(resource_samples)").all() as Array<{ name?: unknown }>).map((row) =>
+        String(row.name ?? ""),
+      ),
+    );
+    if (!["wal_bytes", "sample_duration_ms", "cpu_percent"].every((column) => resourceColumns.has(column))) {
+      this.db.close();
+      throw new Error("Unsupported telemetry schema; delete telemetry.db and start with the current schema.");
+    }
     this.insertSpanStatement = this.db.prepare(
       "INSERT INTO spans(span_id,trace_id,parent_span_id,service,run_id,session_id,name,kind,status,started_at,attributes_json,error_type,error_message) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
     );
@@ -183,7 +201,7 @@ export class TelemetryStore {
       "INSERT OR IGNORE INTO run_trace_links(run_id,trace_id,linked_at) VALUES(?,?,?)",
     );
     this.insertResourceStatement = this.db.prepare(
-      "INSERT INTO resource_samples(id,service,captured_at,cpu_user_micros,cpu_system_micros,rss_bytes,heap_used_bytes,heap_total_bytes,external_bytes,array_buffers_bytes,event_loop_delay_ms,active_runs,queued_runs) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO resource_samples(id,service,captured_at,cpu_user_micros,cpu_system_micros,sample_duration_ms,cpu_percent,rss_bytes,heap_used_bytes,heap_total_bytes,external_bytes,array_buffers_bytes,event_loop_delay_ms,wal_bytes,active_runs,queued_runs) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     );
     this.db
       .prepare(
@@ -369,12 +387,15 @@ export class TelemetryStore {
         sample.capturedAt,
         sample.cpuUserMicros,
         sample.cpuSystemMicros,
+        sample.sampleDurationMs,
+        sample.cpuPercent,
         sample.rssBytes,
         sample.heapUsedBytes,
         sample.heapTotalBytes,
         sample.externalBytes,
         sample.arrayBuffersBytes,
         sample.eventLoopDelayMs,
+        sample.walBytes,
         sample.activeRuns,
         sample.queuedRuns,
       );
@@ -382,6 +403,31 @@ export class TelemetryStore {
       this.telemetryWriteFailures += 1;
       /* ignore telemetry failure */
     }
+  }
+  listResources(from = 0, to = Date.now(), limit = 500): ResourceSample[] {
+    const values = this.db
+      .prepare(
+        "SELECT * FROM resource_samples WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at DESC LIMIT ?",
+      )
+      .all(from, to, Math.max(1, Math.min(500, limit))) as Array<Record<string, unknown>>;
+    return values.map((value) => ({
+      id: String(value.id),
+      service: String(value.service),
+      capturedAt: Number(value.captured_at),
+      cpuUserMicros: Number(value.cpu_user_micros),
+      cpuSystemMicros: Number(value.cpu_system_micros),
+      sampleDurationMs: Number(value.sample_duration_ms),
+      cpuPercent: Number(value.cpu_percent),
+      rssBytes: Number(value.rss_bytes),
+      heapUsedBytes: Number(value.heap_used_bytes),
+      heapTotalBytes: Number(value.heap_total_bytes),
+      externalBytes: Number(value.external_bytes),
+      arrayBuffersBytes: Number(value.array_buffers_bytes),
+      eventLoopDelayMs: Number(value.event_loop_delay_ms),
+      walBytes: Number(value.wal_bytes),
+      activeRuns: Number(value.active_runs),
+      queuedRuns: Number(value.queued_runs),
+    }));
   }
   listSpans(query: TelemetrySpanQuery): TelemetrySpanPage {
     if (
@@ -398,8 +444,21 @@ export class TelemetryStore {
     const clauses = ["status <> 'active'"];
     const params: Array<string | number> = [];
     if (query.runId) {
-      clauses.push("(run_id=? OR trace_id IN (SELECT trace_id FROM run_trace_links WHERE run_id=?))");
-      params.push(query.runId, query.runId);
+      if (query.scopeToRun) {
+        clauses.push(`span_id IN (
+          WITH RECURSIVE owned(span_id, trace_id) AS (
+            SELECT span_id, trace_id FROM spans WHERE run_id=?
+            UNION
+            SELECT child.span_id, child.trace_id FROM spans child
+            JOIN owned parent ON child.parent_span_id=parent.span_id AND child.trace_id=parent.trace_id
+            WHERE child.run_id IS NULL OR child.run_id=?
+          ) SELECT span_id FROM owned
+        )`);
+        params.push(query.runId, query.runId);
+      } else {
+        clauses.push("(run_id=? OR trace_id IN (SELECT trace_id FROM run_trace_links WHERE run_id=?))");
+        params.push(query.runId, query.runId);
+      }
     }
     if (query.traceId) {
       clauses.push("trace_id=?");

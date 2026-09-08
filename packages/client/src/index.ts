@@ -44,25 +44,14 @@ import type {
   XianyuWorkspaceBootstrap,
 } from "@uma-agent/protocol";
 import { PROTOCOL_VERSION } from "@uma-agent/protocol";
-import type { MessageQualityHistory } from "./quality.js";
+import { eventEnvelope } from "./event-envelope.js";
+import { UmaClientError } from "./http-error.js";
+
+export { UmaClientError } from "./http-error.js";
+
+import { type MessageQualityHistory, qualityPath } from "./quality.js";
 
 export type { MessageQualityHistory } from "./quality.js";
-
-const qualityPath = (scope: "runs" | "messages" | "sessions", id: string) =>
-  `/${scope}/${encodeURIComponent(id)}/quality`;
-
-export class UmaClientError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-    readonly retryable = false,
-    readonly requestId?: string,
-  ) {
-    super(message);
-    this.name = "UmaClientError";
-  }
-}
 
 export interface UmaClientOptions {
   baseUrl: string;
@@ -111,29 +100,6 @@ function traceparent(): string {
 }
 export type EventConnectionState = "disconnected" | "connecting" | "connected";
 export type SessionSubscription = { id: string; lastSequence?: number };
-function eventEnvelope(value: unknown): value is AgentEventEnvelope {
-  if (!value || typeof value !== "object") return false;
-  const event = value as Record<string, unknown>;
-  if (
-    event.protocolVersion !== PROTOCOL_VERSION ||
-    typeof event.sessionId !== "string" ||
-    typeof event.sequence !== "number" ||
-    typeof event.timestamp !== "number" ||
-    typeof event.type !== "string"
-  )
-    return false;
-  if (event.type !== "message.delta") return event.sequence >= 1;
-  const payload = event.payload as Record<string, unknown> | undefined;
-  return (
-    event.transient === true &&
-    event.sequence === 0 &&
-    Boolean(payload) &&
-    typeof payload?.messageId === "string" &&
-    typeof payload.append === "string" &&
-    payload.append.length > 0 &&
-    typeof payload.updatedAt === "number"
-  );
-}
 
 export class UmaClient {
   private readonly baseUrl: string;
@@ -148,6 +114,8 @@ export class UmaClient {
   private reconnectAttempt = 0;
   private closed = false;
   private eventConnectionState: EventConnectionState = "disconnected";
+  private readonly requests = new Set<AbortController>();
+  private logoutRequest = Promise.resolve();
 
   constructor(private readonly options: UmaClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -163,18 +131,24 @@ export class UmaClient {
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    if (this.closed && path !== "/auth/logout") throw new DOMException("Client closed", "AbortError");
     const headers = new Headers(init.headers);
     headers.set("traceparent", traceparent());
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     if (init.body && !(init.body instanceof FormData)) headers.set("content-type", "application/json");
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000);
+    this.requests.add(controller);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 15_000);
     try {
       const response = await this.fetchFn(`${this.baseUrl}/api/v15${path}`, {
         ...init,
         headers,
         credentials: "include",
-        signal: init.signal ?? controller.signal,
+        signal: init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal,
       });
       if (!response.ok) {
         const body = (await response
@@ -191,13 +165,16 @@ export class UmaClient {
         );
       }
       if (response.status === 204) return undefined as T;
-      return response.json() as Promise<T>;
+      const body = (await response.json()) as T;
+      controller.signal.throwIfAborted();
+      return body;
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError")
+      if (timedOut && error instanceof DOMException && error.name === "AbortError")
         throw new UmaClientError(504, "request_timeout", "连接超时，请检查 UmaAgent Core。", true);
       throw error;
     } finally {
       clearTimeout(timeout);
+      this.requests.delete(controller);
     }
   }
 
@@ -208,6 +185,8 @@ export class UmaClient {
     return this.request("/maintenance");
   }
   async login(token: string): Promise<{ ok: boolean }> {
+    // 等待旧 Cookie 清理完成，避免迟到的 logout 响应覆盖新账号 Cookie。
+    await this.logoutRequest;
     this.closed = false;
     const result = await this.request<{ ok: boolean }>("/auth/login", {
       method: "POST",
@@ -217,7 +196,8 @@ export class UmaClient {
     return result;
   }
 
-  register(label = "primary"): Promise<UmaRegistration> {
+  async register(label = "primary"): Promise<UmaRegistration> {
+    await this.logoutRequest;
     this.closed = false;
     return this.request("/auth/register", { method: "POST", body: JSON.stringify({ label }) });
   }
@@ -322,7 +302,16 @@ export class UmaClient {
     });
   }
   logout(): Promise<void> {
-    return this.request("/auth/logout", { method: "POST" });
+    // 先断开本地订阅和未完成请求，再发送一次独立的服务端会话清理请求。
+    this.close();
+    this.listeners.clear();
+    this.subscriptions.clear();
+    this.lastSequences.clear();
+    this.recoveryTargets.clear();
+    const result = this.request<void>("/auth/logout", { method: "POST" });
+    delete this.options.token;
+    this.logoutRequest = result.catch(() => undefined);
+    return result;
   }
   listSessions(): Promise<Session[]> {
     return this.request("/sessions");
@@ -855,6 +844,8 @@ export class UmaClient {
     const socket = this.socket;
     this.socket = undefined;
     socket?.close();
+    for (const request of this.requests) request.abort();
+    this.requests.clear();
     this.eventConnectionState = "disconnected";
   }
 

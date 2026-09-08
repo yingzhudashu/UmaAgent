@@ -1,113 +1,78 @@
-# Release Acceptance Record
+# UmaAgent 发布验收
 
-This record is the gate for the two-step UmaAgent release. It must be updated with
-the actual remote commit, CI run URLs, production backup checksums, and operator
-sign-off before a release is declared complete.
+本文记录当前工作树的验收标准、最近一次验证结果与未完成项，不保留历史发布过程或临时备份路径。自动门禁已通过；真实 Provider 验证和长时内存稳定性仍未完成，因此不标记为全部验收通过。
 
-## Xianyu status-tool preflight hotfix (2026-09-08)
+## 版本与存储
 
-- Core release `20260908022600-0a85f01` is live from commit `0a85f01a8610c29f095523affb726dad472d3450`; protocol is `15` and schema is `23`.
-- `npm run check`, `npm test` (53 files, 287 tests), and `npm run build` passed before promotion. The release verifier passed on the server.
-- Production backup is `/srv/backups/uma-agent/state-20260907182458.db`; the promote gate preserved the protected administrator fingerprint and atomically switched `current`.
-- The Xianyu control session now bypasses generic clarification preflight for `agent` requests and enters the channel tool set. A live administrator smoke test completed with `xianyu_status`, reporting Adapter `connected=true`, login `authenticated`, and a completed natural-language response.
-- `uma-agent.service`, `uma-browser-worker.service`, `uma-xianyu-adapter.service`, `robotclaw.service`, and `nginx.service` are active; Core live/ready both returned HTTP 200.
-- The protected PAT file was normalized from CRLF to LF without changing its token value and remains `root:root 0600`. Temporary administrator probe tokens were deleted in `finally` blocks.
+- UmaAgent `1.3.0`，Protocol `v15`，HTTP API `/api/v15`。
+- 业务库使用 SQLite schema `24`。旧 schema 直接拒绝启动；发布前停止服务、备份并清理旧 `state.db`，由新版本初始化空库。
+- Trace 和资源样本统一写入 `telemetry.db`；`state.db` 不包含 `trace_spans` 或 `resource_snapshots`。
 
-## Current Xianyu workspace release (2026-09-07)
+## 自动门禁
 
-- Core release `20260907145346-3ecf056` and Web embed release `20260907145402-3ecf056` are live from commit `3ecf0560bb6d3958a4c31fd7998bf87a4c63a7a6`; protocol is `15` and schema is `23`.
-- `npm run check`, `npm test` (53 files, 285 tests), `npm run build`, `npm run build:web:embed`, and Web E2E (5 tests) passed locally and in the release gate.
-- Android production release `7-3ecf056` is version `1.2.0`, versionCode `7`, signed with the recovered production keystore, and published only after manifest size/SHA-256 verification. APK SHA-256 is `b29bb89e0b52364a5f93fb9ddb5a08d158c45839b5d37e95b8a690f51886010d`.
-- v22 to v23 migration preserved the production database; `PRAGMA integrity_check` is `ok`, foreign-key violations are zero, and the production state backup is `/srv/backups/uma-agent/state-20260907145352.db`.
-- Core live/ready, Web entry points, Core/Web embed hashes, Android manifest, and all UmaAgent-related services passed post-release checks. Xianyu Adapter reports `authenticated/connected`; its Cookie file remains mode `0600`.
-- The general systemd gate reported the pre-existing independent `ai-knowledge-health.service` failure because the production knowledge snapshot trails staging by 41.7 hours. The UmaAgent production verifier now scopes failures to the services owned by this release; the AIKB freshness issue remains an operational follow-up and was not cleared by this release.
+```text
+npm run check
+npm test
+npm run test:coverage
+npm run build
+npm run build:web:embed
+npm run test:web:e2e
+npm run test:perf
+npm run test:soak:faux
+```
 
-## Current mobile hotfix status (2026-09-06)
+Android：
 
-- The Android login failure was traced to parameterless JSON requests being sent with `Content-Type: application/json` and a zero-byte body. The shared request layer now sends `{}` for empty `POST`/`PUT`/`PATCH` requests.
-- Android JVM tests passed: `:app:testDebugUnitTest`, 37 tests.
-- Local Debug APK assembly passed: `:app:assembleDebug`; SHA-256 was `ED0BFA1A1AB6CE4F82B5C533173E8BBE731E86B2A2082AC2BA982317AEC9C48`.
-- The original release keystore was recovered at `C:\Users\16785\.umaagent\android-release.jks`; its certificate matches the production certificate `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`.
-- Signed release publication completed from commit `74e75dfc2fc5d3a7e95f834e1155152fa5514736` as release `5-74e75df`, Android `versionCode 5`, `versionName 1.1.3`.
-- Published APK SHA-256 is `e9939c2b626491cc5bcf80e042bbf8b8c02992cbe6e3f0cad6c2e8b1177d6c41`, size `7571849` bytes. Public manifest and APK download matched these values; Core live returned HTTP 200.
+```text
+cd android
+./gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
+./gradlew.bat :app:connectedDebugAndroidTest --no-daemon
+```
 
-## Current Android UI release (2026-09-07)
+## 功能验收
 
-- Signed release publication completed from commit `17518d92a95a572efc5060a9bac2e734e02d2dc6` as release `6-17518d9`, Android `versionCode 6`, `versionName 1.1.4`.
-- The release uses the existing production certificate `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`; it matches the previously published APK and remains upgrade-compatible.
-- APK SHA-256 is `14f683ee3109dea0bcf6ab750feb96a47e5e5d60ecfdcbbc9e1c6318f9397914`, size `7604617` bytes. The public manifest and downloaded APK matched these values.
-- `current` was atomically switched to `/srv/www/robotclaw/app/releases/6-17518d9`; the previous `5-74e75df` directory remains available for rollback.
-- Release notes cover response aggregation and collapsed execution details, improved mobile reading, message retry, and the Xianyu QR login console.
+- Web、Android、CLI 使用 PAT 登录后可读取会话、快照、历史、附件和事件流。
+- 管理员可进入咸鱼工作台；普通账号不能访问咸鱼接口。
+- “切换普通 UmaAgent 账号”只清理当前客户端管理员令牌、Socket、轮询和缓存，不调用 Adapter stop/logout，不删除咸鱼 Cookie；Adapter 和自动回复继续后台运行。
+- 普通账号 logout 清理本机 PAT、缓存和连接。
+- Android 顶栏避开系统通知栏，底部导航避开手势区，深浅色主题和窄屏布局可用。
+- 管理员按 `runId`/`traceId` 查询完整跨服务链路；普通用户必须指定所属 Run，只读取其 Span 子树。重复 traceId 不扩大权限；错误、属性、工具参数字段与 URL 完成脱敏。
 
-## Previous managed Xianyu production release (superseded, 2026-09-07)
+## 本地验证结果（2026-09-08）
 
-- UmaAgent release `20260906182720-032a419` was promoted from commit `032a419ff9e97e6b3d36e4e3f9710673a37b0f55`; protocol was `15` and schema was `22`.
-- `npm run check`, `npm run build`, `npm run build:web:embed`, and `npm test` passed locally. The final test run passed 53 files and 284 tests.
-- The release verifier passed before promotion. A protected production state backup was created at `/srv/backups/uma-agent/state-20260906182726.db`.
-- `uma-agent.service`, `uma-browser-worker.service`, `uma-xianyu-adapter.service`, `robotclaw.service`, and `nginx.service` are active; staging UmaAgent units remain disabled.
-- Core live and ready both returned HTTP 200. The Adapter control health endpoint returned `status=stopped` with `login.status=pending_login`, which is expected while the configured Cookie is empty.
-- A temporary, immediately revoked `system` administrator probe verified the pre-workspace administrator flow, QR generation, and login-status polling. This record is retained only as historical evidence; the password/Grant flow is no longer supported.
-- A permanent `system` administrator console PAT was provisioned and verified for the operator; its value is intentionally omitted from repository and operational records.
-- The QR session naturally expired during the acceptance window; the Adapter then reported `login.status=expired` and remained stopped while its systemd unit stayed healthy. The actual administrator scan remains pending. Cookie persistence, authenticated Adapter recovery, account-auth-expiration stop behavior, and Feishu alert delivery therefore remain operational follow-up checks rather than completed acceptance claims.
+- `npm run check`、完整构建、`npm run build:web:embed`、Faux Eval（6/6）和 Web 7 项 E2E 已通过。覆盖率统计现在包含 Telemetry，不再遗漏该包；最终测试数量及比例见下表。
+- Android Debug/APK、JVM 测试通过；模拟器的窄屏 411dp、宽屏 720dp、横屏 914dp 各执行 2 项设备测试，覆盖深浅主题、系统栏 Insets、导航和本地账号清理，并核对截图。
+- 设备主题测试使用 Material 3 标准色板；Android 12+ 动态色代码已实现，但不同厂商真机的动态颜色、通知和生命周期仍需单独验收。
+- Compose 和 CI YAML 已解析检查；本机没有 Docker 运行环境，不能据此宣称镜像构建、容器联网或 Linux systemd 验收通过。
 
-## R1 local baseline
+性能使用 20 条 Faux 请求、1 个 Session、240 条连续事件，Windows / Node 24.15.0 / 16 逻辑核；下列数值来自同一轮 34.25 秒测试，不拼接不同轮次的最优结果。
 
-- Candidate commit: `74e75dfc2fc5d3a7e95f834e1155152fa5514736` (`fix: repair Android bootstrap JSON requests`).
-- Protocol: `v15`; database schema: `22`.
-- `npm run check`: passed.
-- `npm run build`: passed.
-- `npm test`: passed (record the final test count from the release run).
-- Android `:app:testDebugUnitTest` and `:app:assembleDebug`: passed locally with SDK/target API 35 and JDK 17; instrumented device tests remain pending.
-- APK: `C:\Users\16785\AppData\Local\Temp\UmaAgent-1.1.3-5-74e75df\UmaAgent-1.1.3.apk`.
-- APK SHA-256: `e9939c2b626491cc5bcf80e042bbf8b8c02992cbe6e3f0cad6c2e8b1177d6c41`.
-- Release APK signing certificate: `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`, matching the previously published APK.
-- Legacy-channel scan: run the repository forbidden-term scan while excluding
-  `.git`, dependency caches, and build caches; the result must be empty.
+| 指标 | 实测 | 门槛 | 结果 |
+| --- | ---: | ---: | --- |
+| 消息受理 API p95 | 12.69 ms | 12.8 ms | 通过 |
+| 事件分页 p95 | 5.58 ms | 5.9 ms | 通过 |
+| Core 采样峰值 RSS | 110.89 MiB | 180 MiB | 通过 |
+| 两库 WAL 合计峰值 | 2.86 MiB | 3.2 MiB | 通过 |
+| CPU 加权平均（单核等效） | 4.0941% | 5.5653% | 通过 |
+| CPU 采样峰值（单核等效） | 4.3721% | 5.568% | 通过 |
+| 事件循环区间均值的 p95 | 26.63 ms | 31.74 ms | 通过 |
 
-## Latest hosted CI evidence
+性能预算恢复 CPU 参考基线，并为事件循环保留 20% 的 Windows 调度波动；采样定义与参考值见 [工程基线](engineering-baseline.md)。这轮 `npm run test:perf` 返回通过。
 
-- Hosted CI evidence is pending publication of the reviewed working tree.
-- Local Node, Web paste-image E2E, Android JVM tests, APK assembly, and instrumented-test
-  compilation are the current evidence; device execution is still required.
+短时 soak 已通过。正常模式 10 分钟负载曾达到 190.1MiB，超过 180MiB 绝对门槛，仍未通过；强制 GC 诊断 3 分钟从 107.6MiB 增长到 114.4MiB，说明主要是 V8 驻留堆而非业务对象不可回收。不能用强制 GC 结果替代生产模式，因此长时内存稳定性仍是发布阻断项。
 
-## R1 device checks
+## 真实 Provider 验收
 
-- [ ] PAT login succeeds and survives process restart through Android Keystore.
-- [ ] Session list, snapshot, history, message send, image attachments, and streaming updates match Web.
-- [ ] Duplicate, out-of-order, and missing sequence events recover without rollback.
-- [ ] Offline mode serves cached reads and disables every write action.
-- [ ] Network recovery reconnects and fills the event gap without duplicate messages.
-- [ ] Core administrator PAT enters the Xianyu workspace; status and QR login succeed without a client password or Grant.
+当前未获得隔离 Provider/咸鱼账号凭据，真实 smoke/perf/soak 均未执行。只有显式设置 `UMA_REAL_API=1` 和完整 `UMA_REAL_*` 配置才运行 Provider 脚本。
 
-## Production operator gate
+`scripts/real-test.mjs` 支持普通用户登录、对话、工具调用、评测和重复负载；资源/诊断查询使用临时库内的独立管理员 PAT，权限错误直接失败。临时 state/workspace/telemetry 与部署数据隔离。脚本不启动 Xianyu Adapter、不扫码，也不覆盖咸鱼控制/草稿流程。
 
-Production actions require root/systemd access and the real Xianyu secrets. The
-operator must attach the following evidence:
+完整发布仍需要补齐下列真实验收清单：
 
-- [ ] Release verifier output and `systemd-analyze verify` output.
-- [x] SQLite, telemetry, workspace, Xianyu state (absent and recorded), and config backup checksums.
-- [ ] Restore/integrity check output showing schema `23` and no foreign-key violations; v22-to-v23 migration preserves users, tokens, sessions, and messages.
-- [x] Inventory and archive record for removed legacy services, state, and environment files.
-- [x] Core, Browser Worker, and Xianyu Adapter systemd status after promotion.
-- [x] Core live/ready, Adapter health, and Core-proxied Xianyu status responses.
-- [ ] Web, CLI, and Android smoke results for PAT login, workspace, status, lifecycle, history, item, chat, publish, and draft send.
-- [ ] First-login QR generation with an empty configured Cookie and administrator PAT.
-- [ ] Actual first-login scan, atomic `0600` Cookie persistence, and automatic Adapter recovery.
-- [ ] Expired-login stop behavior and Feishu alert delivery, or an explicit record that the three Feishu credentials are not configured.
-- [ ] Rollback rehearsal result, including all three active services and release pointer.
-- [x] Original Android release keystore is available; release APK certificate matches the currently published package.
-- [x] Android APK release directory, `latest.json`, `releases.json`, and `current` symlink were switched atomically and publicly verified.
+- smoke：登录、对话、工具调用、咸鱼状态/控制、草稿发送。
+- perf：API/事件 p95、RSS、CPU、事件循环延迟、WAL、Trace 写入失败计数。
+- soak：持续运行、重连、消息流、Adapter 后台运行和数据库稳定性。
 
-Production backup stamp: `20260906182726`; retired channel archive is under
-`/srv/backups/uma-agent/retired-channel-20260828014500`.
-The Xianyu Adapter is enabled with the real internal control token and Feishu alert
-configuration. The configured Cookie is intentionally empty pending the first
-administrator QR scan; no client password, Grant, or placeholder secret is used.
+明文凭据只从受控环境注入，不写入仓库、数据库、Trace、日志或报告；缺少凭据时必须明确记录为未执行。
 
-## R2 completion
-
-- [ ] Session/run controls, image attachments, approvals, resources, and Xianyu workspace are complete.
-- [ ] TypeScript and Kotlin consume the same v15 fixtures and contract tests pass.
-- [ ] API 35 emulator instrumented tests pass for lifecycle, rotation, background, and offline recovery.
-- [ ] No new migration, compatibility layer, fallback, or legacy field was introduced.
-- [ ] 24-hour post-release observation has no unresolved release-blocking errors.
+Android connected test 本轮未执行：模拟器 `emulator-5554` 离线，没有在线设备。JVM 测试、Debug APK 构建和此前三种屏幕配置的设备测试已通过；恢复在线设备后需重新执行 `:app:connectedDebugAndroidTest`。

@@ -111,12 +111,6 @@ try {
     userId,
   );
   collect("external_identities", "SELECT id FROM external_identities WHERE user_id=?", userId);
-  collect(
-    "trace_spans_legacy",
-    `SELECT span_id AS id FROM trace_spans WHERE session_id IN (${sessions})`,
-    userId,
-  );
-
   const counts = Object.fromEntries(Object.entries(ids).map(([name, values]) => [name, values.length]));
   const tokenIdentity = {
     id: String(tokenRow.id),

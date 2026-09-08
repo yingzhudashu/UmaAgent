@@ -16,8 +16,6 @@ const REQUIRED_TABLES = [
   "background_tasks",
   "session_events",
   "knowledge_embeddings",
-  "trace_spans",
-  "resource_snapshots",
   "optimization_applications",
   "channel_sessions",
   "channel_settings",

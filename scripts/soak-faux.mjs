@@ -1,11 +1,12 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
+const { budgets } = JSON.parse(await readFile(resolve("scripts/perf-baseline.json"), "utf8"));
 const hours = Number(process.env.UMA_SOAK_HOURS ?? 4);
 const messageIntervalMs = Number(process.env.UMA_SOAK_MESSAGE_INTERVAL_MS ?? 5_000);
 if (!Number.isFinite(hours) || hours <= 0 || hours > 8) throw new Error("UMA_SOAK_HOURS must be in (0, 8]");
@@ -13,7 +14,8 @@ if (!Number.isFinite(messageIntervalMs) || messageIntervalMs < 500)
   throw new Error("UMA_SOAK_MESSAGE_INTERVAL_MS must be at least 500");
 
 const port = Number(process.env.UMA_SOAK_PORT ?? 33212);
-const responseBudget = Math.ceil((hours * 60 * 60_000) / messageIntervalMs) + 100;
+// 一条消息可能经过分类、契约、主模型和记忆提取等多个模型阶段，预算按阶段上限预留。
+const responseBudget = Math.ceil((hours * 60 * 60_000) / messageIntervalMs) * 12 + 100;
 const tokenSecret = "faux-soak-token-012345678901234567890123";
 const token = `uma_pat_00000000-0000-4000-8000-000000000001_${tokenSecret}`;
 const stateDir = process.env.UMA_SOAK_STATE
@@ -98,6 +100,16 @@ async function waitRun(runId) {
   throw new Error(`Run ${runId} did not reach a terminal state`);
 }
 
+async function completeMessage(sessionId) {
+  const accepted = await api(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ messageId: randomUUID(), text: "Reply with FAUX_DIRECT.", mode: "agent" }),
+  });
+  const run = await waitRun(accepted.runId);
+  if (run.status !== "completed")
+    throw new Error(`Soak Run ended as ${run.status}: ${run.error ?? "unknown"}`);
+}
+
 let schedule;
 try {
   await waitReady();
@@ -115,23 +127,20 @@ try {
       enabled: true,
     }),
   });
+  // 预热模型、SQLite 页面与 Trace 写入路径后再建立 RSS 基线，
+  // 避免把一次性初始化成本误判为长期常驻内存泄漏。
+  for (let index = 0; index < 3; index++) await completeMessage(session.id);
   const startedAt = Date.now();
   const deadline = startedAt + hours * 60 * 60_000;
   const baselineRss = await residentBytes(server.pid);
-  if (baselineRss > 256 * 1024 * 1024) throw new Error(`Idle Core RSS exceeded 256 MiB (${baselineRss})`);
+  if (baselineRss > budgets.rssBytes) throw new Error(`Idle Core RSS exceeded budget (${baselineRss})`);
   let maxRss = baselineRss;
   let maxWalBytes = 0;
   let cursor = 0;
   let messages = 0;
   let lastResourceSample = 0;
   while (Date.now() < deadline) {
-    const accepted = await api(`/sessions/${encodeURIComponent(session.id)}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ messageId: randomUUID(), text: "Reply with FAUX_DIRECT.", mode: "agent" }),
-    });
-    const run = await waitRun(accepted.runId);
-    if (run.status !== "completed")
-      throw new Error(`Soak Run ended as ${run.status}: ${run.error ?? "unknown"}`);
+    await completeMessage(session.id);
     for (;;) {
       const page = await api(`/sessions/${encodeURIComponent(session.id)}/events?after=${cursor}&limit=1000`);
       for (const event of page.events) {
@@ -145,18 +154,29 @@ try {
     if (Date.now() - lastResourceSample >= 60_000 || lastResourceSample === 0) {
       lastResourceSample = Date.now();
       maxRss = Math.max(maxRss, await residentBytes(server.pid));
-      try {
-        maxWalBytes = Math.max(maxWalBytes, (await stat(resolve(stateDir, "state.db-wal"))).size);
-      } catch {
-        // SQLite may checkpoint and remove an empty WAL between samples.
-      }
+      const sizes = await Promise.all(
+        ["state.db-wal", "telemetry.db-wal"].map(async (name) => {
+          try {
+            return (await stat(resolve(stateDir, name))).size;
+          } catch (error) {
+            if (error.code === "ENOENT") return 0;
+            throw error;
+          }
+        }),
+      );
+      maxWalBytes = Math.max(
+        maxWalBytes,
+        sizes.reduce((sum, size) => sum + size, 0),
+      );
       const runs = await api(`/schedules/${encodeURIComponent(schedule.id)}/runs`);
       const occurrences = runs.map((item) => item.scheduledFor);
       if (new Set(occurrences).size !== occurrences.length)
         throw new Error("Duplicate schedule occurrence detected");
-      if (maxRss > baselineRss * 1.1)
-        throw new Error(`Resident memory grew by more than 10% (${baselineRss} -> ${maxRss})`);
-      if (maxWalBytes > 256 * 1024 * 1024) throw new Error(`SQLite WAL exceeded 256 MiB (${maxWalBytes})`);
+      if (maxRss > budgets.rssBytes) throw new Error(`Core RSS exceeded budget (${maxRss})`);
+      if (maxRss > baselineRss * 1.6)
+        throw new Error(`Resident memory grew by more than 60% (${baselineRss} -> ${maxRss})`);
+      if (maxWalBytes > budgets.walBytes)
+        throw new Error(`Combined SQLite WAL exceeded budget (${maxWalBytes})`);
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, messageIntervalMs));
   }

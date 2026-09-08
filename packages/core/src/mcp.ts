@@ -1,8 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { formatTraceparent, type TraceParent } from "@uma-agent/telemetry";
 import Type, { type TSchema } from "typebox";
 import type { McpServerConfig } from "./types.js";
@@ -38,17 +36,22 @@ export class McpManager {
 
   async connect(configs: McpServerConfig[], toolTimeoutMs: number): Promise<void> {
     await this.close();
+    if (configs.length === 0) return;
+    // 未配置 MCP 时不加载协议验证器与传输依赖；模块由 Node 缓存，重连不会重复加载。
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
     for (const config of configs) {
       const client = new Client({ name: "uma-agent", version: "1.3.0" });
       try {
         const transport =
           config.transport === "stdio"
-            ? new StdioClientTransport({
+            ? new (await import("@modelcontextprotocol/sdk/client/stdio.js")).StdioClientTransport({
                 command: config.command as string,
                 args: config.args ?? [],
                 ...(config.env ? { env: { ...process.env, ...config.env } as Record<string, string> } : {}),
               })
-            : new StreamableHTTPClientTransport(new URL(config.url as string), {
+            : new (
+                await import("@modelcontextprotocol/sdk/client/streamableHttp.js")
+              ).StreamableHTTPClientTransport(new URL(config.url as string), {
                 fetch: this.tracedFetch,
                 ...(config.authTokenEnv
                   ? {
@@ -62,6 +65,7 @@ export class McpManager {
               });
         await client.connect(transport as Parameters<Client["connect"]>[0]);
         const listed = await client.listTools();
+        const traceContext = this.traceContext;
         const tools = listed.tools.map((tool): AgentTool => {
           const name = `mcp_${config.name}_${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_");
           return {
@@ -71,10 +75,13 @@ export class McpManager {
             parameters: Type.Unsafe(tool.inputSchema as TSchema),
             executionMode: "sequential",
             async execute(_id, params, signal) {
+              const parent = traceContext.getStore();
               const response = await client.callTool(
                 {
                   name: tool.name,
                   arguments: params as Record<string, unknown>,
+                  // stdio 没有 HTTP 头，通过 MCP 标准元数据传递当前调用上下文。
+                  ...(parent ? { _meta: { traceparent: formatTraceparent(parent) } } : {}),
                 },
                 undefined,
                 {

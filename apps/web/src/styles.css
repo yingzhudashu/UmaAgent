@@ -934,6 +934,23 @@
   color: #747a78;
   font-size: 11px;
 }
+.xianyu-account-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  border: 1px solid var(--border, #d8dcda);
+  border-radius: 6px;
+  background: var(--bg-card, #fff);
+  color: inherit;
+  padding: 6px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.xianyu-account-switch:hover {
+  border-color: var(--primary, #2563eb);
+  color: var(--primary, #2563eb);
+}
 .xianyu-session {
   width: 100%;
   border: 0;
@@ -3414,4 +3431,16 @@
   .uma-embed .settings-search button {
     min-width: 46px;
   }
+}
+.settings-area-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-bottom: 12px;
+}
+
+.settings-area-nav button[aria-pressed="true"] {
+  font-weight: 700;
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
 }

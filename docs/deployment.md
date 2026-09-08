@@ -1,10 +1,8 @@
 # UmaAgent 服务器部署与验收
 
-
 ## 1. 部署前确认
 
 推荐起点：Linux x86_64、2 核 CPU、4 GiB 内存和 20 GiB 可用磁盘；启用 Chromium Browser Worker 时建议 4 核、8 GiB。需要 Docker Engine 24+、Compose v2、Git，以及可访问模型 Provider 的出站 HTTPS。Node 原生部署要求 Node.js 22.19.0 或更新的 22.x。
-
 
 部署前运行：
 
@@ -16,10 +14,11 @@ mkdir -p workspace backups
 chmod 600 .env
 ```
 
-编辑 `.env`，至少设置三个互不相同的高熵值：
+编辑 `.env`，分别设置模型/图片 Provider 密钥与两个独立的内部控制令牌：
 
 ```bash
 openssl rand -hex 32 # BROWSER_WORKER_TOKEN
+openssl rand -hex 32 # UMA_XIANYU_CONTROL_TOKEN
 ```
 
 同时设置模型密钥。不要把 `.env`、生产配置、数据库、日志或备份提交到 Git；这些路径已由 `.gitignore` 和 `.dockerignore` 排除。
@@ -49,7 +48,7 @@ docker compose \
   config --quiet
 ```
 
-启动默认的 Core 和 Browser Worker：
+启动 Compose 中的 Core、Browser Worker 和 Xianyu Adapter：
 
 ```bash
 docker compose \
@@ -68,15 +67,17 @@ docker compose \
 | 内容 | 容器路径 | 默认存储 |
 | --- | --- | --- |
 | Core SQLite、WAL、上传、技能 | `/data/state` | `umaagent_uma-state` 命名卷 |
+| 共享 Trace 与资源样本 | `/data/telemetry` | `umaagent_uma-telemetry` 命名卷 |
+| 咸鱼 Cookie 与渠道状态 | `/data/xianyu` | `umaagent_xianyu-state` 命名卷 |
 | 服务器工作区 | `/data/workspace` | `./workspace` bind mount |
 
-卷名前缀由 `COMPOSE_PROJECT_NAME` 决定。不要让第二个 Core 挂载同一 `uma-state` 卷；SQLite WAL 是单进程、单副本设计。
+卷名前缀由 `COMPOSE_PROJECT_NAME` 决定。不要让第二个 Core 挂载同一 `uma-state` 卷；Core 的业务状态通过进程锁限制为单实例；遥测库支持同机多个服务连接，不能放在不支持 SQLite 文件锁的网络盘。
 
 ### Native Node/systemd 部署
 
 生产发布使用专用系统用户和 Native systemd；state、workspace、配置和环境文件必须放在不同目录。Docker Compose 仅用于本地/CI 隔离验证：
 
-本仓库为 RobotClaw 服务器提供可直接安装的原生模板：
+本仓库提供可直接安装的原生 systemd 模板；部署者应将示例中的域名、路径和用户替换为目标环境值：
 
 - `deploy/uma.config.native.example.json`
 - `deploy/uma-agent.service`
@@ -85,14 +86,14 @@ docker compose \
 - `deploy/link-native-dependencies.sh`
 - `deploy/verify-native-release.sh`
 
-模板固定 Core 为 `127.0.0.1:3210`，只允许 `robotclaw.site` 两个 HTTPS Origin，且首期不注册任何 MCP。部署前必须核对固定 Node 路径和 Provider 合同。
+模板默认 Core 只监听回环地址；`server.webOrigins`、Node 路径和 Provider 配置必须按目标环境明确设置，MCP 配置以模板实际内容为准。
 
 ```bash
 sudo useradd --system --home /var/lib/uma-agent --shell /usr/sbin/nologin umaagent
 sudo install -d -o umaagent -g umaagent /var/lib/uma-agent/state /srv/uma-workspace
 sudo install -d -o umaagent -g umaagent -m 0770 /var/lib/uma-agent/telemetry
 sudo install -d -m 0750 /etc/uma-agent
-sudo cp deploy/uma.config.production.json /etc/uma-agent/uma.config.json
+sudo cp deploy/uma.config.native.example.json /etc/uma-agent/uma.config.json
 sudo cp deploy/uma.env.native.example /etc/uma-agent/uma.env
 sudo chmod 0600 /etc/uma-agent/uma.env
 
@@ -100,57 +101,17 @@ npm ci --ignore-scripts
 npm run build
 ```
 
-For an immutable release layout, do not symlink the whole release `node_modules`
-directory to an older release. That makes `@uma-agent/*` resolve to stale Core
-code. Link third-party dependencies from a shared directory, then link each
-`@uma-agent/*` package to the matching `packages/` or `apps/` directory in the
-same release with `deploy/link-native-dependencies.sh`.
+不可将整个 release 的 node_modules 链接到旧 release。使用 `deploy/link-native-dependencies.sh` 链接共享的第三方依赖，并让每个 `@uma-agent/*` 指向当前 release 的对应包。`deploy/uma-agent.service` 在启动前调用当前 release 中的 `verify-native-release.sh`，检查包解析路径和数据库格式。
 
-Install `deploy/verify-native-release.sh` as
-`/usr/local/libexec/uma-agent-verify-release` and keep shared third-party
-dependencies at `/opt/uma-agent/dependencies/node_modules`. The systemd unit
-runs this verifier before Node starts. It rejects releases whose `@uma-agent/*`
-packages resolve outside the active release, so stale Core code cannot silently
-start.
-
-把配置中的 `stateDir` 改为 `/var/lib/uma-agent/state`、`workspaceRoots` 改为 `/srv/uma-workspace`，并按服务器的真实路径调整 `skillsDirs`。若原生启动 Browser Worker，把 MCP URL 改为 `http://127.0.0.1:3230/mcp`；若暂不部署则从 `mcpServers` 删除该项，否则 readiness 会保持 503。创建 `/etc/systemd/system/uma-agent.service`：
-
-```ini
-[Unit]
-Description=UmaAgent Core Server
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=umaagent
-Group=umaagent
-WorkingDirectory=/opt/uma-agent/current
-Environment=NODE_ENV=production
-EnvironmentFile=/etc/uma-agent/uma.env
-ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent/current/apps/server/dist/main.js --config=/etc/uma-agent/uma.config.json
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/uma-agent/state /var/lib/uma-agent/telemetry /srv/uma-workspace
-
-[Install]
-WantedBy=multi-user.target
-```
-
-确认 `node` 和仓库实际位于示例路径后再启用：
+把配置中的 `stateDir` 改为 `/var/lib/uma-agent/state`、`workspaceRoots` 改为 `/srv/uma-workspace`，并按服务器的真实路径调整 `skillsDirs`。若原生启动 Browser Worker，把 MCP URL 改为 `http://127.0.0.1:3230/mcp`；若暂不部署则从 `mcpServers` 删除该项，否则 readiness 会保持 503。安装仓库中的完整 service 模板，不在文档中复制易过期的部分配置：
 
 ```bash
+sudo cp deploy/uma-agent.service /etc/systemd/system/uma-agent.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now uma-agent
 sudo systemctl status uma-agent
 journalctl -u uma-agent -n 200 --no-pager
 ```
-
 
 ## 4. 健康检查与首轮验收
 
@@ -199,11 +160,11 @@ Caddy 和 Nginx 样例都支持 WebSocket。证书域名必须和 `server.webOri
 
 ## 6. Android APK 发布
 
-Android APK 与 Core Server 是两个独立发布面。Core 的 systemd 发布不会更新 APK；APK 由 Nginx 从 `/srv/www/robotclaw/app` 提供：
+Android APK 与 Core Server 是两个独立发布面。Core 的 systemd 发布不会更新 APK；APK 由反向代理从部署者指定的静态目录提供：
 
-- `/srv/www/robotclaw/app/current`：当前线上 APK 发布目录的原子切换链接。
-- `/srv/www/robotclaw/app/releases/<versionCode>-<commit>/`：不可变 APK 与 `latest.json` 目录。
-- `/srv/www/robotclaw/app/releases.json`：历史发布清单。
+- `<apk-root>/current`：当前线上 APK 发布目录的原子切换链接。
+- `<apk-root>/releases/<versionCode>-<commit>/`：不可变 APK 与 `latest.json` 目录。
+- `<apk-root>/releases.json`：历史发布清单。
 - `/app/latest.json` 与 `/app/releases/<releaseId>/UmaAgent-<versionName>.apk`：公网地址。
 
 ### 6.1 发布前置条件
@@ -230,20 +191,21 @@ Get-FileHash .\app\build\outputs\apk\release\app-release.apk -Algorithm SHA256
 先将 APK 和清单上传到新的不可变目录，再由有权限的发布操作员执行原子切换。禁止直接覆盖 `current` 中的 APK 或在线编辑当前 `latest.json`：
 
 ```bash
+apk_root=/path/to/apk-root
 release_id=<versionCode>-<commit>
-release_dir=/srv/www/robotclaw/app/releases/$release_id
+release_dir="$apk_root/releases/$release_id"
 install -d -o root -g root -m 0755 "$release_dir"
 install -o root -g root -m 0644 UmaAgent-<versionName>.apk "$release_dir/UmaAgent-<versionName>.apk"
 install -o root -g root -m 0644 latest.json "$release_dir/latest.json"
-ln -sfn "$release_dir" /srv/www/robotclaw/app/current.next
-mv -Tf /srv/www/robotclaw/app/current.next /srv/www/robotclaw/app/current
+ln -sfn "$release_dir" "$apk_root/current.next"
+mv -Tf "$apk_root/current.next" "$apk_root/current"
 ```
 
 `releases.json` 也必须先写入同目录临时文件、校验 JSON 后再通过同文件系统 `mv` 替换。切换后验证：
 
 ```bash
-curl --fail https://robotclaw.site/app/latest.json
-curl --fail --output /tmp/UmaAgent.apk https://robotclaw.site/app/releases/<releaseId>/UmaAgent-<versionName>.apk
+curl --fail https://agent.example.com/app/latest.json
+curl --fail --output /tmp/UmaAgent.apk https://agent.example.com/app/releases/<releaseId>/UmaAgent-<versionName>.apk
 sha256sum /tmp/UmaAgent.apk
 ```
 
@@ -253,7 +215,7 @@ sha256sum /tmp/UmaAgent.apk
 
 ### Xianyu Adapter
 
-闲鱼 Adapter 只监听回环地址，Core 通过内部控制令牌代理访问。配置 `UMA_XIANYU_CONTROL_TOKEN` 和 `/etc/uma-agent/config.user.json` 后启动。用户侧只使用 Core 管理员 PAT；不再配置咸鱼管理员密码或 Grant。`xianyu.cookie` 首次可以为空，Adapter 会以 `pending_login` 状态启动，不会伪造或复用旧 Cookie：
+闲鱼 Adapter 原生服务只监听回环地址；Compose 中绑定容器网络且不发布宿主端口，Core 通过内部控制令牌代理访问。配置 `UMA_XIANYU_CONTROL_TOKEN` 和 `/etc/uma-agent/config.user.json` 后启动。用户侧只使用 Core 管理员 PAT；不再配置咸鱼管理员密码或 Grant。`xianyu.cookie` 首次可以为空，Adapter 会以 `pending_login` 状态启动，不会伪造或复用旧 Cookie：
 
 ```json
 {
@@ -283,7 +245,6 @@ curl --fail \
 
 Adapter 的 `/start`、`/stop`、`/pause`、`/resume`、`/conversations`、`/history`、`/item`、`/chat` 和 `/publish` 只接受内部控制令牌；客户端不得直连 Adapter。
 
-
 Browser Worker 容器根文件系统只读、capabilities 全部移除；它不挂载 Core state/workspace。不要自动执行第三方 `npm install`。
 
 ## 8. 防火墙与安全检查
@@ -301,6 +262,7 @@ SQLite 使用 WAL。可靠备份必须先停止写入；不要只复制正在运
 
 ```bash
 mkdir -p backups
+docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml stop
 
 docker run --rm \
   -v umaagent_uma-state:/source:ro \
@@ -313,7 +275,6 @@ docker run --rm \
   alpine sh -c 'cd /source && tar czf /backup/uma-telemetry.tgz .'
 ```
 
-
 恢复前必须确认目标卷名，停止所有相关容器，并使用生成备份时的相同 UmaAgent 版本。清空目标卷会破坏现有数据，先再次核对：
 
 ```bash
@@ -324,13 +285,13 @@ docker run --rm \
   alpine sh -c 'find /target -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && tar xzf /backup/uma-state.tgz -C /target'
 ```
 
+数据库当前使用 schema 24；旧数据库直接拒绝启动。格式更替不能走保留对象指纹的常规 Promote：先停止 Core 和所有遥测写入服务，备份，再清理已确认旧库的 `state.db`、`state.db-wal`、`state.db-shm`。遥测表缺少 `sample_duration_ms`、`cpu_percent` 或 `wal_bytes` 时同样清理 `telemetry.db` 及其 WAL/SHM，由新版本初始化；不执行 migration。不要删除 Adapter 的 Cookie 文件。
 
-
-数据库当前使用 schema 23；仅允许通过内置的 v22 到 v23 事务迁移升级，其他版本均直接拒绝启动。升级前必须备份并完成完整性与保护用户指纹检查；失败时只切换 release 指针，不覆盖数据库。
+空库会清除原有账户与会话，须重新建立管理员、普通用户和发布保护 PAT。旧 release 无法读取新 schema；回到旧版本只能在隔离路径恢复匹配的完整备份，不能仅切换代码指针后继续读新数据库。当前 schema 内的常规发布继续使用下述对象保护门禁。
 
 ## 10. Trace、资源报告与真实 API 验证
 
-Core 的业务数据使用 schema 23 `state.db`；schema 22 首次启动时由 Core 在事务中创建咸鱼渠道会话、设置和投递幂等表，保留已有用户、令牌、会话与消息。Trace 写入 `UMA_TELEMETRY_DIR` 下的独立 `telemetry.db`。生产把该目录挂载给 Core、Server 与 Browser Worker，但不向 Worker 暴露业务 state 或 workspace。Client、Server HTTP、Run、queue、preflight、model、tool、MCP HTTP 和 Browser 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v15/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户只能读取自己拥有的 Run，管理员可读取任意 Run。Trace 不保存 prompt、模型正文、完整 URL 查询、Cookie、Token 或原始工具参数。资源快照和诊断报告分别通过 `/api/v15/reports/resources` 与 `/api/v15/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
+Core 的业务数据使用 schema 24 `state.db`；Trace 与资源样本统一写入 `UMA_TELEMETRY_DIR` 下的 `telemetry.db`，state.db 不包含历史 Trace/资源表。生产把该目录授权给 Core、Server、Browser Worker、SMath Worker 与 Xianyu Adapter；各 Worker 不获得业务 state 的访问权。SMath Worker 和 Xianyu Adapter 缺少 UMA_TELEMETRY_DIR 时直接拒绝启动；共享目录需要服务用户的组写权限，不能只设置 systemd ReadWritePaths。Client、Server HTTP、WebSocket、Run、queue、preflight、model、tool、MCP、Browser、SMath 和 Xianyu Adapter 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v15/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户必须提供自己拥有的 runId，查询只展开该 Run 及其 Worker 子树；管理员可按 Run 或 traceId 查询包含入口 HTTP/Adapter 的完整链路。外部 traceparent 不是授权凭据，复用 traceId 不扩大查询权限。Trace 不保存 prompt、模型正文、完整 URL、Cookie、Token 或原始工具参数。资源每 30 秒及查询资源报告时采样；`cpuPercent = (cpuUserMicros + cpuSystemMicros) / (sampleDurationMs × 1000 × 可用逻辑核数) × 100`，WAL 为 state 与 telemetry 两库合计。资源快照和诊断报告分别通过 `/api/v15/reports/resources` 与 `/api/v15/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
 
 真实测试只接受明确的 UmaAgent 环境变量，并在临时目录生成隔离配置、state、workspace、用户和令牌。它不读取 MiniAgent 配置，也不得使用生产保护 PAT。缺少授权或密钥时命令直接失败，不切换 Faux：
 
@@ -340,6 +301,7 @@ $env:UMA_REAL_PROVIDER = "受控 Provider 名称"
 $env:UMA_REAL_MODEL = "受控模型 ID"
 $env:UMA_REAL_BASE_URL = "https://受控网关/v1"
 $env:UMA_REAL_API_KEY_ENV = "OPENAI_API_KEY"
+$env:UMA_REAL_API_TYPE = "openai-completions" # 必须与 Provider 合同匹配
 $env:OPENAI_API_KEY = "从受控密钥管理注入"
 npm run test:real:smoke
 npm run test:real:eval
@@ -349,11 +311,11 @@ $env:UMA_REAL_SOAK_MINUTES = "5"
 npm run test:real:soak
 ```
 
-输出只包含 p50/p95/p99、CPU/内存/WAL/event-loop 聚合值、token 数量、错误分类和脱敏 Trace ID，不包含 prompt、完整响应、凭据或隐藏思维链。真实测试结束后会删除临时状态目录。
+输出包含时延分位数、资源样本、token 数量、错误分类和脱敏 Trace ID，不包含 prompt、完整响应、凭据或隐藏思维链。真实测试结束后会删除临时状态目录。
 
 ### 原生发布保护门禁
 
-生产 Promote 必须预先创建 `/etc/uma-agent/protected-user-pat`，所有者为 root、权限为 `0600`。PAT 只由保护脚本在进程内读取，不得作为命令行参数、日志或 Trace 属性传递。使用 release 内的门禁脚本执行切换：
+同一 schema 的生产 Promote 必须预先创建 `/etc/uma-agent/protected-user-pat`，所有者为 root、权限为 `0600`。PAT 只由保护脚本在进程内读取，不得作为命令行参数、日志或 Trace 属性传递。使用 release 内的门禁脚本执行切换：
 
 ```bash
 sudo /opt/uma-agent/releases/<release>/deploy/promote-native-release.sh \
@@ -400,6 +362,6 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 第二个 Core 无法获取同一状态目录锁。
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] 完成一次停机备份，并在隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v15 和 schema 23，确认 v22 到 v23 迁移完整性，保留可回滚 release 与同版本备份。
+- [ ] 确认当前应用版本、Protocol v15 和 schema 24；旧 state.db 已按发布策略备份/清理，新库完整性检查通过，并保留可回滚 release。
 - [ ] Android APK 使用线上同一正式签名证书，`latest.json` 的版本、路径、大小和 SHA-256 与 APK 一致。
 - [ ] Android 真机完成更新、PAT 登录、进程重启、会话读取和消息发送；Debug APK 未被发布到生产。

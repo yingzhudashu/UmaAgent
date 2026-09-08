@@ -33,8 +33,10 @@ services:
     restart: unless-stopped
     environment:
       UMA_XIANYU_CONTROL_TOKEN: ${UMA_XIANYU_CONTROL_TOKEN:?set UMA_XIANYU_CONTROL_TOKEN}
+      UMA_TELEMETRY_DIR: /data/telemetry
     volumes:
       - xianyu-state:/data/xianyu
+      - uma-telemetry:/data/telemetry
       - ./docker/config.user.json:/run/uma/config.user.json:ro
     expose:
       - "3250"

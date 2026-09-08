@@ -1,3 +1,5 @@
+import { formatTraceparent, type TraceParent } from "@uma-agent/telemetry";
+
 export type SmathOperation = "list" | "read" | "create" | "update" | "calculate" | "export" | "delete";
 
 export interface SmathJobResult {
@@ -23,10 +25,16 @@ export class SmathWorkerClient {
     ownerId: string,
     input: { operation: SmathOperation; path?: string; content?: string; format?: "pdf" | "html" },
     signal?: AbortSignal,
+    traceParent?: TraceParent,
   ): Promise<SmathJobResult> {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${this.token}`,
+      "content-type": "application/json",
+    };
+    if (traceParent) headers.traceparent = formatTraceparent(traceParent);
     const response = await fetch(`${this.url}/jobs`, {
       method: "POST",
-      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+      headers,
       body: JSON.stringify({ ownerId, ...input }),
       ...(signal ? { signal } : {}),
     });

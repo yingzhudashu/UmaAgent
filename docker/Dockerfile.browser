@@ -2,9 +2,11 @@ FROM node:22.19.0-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.json tsconfig.base.json biome.json ./
 COPY packages/telemetry ./packages/telemetry
+COPY scripts/copy-telemetry-assets.mjs ./scripts/copy-telemetry-assets.mjs
 COPY apps/browser-worker ./apps/browser-worker
 RUN npm ci --ignore-scripts
-RUN npm run build --workspace=@uma-agent/browser-worker
+RUN npm run build --workspace=@uma-agent/telemetry \
+ && npm run build --workspace=@uma-agent/browser-worker
 
 FROM node:22.19.0-bookworm-slim
 ENV NODE_ENV=production

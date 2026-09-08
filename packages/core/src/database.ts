@@ -25,7 +25,6 @@ import type {
   OptimizationProposal,
   PlanStep,
   QualityAssessment,
-  ResourceSnapshot,
   Response,
   ResponseActivity,
   ResponseStatus,
@@ -67,47 +66,7 @@ import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 23;
-
-const SCHEMA_22_TO_23 = `
-CREATE TABLE channel_sessions (
-  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-  channel TEXT NOT NULL CHECK(channel IN ('xianyu')),
-  tenant_id TEXT NOT NULL,
-  conversation_id TEXT NOT NULL,
-  thread_id TEXT NOT NULL DEFAULT '',
-  kind TEXT NOT NULL CHECK(kind IN ('control','buyer')),
-  display_name TEXT,
-  external_user_id TEXT,
-  item_id TEXT,
-  unread_count INTEGER NOT NULL DEFAULT 0 CHECK(unread_count >= 0),
-  last_inbound_at INTEGER,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  UNIQUE(channel,tenant_id,conversation_id,thread_id)
-);
-CREATE INDEX channel_sessions_channel_updated ON channel_sessions(channel,updated_at DESC);
-CREATE TABLE channel_settings (
-  channel TEXT PRIMARY KEY CHECK(channel IN ('xianyu')),
-  auto_reply_enabled INTEGER NOT NULL DEFAULT 0 CHECK(auto_reply_enabled IN (0,1)),
-  updated_at INTEGER NOT NULL
-);
-INSERT INTO channel_settings(channel,auto_reply_enabled,updated_at) VALUES('xianyu',0,0);
-CREATE TABLE channel_deliveries (
-  id TEXT PRIMARY KEY,
-  channel TEXT NOT NULL CHECK(channel IN ('xianyu')),
-  direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
-  idempotency_key TEXT NOT NULL UNIQUE,
-  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
-  status TEXT NOT NULL CHECK(status IN ('pending','draft','delivered','failed')),
-  error TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  delivered_at INTEGER
-);
-CREATE INDEX channel_deliveries_session_status ON channel_deliveries(session_id,status,updated_at DESC);
-PRAGMA user_version = 23;`;
+const SCHEMA_VERSION = 24;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   readonly stateDir: string;
@@ -122,24 +81,16 @@ export class UmaDatabase {
     this.db = new DatabaseSync(join(stateDir, "state.db"));
     this.messages = new MessageRepository(this.db);
     this.sessions = new SessionRepository(this.db);
-    this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+    // 两个库各预留约 1.4 MiB 的 WAL；为单次事务越过 checkpoint 阈值留下余量。
+    this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA wal_autocheckpoint = 350;");
     const version = integer(row(this.db.prepare("PRAGMA user_version"))?.user_version);
     if (version === 0) {
       this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
-    } else if (version === 22) {
-      this.db.exec("BEGIN IMMEDIATE");
-      try {
-        this.db.exec(SCHEMA_22_TO_23);
-        this.db.exec("COMMIT");
-      } catch (error) {
-        this.db.exec("ROLLBACK");
-        this.db.close();
-        throw error;
-      }
     } else if (version !== SCHEMA_VERSION) {
-      // v22 仅通过上面的显式事务迁移升级；其他旧/未来格式一律拒绝。
       this.db.close();
-      throw new Error(`Unsupported database schema ${version}; expected ${SCHEMA_VERSION}.`);
+      throw new Error(
+        `Unsupported database schema ${version}; expected ${SCHEMA_VERSION}. Delete state.db and start with schema ${SCHEMA_VERSION}.`,
+      );
     }
     validateSchema(this.db);
     this.auditEvaluations = new AuditEvaluationRepository(this.db, (operation) =>
@@ -1314,6 +1265,10 @@ export class UmaDatabase {
       ),
       sessionId,
     ).map((value) => this.getRun(text(value.id)));
+  }
+
+  queuedRunCount(): number {
+    return integer(row(this.db.prepare("SELECT COUNT(*) AS count FROM runs WHERE status='queued'"))?.count);
   }
 
   findActiveQualityRun(targetMessageId: string, kind: Run["kind"]): Run | undefined {
@@ -2918,53 +2873,6 @@ export class UmaDatabase {
 
   diagnosticsReport(from: number, to: number): DiagnosticsReport {
     return this.auditEvaluations.diagnosticsReport(from, to);
-  }
-
-  insertResourceSnapshot(snapshot: ResourceSnapshot): void {
-    this.db
-      .prepare(
-        "INSERT INTO resource_snapshots(id,captured_at,cpu_user_micros,cpu_system_micros,rss_bytes,heap_used_bytes,heap_total_bytes,external_bytes,array_buffers_bytes,event_loop_delay_ms,wal_bytes,active_runs,queued_runs) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        snapshot.id,
-        snapshot.capturedAt,
-        snapshot.cpuUserMicros,
-        snapshot.cpuSystemMicros,
-        snapshot.rssBytes,
-        snapshot.heapUsedBytes,
-        snapshot.heapTotalBytes,
-        snapshot.externalBytes,
-        snapshot.arrayBuffersBytes,
-        snapshot.eventLoopDelayMs,
-        snapshot.walBytes,
-        snapshot.activeRuns,
-        snapshot.queuedRuns,
-      );
-  }
-
-  listResourceSnapshots(from = 0, to = Date.now(), limit = 500): ResourceSnapshot[] {
-    return rows(
-      this.db.prepare(
-        "SELECT * FROM resource_snapshots WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at DESC LIMIT ?",
-      ),
-      from,
-      to,
-      Math.max(1, Math.min(500, limit)),
-    ).map((value) => ({
-      id: text(value.id),
-      capturedAt: integer(value.captured_at),
-      cpuUserMicros: integer(value.cpu_user_micros),
-      cpuSystemMicros: integer(value.cpu_system_micros),
-      rssBytes: integer(value.rss_bytes),
-      heapUsedBytes: integer(value.heap_used_bytes),
-      heapTotalBytes: integer(value.heap_total_bytes),
-      externalBytes: integer(value.external_bytes),
-      arrayBuffersBytes: integer(value.array_buffers_bytes),
-      eventLoopDelayMs: Number(value.event_loop_delay_ms ?? 0),
-      walBytes: integer(value.wal_bytes),
-      activeRuns: integer(value.active_runs),
-      queuedRuns: integer(value.queued_runs),
-    }));
   }
 
   recoverScheduledTaskRuns(): ScheduledTaskRun[] {

@@ -16,6 +16,8 @@ export function setCacheNamespace(
 }
 
 export async function clearCacheNamespace(): Promise<void> {
+  // 在任何异步操作之前捕获命名空间，切换账号后仍只清理发起操作的账户。
+  const prefix = `${namespace}|`;
   const database = await openDatabase();
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction([SNAPSHOTS, CURSORS, HISTORY, SESSIONS], "readwrite");
@@ -24,7 +26,9 @@ export async function clearCacheNamespace(): Promise<void> {
       const request = store.openCursor();
       request.onsuccess = () => {
         const cursor = request.result;
-        if (cursor && String(cursor.key).startsWith(`${namespace}|`)) cursor.delete();
+        if (!cursor) return;
+        if (String(cursor.key).startsWith(prefix)) cursor.delete();
+        cursor.continue();
       };
     }
     transaction.oncomplete = () => resolve();
@@ -76,11 +80,12 @@ function sessionKey(sessionId: string, activeBranchId?: string): string {
 }
 
 export async function cacheSnapshot(snapshot: SessionSnapshot): Promise<void> {
+  const snapshotKey = key(sessionKey(snapshot.session.id, snapshot.session.activeBranchId));
+  const cursorKey = key(snapshot.session.id);
   const database = await openDatabase();
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction([SNAPSHOTS, CURSORS], "readwrite");
     const snapshots = transaction.objectStore(SNAPSHOTS);
-    const snapshotKey = key(sessionKey(snapshot.session.id, snapshot.session.activeBranchId));
     const existingSnapshot = snapshots.get(snapshotKey);
     existingSnapshot.onsuccess = () => {
       const current = existingSnapshot.result as SessionSnapshot | undefined;
@@ -89,7 +94,6 @@ export async function cacheSnapshot(snapshot: SessionSnapshot): Promise<void> {
     };
     existingSnapshot.onerror = () => transaction.abort();
     const cursors = transaction.objectStore(CURSORS);
-    const cursorKey = key(snapshot.session.id);
     const request = cursors.get(cursorKey);
     request.onsuccess = () =>
       cursors.put(Math.max(Number(request.result ?? 0), snapshot.snapshotSequence), cursorKey);
@@ -104,11 +108,11 @@ export async function cacheSnapshot(snapshot: SessionSnapshot): Promise<void> {
 export const cachedSnapshot = (sessionId: string, activeBranchId?: string) =>
   get<SessionSnapshot>(SNAPSHOTS, key(sessionKey(sessionId, activeBranchId)));
 export async function cacheCursor(sessionId: string, sequence: number): Promise<void> {
+  const cursorKey = key(sessionId);
   const database = await openDatabase();
   await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(CURSORS, "readwrite");
     const store = transaction.objectStore(CURSORS);
-    const cursorKey = key(sessionId);
     const request = store.get(cursorKey);
     request.onsuccess = () => store.put(Math.max(Number(request.result ?? 0), sequence), cursorKey);
     transaction.oncomplete = () => resolve();

@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { availableParallelism, platform, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
@@ -13,7 +13,7 @@ const token = `uma_pat_00000000-0000-4000-8000-000000000001_${tokenSecret}`;
 const stateDir = process.env.UMA_PERF_STATE
   ? resolve(process.env.UMA_PERF_STATE)
   : await mkdtemp(join(tmpdir(), `uma-perf-${process.pid}-`));
-const requireBudget = process.env.UMA_PERF_REQUIRE === "1";
+
 const messages = Number(process.env.UMA_PERF_MESSAGES ?? baseline.smokeMessages);
 const budgets = baseline.budgets;
 
@@ -143,14 +143,43 @@ try {
       if (!page.hasMore) break;
     }
     maxRss = Math.max(maxRss, await residentBytes(server.pid));
-    try {
-      maxWal = Math.max(maxWal, (await stat(resolve(stateDir, "state.db-wal"))).size);
-    } catch {
-      // SQLite may checkpoint an empty WAL between samples.
-    }
+    const sizes = await Promise.all(
+      ["state.db-wal", "telemetry.db-wal"].map(async (name) => {
+        try {
+          return (await stat(resolve(stateDir, name))).size;
+        } catch (error) {
+          if (error.code === "ENOENT") return 0;
+          throw error;
+        }
+      }),
+    );
+    maxWal = Math.max(
+      maxWal,
+      sizes.reduce((sum, size) => sum + size, 0),
+    );
   }
+  const resources = await api("/reports/resources?from=0&limit=500");
+  // 启动的毫秒级样本受系统 CPU 时钟量化影响，不作为稳定负载的峰值。
+  const steadyResources = resources.filter((sample) => sample.sampleDurationMs >= 1_000);
+  const duration = steadyResources.reduce((sum, sample) => sum + sample.sampleDurationMs, 0);
+  const cpuAveragePercent =
+    duration > 0
+      ? steadyResources.reduce((sum, sample) => sum + sample.cpuPercent * sample.sampleDurationMs, 0) /
+        duration
+      : 0;
+  const cpuPeakPercent = Math.max(0, ...steadyResources.map((sample) => sample.cpuPercent));
+  const cpuAverageCorePercent = cpuAveragePercent * availableParallelism();
+  const cpuPeakCorePercent = cpuPeakPercent * availableParallelism();
+  const eventLoopDelayP95Ms = percentile(
+    steadyResources.map((sample) => sample.eventLoopDelayMs),
+    95,
+  );
   const result = {
     passed:
+      steadyResources.length > 0 &&
+      cpuAverageCorePercent <= budgets.cpuAverageCorePercent &&
+      cpuPeakCorePercent <= budgets.cpuPeakCorePercent &&
+      eventLoopDelayP95Ms <= budgets.eventLoopDelayP95Ms &&
       percentile(apiSamples, 95) <= budgets.apiP95Ms &&
       percentile(eventSamples, 95) <= budgets.eventP95Ms &&
       maxRss <= budgets.rssBytes &&
@@ -166,7 +195,13 @@ try {
     eventP99Ms: Number(percentile(eventSamples, 99).toFixed(2)),
     maxRssBytes: maxRss,
     maxWalBytes: maxWal,
-    resources: await api("/reports/resources?from=0&limit=500"),
+    cpuAveragePercent,
+    cpuPeakPercent,
+    cpuAverageCorePercent,
+    cpuPeakCorePercent,
+    eventLoopDelayP95Ms,
+    environment: { node: process.version, platform: platform(), logicalCpus: availableParallelism() },
+    resources,
     dataset: {
       sessions: 1,
       requests: messages,
@@ -175,9 +210,9 @@ try {
     budgets,
   };
   console.log(JSON.stringify(result));
-  if (requireBudget && !result.passed) process.exitCode = 1;
+  if (!result.passed) process.exitCode = 1;
 } finally {
   server.kill("SIGTERM");
-  await new Promise((resolveExit) => server.once("exit", resolveExit));
+  if (server.exitCode === null) await new Promise((resolveExit) => server.once("exit", resolveExit));
   await rm(stateDir, { recursive: true, force: true });
 }

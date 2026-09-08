@@ -1,7 +1,15 @@
 import type { MessageQualityHistory, UmaClient } from "@uma-agent/client";
-import type { TranscriptItem } from "@uma-agent/protocol";
+import type { QualityAssessment, TranscriptItem } from "@uma-agent/protocol";
 import { useEffect, useRef } from "react";
 
+export type QualityOperation = {
+  kind: "review" | "improve";
+  status: "running" | "completed" | "failed";
+  runId?: string;
+  error?: string;
+  assessments?: readonly QualityAssessment[];
+  result?: string;
+};
 export type RestoredQualityOperation = {
   kind: "review" | "improve";
   status: "completed" | "failed";
@@ -50,7 +58,13 @@ export function useQualityHistory(
   const cachedClient = useRef<UmaClient | undefined>(undefined);
 
   useEffect(() => {
-    if (!enabled || !key || !transcript?.length) return;
+    if (!enabled) {
+      cached.current.clear();
+      inFlight.current.clear();
+      cachedClient.current = undefined;
+      return;
+    }
+    if (!key || !transcript?.length) return;
     if (cachedClient.current !== client) {
       cached.current.clear();
       inFlight.current.clear();

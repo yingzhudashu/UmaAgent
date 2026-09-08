@@ -3,6 +3,7 @@ import { type AgentEventEnvelope, AgentEventEnvelopeSchema } from "./event-contr
 import { Id, PROTOCOL_VERSION, Strict, Timestamp } from "./schema-helpers.js";
 
 export * from "./event-contract.js";
+export * from "./resource-contract.js";
 export { PROTOCOL_VERSION } from "./schema-helpers.js";
 
 export const ModelRefSchema = Strict({ provider: Id, id: Id });
@@ -1059,23 +1060,6 @@ export const OptimizationRollbackResultSchema = Strict({
   rolledBack: Type.Boolean(),
 });
 export type OptimizationRollbackResult = Static<typeof OptimizationRollbackResultSchema>;
-
-export const ResourceSnapshotSchema = Strict({
-  id: Id,
-  capturedAt: Timestamp,
-  cpuUserMicros: Type.Integer({ minimum: 0 }),
-  cpuSystemMicros: Type.Integer({ minimum: 0 }),
-  rssBytes: Type.Integer({ minimum: 0 }),
-  heapUsedBytes: Type.Integer({ minimum: 0 }),
-  heapTotalBytes: Type.Integer({ minimum: 0 }),
-  externalBytes: Type.Integer({ minimum: 0 }),
-  arrayBuffersBytes: Type.Integer({ minimum: 0 }),
-  eventLoopDelayMs: Type.Number({ minimum: 0 }),
-  walBytes: Type.Integer({ minimum: 0 }),
-  activeRuns: Type.Integer({ minimum: 0 }),
-  queuedRuns: Type.Integer({ minimum: 0 }),
-});
-export type ResourceSnapshot = Static<typeof ResourceSnapshotSchema>;
 
 export const SessionEventPageSchema = Strict({
   sessionId: Id,

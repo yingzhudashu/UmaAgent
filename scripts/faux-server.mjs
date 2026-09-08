@@ -19,6 +19,8 @@ const stateDir = process.env.UMA_FAUX_STATE
 if (process.env.UMA_FAUX_RESET_STATE === "1") {
   await rm(stateDir, { recursive: true, force: true });
 }
+// Faux 验收的两个数据库始终隔离，不能继承部署环境的 telemetry 目录。
+process.env.UMA_TELEMETRY_DIR = stateDir;
 
 const config = {
   server: {
@@ -136,8 +138,13 @@ runtime.database.putAuthToken({
 const app = await createServer(runtime);
 await app.listen({ host: config.server.host, port });
 console.log(`UmaAgent faux server: http://127.0.0.1:${port} (token: ${token})`);
+const forceGcTimer =
+  process.env.UMA_FAUX_FORCE_GC === "1" && typeof global.gc === "function"
+    ? setInterval(() => global.gc(), 1_000)
+    : undefined;
 
 const shutdown = async () => {
+  if (forceGcTimer) clearInterval(forceGcTimer);
   await app.close();
   await runtime.stop();
   process.exit(0);

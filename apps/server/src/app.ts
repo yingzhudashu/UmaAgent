@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { access, mkdir, readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
@@ -24,9 +23,6 @@ import {
   SkillInstallRequestSchema,
   UpdateScheduledTaskRequestSchema,
   UpdateSessionRequestSchema,
-  XianyuAutoReplyRequestSchema,
-  XianyuInternalInboundRequestSchema,
-  XianyuInternalSessionRequestSchema,
 } from "@uma-agent/protocol";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import Value from "typebox/value";
@@ -37,7 +33,8 @@ import { installHttpTelemetry } from "./httpTelemetry.js";
 import { SERVER_LOG_REDACTIONS } from "./log-redaction.js";
 import { crossOrigin, secureOrigin, trustLoopbackProxy } from "./request-origin.js";
 import { installRuntimeLogging } from "./runtimeLogging.js";
-import { validateXianyuChatBody, validateXianyuPublishBody, XianyuControlClient } from "./xianyu.js";
+import { XianyuControlClient } from "./xianyu.js";
+import { registerXianyuRoutes } from "./xianyu-routes.js";
 
 type SocketMessage = {
   type?: string;
@@ -335,377 +332,7 @@ export async function createServer(
     return reply.code(204).send();
   });
 
-  const requireXianyu = (request: FastifyRequest): AuthPrincipal => {
-    if (!xianyu) throw new Error("Xianyu service is not configured");
-    return requireAdmin(request, "Xianyu administrator access required");
-  };
-  const requireInternalXianyu = (request: FastifyRequest): void => {
-    const remote = request.socket.remoteAddress ?? "";
-    if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(remote))
-      throw new Error("Xianyu internal access requires loopback");
-    const controlToken = runtime.config.xianyu
-      ? process.env[runtime.config.xianyu.controlTokenEnv]?.trim()
-      : undefined;
-    if (!controlToken || request.headers.authorization !== `Bearer ${controlToken}`)
-      throw new Error("Xianyu internal authentication required");
-  };
-  const xianyuClient = (): XianyuControlClient => {
-    if (!xianyu) throw new Error("Xianyu service is not configured");
-    return xianyu;
-  };
-  const channelWorkspace = join(runtime.config.server.workspaceRoots[0] as string, "channels", "xianyu");
-  const ensureXianyuSession = async (input: {
-    tenantId: string;
-    conversationId: string;
-    threadId?: string;
-    kind: "control" | "buyer";
-    displayName?: string;
-    externalUserId?: string;
-    itemId?: string;
-  }) => {
-    await mkdir(channelWorkspace, { recursive: true });
-    return runtime.database.withTransaction(() => {
-      const existing = runtime.database.findChannelSession(
-        input.tenantId,
-        input.conversationId,
-        input.threadId ?? "",
-      );
-      if (existing) {
-        runtime.database.updateChannelSession({
-          sessionId: existing,
-          ...(input.displayName ? { displayName: input.displayName } : {}),
-          ...(input.externalUserId ? { externalUserId: input.externalUserId } : {}),
-          ...(input.itemId ? { itemId: input.itemId } : {}),
-        });
-        return runtime.database.getSession(existing);
-      }
-      const session = runtime.database.createSession({
-        userId: "system",
-        title:
-          input.kind === "control"
-            ? "咸鱼总控"
-            : input.displayName?.trim() || `咸鱼买家 ${input.conversationId}`,
-        assistantName: "UmaAgent · 咸鱼",
-        workspace: channelWorkspace,
-        model: runtime.config.defaultModel,
-        thinkingLevel: runtime.config.defaultThinkingLevel,
-      });
-      runtime.database.attachChannelSession({ sessionId: session.id, ...input });
-      return session;
-    });
-  };
-
-  app.get("/api/v15/xianyu/workspace", async (request) => {
-    requireXianyu(request);
-    await ensureXianyuSession({
-      tenantId: "xianyu",
-      conversationId: "__control__",
-      kind: "control",
-      displayName: "咸鱼总控",
-    });
-    const [serviceResult, loginResult] = await Promise.allSettled([
-      xianyuClient().health(),
-      xianyuClient().loginStatus(),
-    ]);
-    const unavailable = (result: PromiseRejectedResult) => ({
-      status: "degraded",
-      message: result.reason instanceof Error ? result.reason.message : "咸鱼 Adapter 不可用",
-    });
-    return {
-      workspace: "xianyu",
-      autoReplyEnabled: runtime.database.xianyuAutoReplyEnabled(),
-      service: serviceResult.status === "fulfilled" ? serviceResult.value : unavailable(serviceResult),
-      login: loginResult.status === "fulfilled" ? loginResult.value : unavailable(loginResult),
-      sessions: runtime.database.listChannelSessions("xianyu").map(({ session, metadata }) => ({
-        session,
-        metadata,
-        lastSequence: runtime.listSessionEvents(session.id, 0, 1).snapshotSequence,
-        draftMessageIds: runtime.database.listChannelDraftMessageIds(session.id),
-      })),
-      serverTime: Date.now(),
-    };
-  });
-  app.put<{ Body: { enabled?: boolean } }>("/api/v15/xianyu/settings/auto-reply", async (request) => {
-    requireXianyu(request);
-    if (!Value.Check(XianyuAutoReplyRequestSchema, request.body))
-      throw new Error("Invalid Xianyu auto-reply request");
-    return { enabled: runtime.database.setXianyuAutoReply(request.body.enabled) };
-  });
-  app.post<{ Params: { id: string } }>("/api/v15/xianyu/sessions/:id/read", async (request) => {
-    requireXianyu(request);
-    if (!runtime.database.isChannelSession(request.params.id)) throw new Error("Session not found");
-    runtime.database.markChannelSessionRead(request.params.id);
-    return { ok: true };
-  });
-  app.post<{ Body: Record<string, unknown> }>("/api/v15/xianyu/internal/session", async (request) => {
-    requireInternalXianyu(request);
-    if (!Value.Check(XianyuInternalSessionRequestSchema, request.body))
-      throw new Error("Invalid Xianyu internal session request");
-    const body = request.body as {
-      sessionId?: string;
-      tenantId: string;
-      conversationId: string;
-      threadId?: string;
-      displayName?: string;
-      externalUserId?: string;
-      itemId?: string;
-    };
-    if (body.sessionId) {
-      if (!runtime.database.isChannelSession(body.sessionId, "xianyu"))
-        throw new Error("Session is not an Xianyu channel session");
-      const metadata = runtime.database.channelSession(body.sessionId);
-      if (
-        !metadata ||
-        metadata.tenantId !== body.tenantId ||
-        metadata.conversationId !== body.conversationId ||
-        (metadata.threadId ?? "") !== (body.threadId ?? "")
-      )
-        throw new Error("Xianyu session mapping does not match");
-      runtime.database.updateChannelSession({
-        sessionId: body.sessionId,
-        ...(body.displayName ? { displayName: body.displayName } : {}),
-        ...(body.externalUserId ? { externalUserId: body.externalUserId } : {}),
-        ...(body.itemId ? { itemId: body.itemId } : {}),
-      });
-      return { sessionId: body.sessionId };
-    }
-    const session = await ensureXianyuSession({ ...body, kind: "buyer" });
-    return { sessionId: session.id };
-  });
-  app.post<{ Body: Record<string, unknown> }>("/api/v15/xianyu/internal/inbound", async (request) => {
-    requireInternalXianyu(request);
-    if (!Value.Check(XianyuInternalInboundRequestSchema, request.body))
-      throw new Error("Invalid Xianyu internal inbound request");
-    const body = request.body as {
-      sessionId: string;
-      externalMessageId: string;
-      senderId?: string;
-      text: string;
-      attachmentIds?: string[];
-    };
-    if (!runtime.database.isChannelSession(body.sessionId)) throw new Error("Session not found");
-    const key = `inbound:${body.sessionId}:${body.externalMessageId}`;
-    const delivery = runtime.database.createChannelDelivery({
-      direction: "inbound",
-      idempotencyKey: key,
-      sessionId: body.sessionId,
-      status: "pending",
-    });
-    if (!delivery.created) return { accepted: false, duplicate: true };
-    try {
-      const messageId = randomUUID();
-      const run = runtime.sendMessage(body.sessionId, {
-        messageId,
-        text: body.text,
-        mode: "agent",
-        source: {
-          adapter: "xianyu",
-          conversationId: runtime.database.channelSession(body.sessionId)?.conversationId ?? body.sessionId,
-          externalMessageId: body.externalMessageId,
-          ...(body.senderId ? { senderId: body.senderId } : {}),
-        },
-        ...(body.attachmentIds?.length ? { attachmentIds: body.attachmentIds } : {}),
-      });
-      runtime.database.attachChannelDeliveryMessage(key, messageId);
-      runtime.database.updateChannelSession({
-        sessionId: body.sessionId,
-        inbound: true,
-        ...(body.senderId ? { externalUserId: body.senderId } : {}),
-      });
-      runtime.database.updateChannelDeliveryByKey(key, "delivered");
-      return { accepted: true, duplicate: false, runId: run.id, messageId };
-    } catch (error) {
-      runtime.database.updateChannelDeliveryByKey(
-        key,
-        "failed",
-        error instanceof Error ? error.message : String(error),
-      );
-      throw error;
-    }
-  });
-  app.post<{ Body: { sessionId?: string; messageId?: string; externalMessageId?: string; text?: string } }>(
-    "/api/v15/xianyu/internal/outbound",
-    async (request) => {
-      requireInternalXianyu(request);
-      const body = request.body ?? {};
-      if (!body.sessionId || !body.messageId || typeof body.text !== "string")
-        throw new Error("sessionId, messageId and text are required");
-      if (!runtime.database.isChannelSession(body.sessionId)) throw new Error("Session not found");
-      const message = runtime.database.getMessage(body.messageId);
-      if (message.role !== "assistant" || message.status !== "complete")
-        throw new Error("Message is not a completed assistant reply");
-      const userMessage = runtime.database
-        .listMessages(body.sessionId)
-        .find((item) => item.runId === message.runId && item.role === "user");
-      if (!userMessage?.source || userMessage.source.adapter !== "xianyu")
-        return { send: false, ignored: true };
-      const key = `outbound:${body.sessionId}:${body.messageId}`;
-      const delivery = runtime.database.createChannelDelivery({
-        direction: "outbound",
-        idempotencyKey: key,
-        sessionId: body.sessionId,
-        messageId: body.messageId,
-        status: runtime.database.xianyuAutoReplyEnabled() ? "pending" : "draft",
-      });
-      if (!delivery.created) return { send: false, duplicate: true, status: delivery.status };
-      return {
-        send: runtime.database.xianyuAutoReplyEnabled(),
-        duplicate: false,
-        status: delivery.status,
-        idempotencyKey: key,
-      };
-    },
-  );
-  app.post<{ Body: { idempotencyKey?: string; ok?: boolean; error?: string } }>(
-    "/api/v15/xianyu/internal/outbound/result",
-    async (request) => {
-      requireInternalXianyu(request);
-      const body = request.body ?? {};
-      if (!body.idempotencyKey || typeof body.ok !== "boolean")
-        throw new Error("idempotencyKey and ok are required");
-      runtime.database.updateChannelDeliveryByKey(
-        body.idempotencyKey,
-        body.ok ? "delivered" : "failed",
-        body.error,
-      );
-      return { ok: true };
-    },
-  );
-  app.post<{ Params: { id: string; messageId: string } }>(
-    "/api/v15/xianyu/sessions/:id/drafts/:messageId/send",
-    async (request) => {
-      requireXianyu(request);
-      const { id: sessionId, messageId } = request.params;
-      if (!runtime.database.isChannelSession(sessionId, "xianyu")) throw new Error("Session not found");
-      const message = runtime.database.getMessage(messageId);
-      const messageOwner = runtime.database.findMessageOwner(messageId);
-      if (
-        messageOwner?.sessionId !== sessionId ||
-        message.role !== "assistant" ||
-        message.status !== "complete"
-      )
-        throw new Error("Message is not a completed draft reply");
-      const delivery = runtime.database.channelDeliveryForMessage(messageId);
-      if (!delivery || delivery.sessionId !== sessionId) throw new Error("Draft delivery not found");
-      if (delivery.status === "delivered") return { ok: true, messageId };
-      if (delivery.status !== "draft") throw new Error("Draft is already being delivered");
-      runtime.database.updateChannelDelivery(messageId, "pending");
-      try {
-        await xianyuClient().send({ sessionId, messageId, text: message.content });
-        runtime.database.updateChannelDelivery(messageId, "delivered");
-        return { ok: true, messageId };
-      } catch (error) {
-        runtime.database.updateChannelDelivery(
-          messageId,
-          "failed",
-          error instanceof Error ? error.message : String(error),
-        );
-        throw error;
-      }
-    },
-  );
-  app.get("/api/v15/xianyu/status", async (request) => {
-    const principal = requireXianyu(request);
-    const result = await xianyuClient().health();
-    request.log.info({
-      requestId: request.id,
-      userId: principal.userId,
-      action: "xianyu.status",
-      result: "ok",
-    });
-    return result;
-  });
-  app.post("/api/v15/xianyu/login/start", async (request) => {
-    const principal = requireXianyu(request);
-    const result = await xianyuClient().loginStart();
-    request.log.info({
-      requestId: request.id,
-      userId: principal.userId,
-      action: "xianyu.login.start",
-      result: "ok",
-    });
-    return result;
-  });
-  app.get("/api/v15/xianyu/login/status", async (request) => {
-    const principal = requireXianyu(request);
-    const result = await xianyuClient().loginStatus();
-    request.log.info({
-      requestId: request.id,
-      userId: principal.userId,
-      action: "xianyu.login.status",
-      result: "ok",
-    });
-    return result;
-  });
-  app.get("/api/v15/xianyu/conversations", async (request) => {
-    const principal = requireXianyu(request);
-    const result = await xianyuClient().conversations();
-    request.log.info({
-      requestId: request.id,
-      userId: principal.userId,
-      action: "xianyu.conversations",
-      result: "ok",
-    });
-    return result;
-  });
-  const xianyuAction = (path: "/start" | "/stop" | "/pause" | "/resume", action: string) =>
-    app.post(`/api/v15/xianyu${path}`, async (request) => {
-      const principal = requireXianyu(request);
-      await xianyuClient().request<void>(path, { method: "POST" });
-      request.log.info({ requestId: request.id, userId: principal.userId, action, result: "ok" });
-      return { ok: true };
-    });
-  xianyuAction("/start", "xianyu.start");
-  xianyuAction("/stop", "xianyu.stop");
-  xianyuAction("/pause", "xianyu.pause");
-  xianyuAction("/resume", "xianyu.resume");
-  app.get<{ Params: { conversationId: string } }>(
-    "/api/v15/xianyu/history/:conversationId",
-    async (request) => {
-      const principal = requireXianyu(request);
-      const result = await xianyuClient().history(request.params.conversationId);
-      request.log.info({
-        requestId: request.id,
-        userId: principal.userId,
-        action: "xianyu.history",
-        result: "ok",
-      });
-      return result;
-    },
-  );
-  app.get<{ Params: { itemId: string } }>("/api/v15/xianyu/item/:itemId", async (request) => {
-    const principal = requireXianyu(request);
-    const result = await xianyuClient().item(request.params.itemId);
-    request.log.info({
-      requestId: request.id,
-      userId: principal.userId,
-      action: "xianyu.item",
-      result: "ok",
-    });
-    return result;
-  });
-  app.post<{ Body: Record<string, unknown> }>("/api/v15/xianyu/chat", async (request) => {
-    const principal = requireXianyu(request);
-    const result = await xianyuClient().chat(validateXianyuChatBody(request.body ?? {}));
-    request.log.info({
-      requestId: request.id,
-      userId: principal.userId,
-      action: "xianyu.chat",
-      result: "ok",
-    });
-    return result;
-  });
-  app.post<{ Body: Record<string, unknown> }>("/api/v15/xianyu/publish", async (request) => {
-    const principal = requireXianyu(request);
-    const result = await xianyuClient().publish(validateXianyuPublishBody(request.body ?? {}));
-    request.log.info({
-      requestId: request.id,
-      userId: principal.userId,
-      action: "xianyu.publish",
-      result: "ok",
-    });
-    return result;
-  });
+  registerXianyuRoutes(app, runtime, xianyu, requireAdmin, requestTrace);
 
   app.get("/api/v15/sessions", async (request) => {
     const principal = userPrincipal(auth, request);
@@ -1138,18 +765,21 @@ export async function createServer(
       limit > 500
     )
       throw new Error("Invalid trace query");
-    return runtime.listTrace({
-      ...(runId ? { runId } : {}),
-      ...(query.traceId ? { traceId: query.traceId } : {}),
-      ...(from === undefined ? {} : { from }),
-      ...(to === undefined ? {} : { to }),
-      ...(query.status && ["ok", "error", "cancelled"].includes(query.status)
-        ? { status: query.status as "ok" | "error" | "cancelled" }
-        : {}),
-      ...(query.name ? { name: query.name } : {}),
-      offset,
-      limit,
-    });
+    return runtime.listTrace(
+      {
+        ...(runId ? { runId } : {}),
+        ...(query.traceId ? { traceId: query.traceId } : {}),
+        ...(from === undefined ? {} : { from }),
+        ...(to === undefined ? {} : { to }),
+        ...(query.status && ["ok", "error", "cancelled"].includes(query.status)
+          ? { status: query.status as "ok" | "error" | "cancelled" }
+          : {}),
+        ...(query.name ? { name: query.name } : {}),
+        offset,
+        limit,
+      },
+      principal.role !== "admin",
+    );
   });
   app.get<{ Querystring: { from?: string; to?: string; limit?: string } }>(
     "/api/v15/reports/resources",
@@ -1168,7 +798,7 @@ export async function createServer(
         limit > 500
       )
         throw new Error("Invalid resource report range");
-      return runtime.listResourceSnapshots(from, to, limit);
+      return runtime.listResourceSnapshots(from, request.query.to === undefined ? undefined : to, limit);
     },
   );
   app.get<{ Querystring: { from?: string; to?: string } }>("/api/v15/reports/operations", async (request) => {
@@ -1466,9 +1096,9 @@ export async function createServer(
         .send(data);
     },
   );
-
   app.head("/api/v15/events", async (_request, reply) => reply.code(405).send());
   app.get("/api/v15/events", { websocket: true }, (socket, request) => {
+    const connectionSpan = httpTelemetry.startSpan("websocket.connection", requestTrace(request));
     if (request.method !== "GET") {
       socket.close(1003, "WebSocket requires GET");
       return;
@@ -1578,12 +1208,12 @@ export async function createServer(
       }
     });
     socket.on("close", () => {
+      connectionSpan.finish({ status: "ok" });
       clearTimeout(timer);
       unsubscribe();
       unsubscribeResources();
     });
   });
-
   app.all("/api/*", async (request, reply) => {
     const isCurrentVersion = request.url === "/api/v15" || request.url.startsWith("/api/v15/");
     return reply

@@ -61,8 +61,11 @@ export class TraceService extends SharedTraceService {
     });
     this.queuedWaits.delete(runId);
   }
-  listTrace(query: TraceQuery): TraceQueryPage {
-    const page = this.store.listSpans(query as TelemetrySpanQuery);
+  listTrace(query: TraceQuery, scopeToRun = false): TraceQueryPage {
+    const page = this.store.listSpans({
+      ...query,
+      ...(scopeToRun ? { scopeToRun: true } : {}),
+    } as TelemetrySpanQuery);
     const spans: TraceSpan[] = page.spans
       .filter((span) => span.status !== "active")
       .map((span) => ({

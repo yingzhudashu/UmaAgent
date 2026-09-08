@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   safeFetch: vi.fn(),
+  search: vi.fn(),
 }));
 
 vi.mock("../src/tools.js", () => ({ safeFetch: mocks.safeFetch }));
+vi.mock("@tavily/core", () => ({ tavily: () => ({ search: mocks.search }) }));
 
 import { SearchService } from "../src/search.js";
 
@@ -18,16 +20,13 @@ describe("search service", () => {
   });
 
   it("bounds and normalizes Tavily results", async () => {
-    const search = new SearchService("");
-    const provider = {
-      search: vi.fn().mockResolvedValue({
-        results: [
-          { title: "First", url: "https://example.com/1", content: "a".repeat(2_100) },
-          { title: "Second", url: "https://example.com/2", content: "second" },
-        ],
-      }),
-    };
-    Object.assign(search, { tavilyClient: provider });
+    const search = new SearchService("isolated-test-key");
+    mocks.search.mockResolvedValue({
+      results: [
+        { title: "First", url: "https://example.com/1", content: "a".repeat(2_100) },
+        { title: "Second", url: "https://example.com/2", content: "second" },
+      ],
+    });
 
     await expect(search.search("tavily", "  typescript  ", 0)).resolves.toEqual([
       {
@@ -37,7 +36,7 @@ describe("search service", () => {
         source: "tavily",
       },
     ]);
-    expect(provider.search).toHaveBeenCalledWith(
+    expect(mocks.search).toHaveBeenCalledWith(
       "typescript",
       expect.objectContaining({ maxResults: 1, timeout: 10 }),
     );
