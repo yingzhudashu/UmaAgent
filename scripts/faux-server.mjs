@@ -115,6 +115,11 @@ const response = (context) => {
   }
   if (requestText.includes("FAUX_SECURITY_TEST")) return fauxAssistantMessage("FAUX_SECURITY_SAFE");
   if (requestText.includes("FAUX_PROMPT_INJECTION")) return fauxAssistantMessage("FAUX_INJECTION_REFUSED");
+  // 扩展负载独立于固定基准：验证长回复不会截断，仍经过真实流式与持久化路径。
+  if (requestText.includes("FAUX_LARGE_REPLY"))
+    return fauxAssistantMessage(
+      `FAUX_LARGE_BEGIN\n${"Readable stream content. ".repeat(400)}\nFAUX_LARGE_END`,
+    );
   if (requestText.includes("Execute only plan step 1")) return fauxAssistantMessage("FAUX_PLAN_STEP_1");
   if (requestText.includes("Execute only plan step 2")) return fauxAssistantMessage("FAUX_PLAN_STEP_2");
   return fauxAssistantMessage(`Faux Core received: ${requestText.slice(0, 300)}`);
@@ -135,16 +140,22 @@ runtime.database.putAuthToken({
   scopes: ["user"],
   expiresAt: Date.now() + 86_400_000,
 });
+// Dedicated ordinary accounts keep UI tests independent of registration quotas.
+for (const suffix of ["2", "3"]) {
+  const user = runtime.database.createUser("user");
+  const secret = `faux-user-${suffix}-token-012345678901234567890123`;
+  runtime.database.putAuthToken({
+    id: `00000000-0000-4000-8000-00000000000${suffix}`,
+    userId: user.id,
+    tokenHash: createHash("sha256").update(secret).digest("hex"),
+    label: "faux-ui-test",
+    scopes: ["user"],
+  });
+}
 const app = await createServer(runtime);
 await app.listen({ host: config.server.host, port });
 console.log(`UmaAgent faux server: http://127.0.0.1:${port} (token: ${token})`);
-const forceGcTimer =
-  process.env.UMA_FAUX_FORCE_GC === "1" && typeof global.gc === "function"
-    ? setInterval(() => global.gc(), 1_000)
-    : undefined;
-
 const shutdown = async () => {
-  if (forceGcTimer) clearInterval(forceGcTimer);
   await app.close();
   await runtime.stop();
   process.exit(0);

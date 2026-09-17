@@ -10,9 +10,7 @@ const baseline = JSON.parse(await readFile(resolve("scripts/perf-baseline.json")
 const port = Number(process.env.UMA_PERF_PORT ?? 33321);
 const tokenSecret = process.env.UMA_PERF_TOKEN ?? "faux-perf-token-012345678901234567890123";
 const token = `uma_pat_00000000-0000-4000-8000-000000000001_${tokenSecret}`;
-const stateDir = process.env.UMA_PERF_STATE
-  ? resolve(process.env.UMA_PERF_STATE)
-  : await mkdtemp(join(tmpdir(), `uma-perf-${process.pid}-`));
+const stateRoot = process.env.UMA_PERF_STATE ? resolve(process.env.UMA_PERF_STATE) : tmpdir();
 
 const messages = Number(process.env.UMA_PERF_MESSAGES ?? baseline.smokeMessages);
 const budgets = baseline.budgets;
@@ -20,9 +18,10 @@ const budgets = baseline.budgets;
 if (!Number.isInteger(messages) || messages < 1 || messages > 100_000)
   throw new Error("UMA_PERF_MESSAGES must be an integer between 1 and 100000");
 
-await rm(stateDir, { recursive: true, force: true });
-await mkdir(stateDir, { recursive: true });
-const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
+// 参数指定隔离根目录；只创建和清理本次独有子目录，不重置调用者已有数据。
+await mkdir(stateRoot, { recursive: true });
+const stateDir = await mkdtemp(join(stateRoot, `uma-perf-${process.pid}-`));
+const server = spawn(process.execPath, ["--max-semi-space-size=4", "scripts/faux-server.mjs"], {
   cwd: resolve("."),
   env: {
     ...process.env,
@@ -41,7 +40,7 @@ server.stderr.on("data", (chunk) => {
   output = `${output}${chunk}`.slice(-10_000);
 });
 
-const base = `http://127.0.0.1:${port}/api/v15`;
+const base = `http://127.0.0.1:${port}/api/v16`;
 async function api(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
     ...options,

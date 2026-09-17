@@ -80,6 +80,14 @@ if [[ "$xianyu_enabled" = 1 && "$xianyu_unit_exists" = 1 ]]; then
 fi
 rollback() {
   trap - EXIT
+  # schema 升级不可通过切回旧代码撤销。新 schema 已落盘时保留维护态，
+  # 停止写入，等待明确的数据恢复或前向修复，避免旧 Core 对新库反复启动。
+  if [[ -n "$previous" ]] && ! grep -qx 'schema=25' "$previous/RELEASE"; then
+    systemctl stop "${services[@]}" || true
+    write_maintenance 1 || true
+    echo "Schema changed; services stopped. Previous release and database backup retained for explicit recovery." >&2
+    return
+  fi
   if [[ -n "$previous" ]]; then
     ln -sfn -- "$previous" "${current_link}.rollback"
     mv -Tf -- "${current_link}.rollback" "$current_link"
@@ -126,7 +134,7 @@ mv -Tf -- "${current_link}.next" "$current_link"
 systemctl start "${services[@]}"
 ready=0
 for _ in {1..30}; do
-  if curl --fail --silent --show-error http://127.0.0.1:3210/api/v15/health/ready >/dev/null; then
+  if curl --fail --silent --show-error http://127.0.0.1:3210/api/v16/health/ready >/dev/null; then
     ready=1
     break
   fi
@@ -136,8 +144,8 @@ if [[ "$ready" != 1 ]]; then
   echo "UmaAgent readiness timed out" >&2
   false
 fi
-curl --fail --silent --show-error http://127.0.0.1:3210/api/v15/health/live >/dev/null
-curl --fail --silent --show-error http://127.0.0.1:3210/api/v15/health/ready >/dev/null
+curl --fail --silent --show-error http://127.0.0.1:3210/api/v16/health/live >/dev/null
+curl --fail --silent --show-error http://127.0.0.1:3210/api/v16/health/ready >/dev/null
 if [[ "$xianyu_enabled" = 1 ]]; then
   UMA_XIANYU_CONTROL_TOKEN=$(sed -n 's/^UMA_XIANYU_CONTROL_TOKEN=//p' /etc/uma-agent/uma.env | head -n 1)
   [[ -n "$UMA_XIANYU_CONTROL_TOKEN" ]] || { echo "UMA_XIANYU_CONTROL_TOKEN is missing" >&2; false; }

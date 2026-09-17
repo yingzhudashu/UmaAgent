@@ -14,8 +14,8 @@ import {
 } from "../src/index.js";
 
 describe("protocol schemas", () => {
-  it("keeps the checked v15 fixtures valid for native clients", async () => {
-    for (const name of ["v15-event.json", "v15-transient-delta.json"]) {
+  it("keeps the checked v16 fixtures valid for native clients", async () => {
+    for (const name of ["v16-event.json", "v16-transient-delta.json"]) {
       const fixture = JSON.parse(
         await readFile(resolve("packages/protocol/test/fixtures", name), "utf8"),
       ) as unknown;
@@ -59,14 +59,14 @@ describe("protocol schemas", () => {
 
   it("accepts only strict transient append deltas", () => {
     const delta = {
-      protocolVersion: 15,
+      protocolVersion: 16,
       sessionId: "session",
       runId: "run",
       sequence: 0,
       timestamp: 1,
       transient: true,
       type: "message.delta",
-      payload: { messageId: "message", responseId: "response", append: "chunk", updatedAt: 1 },
+      payload: { messageId: "message", responseId: "response", append: "chunk", offset: 0, updatedAt: 1 },
     };
     expect(Value.Check(AgentEventEnvelopeSchema, delta)).toBe(true);
     expect(Value.Check(AgentEventEnvelopeSchema, { ...delta, payload: { messageId: "message" } })).toBe(

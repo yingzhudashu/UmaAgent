@@ -88,7 +88,7 @@ export function registerXianyuRoutes(
     });
   };
 
-  app.get("/api/v15/xianyu/workspace", async (request) => {
+  app.get("/api/v16/xianyu/workspace", async (request) => {
     requireXianyu(request);
     await ensureXianyuSession({
       tenantId: "xianyu",
@@ -118,19 +118,19 @@ export function registerXianyuRoutes(
       serverTime: Date.now(),
     };
   });
-  app.put<{ Body: { enabled?: boolean } }>("/api/v15/xianyu/settings/auto-reply", async (request) => {
+  app.put<{ Body: { enabled?: boolean } }>("/api/v16/xianyu/settings/auto-reply", async (request) => {
     requireXianyu(request);
     if (!Value.Check(XianyuAutoReplyRequestSchema, request.body))
       throw new Error("Invalid Xianyu auto-reply request");
     return { enabled: runtime.database.setXianyuAutoReply(request.body.enabled) };
   });
-  app.post<{ Params: { id: string } }>("/api/v15/xianyu/sessions/:id/read", async (request) => {
+  app.post<{ Params: { id: string } }>("/api/v16/xianyu/sessions/:id/read", async (request) => {
     requireXianyu(request);
     if (!runtime.database.isChannelSession(request.params.id)) throw new Error("Session not found");
     runtime.database.markChannelSessionRead(request.params.id);
     return { ok: true };
   });
-  app.post<{ Body: Record<string, unknown> }>("/api/v15/xianyu/internal/session", async (request) => {
+  app.post<{ Body: Record<string, unknown> }>("/api/v16/xianyu/internal/session", async (request) => {
     requireInternalXianyu(request);
     if (!Value.Check(XianyuInternalSessionRequestSchema, request.body))
       throw new Error("Invalid Xianyu internal session request");
@@ -165,7 +165,7 @@ export function registerXianyuRoutes(
     const session = await ensureXianyuSession({ ...body, kind: "buyer" });
     return { sessionId: session.id };
   });
-  app.post<{ Body: Record<string, unknown> }>("/api/v15/xianyu/internal/inbound", async (request) => {
+  app.post<{ Body: Record<string, unknown> }>("/api/v16/xianyu/internal/inbound", async (request) => {
     requireInternalXianyu(request);
     if (!Value.Check(XianyuInternalInboundRequestSchema, request.body))
       throw new Error("Invalid Xianyu internal inbound request");
@@ -221,7 +221,7 @@ export function registerXianyuRoutes(
     }
   });
   app.post<{ Body: { sessionId?: string; messageId?: string; externalMessageId?: string; text?: string } }>(
-    "/api/v15/xianyu/internal/outbound",
+    "/api/v16/xianyu/internal/outbound",
     async (request) => {
       requireInternalXianyu(request);
       const body = request.body ?? {};
@@ -257,7 +257,7 @@ export function registerXianyuRoutes(
     },
   );
   app.post<{ Body: { idempotencyKey?: string; ok?: boolean; error?: string } }>(
-    "/api/v15/xianyu/internal/outbound/result",
+    "/api/v16/xianyu/internal/outbound/result",
     async (request) => {
       requireInternalXianyu(request);
       const body = request.body ?? {};
@@ -272,7 +272,7 @@ export function registerXianyuRoutes(
     },
   );
   app.post<{ Params: { id: string; messageId: string } }>(
-    "/api/v15/xianyu/sessions/:id/drafts/:messageId/send",
+    "/api/v16/xianyu/sessions/:id/drafts/:messageId/send",
     async (request) => {
       requireXianyu(request);
       const { id: sessionId, messageId } = request.params;
@@ -304,7 +304,7 @@ export function registerXianyuRoutes(
       }
     },
   );
-  app.get("/api/v15/xianyu/status", async (request) => {
+  app.get("/api/v16/xianyu/status", async (request) => {
     const principal = requireXianyu(request);
     const result = await xianyuClient(request).health();
     request.log.info({
@@ -315,7 +315,7 @@ export function registerXianyuRoutes(
     });
     return result;
   });
-  app.post("/api/v15/xianyu/login/start", async (request) => {
+  app.post("/api/v16/xianyu/login/start", async (request) => {
     const principal = requireXianyu(request);
     const result = await xianyuClient(request).loginStart();
     request.log.info({
@@ -326,7 +326,7 @@ export function registerXianyuRoutes(
     });
     return result;
   });
-  app.get("/api/v15/xianyu/login/status", async (request) => {
+  app.get("/api/v16/xianyu/login/status", async (request) => {
     const principal = requireXianyu(request);
     const result = await xianyuClient(request).loginStatus();
     request.log.info({
@@ -337,7 +337,7 @@ export function registerXianyuRoutes(
     });
     return result;
   });
-  app.get("/api/v15/xianyu/conversations", async (request) => {
+  app.get("/api/v16/xianyu/conversations", async (request) => {
     const principal = requireXianyu(request);
     const result = await xianyuClient(request).conversations();
     request.log.info({
@@ -349,7 +349,7 @@ export function registerXianyuRoutes(
     return result;
   });
   const xianyuAction = (path: "/start" | "/stop" | "/pause" | "/resume", action: string) =>
-    app.post(`/api/v15/xianyu${path}`, async (request) => {
+    app.post(`/api/v16/xianyu${path}`, async (request) => {
       const principal = requireXianyu(request);
       await xianyuClient(request).request<void>(path, { method: "POST" });
       request.log.info({ requestId: request.id, userId: principal.userId, action, result: "ok" });
@@ -360,7 +360,7 @@ export function registerXianyuRoutes(
   xianyuAction("/pause", "xianyu.pause");
   xianyuAction("/resume", "xianyu.resume");
   app.get<{ Params: { conversationId: string } }>(
-    "/api/v15/xianyu/history/:conversationId",
+    "/api/v16/xianyu/history/:conversationId",
     async (request) => {
       const principal = requireXianyu(request);
       const result = await xianyuClient(request).history(request.params.conversationId);
@@ -373,7 +373,7 @@ export function registerXianyuRoutes(
       return result;
     },
   );
-  app.get<{ Params: { itemId: string } }>("/api/v15/xianyu/item/:itemId", async (request) => {
+  app.get<{ Params: { itemId: string } }>("/api/v16/xianyu/item/:itemId", async (request) => {
     const principal = requireXianyu(request);
     const result = await xianyuClient(request).item(request.params.itemId);
     request.log.info({
@@ -384,7 +384,7 @@ export function registerXianyuRoutes(
     });
     return result;
   });
-  app.post<{ Body: Record<string, unknown> }>("/api/v15/xianyu/chat", async (request) => {
+  app.post<{ Body: Record<string, unknown> }>("/api/v16/xianyu/chat", async (request) => {
     const principal = requireXianyu(request);
     const result = await xianyuClient(request).chat(validateXianyuChatBody(request.body ?? {}));
     request.log.info({
@@ -395,7 +395,7 @@ export function registerXianyuRoutes(
     });
     return result;
   });
-  app.post<{ Body: Record<string, unknown> }>("/api/v15/xianyu/publish", async (request) => {
+  app.post<{ Body: Record<string, unknown> }>("/api/v16/xianyu/publish", async (request) => {
     const principal = requireXianyu(request);
     const result = await xianyuClient(request).publish(validateXianyuPublishBody(request.body ?? {}));
     request.log.info({

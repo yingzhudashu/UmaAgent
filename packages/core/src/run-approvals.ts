@@ -3,7 +3,7 @@ import type { UmaDatabase } from "./database.js";
 import type { EventHub } from "./events.js";
 import type { PendingApproval } from "./runtime-support.js";
 
-/** Owns approval persistence, idempotent decisions, timeout, cancellation and shutdown rejection. */
+/** 统一账号执行策略、审批持久化、幂等决定、超时、取消和关闭清理。 */
 export class RunApprovals {
   private readonly pending = new Map<string, PendingApproval>();
 
@@ -49,6 +49,20 @@ export class RunApprovals {
     args: unknown;
     signal: AbortSignal;
   }): Promise<boolean> {
+    if (input.signal.aborted) return Promise.resolve(false);
+    const owner = this.database.sessionOwner(input.sessionId) ?? "";
+    if (this.database.getExecutionSettings(owner).autoApprove) {
+      this.events.transaction(() =>
+        this.database.addAudit({
+          runId: input.runId,
+          kind: "approval",
+          name: input.toolName,
+          input: { toolCallId: input.toolCallId, policy: "account_auto_approve" },
+          status: "approved",
+        }),
+      );
+      return Promise.resolve(true);
+    }
     let waiting: Promise<boolean> | undefined;
     this.events.transaction(() => {
       const approval = this.database.createApproval(input);

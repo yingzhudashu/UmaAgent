@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -18,18 +18,21 @@ const port = Number(process.env.UMA_SOAK_PORT ?? 33212);
 const responseBudget = Math.ceil((hours * 60 * 60_000) / messageIntervalMs) * 12 + 100;
 const tokenSecret = "faux-soak-token-012345678901234567890123";
 const token = `uma_pat_00000000-0000-4000-8000-000000000001_${tokenSecret}`;
-const stateDir = process.env.UMA_SOAK_STATE
-  ? resolve(process.env.UMA_SOAK_STATE)
-  : await mkdtemp(join(tmpdir(), `uma-soak-${process.pid}-`));
-await mkdir(stateDir, { recursive: true });
-const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
+// 只清理本次创建的唯一目录，不重置调用者指定的目录。
+const stateRoot = process.env.UMA_SOAK_STATE ? resolve(process.env.UMA_SOAK_STATE) : tmpdir();
+await mkdir(stateRoot, { recursive: true });
+const stateDir = await mkdtemp(join(stateRoot, `uma-soak-${process.pid}-`));
+const evidenceDir = resolve("artifacts/acceptance", `soak-${Date.now()}`);
+await mkdir(evidenceDir, { recursive: true });
+let passed = false;
+let startedAt = Date.now();
+const server = spawn(process.execPath, ["--max-semi-space-size=4", "scripts/faux-server.mjs"], {
   cwd: resolve("."),
   env: {
     ...process.env,
     UMA_FAUX_PORT: String(port),
     UMA_FAUX_TOKEN: tokenSecret,
     UMA_FAUX_STATE: stateDir,
-    UMA_FAUX_RESET_STATE: "1",
     UMA_FAUX_RESPONSES: String(responseBudget),
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -42,7 +45,7 @@ server.stderr.on("data", (chunk) => {
   serverOutput = `${serverOutput}${chunk}`.slice(-20_000);
 });
 
-const baseUrl = `http://127.0.0.1:${port}/api/v15`;
+const baseUrl = `http://127.0.0.1:${port}/api/v16`;
 async function api(path, options = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
     ...options,
@@ -130,7 +133,7 @@ try {
   // 预热模型、SQLite 页面与 Trace 写入路径后再建立 RSS 基线，
   // 避免把一次性初始化成本误判为长期常驻内存泄漏。
   for (let index = 0; index < 3; index++) await completeMessage(session.id);
-  const startedAt = Date.now();
+  startedAt = Date.now();
   const deadline = startedAt + hours * 60 * 60_000;
   const baselineRss = await residentBytes(server.pid);
   if (baselineRss > budgets.rssBytes) throw new Error(`Idle Core RSS exceeded budget (${baselineRss})`);
@@ -172,6 +175,9 @@ try {
       const occurrences = runs.map((item) => item.scheduledFor);
       if (new Set(occurrences).size !== occurrences.length)
         throw new Error("Duplicate schedule occurrence detected");
+      const sample = { elapsedMs: Date.now() - startedAt, messages, maxRss, maxWalBytes, cursor };
+      await appendFile(join(evidenceDir, "samples.jsonl"), JSON.stringify(sample) + "\n");
+      console.log(JSON.stringify(sample));
       if (maxRss > budgets.rssBytes) throw new Error(`Core RSS exceeded budget (${maxRss})`);
       if (maxRss > baselineRss * 1.6)
         throw new Error(`Resident memory grew by more than 60% (${baselineRss} -> ${maxRss})`);
@@ -180,18 +186,29 @@ try {
     }
     await new Promise((resolveDelay) => setTimeout(resolveDelay, messageIntervalMs));
   }
-  console.log(
-    JSON.stringify({
-      passed: true,
-      durationMs: Date.now() - startedAt,
-      messages,
-      sessions: 1,
-      lastSequence: cursor,
-      baselineRss,
-      maxRss,
-      maxWalBytes,
-    }),
+  passed = true;
+  const report = {
+    passed: true,
+    durationMs: Date.now() - startedAt,
+    messages,
+    sessions: 1,
+    lastSequence: cursor,
+    baselineRss,
+    maxRss,
+    maxWalBytes,
+  };
+  await writeFile(join(evidenceDir, "result.json"), JSON.stringify(report, null, 2));
+  console.log(JSON.stringify(report));
+} catch (error) {
+  await writeFile(
+    join(evidenceDir, "result.json"),
+    JSON.stringify(
+      { passed: false, elapsedMs: Date.now() - startedAt, error: String(error), stateDir },
+      null,
+      2,
+    ),
   );
+  throw error;
 } finally {
   if (schedule) {
     try {
@@ -205,5 +222,8 @@ try {
     if (server.exitCode !== null) resolveExit();
     else server.once("exit", resolveExit);
   });
-  await rm(stateDir, { recursive: true, force: true });
+  await writeFile(join(evidenceDir, "server.log"), serverOutput);
+  // 失败保留隔离数据库，便于复现与查询；成功只清理本次临时状态。
+  if (passed) await rm(stateDir, { recursive: true, force: true });
+  else console.error(`Soak evidence: ${evidenceDir}; isolated state: ${stateDir}`);
 }

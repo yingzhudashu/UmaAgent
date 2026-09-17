@@ -1,0 +1,44 @@
+[
+  { "command": "/help", "title": "命令帮助", "description": "查看可用的快捷命令", "admin": false },
+  { "command": "/status", "title": "服务状态", "description": "查看 Core、数据库和运行状态", "admin": false },
+  { "command": "/doctor", "title": "连接诊断", "description": "检查服务与数据库是否就绪", "admin": false },
+  { "command": "/config", "title": "查看配置", "description": "查看公开的服务配置", "admin": true },
+  { "command": "/model", "title": "模型列表", "description": "查看已配置的模型", "admin": false },
+  {
+    "command": "/reload-config",
+    "title": "重新加载配置",
+    "description": "应用可热更新的服务配置",
+    "admin": true
+  },
+  { "command": "/session list", "title": "会话列表", "description": "列出当前账号的会话", "admin": false },
+  { "command": "/session status", "title": "当前会话", "description": "查看当前会话状态", "admin": false },
+  {
+    "command": "/queue status",
+    "title": "队列状态",
+    "description": "查看当前会话的排队消息",
+    "admin": false
+  },
+  { "command": "/btw status", "title": "后台任务", "description": "列出当前账号的后台任务", "admin": false },
+  {
+    "command": "/schedule list",
+    "title": "调度列表",
+    "description": "查看当前账号的定时任务",
+    "admin": false
+  },
+  { "command": "/kb list", "title": "知识来源", "description": "列出当前账号的知识源", "admin": false },
+  {
+    "command": "/memory status",
+    "title": "记忆状态",
+    "description": "查看当前账号的记忆统计",
+    "admin": false
+  },
+  { "command": "/stats", "title": "运行统计", "description": "查看服务运行报表", "admin": true },
+  { "command": "/test list", "title": "评测历史", "description": "查看评测报告记录", "admin": true },
+  {
+    "command": "/self-opt proposals",
+    "title": "优化提案",
+    "description": "查看人工优化待办，不自动执行补丁",
+    "admin": true
+  },
+  { "command": "/reload-skills", "title": "刷新技能", "description": "重新扫描已配置的技能", "admin": true }
+]

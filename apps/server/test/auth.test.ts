@@ -35,6 +35,18 @@ const request = (headers: Record<string, string> = {}, cookies: Record<string, s
   ({ headers, cookies }) as unknown as FastifyRequest;
 
 describe("AuthService", () => {
+  it("reuses authentication only within one request and rechecks later requests", () => {
+    const { auth, database } = fixture();
+    const user = auth.register("request-scope");
+    const headers = { authorization: `Bearer ${user.token}` };
+    const first = request(headers);
+    expect(auth.requestAuthenticated(first)).toBe(true);
+    expect(auth.bearerAuthenticated(first)).toBe(true);
+    expect(database.findAuthToken).toHaveBeenCalledTimes(1);
+    database.findAuthToken.mockReturnValueOnce(undefined);
+    expect(auth.requestAuthenticated(request(headers))).toBe(false);
+    expect(database.findAuthToken).toHaveBeenCalledTimes(2);
+  });
   it("authenticates personal bearer credentials and cookies", () => {
     const { auth, database } = fixture();
     const user = auth.register("test");

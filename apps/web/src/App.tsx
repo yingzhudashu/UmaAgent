@@ -5,32 +5,23 @@ import {
   type UmaClient,
   UmaClientError,
 } from "@uma-agent/client";
-import type {
-  Approval,
-  Attachment,
-  InteractionMode,
-  SessionSnapshot,
-  TranscriptItem,
-} from "@uma-agent/protocol";
-import {
-  ArrowDown,
-  Bot,
-  CircleStop,
-  FilePlus2,
-  Menu,
-  Pencil,
-  RefreshCw,
-  RotateCcw,
-  Send,
-  TerminalSquare,
-  Trash2,
-} from "lucide-react";
-import { type FormEvent, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Approval, Session, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
+import { ArrowDown, Bot } from "lucide-react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalBar, RunPanel } from "./areas/RunArea.js";
 import { SessionArea } from "./areas/SessionArea.js";
 import {
+  BackgroundTaskArea,
+  DiagnosticsArea,
+  EvaluationArea,
+  MemoryArea,
+  OptimizationArea,
+  ResourceArea,
+  ScheduleArea,
+  XianyuWorkspace,
+} from "./areas/WorkspaceAreas.js";
+import {
   cacheCursor,
-  cachedCursor,
   cachedHistory,
   cachedSessions,
   cachedSnapshot,
@@ -40,47 +31,38 @@ import {
   clearCacheNamespace,
   setCacheNamespace,
 } from "./cache.js";
+import { AppearanceSettings } from "./components/AppearanceSettings.js";
 import { CommandPaletteHost } from "./components/CommandPalette.js";
+import { ConfirmDialog } from "./components/ConfirmDialog.js";
+import { ConversationComposer } from "./components/ConversationComposer.js";
+import { ConversationHeader } from "./components/ConversationHeader.js";
 import { InspectorContent } from "./components/InspectorContent.js";
-import { InspectorDrawer } from "./components/InspectorDrawer.js";
+import { InspectorDrawer, type InspectorSection } from "./components/InspectorDrawer.js";
 import { ApprovalPanel, ConnectionPanel, SyncPanel } from "./components/InspectorStatusPanels.js";
 import { MessageBubble } from "./components/MessageBubble.js";
-import { ModeSelector } from "./components/ModeSelector.js";
+import { type Destination, destinations, ProjectNavigation } from "./components/ProjectNavigation.js";
+import { QualityNavigation } from "./components/QualityNavigation.js";
 import { QueueDock } from "./components/QueueDock.js";
+import { RenameSessionDialog } from "./components/RenameSessionDialog.js";
 import { ResponseCard } from "./components/ResponseCard.js";
 import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
-import { type InspectorSection, StatusRail } from "./components/StatusRail.js";
+import { UnsavedChanges, useLeaveConfirmation } from "./components/UnsavedChanges.js";
 import { Login } from "./Login.js";
 import { type QualityOperation, useQualityHistory } from "./quality-history.js";
+import { requestErrorMessage } from "./request-error.js";
 import { buildConversationEntries } from "./responseTurns.js";
 import { applyDurableEvent, applyStreamingEvent, mergeSessionSnapshot } from "./streaming.js";
+import { useConversationDrafts } from "./useConversationDrafts.js";
 
-const XianyuWorkspace = lazy(() =>
-  import("./areas/XianyuWorkspace.js").then((module) => ({ default: module.XianyuWorkspace })),
-);
-const BackgroundTaskArea = lazy(() =>
-  import("./areas/BackgroundTaskArea.js").then((module) => ({ default: module.BackgroundTaskArea })),
-);
-const DiagnosticsArea = lazy(() =>
-  import("./areas/DiagnosticsArea.js").then((module) => ({ default: module.DiagnosticsArea })),
-);
-const EvaluationArea = lazy(() =>
-  import("./areas/EvaluationArea.js").then((module) => ({ default: module.EvaluationArea })),
-);
-const MemoryArea = lazy(() =>
-  import("./areas/MemoryArea.js").then((module) => ({ default: module.MemoryArea })),
-);
-const OptimizationArea = lazy(() =>
-  import("./areas/OptimizationArea.js").then((module) => ({ default: module.OptimizationArea })),
-);
-const ResourceArea = lazy(() =>
-  import("./areas/ResourceArea.js").then((module) => ({ default: module.ResourceArea })),
-);
-const ScheduleArea = lazy(() =>
-  import("./areas/ScheduleArea.js").then((module) => ({ default: module.ScheduleArea })),
-);
-
-type SettingsArea = "session" | "tasks" | "memory" | "schedules" | "resources" | "admin";
+type SettingsArea =
+  | "session"
+  | "tasks"
+  | "memory"
+  | "schedules"
+  | "resources"
+  | "admin"
+  | "sessions"
+  | "xianyu";
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -93,20 +75,63 @@ export interface AppProps {
   theme?: "light" | "dark";
 }
 
-export function App({ client, embedded = false, theme = "light" }: AppProps) {
+export function App(props: AppProps) {
+  return (
+    <UnsavedChanges>
+      <AppContent {...props} />
+    </UnsavedChanges>
+  );
+}
+function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
+  const leave = useLeaveConfirmation();
+  const closeInspector = useCallback(
+    () =>
+      leave(() => {
+        setDestination("sessions");
+        setInspectorSection(undefined);
+      }),
+    [leave],
+  );
   const queryClient = useQueryClient();
+  const [qualityTab, setQualityTab] = useState("diagnostics");
+  const [diagnosticDays, setDiagnosticDays] = useState(1);
+  const [renameTitle, setRenameTitle] = useState<string>();
+  const [globalError, setGlobalError] = useState("");
+  const [profileDraft, setProfileDraft] = useState<string>();
+  const [destination, setDestination] = useState<Destination>("sessions");
+  const [appearance, setAppearance] = useState<"light" | "dark" | "system">(() => {
+    const saved = localStorage.getItem("UmaAgent.appearance");
+    return saved === "light" || saved === "dark" ? saved : "system";
+  });
+  const effectiveTheme = appearance === "system" ? theme : appearance;
+
   const [selected, setSelected] = useState<string>();
+  const pendingCreatedSessions = useRef(new Map<string, Session>());
   const [createSessionError, setCreateSessionError] = useState<string>();
-  const [prompt, setPrompt] = useState("");
-  const [interactionMode, setInteractionMode] = useState<InteractionMode>("agent");
+  const {
+    draft,
+    prompt,
+    attachments,
+    interactionMode,
+    setPrompt,
+    setInteractionMode,
+    setAttachments,
+    sendMessage,
+    submit: sendDraft,
+    upload: uploadDraft,
+    clear: clearDrafts,
+    uploading,
+    authGeneration,
+  } = useConversationDrafts(client, selected);
   const [loginRequired, setLoginRequired] = useState<boolean>();
   const [userRole, setUserRole] = useState<"admin" | "user">("user");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [inspectorSection, setInspectorSection] = useState<InspectorSection>();
   const [settingsArea, setSettingsArea] = useState<SettingsArea>("session");
   const [approvals, setApprovals] = useState<Approval[]>([]);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [browserOnline, setBrowserOnline] = useState(() => navigator.onLine);
+  const [cacheUnavailable, setCacheUnavailable] = useState(false);
+  const cacheFailed = useCallback(() => setCacheUnavailable(true), []);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent>();
   const [historical, setHistorical] = useState<TranscriptItem[]>([]);
   const [historyHasMore, setHistoryHasMore] = useState<boolean>();
@@ -119,6 +144,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const scrollFrameRef = useRef<number | undefined>(undefined);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [deleteSessionPending, setDeleteSessionPending] = useState<string>();
   const [qualityOperations, setQualityOperations] = useState<Record<string, QualityOperation>>({});
   const mergeQualityHistory = useCallback((restored: Record<string, QualityOperation>) => {
     setQualityOperations((current) => {
@@ -132,25 +158,34 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const sessions = useQuery({
     queryKey: ["sessions"],
     enabled: loginRequired !== true,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       try {
         const bootstrap = await client.syncBootstrap();
+        signal.throwIfAborted();
         setUserRole(bootstrap.user.role);
         setCacheNamespace(bootstrap.user.id, client.serverOrigin);
-        const values = bootstrap.sessions.map((item) => item.session);
-        await cacheSessions(values);
+        const confirmed = bootstrap.sessions.map((item) => item.session);
+        for (const session of confirmed) pendingCreatedSessions.current.delete(session.id);
+        const values = [...pendingCreatedSessions.current.values(), ...confirmed];
+        await cacheSessions(values).catch(cacheFailed);
         return values;
       } catch (error) {
-        const cached = await cachedSessions();
-        if (cached) return cached;
+        signal.throwIfAborted();
+        if (error instanceof UmaClientError && error.status === 401) throw error;
+        const cached = await cachedSessions().catch(() => undefined);
+        if (cached)
+          return [
+            ...pendingCreatedSessions.current.values(),
+            ...cached.filter((session) => !pendingCreatedSessions.current.has(session.id)),
+          ];
         throw error;
       }
     },
   });
   const authenticated = loginRequired === false;
-  // 设置按区域查询；打开命令面板时按原有命令需求提供数据，关闭区域不继续刷新管理资源。
+  // 设置按当前区域查询；命令直接交 Core 执行，不提前读取所有管理资源。
   const areaEnabled = (area: SettingsArea) =>
-    authenticated && (commandOpen || (inspectorSection === "settings" && settingsArea === area));
+    authenticated && inspectorSection === "settings" && settingsArea === area;
   const models = useQuery({
     queryKey: ["models"],
     queryFn: () => client.listModels(),
@@ -183,24 +218,27 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     enabled: areaEnabled("session") && userRole === "admin",
   });
   const diagnostics = useQuery({
-    queryKey: ["diagnostics"],
-    queryFn: () => client.diagnosticsReport(),
-    enabled: areaEnabled("admin") && userRole === "admin",
+    queryKey: ["diagnostics", diagnosticDays],
+    queryFn: () => {
+      const to = Date.now();
+      return client.diagnosticsReport(to - diagnosticDays * 86_400_000, to);
+    },
+    enabled: areaEnabled("admin") && userRole === "admin" && qualityTab === "diagnostics",
   });
   const evaluations = useQuery({
     queryKey: ["evaluations"],
     queryFn: () => client.listEvaluationReports(),
-    enabled: areaEnabled("admin") && userRole === "admin",
+    enabled: areaEnabled("admin") && userRole === "admin" && qualityTab === "evaluations",
   });
   const evaluationTrends = useQuery({
     queryKey: ["evaluation-trends"],
     queryFn: () => client.listEvaluationTrends(Date.now() - 30 * 86_400_000, Date.now(), "day"),
-    enabled: areaEnabled("admin") && userRole === "admin",
+    enabled: areaEnabled("admin") && userRole === "admin" && qualityTab === "evaluations",
   });
   const optimization = useQuery({
     queryKey: ["optimization"],
     queryFn: () => client.listOptimizationProposals(),
-    enabled: areaEnabled("admin") && userRole === "admin",
+    enabled: areaEnabled("admin") && userRole === "admin" && qualityTab === "optimization",
   });
   const publicConfig = useQuery({
     queryKey: ["config"],
@@ -239,12 +277,22 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     queryFn: async () => {
       const sessionId = selected as string;
       try {
-        const value = await client.getSession(sessionId);
-        await cacheSnapshot(value);
-        return value;
+        const received = await client.getSession(sessionId);
+        await cacheSnapshot(received).catch(cacheFailed);
+        // HTTP 快照可能晚于 WebSocket 增量返回；与重连快照使用相同游标规则，
+        // 避免旧请求把已经显示的工具步骤或回复覆盖为空。
+        return mergeSessionSnapshot(
+          queryClient.getQueryData<SessionSnapshot>(["snapshot", sessionId, activeBranchId]),
+          received,
+        );
       } catch (error) {
-        const cached = await cachedSnapshot(sessionId, activeBranchId);
-        if (cached) return cached;
+        if (error instanceof UmaClientError && error.status === 401) throw error;
+        const cached = await cachedSnapshot(sessionId, activeBranchId).catch(() => undefined);
+        if (cached)
+          return mergeSessionSnapshot(
+            queryClient.getQueryData<SessionSnapshot>(["snapshot", sessionId, activeBranchId]),
+            cached,
+          );
         throw error;
       }
     },
@@ -291,6 +339,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     if (loginRequired === true) return;
     const authError = Number((sessions.error as { status?: unknown } | null)?.status) === 401;
     if (authError) {
+      pendingCreatedSessions.current.clear();
       setLoginRequired(true);
       void clearCacheNamespace();
       client.close();
@@ -299,7 +348,8 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     if (sessions.isError && loginRequired === undefined) setLoginRequired(true);
     if (sessions.isSuccess) {
       const available = sessions.data ?? [];
-      if (selected && !available.some((session) => session.id === selected)) setSelected(undefined);
+      // A list refresh may lag behind a successful create response. It must not
+      // undo explicit selection; deletion handles selection in its own callback.
       if (!selected && available[0]) setSelected(available[0].id);
     }
   }, [sessions.error, sessions.data, sessions.isSuccess, sessions.isError, selected, client, loginRequired]);
@@ -320,18 +370,27 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     const timer = window.setInterval(update, 1000);
     return () => window.clearInterval(timer);
   }, [authenticated, client]);
+  const snapshotReady = Boolean(snapshot.data);
   useEffect(() => {
-    if (!selected || selected === "undefined") return;
+    if (!selected || selected === "undefined" || !snapshotReady) return;
     let unsubscribe: (() => void) | undefined;
     let cancelled = false;
-    void Promise.all([cachedCursor(selected), cachedHistory(selected, activeBranchId)])
+    void cachedHistory(selected, activeBranchId)
       .catch(() => undefined)
       .then((cached) => {
         if (cancelled) return;
-        setHistorical(cached?.[1] ?? []);
+        setHistorical(cached ?? []);
         setHistoryHasMore(undefined);
         unsubscribe = client.subscribeSessions(
-          [{ id: selected, lastSequence: cached?.[0] ?? 0 }],
+          // 只有快照落入该分支的缓存后才订阅；提前消费事件会让无投影的增量静默丢失。
+          [
+            {
+              id: selected,
+              lastSequence:
+                queryClient.getQueryData<SessionSnapshot>(["snapshot", selected, activeBranchId])
+                  ?.snapshotSequence ?? 0,
+            },
+          ],
           (event) => {
             const transient = event.type === "message.delta" && "transient" in event && event.transient;
             const durableSequence =
@@ -339,7 +398,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 ? (event.payload as SessionSnapshot).snapshotSequence
                 : event.sequence;
             if (!transient) {
-              void cacheCursor(selected, durableSequence);
+              void cacheCursor(selected, durableSequence).catch(cacheFailed);
               setSyncCursor(durableSequence);
             }
             setLastSyncAt(Date.now());
@@ -355,7 +414,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               const key = ["snapshot", selected, value.session.activeBranchId] as const;
               const merged = mergeSessionSnapshot(queryClient.getQueryData<SessionSnapshot>(key), value);
               queryClient.setQueryData(key, merged);
-              void cacheSnapshot(merged);
+              void cacheSnapshot(merged).catch(cacheFailed);
               queryClient.setQueryData(["queue", selected], value.queue);
             } else if (event.type === "message.delta") {
               applyStreamingEvent(queryClient, selected, event, activeBranchId);
@@ -363,6 +422,20 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               void queryClient.invalidateQueries({ queryKey: ["queue", selected] });
             } else {
               applyDurableEvent(queryClient, selected, event, activeBranchId);
+              if (
+                event.type === "response.completed" ||
+                (event.type === "run.updated" &&
+                  ["completed", "failed", "cancelled", "interrupted"].includes(
+                    String((event.payload as { status?: string }).status),
+                  ))
+              ) {
+                const completed = queryClient.getQueryData<SessionSnapshot>([
+                  "snapshot",
+                  selected,
+                  activeBranchId,
+                ]);
+                if (completed) void cacheSnapshot(completed).catch(cacheFailed);
+              }
               if (event.type === "run.updated")
                 void queryClient.invalidateQueries({ queryKey: ["queue", selected] });
             }
@@ -375,7 +448,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [selected, activeBranchId, queryClient, client]);
+  }, [selected, activeBranchId, queryClient, client, snapshotReady, cacheFailed]);
   const transcript = useMemo(() => {
     const items = [...historical, ...(snapshot.data?.transcript ?? [])];
     const unique = [...new Map(items.map((item) => [item.id, item])).values()].sort(
@@ -439,38 +512,34 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const promptRef = useRef<HTMLTextAreaElement>(null);
 
   const createSession = useMutation({
-    mutationFn: () => client.createSession(),
+    mutationFn: async () => {
+      const generation = authGeneration.current;
+      return { session: await client.createSession(), generation };
+    },
     onMutate: () => {
       setCreateSessionError(undefined);
     },
-    onSuccess: async (session) => {
+    onSuccess: async ({ session, generation }) => {
+      if (generation !== authGeneration.current) return;
+      await queryClient.cancelQueries({ queryKey: ["sessions"] });
+      if (generation !== authGeneration.current) return;
+      pendingCreatedSessions.current.set(session.id, session);
+      queryClient.setQueryData<Session[]>(["sessions"], (current = []) => [
+        session,
+        ...current.filter((item) => item.id !== session.id),
+      ]);
       setSelected(session.id);
+      setDestination("sessions");
+      setInspectorSection(undefined);
       setSidebarOpen(false);
-      setInteractionMode("agent");
-      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
-      const value = await client.getSession(session.id);
-      queryClient.setQueryData(["snapshot", session.id, value.session.activeBranchId], value);
-      await cacheSnapshot(value);
-      await cacheHistory(session.id, [], value.session.activeBranchId);
-      await cacheCursor(session.id, value.snapshotSequence);
-      setSyncCursor(value.snapshotSequence);
-      setLastSyncAt(Date.now());
+      setHistorical([]);
+      setHistoryHasMore(undefined);
+      setSyncCursor(undefined);
+      setLastSyncAt(undefined);
       requestAnimationFrame(() => promptRef.current?.focus());
     },
     onError: (error) => {
       setCreateSessionError(requestErrorMessage(error));
-    },
-  });
-  const sendMessage = useMutation({
-    mutationFn: (text: string) =>
-      client.sendMessage(selected as string, text, {
-        mode: interactionMode,
-        ...(attachments.length ? { attachmentIds: attachments.map((item) => item.id) } : {}),
-      }),
-    onSuccess: () => {
-      setPrompt("");
-      setAttachments([]);
-      void queryClient.invalidateQueries({ queryKey: ["queue", selected] });
     },
   });
   const updateSession = useMutation({
@@ -483,8 +552,12 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   });
   const deleteSession = useMutation({
     mutationFn: (id: string) => client.deleteSession(id),
-    onSuccess: () => {
-      setSelected(undefined);
+    onSuccess: (_, id) => {
+      pendingCreatedSessions.current.delete(id);
+      queryClient.setQueryData<Session[]>(["sessions"], (current = []) =>
+        current.filter((session) => session.id !== id),
+      );
+      setSelected((current) => (current === id ? undefined : current));
       void queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
   });
@@ -524,26 +597,14 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
     : health.isError
       ? "无法连接 UmaAgent Core，请检查服务状态后重试。"
       : undefined;
-  const requestErrorMessage = (error: unknown): string => {
-    if (!(error instanceof UmaClientError)) return "请求未完成，请稍后重试。";
-    if (error.code === "provider_error" || error.code === "provider_contract_error")
-      return `模型服务暂时不可用${error.requestId ? `（请求 ${error.requestId}）` : ""}。`;
-    if (error.code === "forbidden") return "当前账号没有执行此操作的权限。";
-    if (error.code === "rate_limited") return "请求过于频繁，请稍后重试。";
-    return `${error.message}${error.requestId ? `（请求 ${error.requestId}）` : ""}`;
-  };
   const Workspace = embedded ? "div" : "main";
-  const showXianyuWorkspace =
-    userRole === "admin" && new URLSearchParams(window.location.search).get("workspace") !== "agent";
+  // Keep the standard agent workspace as the default for every role. The
+  // administrator can explicitly open 咸鱼工作台 from the project navigation.
   const upload = async (file: Blob, name = "pasted-image.png") => {
-    if (offline || !selected) return;
-    const attachment = await client.upload(file, name, selected);
-    setAttachments((items) => [...items, attachment]);
+    if (!offline) await uploadDraft(file, name);
   };
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if ((prompt.trim() || attachments.length > 0) && selected && !offline)
-      sendMessage.mutate(prompt.trim() || "请分析这张图片。");
+  const submit = () => {
+    if (!offline && !createSession.isPending) sendDraft();
   };
   const resolveApproval = async (approval: Approval, approved: boolean) => {
     await client.resolveApproval(approval.id, approved);
@@ -552,11 +613,14 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
   const renameSession = () => {
     const current = snapshot.data?.session;
     if (!current) return;
-    const title = window.prompt("会话名称", current.title)?.trim();
-    if (title && title !== current.title) updateSession.mutate({ title });
+    setRenameTitle(current.title);
   };
   const removeSession = () => {
-    if (selected && window.confirm("删除此会话及其全部记录？")) deleteSession.mutate(selected);
+    if (selected && !deleteSession.isPending) setDeleteSessionPending(selected);
+  };
+  const confirmDeleteSession = () => {
+    if (!deleteSessionPending) return;
+    deleteSession.mutate(deleteSessionPending, { onSettled: () => setDeleteSessionPending(undefined) });
   };
   const retryLast = () => {
     const lastUser = [...transcript].reverse().find((item) => item.role === "user");
@@ -644,37 +708,75 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
       });
   };
   const signOut = () => {
+    clearDrafts();
+    pendingCreatedSessions.current.clear();
     const logout = client.logout();
     setLoginRequired(true);
-    setInteractionMode("agent");
     setSelected(undefined);
-    setPrompt("");
+    setProfileDraft(undefined);
     setQualityOperations({});
     setCommandOpen(false);
     setLastSyncAt(undefined);
     setSyncCursor(undefined);
     setApprovals([]);
-    setAttachments([]);
     setHistorical([]);
     setHistoryHasMore(undefined);
     setInspectorSection(undefined);
     setSettingsArea("session");
     setSidebarOpen(false);
     setUserRole("user");
+    setDestination("sessions");
     void queryClient.cancelQueries();
     queryClient.clear();
     void clearCacheNamespace();
     void logout.catch(() => undefined);
   };
+  const navigate = (next: Destination) =>
+    leave(() => {
+      setDestination(next);
+      setSidebarOpen(false);
+      if (next === "sessions") {
+        setInspectorSection(undefined);
+        return;
+      }
+
+      setSettingsArea(next);
+      setInspectorSection("settings");
+    });
+  const qualityQueries =
+    qualityTab === "diagnostics"
+      ? [diagnostics]
+      : qualityTab === "evaluations"
+        ? [evaluations, evaluationTrends]
+        : [optimization];
+  const managementQueries =
+    inspectorSection === "settings"
+      ? {
+          tasks: [tasks],
+          schedules: [schedules],
+          memory: [memories],
+          resources: [knowledge],
+          admin: qualityQueries,
+          session: [],
+          sessions: [],
+          xianyu: [],
+        }[settingsArea]
+      : [];
   if (loginRequired === undefined)
     return (
-      <div className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${theme}`}>
+      <div
+        data-design-shell="UmaAgent"
+        className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${effectiveTheme}`}
+      >
         <output className="login-shell">正在连接 UmaAgent Core…</output>
       </div>
     );
   if (loginRequired)
     return (
-      <div className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${theme}`}>
+      <div
+        data-design-shell="UmaAgent"
+        className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${effectiveTheme}`}
+      >
         <Login
           client={client}
           embedded={embedded}
@@ -685,23 +787,42 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
         />
       </div>
     );
-  if (showXianyuWorkspace)
-    return (
-      <div className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${theme}`}>
-        <Suspense fallback={<output>正在载入咸鱼工作台…</output>}>
-          <XianyuWorkspace client={client} embedded={embedded} onSwitchAccount={signOut} />
-        </Suspense>
-      </div>
-    );
+
   return (
-    <div className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${theme}`}>
-      <div className="app-shell">
+    <div
+      data-design-shell="UmaAgent"
+      className={`uma-embed uma-embed--${embedded ? "embedded" : "standalone"} theme-${effectiveTheme}`}
+    >
+      <div className={`app-shell design-shell ${destination !== "sessions" ? "is-management" : ""}`}>
         {maintenance.data?.maintenance && (
           <output className="maintenance-banner">
             {maintenance.data.message ?? "系统正在停服更新，请稍候。"}
           </output>
         )}
         <SessionArea
+          navigation={
+            <ProjectNavigation
+              current={destination}
+              admin={userRole === "admin"}
+              navigate={navigate}
+              status={{
+                online: !offline,
+                busy: Boolean(busy),
+                approvals: approvals.filter((approval) => approval.sessionId === selected).length,
+                open: inspectorSection,
+                onOpen: (section) =>
+                  leave(() => {
+                    setDestination("sessions");
+                    setSidebarOpen(false);
+                    if (section === "settings") setSettingsArea("session");
+                    setInspectorSection((current) =>
+                      destination === "sessions" && current === section ? undefined : section,
+                    );
+                  }),
+              }}
+            />
+          }
+          showSessions={destination === "sessions"}
           sessions={sessions.data ?? []}
           selected={selected}
           open={sidebarOpen}
@@ -710,115 +831,52 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
           {...(createSessionError ? { createError: createSessionError } : {})}
           health={health.data}
           installable={Boolean(installPrompt)}
-          create={() => createSession.mutate()}
+          create={() =>
+            leave(() => {
+              navigate("sessions");
+              createSession.mutate();
+            })
+          }
           retryCreate={() => createSession.mutate()}
-          select={(id) => {
-            setSelected(id);
-            setSidebarOpen(false);
-          }}
+          select={(id) =>
+            leave(() => {
+              navigate("sessions");
+              setSelected(id);
+              setSidebarOpen(false);
+            })
+          }
           close={() => setSidebarOpen(false)}
           install={() => {
             void installPrompt?.prompt().then(() => setInstallPrompt(undefined));
           }}
         />
-        <Workspace className="workspace">
-          <header>
-            <button
-              type="button"
-              className="icon mobile-only"
-              onClick={() => setSidebarOpen(true)}
-              title="打开导航"
-            >
-              <Menu />
-            </button>
-            <div>
-              <h1>{snapshot.data?.session.title ?? "选择会话"}</h1>
-              <span className="header-subtitle">{snapshot.data?.session.workspace}</span>
-            </div>
-            <div className="header-actions">
-              {snapshot.data && (
-                <select
-                  className="model-select"
-                  value={snapshot.data.session.queueMode}
-                  disabled={offline}
-                  onChange={(event) =>
-                    updateSession.mutate({ queueMode: event.target.value as "queue" | "preemptive" })
-                  }
-                  title="消息队列模式"
-                >
-                  <option value="queue">queue</option>
-                  <option value="preemptive">preemptive</option>
-                </select>
-              )}
-              {snapshot.data && (
-                <select
-                  className="model-select"
-                  value={`${snapshot.data.session.model.provider}/${snapshot.data.session.model.id}`}
-                  disabled={offline}
-                  onChange={(event) => {
-                    const [provider, ...id] = event.target.value.split("/");
-                    if (provider && id.length)
-                      updateSession.mutate({ model: { provider, id: id.join("/") } });
-                  }}
-                  title="模型"
-                >
-                  {models.data?.map((model) => (
-                    <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>
-                      {model.provider}/{model.id}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <button
-                type="button"
-                className="icon"
-                onClick={() => {
-                  setCommandOpen(true);
-                }}
-                title="快捷命令"
-              >
-                <TerminalSquare />
-              </button>
-              <button
-                type="button"
-                className="icon"
-                onClick={renameSession}
-                title="重命名会话"
-                disabled={!selected || offline}
-              >
-                <Pencil />
-              </button>
-              <button
-                type="button"
-                className="icon"
-                onClick={removeSession}
-                title="删除会话"
-                disabled={!selected || offline}
-              >
-                <Trash2 />
-              </button>
-              <button type="button" className="icon" onClick={() => void snapshot.refetch()} title="刷新">
-                <RefreshCw />
-              </button>
-              <button
-                type="button"
-                className="icon"
-                onClick={() =>
-                  selected && void client.compactSession(selected).then(() => snapshot.refetch())
-                }
-                title="压缩上下文"
-                disabled={!selected || offline}
-              >
-                <RotateCcw />
-              </button>
-            </div>
-          </header>
+        <Workspace className="workspace" hidden={destination !== "sessions"}>
+          <ConversationHeader
+            session={snapshot.data?.session ?? selectedSession}
+            models={models.data ?? []}
+            disabled={!selected || offline || createSession.isPending || sendMessage.isPending || uploading}
+            openNavigation={() => setSidebarOpen(true)}
+            openCommands={() => setCommandOpen(true)}
+            update={(patch) => updateSession.mutate(patch)}
+            rename={renameSession}
+            remove={removeSession}
+            refresh={() => void snapshot.refetch()}
+            compact={() => selected && void client.compactSession(selected).then(() => snapshot.refetch())}
+          />
           <section
             ref={transcriptRef}
             className="transcript"
             onScroll={onTranscriptScroll}
             aria-label="会话消息"
           >
+            {snapshot.isError && (
+              <div role="alert" className="composer-error">
+                <span>会话内容读取失败，请重试。</span>
+                <button type="button" onClick={() => void snapshot.refetch()}>
+                  重新读取会话
+                </button>
+              </div>
+            )}
             {(historyHasMore ?? snapshot.data?.history.hasMoreBefore) && (
               <button
                 type="button"
@@ -837,7 +895,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                     );
                     setHistorical(unique);
                     setHistoryHasMore(page.hasMore);
-                    void cacheHistory(selected, unique, activeBranchId);
+                    void cacheHistory(selected, unique, activeBranchId).catch(cacheFailed);
                     requestAnimationFrame(() => {
                       const current = transcriptRef.current;
                       if (current) current.scrollTop = current.scrollHeight - previousHeight + previousTop;
@@ -928,18 +986,18 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
             )}
             <div aria-hidden="true" />
           </section>
-          {showJumpToLatest && (
-            <button
-              type="button"
-              className="jump-latest"
-              onClick={() => scrollToLatest("smooth")}
-              title="回到最新消息"
-            >
-              <ArrowDown size={15} />
-              最新消息
-            </button>
-          )}
           <div className="composer-wrap">
+            {showJumpToLatest && (
+              <button
+                type="button"
+                className="jump-latest"
+                onClick={() => scrollToLatest("smooth")}
+                title="回到最新消息"
+              >
+                <ArrowDown size={15} />
+                最新消息
+              </button>
+            )}
             <QueueDock
               running={runningRun}
               {...(runningRun
@@ -966,18 +1024,14 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
               }}
             />
             {connectionMessage && <p className="connection-notice">{connectionMessage}</p>}
-            {sendMessage.isError && (
+            {cacheUnavailable && (
+              <output className="connection-notice">浏览器无法保存离线缓存，当前页面可继续使用。</output>
+            )}
+            {sendMessage.isError && sendMessage.variables?.sessionId === selected && (
               <div className="composer-error" role="alert">
                 <span>{requestErrorMessage(sendMessage.error)}</span>
-                <button
-                  type="button"
-                  className="text-action"
-                  onClick={() => {
-                    sendMessage.reset();
-                    retryLast();
-                  }}
-                >
-                  重试
+                <button type="button" className="text-action" onClick={() => void snapshot.refetch()}>
+                  核对会话记录
                 </button>
               </div>
             )}
@@ -991,150 +1045,94 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                   resolve={(approved) => void resolveApproval(approval, approved)}
                 />
               ))}
-            {attachments.length > 0 && (
-              <div className="attachments">
-                {attachments.map((attachment) => (
-                  <button
-                    type="button"
-                    key={attachment.id}
-                    title={`移除 ${attachment.name}`}
-                    onClick={() =>
-                      setAttachments((items) => items.filter((item) => item.id !== attachment.id))
-                    }
-                  >
-                    {attachment.name} ×
-                  </button>
-                ))}
-              </div>
-            )}
-            <ModeSelector
-              value={interactionMode}
-              onChange={setInteractionMode}
-              disabled={!selected || offline}
+            <ConversationComposer
+              attachments={attachments}
+              removeAttachment={(id) => setAttachments((items) => items.filter((item) => item.id !== id))}
+              interactionMode={interactionMode}
+              changeMode={setInteractionMode}
+              prompt={prompt}
+              changePrompt={setPrompt}
+              promptRef={promptRef}
+              hasSession={Boolean(selected)}
+              readOnly={Boolean(draft.pending)}
+              busy={Boolean(busy)}
+              disabled={!selected || offline || createSession.isPending || sendMessage.isPending || uploading}
+              submit={submit}
+              cancel={() => selected && void client.cancel(selected)}
+              upload={(file, name) =>
+                void upload(file, name).catch((error) => setGlobalError(requestErrorMessage(error)))
+              }
             />
-            <form className="composer" onSubmit={submit}>
-              <label
-                className="icon file-button"
-                htmlFor="attachment-upload"
-                title="上传文件"
-                aria-label="上传文件"
-              >
-                <FilePlus2 />
-                <input
-                  id="attachment-upload"
-                  type="file"
-                  disabled={!selected || offline}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file)
-                      void upload(file, file.name).catch((error) => window.alert(requestErrorMessage(error)));
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </label>
-              <textarea
-                ref={promptRef}
-                rows={1}
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                onPaste={(event) => {
-                  const image = [...event.clipboardData.items]
-                    .find((item) => item.kind === "file" && item.type.startsWith("image/"))
-                    ?.getAsFile();
-                  if (!image) return;
-                  event.preventDefault();
-                  void upload(image, `pasted-image-${Date.now()}.${image.type.split("/")[1] ?? "png"}`).catch(
-                    (error) => window.alert(requestErrorMessage(error)),
-                  );
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }}
-                placeholder={selected ? "向 UmaAgent 发送消息" : "先创建会话"}
-                disabled={!selected || offline}
-              />
-              {busy ? (
-                <button
-                  type="button"
-                  className="danger icon"
-                  onClick={() => selected && void client.cancel(selected)}
-                  disabled={offline}
-                  title="停止"
-                >
-                  <CircleStop />
-                </button>
-              ) : (
-                <button
-                  type="submit"
-                  className="primary icon"
-                  disabled={(!prompt.trim() && attachments.length === 0) || !selected || offline}
-                  title="发送"
-                >
-                  <Send />
-                </button>
-              )}
-            </form>
           </div>
         </Workspace>
+        {deleteSessionPending && (
+          <ConfirmDialog
+            title="删除会话？"
+            busy={deleteSession.isPending}
+            danger
+            cancel={() => setDeleteSessionPending(undefined)}
+            confirm={confirmDeleteSession}
+          >
+            会话及全部记录将被删除，此操作不可恢复。
+          </ConfirmDialog>
+        )}
+        {renameTitle !== undefined && (
+          <RenameSessionDialog
+            title={renameTitle}
+            original={selectedSession?.title ?? ""}
+            change={setRenameTitle}
+            busy={updateSession.isPending}
+            failed={updateSession.isError}
+            close={() => setRenameTitle(undefined)}
+            save={() => {
+              if (renameTitle.trim())
+                updateSession.mutate(
+                  { title: renameTitle.trim() },
+                  { onSuccess: () => setRenameTitle(undefined) },
+                );
+            }}
+          />
+        )}
+        {globalError && (
+          <div className="composer-error" role="alert">
+            {globalError}
+            <button type="button" onClick={() => setGlobalError("")}>
+              关闭
+            </button>
+          </div>
+        )}
         <CommandPaletteHost
           open={commandOpen}
+          onOpen={() => setCommandOpen(true)}
           client={client}
           sessionId={selected}
-          models={models.data}
-          sessions={sessions.data}
-          snapshot={snapshot.data}
-          tasks={tasks.data}
-          schedules={schedules.data}
-          knowledge={knowledge.data}
-          memoryCount={memories.data?.length ?? 0}
-          report={report.data}
-          publicConfig={publicConfig.data}
-          evaluations={evaluations.data}
-          optimization={optimization.data}
-          skills={skills}
           onClose={() => setCommandOpen(false)}
-        />
-        <StatusRail
-          online={!offline}
-          busy={Boolean(busy)}
-          approvals={approvals.filter((approval) => approval.sessionId === selected).length}
-          open={inspectorSection}
-          onOpen={(section) => setInspectorSection((current) => (current === section ? undefined : section))}
         />
         {inspectorSection && (
           <InspectorDrawer
+            inline={destination !== "sessions"}
+            title={destination !== "sessions" ? destinations[destination].label : undefined}
+            description={destination !== "sessions" ? destinations[destination].description : undefined}
+            screen={destination !== "sessions" ? destinations[destination].screen : undefined}
+            openNavigation={() => setSidebarOpen(true)}
             section={inspectorSection}
-            onClose={() => {
-              setInspectorSection(undefined);
-            }}
+            onClose={closeInspector}
           >
             <Suspense fallback={<output>正在加载管理区域…</output>}>
               <InspectorContent>
-                {inspectorSection === "settings" && (
-                  <nav aria-label="设置区域" className="settings-area-nav">
-                    {(
-                      [
-                        ["session", "会话与账号"],
-                        ["tasks", "任务"],
-                        ["schedules", "调度"],
-                        ["memory", "记忆"],
-                        ["resources", "资源"],
-                        ...(userRole === "admin" ? [["admin", "管理"]] : []),
-                      ] as [SettingsArea, string][]
-                    ).map(([area, label]) => (
-                      <button
-                        key={area}
-                        type="button"
-                        aria-pressed={settingsArea === area}
-                        onClick={() => setSettingsArea(area)}
-                      >
-                        {label}
+                {managementQueries.some((q) => q.isLoading) && <output>正在读取页面数据…</output>}
+                {managementQueries
+                  .filter((q) => q.isError)
+                  .map((q) => (
+                    <p key={q.errorUpdatedAt} role="alert" className="error">
+                      {q.error instanceof Error ? q.error.message : "数据读取失败"}
+                      <button type="button" onClick={() => void q.refetch()}>
+                        重新读取
                       </button>
-                    ))}
-                  </nav>
+                    </p>
+                  ))}
+                {destination === "xianyu" && userRole === "admin" && (
+                  <XianyuWorkspace client={client} embedded onSwitchAccount={signOut} />
                 )}
                 {inspectorSection === "connection" && <ConnectionPanel health={health.data} />}
                 {inspectorSection === "sync" && (
@@ -1158,6 +1156,7 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 )}
                 {inspectorSection === "run" && (
                   <RunPanel
+                    client={client}
                     run={currentRun}
                     checkpoints={checkpoints.data ?? []}
                     actions={actions.data ?? []}
@@ -1180,39 +1179,40 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                     tasks={tasks.data ?? []}
                     disabled={offline}
                     create={(prompt) => {
-                      if (!selected) return;
-                      void client.createTask(prompt, selected).then(() => tasks.refetch());
+                      if (!selected) throw new Error("请先创建或选择会话");
+                      return client.createTask(prompt, selected).then(() => tasks.refetch());
                     }}
-                    cancel={(id) => void client.cancelTask(id).then(() => tasks.refetch())}
-                    remove={(id) => void client.deleteTask(id).then(() => tasks.refetch())}
-                    openRun={(task) => {
-                      setSelected(task.sessionId);
-                      setInspectorSection("run");
-                    }}
+                    cancel={(id) => client.cancelTask(id).then(() => tasks.refetch())}
+                    remove={(id) => client.deleteTask(id).then(() => tasks.refetch())}
+                    openRun={(task) =>
+                      leave(() => {
+                        setDestination("sessions");
+                        setSelected(task.sessionId);
+                        setInspectorSection("run");
+                      })
+                    }
                   />
                 )}
                 {inspectorSection === "settings" && settingsArea === "memory" && (
                   <MemoryArea
                     facts={memories.data ?? []}
                     disabled={offline}
-                    reject={(id) =>
-                      void client.reviewMemoryFact(id, "rejected").then(() => memories.refetch())
-                    }
-                    accept={(id) => void client.reviewMemoryFact(id, "active").then(() => memories.refetch())}
+                    reject={(id) => client.reviewMemoryFact(id, "rejected").then(() => memories.refetch())}
+                    accept={(id) => client.reviewMemoryFact(id, "active").then(() => memories.refetch())}
                   />
                 )}
                 {inspectorSection === "settings" && settingsArea === "schedules" && (
                   <ScheduleArea
                     schedules={schedules.data ?? []}
                     disabled={offline}
-                    create={(input) => void client.createSchedule(input).then(() => schedules.refetch())}
+                    create={(input) => client.createSchedule(input).then(() => schedules.refetch())}
                     toggle={(id, enabled) =>
-                      void client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
+                      client.updateSchedule(id, { enabled }).then(() => schedules.refetch())
                     }
-                    run={(id) => void client.runSchedule(id).then(() => schedules.refetch())}
-                    remove={(id) => void client.deleteSchedule(id).then(() => schedules.refetch())}
+                    run={(id) => client.runSchedule(id).then(() => schedules.refetch())}
+                    remove={(id) => client.deleteSchedule(id).then(() => schedules.refetch())}
                     loadRuns={(id) => client.listScheduleRuns(id)}
-                    cancelRun={(id) => void client.cancelScheduleRun(id).then(() => schedules.refetch())}
+                    cancelRun={(id) => client.cancelScheduleRun(id).then(() => schedules.refetch())}
                   />
                 )}
                 {inspectorSection === "settings" && settingsArea === "resources" && (
@@ -1222,18 +1222,18 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                     mcp={mcp.data ?? []}
                     knowledge={knowledge.data ?? []}
                     disabled={offline}
-                    refreshSkills={() => void client.refreshSkills().then(() => skills.refetch())}
+                    refreshSkills={() => client.refreshSkills().then(() => skills.refetch())}
                     installSkill={(reference) =>
-                      void client.installSkill({ source: "local", reference }).then(() => skills.refetch())
+                      client.installSkill({ source: "local", reference }).then(() => skills.refetch())
                     }
                     setSkillStatus={(id, action) =>
-                      void client.setSkillStatus(id, action).then(() => skills.refetch())
+                      client.setSkillStatus(id, action).then(() => skills.refetch())
                     }
                     addKnowledgePath={(name, path) =>
-                      void client.indexKnowledge(name, path).then(() => knowledge.refetch())
+                      client.indexKnowledge(name, path).then(() => knowledge.refetch())
                     }
                     uploadKnowledge={(file) =>
-                      void client
+                      client
                         .upload(file, file.name, selected)
                         .then((attachment) => {
                           if (!selected) throw new Error("Select a session before uploading knowledge");
@@ -1241,28 +1241,39 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                         })
                         .then(() => knowledge.refetch())
                     }
-                    deleteKnowledge={(id) => void client.deleteKnowledge(id).then(() => knowledge.refetch())}
-                    reindexKnowledge={(id) =>
-                      void client.reindexKnowledge(id).then(() => knowledge.refetch())
-                    }
+                    deleteKnowledge={(id) => client.deleteKnowledge(id).then(() => knowledge.refetch())}
+                    reindexKnowledge={(id) => client.reindexKnowledge(id).then(() => knowledge.refetch())}
                     searchKnowledge={(query, sourceId) => client.searchKnowledge(query, sourceId)}
                   />
                 )}
                 {inspectorSection === "settings" && settingsArea === "admin" && userRole === "admin" && (
                   <section className="inspector-group">
-                    <h3>管理</h3>
-                    <EvaluationArea reports={evaluations.data ?? []} trends={evaluationTrends.data ?? []} />
-                    <DiagnosticsArea report={diagnostics.data} />
-                    <OptimizationArea
-                      proposals={optimization.data ?? []}
-                      disabled={offline}
-                      generate={() =>
-                        void client.generateOptimizationProposals().then(() => optimization.refetch())
-                      }
-                      decide={(id, status) =>
-                        void client.decideOptimizationProposal(id, status).then(() => optimization.refetch())
-                      }
+                    <QualityNavigation
+                      tab={qualityTab}
+                      changeTab={setQualityTab}
+                      days={diagnosticDays}
+                      changeDays={setDiagnosticDays}
+                      pending={offline || qualityQueries.some((query) => query.isFetching)}
+                      refresh={() => {
+                        for (const query of qualityQueries) void query.refetch();
+                      }}
                     />
+                    {qualityTab === "evaluations" && (
+                      <EvaluationArea reports={evaluations.data ?? []} trends={evaluationTrends.data ?? []} />
+                    )}
+                    {qualityTab === "diagnostics" && <DiagnosticsArea report={diagnostics.data} />}
+                    {qualityTab === "optimization" && (
+                      <OptimizationArea
+                        proposals={optimization.data ?? []}
+                        disabled={offline}
+                        generate={() =>
+                          client.generateOptimizationProposals().then(() => optimization.refetch())
+                        }
+                        decide={(id, status) =>
+                          client.decideOptimizationProposal(id, status).then(() => optimization.refetch())
+                        }
+                      />
+                    )}
                     <div className="operation-list">
                       {audit.data?.map((record) => (
                         <div key={record.id}>
@@ -1278,19 +1289,32 @@ export function App({ client, embedded = false, theme = "light" }: AppProps) {
                 )}
                 {inspectorSection === "settings" && settingsArea === "session" && (
                   <section className="inspector-group">
-                    <h3>会话设置</h3>
+                    {destination !== "sessions" && (
+                      <AppearanceSettings
+                        value={appearance}
+                        change={(value) => {
+                          setAppearance(value);
+                          localStorage.setItem("UmaAgent.appearance", value);
+                        }}
+                      />
+                    )}
                     <SessionSettingsPanel
+                      client={client}
+                      scope={destination === "sessions" ? "session" : "account"}
                       session={snapshot.data?.session}
                       health={health.data}
                       installAvailable={Boolean(installPrompt)}
                       install={() => void installPrompt?.prompt()}
                       report={report.data}
                       profile={profile.data}
+                      draft={profileDraft}
+                      changeDraft={setProfileDraft}
                       saveProfile={async (content) => {
-                        await client.updateAgentProfile(content);
-                        await profile.refetch();
+                        const saved = await client.updateAgentProfile(content);
+                        queryClient.setQueryData(["profile"], saved);
+                        setProfileDraft(undefined);
                       }}
-                      logout={signOut}
+                      logout={() => leave(signOut)}
                       reloadConfig={() =>
                         void client.reloadConfig().then(() => queryClient.invalidateQueries())
                       }

@@ -33,14 +33,15 @@ export function assertContextCapacity(
   messages: AgentMessage[],
   systemPrompt = "",
   currentPrompt = "",
-): void {
-  const estimated =
-    estimateContextTokens(messages).tokens + Math.ceil((systemPrompt.length + currentPrompt.length) / 4);
+): number {
+  const contextTokens = estimateContextTokens(messages).tokens;
+  const estimated = contextTokens + Math.ceil((systemPrompt.length + currentPrompt.length) / 4);
   const outputReserve = Math.min(
     model.maxTokens ?? 4_096,
     Math.max(1_024, Math.floor(model.contextWindow * 0.2)),
   );
   if (estimated + outputReserve >= model.contextWindow) throw new ContextOverflowError();
+  return contextTokens;
 }
 
 function composeMessages(summary: ContextSummary | undefined, pending: StoredAgentMessage[]): AgentMessage[] {

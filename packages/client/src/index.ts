@@ -46,6 +46,7 @@ import type {
 import { PROTOCOL_VERSION } from "@uma-agent/protocol";
 import { eventEnvelope } from "./event-envelope.js";
 import { UmaClientError } from "./http-error.js";
+import { traceparent } from "./trace-context.js";
 
 export { UmaClientError } from "./http-error.js";
 
@@ -91,13 +92,6 @@ export interface MaintenanceStatus {
 
 type Listener = (event: AgentEventEnvelope) => void;
 type ResourceListener = (event: ResourceInvalidated | ResourceResyncRequired) => void;
-function traceparent(): string {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  const traceId = [...bytes.slice(0, 16)].map((value) => value.toString(16).padStart(2, "0")).join("");
-  const spanId = [...bytes.slice(16)].map((value) => value.toString(16).padStart(2, "0")).join("");
-  return `00-${traceId}-${spanId}-01`;
-}
 export type EventConnectionState = "disconnected" | "connecting" | "connected";
 export type SessionSubscription = { id: string; lastSequence?: number };
 
@@ -122,6 +116,17 @@ export class UmaClient {
     this.fetchFn = options.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
+  getExecutionSettings(): Promise<{ autoApprove: boolean }> {
+    return this.request("/account/execution-settings");
+  }
+
+  updateExecutionSettings(autoApprove: boolean): Promise<{ autoApprove: boolean }> {
+    return this.request("/account/execution-settings", {
+      method: "PATCH",
+      body: JSON.stringify({ autoApprove }),
+    });
+  }
+
   get serverOrigin(): string {
     return new URL(this.baseUrl).origin;
   }
@@ -144,7 +149,7 @@ export class UmaClient {
       controller.abort();
     }, 15_000);
     try {
-      const response = await this.fetchFn(`${this.baseUrl}/api/v15${path}`, {
+      const response = await this.fetchFn(`${this.baseUrl}/api/v16${path}`, {
         ...init,
         headers,
         credentials: "include",
@@ -714,7 +719,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v15/attachments/${encodeURIComponent(id)}/content`,
+      `${this.baseUrl}/api/v16/attachments/${encodeURIComponent(id)}/content`,
       { headers, credentials: "include" },
     );
     if (!response.ok) {
@@ -740,7 +745,7 @@ export class UmaClient {
     const headers = new Headers();
     if (this.options.token) headers.set("authorization", `Bearer ${this.options.token}`);
     const response = await this.fetchFn(
-      `${this.baseUrl}/api/v15/attachments/${encodeURIComponent(id)}/content?download=1`,
+      `${this.baseUrl}/api/v16/attachments/${encodeURIComponent(id)}/content?download=1`,
       { headers, credentials: "include" },
     );
     if (!response.ok) throw new UmaClientError(response.status, "http_error", response.statusText, false);
@@ -786,7 +791,7 @@ export class UmaClient {
   connectEvents(): void {
     if (this.socket || this.closed) return;
     this.eventConnectionState = "connecting";
-    const url = new URL("/api/v15/events", this.baseUrl);
+    const url = new URL("/api/v16/events", this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     const socket = this.options.webSocketFactory
       ? this.options.webSocketFactory(url.toString())

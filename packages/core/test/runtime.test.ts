@@ -91,6 +91,7 @@ async function runtimeWith(responses: FauxResponseStep[]): Promise<UmaRuntime> {
   runtime.database.db
     .prepare("INSERT OR IGNORE INTO users(id,role,status,created_at,updated_at) VALUES(?,?,?,?,?)")
     .run("test-user", "user", "active", now, now);
+  runtime.database.setExecutionSettings("test-user", false);
   const createSession = runtime.createSession.bind(runtime);
   runtime.createSession = ((input = {}) => createSession(input, "test-user")) as UmaRuntime["createSession"];
   cleanup.push(async () => {
@@ -163,6 +164,60 @@ async function runOnce(
 }
 
 describe("UmaRuntime preflight", () => {
+  it("activates waiting account permissions and applies later policy changes without replaying commands", async () => {
+    const runtime = await runtimeWith([]);
+    const session = await runtime.createSession();
+    const requested = new Promise<void>((resolve) => {
+      const unsubscribe = runtime.subscribe((event) => {
+        if (event.sessionId === session.id && event.type === "approval.requested") {
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+    const run = runtime.sendCommand(session.id, "node -e \"process.stdout.write('once')\"", "policy-command");
+    await requested;
+    expect(runtime.database.getSnapshot(session.id).pendingApprovals).toHaveLength(1);
+    runtime.updateExecutionSettings("test-user", true);
+    expect((await waitForRunTerminal(runtime, run.id)).status).toBe("completed");
+    expect(runtime.database.getSnapshot(session.id).pendingApprovals).toHaveLength(0);
+    expect(runtime.sendCommand(session.id, "ignored duplicate", "policy-command").id).toBe(run.id);
+    expect(runtime.listRunActions(run.id)).toHaveLength(1);
+    const automatic = runtime.sendCommand(
+      session.id,
+      "node -e \"process.stdout.write('automatic')\"",
+      "automatic-command",
+    );
+    expect((await waitForRunTerminal(runtime, automatic.id)).status).toBe("completed");
+    expect(runtime.database.getSnapshot(session.id).pendingApprovals).toHaveLength(0);
+    runtime.updateExecutionSettings("test-user", false);
+    expect(runtime.database.getExecutionSettings("test-user").autoApprove).toBe(false);
+    expect(
+      runtime.database.db
+        .prepare("SELECT COUNT(*) AS count FROM account_execution_audit WHERE user_id='test-user'")
+        .get()?.count,
+    ).toBe(3);
+  });
+
+  it("does not ask for plan permission when account auto approval is enabled", async () => {
+    const runtime = await runtimeWith([
+      classification("complex"),
+      decision("plan"),
+      fauxAssistantMessage("step one"),
+      fauxAssistantMessage("step two"),
+      fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" })),
+    ]);
+    runtime.updateExecutionSettings("test-user", true);
+    const confirmations: string[] = [];
+    runtime.subscribe((event) => {
+      if (event.type === "run.updated" && (event.payload as Run).status === "awaiting_confirmation")
+        confirmations.push(event.runId ?? "");
+    });
+    const { run } = await runOnce(runtime, "plan");
+    expect(run.status, run.error).toBe("completed");
+    expect(confirmations).toEqual([]);
+  });
+
   it("replaces an edited message on the active branch and hides its former descendants", async () => {
     const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("edited answer")]);
     const session = await runtime.createSession();
@@ -287,7 +342,7 @@ describe("UmaRuntime preflight", () => {
       },
     );
     expect((await terminal).status).toBe("completed");
-    expect(runtime.listTrace({ runId: run.id }).spans).toEqual(
+    expect((await runtime.listTrace({ runId: run.id })).spans).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
@@ -1154,6 +1209,20 @@ describe("UmaRuntime preflight", () => {
     expect(result.error).toContain("HTTP 429 rate limit");
   });
 
+  it("records the agent model failure reason in its own span without leaking credentials", async () => {
+    const failure = fauxAssistantMessage("");
+    failure.stopReason = "error";
+    failure.errorMessage = "Provider unavailable api_key=private-provider-secret";
+    const runtime = await runtimeWith([classification("simple"), failure]);
+    const { run } = await runOnce(runtime);
+    expect(run.status).toBe("failed");
+    const trace = await runtime.listTrace({ runId: run.id });
+    const model = trace.spans.find((span) => span.name === "model");
+    expect(model).toMatchObject({ status: "error", errorType: "ModelError" });
+    expect(model?.errorMessage).toContain("Provider unavailable");
+    expect(JSON.stringify(trace)).not.toContain("private-provider-secret");
+  });
+
   it("implements every internal schedule-manage operation and validates required fields", async () => {
     const runtime = await runtimeWith([]);
     const manage = (params: Record<string, unknown>) =>
@@ -1268,7 +1337,7 @@ describe("UmaRuntime preflight", () => {
     runtime.database.updateRun(source.id, { status: "completed" });
     const review = runtime.reviewMessage("quality-answer", "Check completeness");
     expect((await waitForRunTerminal(runtime, review.id)).status).toBe("completed");
-    expect(runtime.listTrace({ runId: review.id }).spans).toEqual(
+    expect((await runtime.listTrace({ runId: review.id })).spans).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "review", kind: "run", status: "ok", runId: review.id }),
         expect.objectContaining({ name: "model.review", kind: "model", status: "ok", runId: review.id }),
@@ -1284,7 +1353,7 @@ describe("UmaRuntime preflight", () => {
     ]);
     const improve = runtime.improveMessage("quality-answer");
     expect((await waitForRunTerminal(runtime, improve.id)).status).toBe("completed");
-    expect(runtime.listTrace({ runId: improve.id }).spans).toEqual(
+    expect((await runtime.listTrace({ runId: improve.id })).spans).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "improve", kind: "run", status: "ok", runId: improve.id }),
         expect.objectContaining({ name: "model.improve", kind: "model", status: "ok", runId: improve.id }),

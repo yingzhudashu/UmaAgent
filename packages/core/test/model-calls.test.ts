@@ -27,6 +27,40 @@ function fixture() {
 }
 
 describe("ModelCallService", () => {
+  it.each(["start", "finish", "provider-and-finish"])(
+    "terminates trace when %s fails without repeating accounting writes",
+    async (failure) => {
+      const { service, database, completeSimple } = fixture();
+      const span = { finish: vi.fn(), setAttributes: vi.fn() };
+      const error = new Error("database unavailable");
+      if (failure === "start")
+        database.startModelCall.mockImplementation(() => {
+          throw error;
+        });
+      else
+        database.finishModelCall.mockImplementation(() => {
+          throw error;
+        });
+      if (failure === "provider-and-finish")
+        completeSimple.mockRejectedValue(new Error("provider unavailable"));
+      const result = service.complete({
+        runId: "run",
+        sessionId: "session",
+        role: "fast",
+        purpose: "classify",
+        systemPrompt: "system",
+        messages: [],
+        signal: new AbortController().signal,
+        trace: { child: () => span } as never,
+      });
+      if (failure === "provider-and-finish") await expect(result).rejects.toBeInstanceOf(AggregateError);
+      else await expect(result).rejects.toBe(error);
+      expect(span.finish).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: "error" }));
+      expect(database.finishModelCall).toHaveBeenCalledTimes(failure === "start" ? 0 : 1);
+      expect(completeSimple).toHaveBeenCalledTimes(failure === "start" ? 0 : 1);
+    },
+  );
+
   it("uses a stable anonymous session cache key and the SDK retry budget", async () => {
     const { service, completeSimple } = fixture();
     const signal = new AbortController().signal;

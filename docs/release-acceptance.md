@@ -1,78 +1,191 @@
-# UmaAgent 发布验收
+# UmaAgent 优化与验收报告
 
-本文记录当前工作树的验收标准、最近一次验证结果与未完成项，不保留历史发布过程或临时备份路径。自动门禁已通过；真实 Provider 验证和长时内存稳定性仍未完成，因此不标记为全部验收通过。
+验收对象：Core 1.3.0、Android 1.4.0（14）、Protocol v16、HTTP `/api/v16`、业务 schema 25。核验日期：2026-09-17。**当前整体验收未通过。** 用户于 2026-09-17 明确授权构建、发布并部署私人服务器；发布不代表未通过的性能门禁被豁免或验收通过。模型与负载测试使用隔离状态，未发送闲鱼真实消息。部署结果见[部署文档](deployment.md)。
 
-## 版本与存储
+## 当前交付范围
 
-- UmaAgent `1.3.0`，Protocol `v15`，HTTP API `/api/v15`。
-- 业务库使用 SQLite schema `24`。旧 schema 直接拒绝启动；发布前停止服务、备份并清理旧 `state.db`，由新版本初始化空库。
-- Trace 和资源样本统一写入 `telemetry.db`；`state.db` 不包含 `trace_spans` 或 `resource_snapshots`。
+Android 保留 Compose 导航、列表和输入，正文共享离线 marked、DOMPurify、KaTeX。手机采用对话、会话、任务、更多四入口，600dp侧栏、840dp双栏；支持深浅主题、大字号、键盘与手势区。消息、队列和顶栏辅助操作收纳为一层菜单，正文支持代码复制、公式、表格及图片预览保存。临时增量按offset投影，持久事件推进游标，终态和重连校准快照；草稿与未确认发送ID原子持久化。
 
-## 自动门禁
+账号免审批默认开启，Android、Web、CLI、工具、Shell、计划、调度与渠道统一使用账号策略。开启时释放该账号待许可操作并审计；权限、工作区边界和未知副作用恢复仍生效。旧路由与运行时兼容层删除，schema24→25仅使用带备份、锁、完整性校验及事务回滚的离线工具。
 
-```text
-npm run check
-npm test
-npm run test:coverage
-npm run build
-npm run build:web:embed
-npm run test:web:e2e
-npm run test:perf
-npm run test:soak:faux
-```
+Trace覆盖HTTP、队列、Run、模型、工具、审批和Worker，按账号及Run隔离；遥测SQLite使用独立有界批量Worker。审计保留已知非负整数用量，字符串凭据和嵌套敏感值脱敏。SQL按连接缓存，分页先筛选，步骤与附件批量读取，相关业务写入在事务提交后发布事件。
 
-Android：
+Web完成消息菜单、唯一模型入口、设置分组、共享正文和复制失败反馈。快照、HTTP与WebSocket按游标合并，异步缓存读取后核对最新投影；401不用缓存冒充认证成功。Android/Web快捷命令共用协议目录，提供中文名称、说明、搜索与权限提示。
 
-```text
-cd android
-./gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
-./gradlew.bat :app:connectedDebugAndroidTest --no-daemon
-```
+## 当前验证结果
 
-## 功能验收
+证据位于`artifacts/acceptance/`。批次后缀不是产品版本。历史失败日志保留，但不能替代当前候选结果。
 
-- Web、Android、CLI 使用 PAT 登录后可读取会话、快照、历史、附件和事件流。
-- 管理员可进入咸鱼工作台；普通账号不能访问咸鱼接口。
-- “切换普通 UmaAgent 账号”只清理当前客户端管理员令牌、Socket、轮询和缓存，不调用 Adapter stop/logout，不删除咸鱼 Cookie；Adapter 和自动回复继续后台运行。
-- 普通账号 logout 清理本机 PAT、缓存和连接。
-- Android 顶栏避开系统通知栏，底部导航避开手势区，深浅色主题和窄屏布局可用。
-- 管理员按 `runId`/`traceId` 查询完整跨服务链路；普通用户必须指定所属 Run，只读取其 Span 子树。重复 traceId 不扩大权限；错误、属性、工具参数字段与 URL 完成脱敏。
+|门禁|结果与证据|边界|
+|---|---|---|
+|静态检查|check-final114.log通过，19 warnings、2 infos|既有CSS等告警未清零|
+|覆盖率|coverage-final82.log：60文件、324测试通过；语句82.16%、分支73.75%、函数77.19%、行84.93%|既有门槛未降低；并非所有包达到80%|
+|完整构建|build-final82.log及web-e2e-final98.log前置构建成功|含当前后端和共享命令目录|
+|嵌入构建|embed-final101.log成功|独立嵌入产物|
+|Web E2E|web-e2e-final98.log：30/30通过|320px队列、草稿隔离、权限、中文命令搜索、正文复制失败|
+|Faux评测|eval-final83.log：6/6通过|不代表真实供应商稳定性|
+|扩展负载|load-final84.log四项通过|100历史/1200事件/33页，4会话32并发，10032字大回复，工具与Trace|
+|Android JVM与构建|android-build-final116.log成功|主APK、测试APK及42项JVM测试，含Lint|
+|Android Lint|final116：0 errors、35 warnings|final114/115失败已修；保留依赖版本、Modifier顺序和WebView脚本审查告警|
+|Android全量设备用例|android-full-final116.log：31通过、1不适用跳过、1性能失败|同一最终构建；正文显示p95 195.3643ms，未降低100ms门槛|
+|Android核心闭环|android-core-final97.log：3/3通过；Profile/Auth为final85|登录、策略、附件、工具、Trace、换账号、Profile恢复、离页写入与上传、注册令牌保存|
+|Android设置与命令|android-ui-final85.log：6通过、1不适用跳过|跨会话退出草稿确认、命令关闭确认、Insets与恢复；平板返回在手机跳过|
+|头像上传、重载与清除|android-sync-final103.log：头像/跨设备身份、后台及核心闭环3/3通过|4096×2048图片采样至最长边512，RGBA≤1MiB；未改服务端MIME检查|
+|后台生成与草稿恢复|android-background-final96.log：1/1通过|页面CREATED时真实Run完成，前台恢复保留草稿|
+|快捷命令失败与Trace显示|android-targeted-final94.log：相关3项通过|同批头像file URI测试失败另修为content URI后final95通过，未抹除失败批次|
+|长回复停止与继续发送|android-core-final97.log包含停止与继续发送通过|真实停止按钮取消已显示增量的Run，原会话再次发送成功|
+|强杀后离线恢复|android-process-recovery-final116/通过|当前主包final116，停Core、强杀App、离线重启，正文与草稿截图已复核|
+|Android完整矩阵|final116六组布局/功能断言通过，六组显示延迟失败|同一3GiB模拟器，当前交付APK；不能称Android专项通过|
+|固定性能|perf-final86三轮CPU失败|其他固定指标通过；停止旧候选soak、模拟器空闲后仍失败|
+|四小时正常GC soak|final83中断；soak4h-final116.log重新运行|08:03启动，完成前不算通过；356文件哈希核验无差异|
+|真实模型smoke|real-smoke-final106.log通过，9.622秒、6 Span|当前后端；Token计数5454，受理6.77ms|
+|真实模型评测|real-eval-final107.log：3/3通过|当前后端，固定样本|
+|真实模型20请求|real-perf-final108.log：20/20，受理p95 12.18ms、RSS118882304B、WAL3073584B|当前后端；旧final6供应商过载失败保留|
+|真实模型短soak|real-soak-final109.log：27/27、257157ms|受理p95 8.99ms、RSS119984128B、WAL3057104B；当前后端|
+|设计静态检查|design-final114.log：32页、85动作、154 SVG、0问题|不证明全部动作分支或设备行为通过|
+|Linux Native 部署|2026-09-17 服务器发布通过|Node22.23.2；迁移演练、保护对象、公网 API/WS、关联 Trace、Web 和正式 APK；不代表 Linux 性能验收|
+|真机、Docker、真实Embedding|未执行|不得标记通过|
 
-## 本地验证结果（2026-09-08）
+## 固定性能与采样
 
-- `npm run check`、完整构建、`npm run build:web:embed`、Faux Eval（6/6）和 Web 7 项 E2E 已通过。覆盖率统计现在包含 Telemetry，不再遗漏该包；最终测试数量及比例见下表。
-- Android Debug/APK、JVM 测试通过；模拟器的窄屏 411dp、宽屏 720dp、横屏 914dp 各执行 2 项设备测试，覆盖深浅主题、系统栏 Insets、导航和本地账号清理，并核对截图。
-- 设备主题测试使用 Material 3 标准色板；Android 12+ 动态色代码已实现，但不同厂商真机的动态颜色、通知和生命周期仍需单独验收。
-- Compose 和 CI YAML 已解析检查；本机没有 Docker 运行环境，不能据此宣称镜像构建、容器联网或 Linux systemd 验收通过。
+Windows、Node24.15.0、16逻辑核、20请求、完整Trace。预算：受理p95≤12.8ms，事件p95≤5.9ms，RSS≤188743680B，两库WAL≤3355443B，CPU单核等效平均≤5.5653%、采样峰值≤5.568%，事件循环≤31.74ms。短基准仅一个稳态CPU样本，平均等于采样峰值，不代表瞬时峰值。
 
-性能使用 20 条 Faux 请求、1 个 Session、240 条连续事件，Windows / Node 24.15.0 / 16 逻辑核；下列数值来自同一轮 34.25 秒测试，不拼接不同轮次的最优结果。
+|当前轮次|受理p95 ms|事件p95 ms|RSS B|WAL B|CPU %|事件循环 ms|
+|---|---:|---:|---:|---:|---:|---:|
+|final83-1|10.05|2.48|116129792|2978824|8.3741|29.5049|
+|final83-2|8.76|3.25|115924992|3015904|6.2596|29.3319|
+|final83-3|9.92|4.68|116736000|3036504|9.4649|29.4463|
 
-| 指标 | 实测 | 门槛 | 结果 |
-| --- | ---: | ---: | --- |
-| 消息受理 API p95 | 12.69 ms | 12.8 ms | 通过 |
-| 事件分页 p95 | 5.58 ms | 5.9 ms | 通过 |
-| Core 采样峰值 RSS | 110.89 MiB | 180 MiB | 通过 |
-| 两库 WAL 合计峰值 | 2.86 MiB | 3.2 MiB | 通过 |
-| CPU 加权平均（单核等效） | 4.0941% | 5.5653% | 通过 |
-| CPU 采样峰值（单核等效） | 4.3721% | 5.568% | 通过 |
-| 事件循环区间均值的 p95 | 26.63 ms | 31.74 ms | 通过 |
+前序同机三轮保留如下。当前后台负载不同，不能与早前结果声称严格同负载对照，也不能拼接最优值判定通过。
 
-性能预算恢复 CPU 参考基线，并为事件循环保留 20% 的 Windows 调度波动；采样定义与参考值见 [工程基线](engineering-baseline.md)。这轮 `npm run test:perf` 返回通过。
+|批次|受理p95 ms|事件p95 ms|RSS B|WAL B|CPU %|事件循环 ms|
+|---|---:|---:|---:|---:|---:|---:|
+|before-1|13.44|6.27|127250432|2954104|9.7986|29.3556|
+|before-2|8.61|5.37|132952064|2945864|8.4850|28.9742|
+|before-3|17.23|5.70|133390336|2962344|8.9772|29.6255|
+|perf-atomic-1|4.81|1.36|114651136|3015904|5.2184|30.1322|
+|perf-atomic-2|5.43|1.37|115335168|2970584|7.7822|30.1357|
+|perf-atomic-3|5.20|1.47|114683904|3003544|7.4444|30.0553|
 
-短时 soak 已通过。正常模式 10 分钟负载曾达到 190.1MiB，超过 180MiB 绝对门槛，仍未通过；强制 GC 诊断 3 分钟从 107.6MiB 增长到 114.4MiB，说明主要是 V8 驻留堆而非业务对象不可回收。不能用强制 GC 结果替代生产模式，因此长时内存稳定性仍是发布阻断项。
+profile-final85/保存300请求CPU与分配采样，主要热点为同步SQLite提交、消息读取和解析。采样器结果不充当正常模式门禁。生产及测试均保留SQLite FULL同步、模型上下文及Trace，使用--max-semi-space-size=4，不调用强制GC。
 
-## 真实 Provider 验收
+移除四个旧候选soak后的复测仍失败，旧进程中断清单为superseded-soaks-final86.json，不能标为完成。当时final83 soak仍运行；复测期间模拟器空闲，无设备测试或构建并行。
 
-当前未获得隔离 Provider/咸鱼账号凭据，真实 smoke/perf/soak 均未执行。只有显式设置 `UMA_REAL_API=1` 和完整 `UMA_REAL_*` 配置才运行 Provider 脚本。
+|轮次|受理p95 ms|事件p95 ms|RSS B|WAL B|CPU %|事件循环 ms|
+|---|---:|---:|---:|---:|---:|---:|
+|final86-1|10.12|4.88|116031488|2991184|10.9111|29.4330|
+|final86-2|11.52|3.68|115990528|3015904|9.9744|29.4888|
+|final86-3|10.72|3.03|115929088|3015904|9.4531|29.9127|
 
-`scripts/real-test.mjs` 支持普通用户登录、对话、工具调用、评测和重复负载；资源/诊断查询使用临时库内的独立管理员 PAT，权限错误直接失败。临时 state/workspace/telemetry 与部署数据隔离。脚本不启动 Xianyu Adapter、不扫码，也不覆盖咸鱼控制/草稿流程。
+## Android专项证据
 
-完整发布仍需要补齐下列真实验收清单：
+设备为API36模拟器emulator-5556，AVD CodexAcceptance20260910，使用NVIDIA RTX4060 host GPU；与SwiftShader记录分开。debug包site.robotclaw.umaagent.debug连接隔离地址http://10.0.2.2:33210。
 
-- smoke：登录、对话、工具调用、咸鱼状态/控制、草稿发送。
-- perf：API/事件 p95、RSS、CPU、事件循环延迟、WAL、Trace 写入失败计数。
-- soak：持续运行、重连、消息流、Adapter 后台运行和数据库稳定性。
+完整矩阵android-matrix-20260917-054739/使用主包final90，测量真实Choreographer、DOM观察、VisualState回执及FrameCommit，不能把DOM完成当作显示完成。36张图已复核：方向正确，键盘实际可见，无System UI遮罩；正文宽块内横滚，大字号设置重排。此矩阵包含账号入口合并、诊断格式与多标签标题调整，不含之后头像采样、后台状态收集和DOM状态保留修复；后续定向验证独立记录。
 
-明文凭据只从受控环境注入，不写入仓库、数据库、Trace、日志或报告；缺少凭据时必须明确记录为未执行。
+|配置|功能/布局通过|不适用跳过|失败总数|显示p95 ms|最大帧 ms|
+|---|---:|---:|---:|---:|---:|---:|
+|phone|12|1|1|260.2033|170.4855|
+|phone200|12|1|1|245.2823|146.7133|
+|narrow|11|1|2|405.4622|295.2266|
+|tablet600|12|1|1|366.9540|265.1097|
+|dual840|13|0|1|449.6282|380.6200|
+|landscape200|12|1|1|316.3927|263.1416|
 
-Android connected test 本轮未执行：模拟器 `emulator-5554` 离线，没有在线设备。JVM 测试、Debug APK 构建和此前三种屏幕配置的设备测试已通过；恢复在线设备后需重新执行 `:app:connectedDebugAndroidTest`。
+窄屏的历史滚动用例在Activity销毁阶段超时，最后状态PAUSED；不能标成通过。矩阵后段有Android构建负载，主机空闲内存曾不足1GiB，不能据此把变差全部归因于产品或忽略失败。六组均超过100ms显示门槛，本轮采样未见超过700ms冻结帧。内存、CPU与帧原始数据按配置保存，包含WebView相关进程。旧性能测试换行曾被错误编码为字面反斜线，已修正为真实段落；旧新结果不是同内容对照。修正后的SwiftShader定向final80 p95为253.5174ms，host GPU final81为144.6784ms，两者均失败。
+
+当前核心页面截图android-core-final103/的12页联系表已复核，质量页重复标题移除、Token与一位小数格式正确；登录更新错误来自Faux未提供APK清单，不代表更新流程通过。android-ui-final86.log核心与Shell为6通过、1不适用跳过。移除旧soak后的正文定向final86仍失败，p95 187.5557ms、最大帧117.1744ms，原始分段采样保留。前后对照为android-compare-final99/的chat、sessions、settings三张；基线Git eacda4851f449ae595778fb90b0c881caf5d1d14（Android1.3.5），对照build99，采用相同390dp、100%字号与合成正文。三张对照已复核，采用合成状态，不充当真实登录证据。
+
+重启模拟器后的窄屏单组android-matrix-20260917-062935/为12通过、1不适用跳过、1性能失败；Activity销毁超时未复现，p95 277.9079ms、最大帧216.4109ms。原失败记录保留，单组复测不能替代完整矩阵。
+
+无构建和Web测试并行的独立正文复测android-perf-final100/仍失败：p95 416.0347ms、最大帧382.7111ms。中位数DOM观察54.10ms、可绘制107.89ms、宿主提交231.08ms，保留完整原始数据；模拟器系统图形服务CPU与换页活动需独立诊断。
+
+当前包final103的完整矩阵补测android-matrix-20260917-064757/：手机、200%字号、窄屏和600dp均12通过、1不适用跳过、1显示性能失败；p95分别320.0471、379.3783、339.6802、308.7079ms，最大帧分别235.2502、250.8150、309.9685、288.1252ms。840dp组出现Launcher输入ANR、截图失败及空PNG，07:04强制停止测试App并记录为中断；横屏组未执行。保留device-anr.txt、device-crash.log与instrumentation.log。采集脚本已修复空PNG导致整轮收集退出的问题，无效图仍判失败，未删除失败原件。
+
+冷启动模拟器并将本次运行内存设为3072MiB后的定向矩阵android-matrix-20260917-071425/：dual840为13通过、1性能失败；landscape200为12通过、1不适用跳过、1性能失败。显示p95分别152.6047/124.9571ms，最大帧93.5405/66.1962ms；12图已复核，未见系统遮罩，配置不同不与2GiB批次混为同环境结果。
+
+前序完整矩阵android-matrix-20260917-073431/采用主包与测试包final113、API36、host GPU、3072MiB：六组截图方向正确，无空PNG，36图已复核。五组12通过、1不适用跳过、1性能失败；dual840为13通过、1性能失败。本轮未复现Launcher ANR或销毁超时。
+
+|配置|显示p95 ms|最大帧 ms|
+|---|---:|---:|
+|phone|176.8750|91.2474|
+|phone200|225.3084|107.3852|
+|narrow|229.9952|138.5721|
+|tablet600|219.9746|135.6043|
+|dual840|248.3795|130.6684|
+|landscape200|192.0605|111.2084|
+
+final113核心7/7通过；final114增加模型回执隔离、删除时发送/附件状态清理，以及准备/校验阶段停止入口，定向9/9通过，包含26种成功/失败会话回执和10种队列组合。build114截图为android-core-final114/，强杀离线证据为android-process-recovery-final114/。关键页面最新前后对照android-compare-final114/已逐张复核，沿用相同基线原图，无缩放裁剪内容；provenance.json记录来源。final116修复API26图片有界读取与附件解码状态，定向4/4通过（附件预览、共享正文、核心闭环、26种会话回执）。final116随后完成独立完整矩阵，结果如下，旧候选证据保留原批次。
+
+当前交付构建final116完整矩阵android-matrix-20260917-081326/：六组全部完成，无空PNG；36张截图逐张复核。五组13通过、1不适用跳过、1性能失败；dual840为14通过、1性能失败，新增准备/执行/校验阶段停止用例均通过。
+
+|配置|显示p95 ms|最大帧 ms|
+|---|---:|---:|
+|phone|217.9033|109.8744|
+|phone200|179.8913|103.8428|
+|narrow|110.6871|101.3219|
+|tablet600|110.0386|110.4551|
+|dual840|124.0417|106.7430|
+|landscape200|180.2642|113.8008|
+
+android-contrast-final114.json按源调色板计算18组正文/背景配色，最小5.424:1，均达到4.5:1；该静态计算不覆盖所有叠色、禁用状态、控件边界与读屏行为。Windows本机未安装可用Docker或WSL Linux，相关验证保持未执行。
+
+运行时包在独立解压目录完成npm ci --ignore-scripts，Web HTTP200、Faux消息完成、6 Span通过，证据runtime-validation-final106.json。该验证不连接生产状态，不启动闲鱼Adapter。
+
+## 按钮与体验闭环
+
+|区域/问题|当前处理|状态|
+|---|---|---|
+|顶栏、消息、队列拥挤|唯一模型入口、辅助动作一层菜单、执行过程统一展开|矩阵、Web E2E通过|
+|免审批缺少统一设置|账号权威开关，跨端策略一致|Core与设备闭环通过|
+|普通环境切换与退出重复|合并切换账号；测试包独立保留退出网关|final85通过|
+|换账号丢其他会话草稿|检查所有会话正文、附件及未确认发送，确认后清理|final85回归通过|
+|命令目录重复且难发现|共用协议JSON、中文搜索和权限说明、未提交关闭确认|Web与设备通过|
+|诊断长小数与用量缺失|已知整数用量不脱敏，耗时显示一位小数|数据库回归、核心设备及截图通过|
+|丢增量、旧快照覆盖|offset投影、游标合并、重连与终态校准|Android单测、Web竞态E2E通过|
+|写回执或远端更新清掉草稿|回执后关闭，逐字段保留本地脏值|消息编辑、Profile和Web回归通过|
+|离页取消写入或上传登记|任务归账号ViewModel，离页只停止等待，跨账号回执隔离|核心设备通过|
+|大字号说明挤压、键盘遮挡|设置纵向重排，安全区宽度断点，统一Insets|矩阵及截图通过|
+|复制失败却显示成功|依据剪贴板真实结果反馈|Web E2E通过，Android桥接已构建|
+|队列跨会话迟到回执|读取及四类队列写入核对账号与会话；不覆盖新会话加载状态|设备final114通过，10种队列组合|
+|会话及模型迟到回执|13类会话操作的成功/失败回执核对归属，不覆盖当前加载、取消或错误状态|设备final114通过，26种组合|
+|准备/校验阶段无法停止|使用v16 Run状态，准备、执行和校验阶段保留停止|设备final114通过|
+|头像逐消息同步解码|后台采样、会话共享，上传/清除立即刷新|设备final95通过|
+|后台页面持续重组|生命周期感知收集，后台仍完成与保存Run|设备final96通过|
+|资源重复入口与写入字段可变|打开停用重复入口，写入锁字段，成功回执清表单|失败保留/取消确认final100通过|
+|复制/图片状态被流式覆盖|按最后渲染结构比对保留未变节点|Web E2E final98通过|
+|CPU及正文显示超标|保留采样和全部失败轮次|尚未解决|
+
+按钮去向和页面规格见[Android设计](android-design.zh-CN.md)、[前端设计](frontend-design.zh-CN.md)。
+
+## 未完成与交付边界
+
+1. CPU与Android显示延迟失败，当前四小时测试未完成。final83在10428735ms、1883消息后进程退出，无最终报告，峰值RSS165498880B/WAL3238384B；原因尚无证据确认，不计通过。final116于08:03使用独立目录重新开始四小时测试。旧候选soak4h-release-candidate.log完成14404872ms、2566消息、峰值RSS154746880B/WAL3238384B，但不覆盖之后修复。当前候选哈希为backend-final83-sha256.json。发布操作期间继续保留独立长测；自动修改交付文档的收尾进程已停止，结果必须依据实际报告人工核验后更新，未完成不计通过。
+2. 旧真实20请求批次存在供应商过载，关联标识保存在本地隔离验收日志。保留整轮失败；当前后端修复后的独立final108已20/20通过，不用新结果删除旧记录。
+3. 真机、Docker、真实Embedding以及 Linux 完整性能矩阵未验收；全页面G03/G14正常/失败/双击/返回组合、外接键盘、读屏完整焦点及对比度未逐项完成。
+4. 大型业务门面和通用管理详情仍有架构债务。源码清单、编译与设计检查不能证明全部代码逐行符合最佳实践。
+5. artifacts/delivery/状态为acceptance-incomplete；精确候选与SHA-256以manifest.json为准。运行时ZIP无node_modules、凭据或用户数据，需Node≥22.19.0及npm ci --ignore-scripts。debug APK不是生产签名包；本次另交付并发布原证书签名的正式 APK，详见下节。
+
+删除无引用的scripts/check-login.mjs与scripts/inspect.mjs：前者曾输出注册页全文，后者硬编码本机调试地址。正式登录和正文测试已由Playwright覆盖。
+
+设计源、正式图稿、测试、性能预算和运维工具保留。日志、采样、失败证据和截图集中在忽略目录；历史阶段报告移至验收证据。真实数据、凭据和必要备份不清理。临时基线源码artifacts/acceptance/android-baseline-source/android删除被自动审批审查拒绝，返回blocked by policy且无更细原因；未绕过限制，目录仍保留。
+
+## 重现
+
+执行npm run check、npm run test:coverage、npm run build、npm run build:web:embed、npm run test:eval:faux、npm run test:web:e2e、npm run test:perf、node scripts/load-faux.mjs、npm run test:soak:faux。
+
+运行npm run build:android:content；在android目录执行gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest。安装主包与测试包后执行python scripts/android-device-matrix.py，脚本恢复尺寸、密度、方向和字号。设计生成与校验分别为python docs/frontend-design/render.py和python docs/frontend-design/validate.py。
+
+
+## 2026-09-17 私人服务器发布核验
+
+用户明确授权发布；总体仍为 `acceptance-incomplete`，不修改固定 CPU、Android 延迟或四小时长测门槛。
+
+- 静态检查 `check-release130.log` 通过；60 文件、324 项测试 `tests-release117.log` 通过；完整构建、Web 30 项 E2E 通过。嵌入构建另加入 CSS≤1MiB、入口 JS≤10MiB 及字体引用完整性检查。
+- 发现并修复宿主拒绝 1.5MB 内联字体 CSS 的问题：公式字体全部保留，输出 60 个独立字体资产并按内容命名，CSS 约 114KB。资源上限保持不变。公网手机 390px、桌面 1280px 的组件挂载及公式字体实际加载通过；不能只以 HTTP 200 或清单哈希判定可用。
+- Linux Node22.23.2 候选导入、真实配置只读检查、schema24 副本离线转换演练通过。生产停服备份、加密下载、解密 SHA-256 回环校验完成；随后离线升级到 schema25，数据库完整性正常、外键无违规、保护账号对象未减少。
+- Core、Browser Worker、渠道适配器及代理运行正常。公网 live/ready、认证、模型目录、会话、账号策略均返回200；账号免审批为true，旧协议返回404。先校准快照游标再订阅的公网 WebSocket 同步通过；7条关联 HTTP Span 已正常终结并落盘。未发送闲鱼真实消息。
+- Android 正式包 1.4.0（14），大小12999741字节，SHA-256为 `bbade0e4f63a494f6a0a5a334203e89f88b3b3f26ed5d8b8dfc88b02e28471e3`。正式构建、42项JVM及Lint通过，新旧证书相同。模拟器从线上旧版覆盖安装成功，冷启动、版本与公网更新检查通过；真机尚未验证。此前 debug 设备矩阵仍按原失败结果保留。
+- 私人地址、网关、签名属性、SSH 参数和服务器配置均保存在本机受限配置或加密备份中，不进入 Git、公开报告和构建源码包。原始提交历史在本地保存，推送使用脱敏后的最终源码状态。
+
+发布证据位于忽略目录 `artifacts/acceptance/`，含 `production-release130.log`、`public-smoke-release124.log`、签名与备份验证。正式 APK 位于 `artifacts/delivery/android-release119/`。服务器只读功能检查和 Windows 性能测试是不同环境，结果不得混写。四小时长测仍独立运行，完成前不计通过。

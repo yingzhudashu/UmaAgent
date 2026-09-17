@@ -14,6 +14,7 @@ Environment=PLAYWRIGHT_BROWSERS_PATH=/var/lib/uma-agent/browser/.cache/ms-playwr
 Environment=UMA_TELEMETRY_DIR=/var/lib/uma-agent/telemetry
 EnvironmentFile=/etc/uma-agent/browser.env
 ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent/current/apps/browser-worker/dist/main.js
+ExecStartPost=/usr/bin/curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 1 --retry-max-time 30 --max-time 2 --output /dev/null http://127.0.0.1:3230/health
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

@@ -23,6 +23,30 @@ async function fixture() {
 }
 
 describe("EventHub", () => {
+  it("calibrates a reconnect snapshot with the live prefix and releases it after the final message", async () => {
+    const { database, session, hub } = await fixture();
+    const item = database.insertMessage({
+      sessionId: session.id,
+      role: "assistant",
+      status: "streaming",
+      content: "",
+    });
+    hub.transaction(() => hub.emit(session.id, undefined, "message.started", item));
+    hub.emitTransientDelta(session.id, undefined, {
+      messageId: item.id,
+      offset: 0,
+      append: "完整前缀",
+      updatedAt: 10,
+    });
+    expect(hub.overlaySnapshot(database.getSnapshot(session.id)).transcript.at(-1)?.content).toBe("完整前缀");
+    expect(database.getMessage(item.id).content).toBe("");
+    hub.transaction(() => {
+      const final = database.updateMessage(item.id, { content: "终态", status: "complete" });
+      hub.emit(session.id, undefined, "message.completed", final);
+    });
+    expect(hub.overlaySnapshot(database.getSnapshot(session.id)).transcript.at(-1)?.content).toBe("终态");
+    database.close();
+  });
   it("requires a transaction and broadcasts committed nested events", async () => {
     const { database, session, hub } = await fixture();
     expect(() => hub.emit(session.id, undefined, "session.snapshot", {})).toThrow("inside");
@@ -70,6 +94,7 @@ describe("EventHub", () => {
     hub.emitTransientDelta(session.id, "run-1", {
       messageId: "message-1",
       append: "chunk",
+      offset: 0,
       updatedAt: 1,
     });
     expect(listener).toHaveBeenCalledWith(
@@ -103,7 +128,7 @@ describe("EventHub", () => {
       1,
       expect.objectContaining({
         type: "resource.invalidated",
-        protocolVersion: 15,
+        protocolVersion: 16,
         resource: "tasks",
       }),
     );

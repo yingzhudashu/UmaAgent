@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
-import type { InspectorSection } from "./StatusRail.js";
+export type InspectorSection = "connection" | "run" | "approvals" | "sync" | "settings";
 
 const titles: Record<InspectorSection, string> = {
   connection: "Core 连接",
@@ -12,10 +12,20 @@ const titles: Record<InspectorSection, string> = {
 };
 
 export function InspectorDrawer({
+  inline = false,
+  title,
+  description,
+  screen,
+  openNavigation,
   section,
   onClose,
   children,
 }: {
+  inline?: boolean;
+  title?: string | undefined;
+  description?: string | undefined;
+  screen?: string | undefined;
+  openNavigation?: (() => void) | undefined;
   section: InspectorSection | undefined;
   onClose: () => void;
   children: ReactNode;
@@ -23,10 +33,12 @@ export function InspectorDrawer({
   const drawerRef = useRef<HTMLElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (!section) return;
+    if (!section || inline) return;
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     drawerRef.current?.focus({ preventScroll: true });
     const onKeyDown = (event: KeyboardEvent) => {
+      // 原生模态确认拥有自己的焦点与 Escape 处理，背后的抽屉不得抢先关闭。
+      if (document.querySelector("dialog[open]")) return;
       if (event.key === "Escape") onClose();
       if (event.key !== "Tab" || !drawerRef.current) return;
       const focusable = [
@@ -55,8 +67,27 @@ export function InspectorDrawer({
       returnFocusRef.current?.focus({ preventScroll: true });
       returnFocusRef.current = null;
     };
-  }, [onClose, section]);
+  }, [onClose, section, inline]);
   if (!section) return null;
+  if (inline)
+    return (
+      <section className="destination-workspace" data-design-page={screen}>
+        <header className="destination-header">
+          <button type="button" className="mobile-only" aria-label="打开导航" onClick={openNavigation}>
+            导航
+          </button>
+          <div>
+            <span className="eyebrow">UmaAgent</span>
+            <h1>{title}</h1>
+            <p>{description}</p>
+          </div>
+          <button type="button" onClick={onClose}>
+            返回会话
+          </button>
+        </header>
+        <div className="destination-body">{children}</div>
+      </section>
+    );
   return (
     <>
       <button type="button" className="drawer-backdrop" aria-label="关闭详情" onClick={onClose} />

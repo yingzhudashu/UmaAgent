@@ -76,6 +76,12 @@
     height: 48px;
     margin: 0 auto;
   }
+  .brand-mark img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+  }
   .new-session,
   .sidebar nav button,
   .sidebar-footer button {
@@ -354,9 +360,6 @@
   .danger:hover {
     color: #9a2724;
     background: #f5dedd;
-  }
-  .file-button input {
-    display: none;
   }
   .attachments {
     font-size: 12px;
@@ -735,9 +738,9 @@
     width: min(360px, calc(100vw - 32px));
     background: var(--bg-card, #fff);
     border: 1px solid #dfe3e1;
-    border-radius: 8px;
-    padding: 28px;
-    box-shadow: 0 12px 36px rgb(20 35 29 / 8%);
+    border-radius: 12px;
+    padding: 30px;
+    box-shadow: 0 18px 46px rgb(20 35 29 / 10%);
   }
   .login h1 {
     font-size: 22px;
@@ -755,13 +758,41 @@
   .login input {
     height: 40px;
     border: 1px solid #cfd4d2;
-    border-radius: 5px;
+    border-radius: 8px;
     padding: 0 10px;
+  }
+  .login input:focus-visible {
+    outline: 0;
+    border-color: var(--accent, #385ee8);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #385ee8) 16%, transparent);
   }
   .login button {
     height: 40px;
     width: 100%;
     margin-top: 14px;
+  }
+  .login .secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    border: 1px solid var(--border, #d7dce4);
+    border-radius: 8px;
+    color: #17212b;
+    background: #e4eff8;
+  }
+  .theme-dark .login .secondary {
+    color: #f1f5f9;
+    background: #293e54;
+  }
+  .login .secondary:hover {
+    border-color: color-mix(in srgb, var(--accent, #385ee8) 38%, var(--border, #d7dce4));
+    color: var(--accent, #385ee8);
+    background: color-mix(in srgb, var(--accent, #385ee8) 5%, #fff);
+  }
+  .login button:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #385ee8) 18%, transparent);
   }
 
   .token-result {
@@ -900,7 +931,6 @@
     }
   }
 }
-
 .xianyu-workspace {
   min-height: 100%;
   height: 100vh;
@@ -1415,9 +1445,6 @@
   overflow: hidden;
   background: var(--surface-2, #f5f7f8);
 }
-.status-rail {
-  z-index: 30;
-}
 .drawer-backdrop {
   z-index: 19;
 }
@@ -1564,23 +1591,23 @@
 
 /* Workbench refresh: dense, calm surfaces with a single interaction accent. */
 .uma-embed {
-  --surface-0: #f6f8f7;
+  --surface-0: #f4f7fb;
   --surface-1: #ffffff;
-  --surface-2: #eef2f0;
-  --ink-strong: #17201c;
-  --ink: #37433d;
-  --ink-muted: #78847e;
-  --line: #dfe6e2;
-  --accent: #2563eb;
-  --accent-soft: #e8efff;
+  --surface-2: #edf2f8;
+  --ink-strong: #172338;
+  --ink: #48586c;
+  --ink-muted: #7e8ea2;
+  --line: #d9e2ec;
+  --accent: #385ee8;
+  --accent-soft: #e9edff;
   --danger: #b42318;
   --warning: #9a6700;
-  --success: #18794e;
+  --success: #13795b;
   background: var(--surface-0);
   color: var(--ink);
 }
 .uma-embed .app-shell {
-  grid-template-columns: 248px minmax(0, 1fr) 52px;
+  grid-template-columns: 260px minmax(0, 1fr) 56px;
   position: relative;
   background: var(--surface-1);
   height: 100%;
@@ -1761,30 +1788,32 @@
 .uma-embed .sidebar {
   background: var(--surface-0);
   border-color: var(--line);
-  padding: 18px 12px 12px;
+  padding: 20px 14px 14px;
 }
 .uma-embed .brand {
-  padding-bottom: 18px;
+  padding-bottom: 20px;
 }
 .uma-embed .brand-mark {
   background: var(--accent);
-  border-radius: 10px;
+  border-radius: 12px;
+  box-shadow: 0 8px 18px rgb(56 94 232 / 22%);
 }
 .uma-embed .new-session {
-  height: 42px;
+  height: 44px;
   border-color: var(--line);
-  border-radius: 9px;
+  border-radius: 10px;
   color: var(--ink-strong);
   box-shadow: 0 1px 2px rgb(16 42 31 / 4%);
 }
 .uma-embed .sidebar nav button {
-  border-radius: 9px;
-  min-height: 52px;
+  border-radius: 10px;
+  min-height: 54px;
   color: var(--ink);
 }
 .uma-embed .sidebar nav button.active {
   background: var(--accent-soft);
   color: var(--ink-strong);
+  box-shadow: inset 3px 0 var(--accent);
 }
 .uma-embed .sidebar nav small {
   color: var(--ink-muted);
@@ -1793,13 +1822,13 @@
   background: var(--surface-1);
 }
 .uma-embed .workspace > header {
-  height: 72px;
-  padding: 0 28px;
+  height: 76px;
+  padding: 0 30px;
   border-color: var(--line);
 }
 .uma-embed .workspace > header h1 {
   color: var(--ink-strong);
-  font-size: 16px;
+  font-size: 17px;
   letter-spacing: 0;
 }
 .uma-embed .header-subtitle {
@@ -1826,7 +1855,7 @@
   background: var(--surface-1);
 }
 .uma-embed .transcript {
-  padding: 36px max(28px, calc((100% - 860px) / 2)) 96px;
+  padding: 30px max(30px, calc((100% - 900px) / 2)) 104px;
   background: var(--surface-1);
 }
 .uma-embed .empty {
@@ -1842,26 +1871,26 @@
 }
 .uma-embed .message-row {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  gap: 12px;
-  padding: 18px 0;
-  max-width: 860px;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 14px;
+  padding: 20px 0;
+  max-width: 900px;
 }
 .uma-embed .message-content {
   min-width: 0;
 }
 .uma-embed .message-avatar {
-  width: 64px;
-  height: 64px;
+  width: 52px;
+  height: 52px;
   display: grid;
   place-items: center;
-  border-radius: 9px;
+  border-radius: 12px;
   color: var(--accent);
   background: var(--accent-soft);
   margin-top: 2px;
 }
 .uma-embed .message-row--user {
-  grid-template-columns: minmax(0, 1fr) 64px;
+  grid-template-columns: minmax(0, 1fr) 52px;
 }
 .uma-embed .message-row--user .message-avatar {
   grid-column: 2;
@@ -2031,7 +2060,7 @@
 }
 .uma-embed .composer-wrap {
   position: relative;
-  padding: 10px max(28px, calc((100% - 860px) / 2)) 22px;
+  padding: 12px max(30px, calc((100% - 900px) / 2)) 22px;
   background: var(--surface-1);
   border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
 }
@@ -2277,9 +2306,9 @@
 .uma-embed .composer {
   min-height: 58px;
   border-color: var(--line);
-  border-radius: 13px;
+  border-radius: 14px;
   padding: 8px;
-  box-shadow: 0 5px 20px rgb(16 42 31 / 7%);
+  box-shadow: 0 10px 28px rgb(23 35 56 / 10%);
 }
 .uma-embed .composer:focus-within {
   border-color: color-mix(in srgb, var(--accent) 65%, var(--line));
@@ -2296,57 +2325,10 @@
 .uma-embed .primary:hover {
   background: #105b46;
 }
-.uma-embed .status-rail {
-  position: relative;
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 16px 7px;
-  border-left: 1px solid var(--line);
-  background: var(--surface-0);
-}
-.uma-embed .status-rail button {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border: 0;
-  border-radius: 10px;
-  color: var(--ink-muted);
-  background: transparent;
-}
-.uma-embed .status-rail button:hover,
-.uma-embed .status-rail button.active {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-.uma-embed .status-rail button.attention {
-  color: var(--warning);
-}
-.uma-embed .status-rail button:focus-visible,
 .uma-embed .inspector-drawer button:focus-visible,
 .uma-embed .new-session:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-.uma-embed .status-rail button b {
-  position: absolute;
-  top: -3px;
-  right: -3px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  color: #fff;
-  background: var(--danger);
-  font-size: 10px;
-  line-height: 16px;
-}
-.uma-embed .status-rail .rail-panel {
-  margin-top: auto;
 }
 .uma-embed .rail-dot {
   position: absolute;
@@ -2470,9 +2452,9 @@
   width: min(360px, 100%);
   padding: 28px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--surface-1);
-  box-shadow: 0 12px 36px rgb(20 35 29 / 8%);
+  box-shadow: 0 14px 36px rgb(23 35 56 / 10%);
 }
 .uma-embed .inspector-content .details {
   display: block;
@@ -2865,20 +2847,6 @@
     height: 100%;
     min-height: inherit;
   }
-  .uma-embed .status-rail {
-    position: fixed;
-    z-index: 9;
-    right: 8px;
-    bottom: 92px;
-    width: 42px;
-    padding: 6px 3px;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    box-shadow: 0 8px 24px rgb(16 42 31 / 14%);
-  }
-  .uma-embed .status-rail .rail-panel {
-    margin-top: 0;
-  }
   .uma-embed .inspector-drawer {
     position: fixed;
     top: auto;
@@ -2900,21 +2868,29 @@
     padding: 22px 14px 82px;
   }
   .uma-embed .composer-wrap {
-    padding: 8px 10px 14px;
+    position: sticky;
+    bottom: 0;
+    z-index: 12;
+    padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--surface-1) 94%, transparent);
+    backdrop-filter: blur(12px);
   }
   .uma-embed .queue-dock {
     right: 10px;
     width: calc(100% - 20px);
   }
   .uma-embed .message-avatar {
-    width: 56px;
-    height: 56px;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
   }
   .uma-embed .message-row {
-    grid-template-columns: 56px minmax(0, 1fr);
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 10px;
+    padding: 16px 0;
   }
   .uma-embed .message-row--user {
-    grid-template-columns: minmax(0, 1fr) 56px;
+    grid-template-columns: minmax(0, 1fr) 36px;
   }
   .uma-embed .message-row--user .message-content {
     max-width: 88%;
@@ -2968,8 +2944,7 @@
 }
 .uma-embed .app-shell,
 .uma-embed .workspace,
-.uma-embed .sidebar,
-.uma-embed .status-rail {
+.uma-embed .sidebar {
   min-width: 0;
   min-height: 0;
 }
@@ -3131,8 +3106,10 @@
   gap: 2px;
 }
 .uma-embed .command-list button {
-  min-height: 34px;
-  padding: 0 10px;
+  display: grid;
+  gap: 4px;
+  min-height: 48px;
+  padding: 8px 10px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -3443,4 +3420,143 @@
   font-weight: 700;
   outline: 2px solid currentColor;
   outline-offset: -2px;
+}
+
+.confirm-dialog {
+  max-width: 480px;
+}
+.confirm-dialog h2 {
+  margin-top: 0;
+}
+.confirm-dialog p {
+  color: #52616e;
+  line-height: 1.6;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+.dialog-actions .danger {
+  background: #b42318;
+  color: white;
+  border-color: #b42318;
+}
+/* 2026-09-10 hierarchy pass: preserve chat area as the primary surface. */
+.uma-embed .workspace > header {
+  min-height: 56px;
+  padding: 8px 24px;
+  gap: 12px;
+}
+.uma-embed .workspace > header h1 {
+  font-size: 20px;
+  line-height: 28px;
+}
+.uma-embed .header-actions {
+  gap: 6px;
+  max-width: 55%;
+}
+.uma-embed .header-actions .model-select {
+  height: 40px;
+  min-height: 40px;
+  max-width: 190px;
+  padding: 6px 10px;
+}
+.uma-embed .composer-wrap {
+  padding: 10px max(24px, calc((100% - 800px) / 2));
+}
+.uma-embed .composer {
+  min-height: 72px;
+}
+.uma-embed .composer textarea {
+  min-height: 72px;
+  max-height: 160px;
+  font-size: 15px;
+  line-height: 24px;
+  padding: 12px 14px;
+}
+.uma-embed .mode-selector {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 3px;
+  width: max-content;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-3);
+}
+.uma-embed .mode-selector button {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.uma-embed .mode-selector button.active {
+  background: var(--primary);
+  color: #fff;
+}
+.uma-embed .markdown {
+  font-size: 15px;
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
+.uma-embed .markdown table {
+  display: block;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 20px;
+}
+.uma-embed .markdown th,
+.uma-embed .markdown td {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.uma-embed .markdown th {
+  background: var(--surface-3);
+  font-weight: 650;
+}
+.uma-embed .markdown pre {
+  max-width: 100%;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  font:
+    13px / 20px Consolas,
+    "Cascadia Code",
+    monospace;
+}
+.uma-embed .markdown code {
+  font:
+    13px / 20px Consolas,
+    "Cascadia Code",
+    monospace;
+}
+.uma-embed .markdown .katex,
+.uma-embed .markdown mjx-container {
+  font-size: 1em;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+@media (max-width: 839px) {
+  .uma-embed .workspace > header {
+    padding: 8px 16px;
+  }
+  .uma-embed .header-actions {
+    max-width: 100%;
+    width: 100%;
+  }
+  .uma-embed .header-actions .model-select {
+    flex: 1;
+    max-width: none;
+  }
+  .uma-embed .composer-wrap {
+    padding: 8px 16px 12px;
+  }
 }

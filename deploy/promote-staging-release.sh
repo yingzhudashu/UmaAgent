@@ -12,7 +12,7 @@ target_release="$production_root/releases/$release"
 [[ "$release" =~ ^[0-9]{14}-[0-9a-f]{7,40}$ ]] || { echo "invalid release ID" >&2; exit 1; }
 [[ $(readlink -f -- "$staging_root/current") = "$source_release" ]] || { echo "release is not active in staging" >&2; exit 1; }
 systemctl is-active --quiet uma-agent-staging.service
-curl --fail --silent http://127.0.0.1:3211/api/v15/health/ready >/dev/null
+curl --fail --silent http://127.0.0.1:3211/api/v16/health/ready >/dev/null
 [[ ! -e "$target_release" ]] || { echo "production release already exists: $target_release" >&2; exit 1; }
 
 install -d -o root -g root -m 0755 "$target_release"

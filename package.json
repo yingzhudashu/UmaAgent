@@ -11,12 +11,12 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "npm run build --workspace=@uma-agent/protocol && npm run build --workspace=@uma-agent/channel-adapter && npm run build --workspace=@uma-agent/client && npm run build --workspace=@uma-agent/telemetry && npm run build --workspace=@uma-agent/core && npm run build --workspace=@uma-agent/server && npm run build --workspace=@uma-agent/eval-runner && npm run build --workspace=@uma-agent/cli && npm run build --workspace=@uma-agent/web && npm run build --workspace=@uma-agent/xianyu-adapter && npm run build --workspace=@uma-agent/browser-worker && npm run build --workspace=@uma-agent/smath-worker",
+    "build": "npm run build --workspace=@uma-agent/message-content && npm run build --workspace=@uma-agent/protocol && npm run build --workspace=@uma-agent/channel-adapter && npm run build --workspace=@uma-agent/client && npm run build --workspace=@uma-agent/telemetry && npm run build --workspace=@uma-agent/core && npm run build --workspace=@uma-agent/server && npm run build --workspace=@uma-agent/eval-runner && npm run build --workspace=@uma-agent/cli && npm run build --workspace=@uma-agent/web && npm run build --workspace=@uma-agent/xianyu-adapter && npm run build --workspace=@uma-agent/browser-worker && npm run build --workspace=@uma-agent/smath-worker",
     "check": "npm run check:architecture && biome check . && tsc -b",
     "check:architecture": "node scripts/check-architecture.mjs",
     "audit:source": "node scripts/audit-source.mjs",
     "dev": "npm run dev --workspace=@uma-agent/server",
-    "dev:faux": "npm run build && node scripts/faux-server.mjs",
+    "dev:faux": "npm run build && node --max-semi-space-size=4 scripts/faux-server.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:web:e2e": "playwright test",
@@ -30,13 +30,14 @@
     "diagnose:provider": "node scripts/diagnose-provider.mjs",
     "test:watch": "vitest",
     "start": "npm run start --workspace=@uma-agent/server",
-    "start:configured": "node --env-file=.env apps/server/dist/main.js",
+    "start:configured": "node --max-semi-space-size=4 --env-file=.env apps/server/dist/main.js",
     "cli": "node apps/cli/dist/main.js",
     "cli:configured": "node --env-file=.env apps/cli/dist/main.js",
     "dev:web": "npm run dev --workspace=@uma-agent/web",
     "build:web": "npm run build --workspace=@uma-agent/web",
     "build:web:embed": "npm run build:embed --workspace=@uma-agent/web",
-    "start:xianyu": "node apps/xianyu-adapter/dist/main.js"
+    "start:xianyu": "node apps/xianyu-adapter/dist/main.js",
+    "build:android:content": "npm run build:android --workspace=@uma-agent/message-content"
   },
   "devDependencies": {
     "@biomejs/biome": "2.3.5",

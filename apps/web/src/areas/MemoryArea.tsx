@@ -1,5 +1,6 @@
 import type { MemoryFact } from "@uma-agent/protocol";
 import { Check, X } from "lucide-react";
+import { useOperation } from "../components/OperationFeedback.js";
 
 export function MemoryArea({
   facts,
@@ -9,11 +10,13 @@ export function MemoryArea({
 }: {
   facts: MemoryFact[];
   disabled: boolean;
-  reject: (id: string) => void;
-  accept: (id: string) => void;
+  reject: (id: string) => unknown;
+  accept: (id: string) => unknown;
 }) {
+  const operation = useOperation();
   return (
     <section className="settings-section settings-section--operation">
+      {operation.feedback}
       <div className="settings-section-heading">
         <div>
           <h3>记忆</h3>
@@ -37,16 +40,16 @@ export function MemoryArea({
                   className="settings-icon-button"
                   title="拒绝记忆"
                   aria-label="拒绝记忆"
-                  disabled={disabled}
-                  onClick={() => reject(fact.id)}
+                  disabled={disabled || operation.busy}
+                  onClick={() => operation.confirm("拒绝这条记忆？", fact.key, () => reject(fact.id))}
                 >
                   <X size={14} aria-hidden="true" />
                 </button>
                 <button
                   type="button"
                   className="settings-inline-command"
-                  disabled={disabled}
-                  onClick={() => accept(fact.id)}
+                  disabled={disabled || operation.busy}
+                  onClick={() => void operation.execute(() => accept(fact.id))}
                 >
                   <Check size={14} aria-hidden="true" /> 保留
                 </button>

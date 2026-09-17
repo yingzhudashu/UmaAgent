@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 const REQUIRED_TABLES = [
   "users",
+  "account_execution_audit",
   "auth_tokens",
   "sessions",
   "runs",
@@ -30,6 +31,13 @@ export function validateSchema(db: DatabaseSync): void {
   );
   for (const table of REQUIRED_TABLES)
     if (!tables.has(table)) throw new Error(`schema_mismatch: missing table ${table}`);
+  if (
+    !db
+      .prepare("PRAGMA table_info(users)")
+      .all()
+      .some((column) => column.name === "auto_approve")
+  )
+    throw new Error("schema_mismatch: users.auto_approve is missing");
   const columns = db.prepare("PRAGMA table_info(sessions)").all() as Array<{
     name?: unknown;
     notnull?: unknown;

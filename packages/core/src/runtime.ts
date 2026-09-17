@@ -126,6 +126,8 @@ export class UmaRuntime {
   config: UmaConfig;
   constructor(config: UmaConfig) {
     this.config = config;
+    // 配置错误必须在获取文件锁、数据库和遥测Worker前失败，避免构造失败泄漏资源。
+    this.embedding = new EmbeddingService(config.embedding);
     this.stateLock = StateLock.acquire(config.server.stateDir);
     try {
       this.database = new UmaDatabase(config.server.stateDir);
@@ -138,7 +140,6 @@ export class UmaRuntime {
       throw error;
     }
     this.events = new EventHub(this.database);
-    this.embedding = new EmbeddingService(config.embedding);
     this.knowledge = new KnowledgeService(
       this.database,
       config.server.workspaceRoots,
@@ -390,7 +391,8 @@ export class UmaRuntime {
       | "quality"
       | "config"
       | "evaluations"
-      | "optimization",
+      | "optimization"
+      | "execution-settings",
     ownerId?: string,
   ): void {
     this.events.transaction(() => this.events.invalidate(resource, ownerId));
@@ -399,7 +401,7 @@ export class UmaRuntime {
     return userId ? this.database.listUserSessions(userId) : this.resources.listSessions();
   }
   getSnapshot(id: string): SessionSnapshot {
-    return this.resources.getSnapshot(id);
+    return this.events.overlaySnapshot(this.resources.getSnapshot(id));
   }
   listModels(): ModelRef[] {
     return this.resources.listModels();
@@ -735,11 +737,13 @@ export class UmaRuntime {
   listTrace(query: TraceQuery, scopeToRun = false) {
     return this.trace.listTrace(query, scopeToRun);
   }
-  diagnosticsReport(from: number, to: number) {
+  async diagnosticsReport(from: number, to: number) {
+    await this.trace.store.flush();
     return { ...this.database.diagnosticsReport(from, to), trace: this.trace.store.summarize(from, to) };
   }
-  listResourceSnapshots(from = 0, to?: number, limit = 500) {
+  async listResourceSnapshots(from = 0, to?: number, limit = 500) {
     this.resourceMonitor.capture();
+    await this.trace.store.flush();
     return this.trace.store
       .listResources(from, to ?? Date.now(), limit)
       .map(({ service: _service, ...sample }) => sample);
@@ -1287,6 +1291,21 @@ export class UmaRuntime {
     throw new Error("Run is not cancellable");
   }
 
+  /** 保存账号策略后推进已有许可，不重放未知副作用。 */
+  updateExecutionSettings(userId: string, autoApprove: boolean): { autoApprove: boolean } {
+    const result = this.events.transaction(() => {
+      const value = this.database.setExecutionSettings(userId, autoApprove);
+      this.events.invalidate("execution-settings", userId);
+      return value;
+    });
+    if (autoApprove) {
+      const pending = this.database.pendingExecutionPermissions(userId);
+      for (const id of pending.approvalIds) this.approvals.resolve(id, true);
+      for (const id of pending.planRunIds) this.confirmPlan(id);
+    }
+    return result;
+  }
+
   resolveApproval(id: string, approved: boolean): Approval {
     return this.approvals.resolve(id, approved);
   }
@@ -1430,114 +1449,125 @@ export class UmaRuntime {
               steps: currentRun.plan.map((step) => step.title),
             }
           : await this.preflight.decide(session, input, controller.signal, runId, preflightTrace);
-      this.events.transaction(() => {
-        const routed = this.database.updateRun(runId, {
-          route: decision.route,
-          taskClass: decision.taskClass,
-          goal: decision.goal,
-          successCriteria: decision.successCriteria,
-          assumptions: decision.assumptions,
-          reasoningSummary: decision.reasoningSummary,
-        });
-        this.database.createCheckpoint({
-          runId,
-          phase: "preflight",
-          turnCount: 0,
-          lastMessageSequence: this.database.getMessage(input.messageId).sequence,
-          contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
-          safeToResume: true,
-        });
-        this.events.emit(session.id, runId, "run.updated", routed);
-      });
-      injectRuntimeFault("checkpoint.created");
-      injectRuntimeFault("preflight.completed");
-      if (decision.route === "clarify") {
-        this.orchestrator.pause(session.id);
-        const content = decision.questions.map((question, index) => `${index + 1}. ${question}`).join("\n");
+      // 路由、检查点和下一状态属于同一同步阶段，原子提交后再发布事件，避免逐状态 fsync。
+      const preflightStatus = this.events.transaction(() => {
         this.events.transaction(() => {
-          const message = this.database.insertMessage({
-            sessionId: session.id,
-            runId,
-            role: "assistant",
-            status: "complete",
-            content,
-            payload: {
-              role: "assistant",
-              content: [{ type: "text", text: content }],
-              api: session.model.provider,
-              provider: session.model.provider,
-              model: session.model.id,
-              usage: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 0,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "stop",
-              timestamp: Date.now(),
-            } as AssistantMessage,
+          const routed = this.database.updateRun(runId, {
+            route: decision.route,
+            taskClass: decision.taskClass,
+            goal: decision.goal,
+            successCriteria: decision.successCriteria,
+            assumptions: decision.assumptions,
+            reasoningSummary: decision.reasoningSummary,
           });
-          const awaiting = this.database.updateRun(runId, {
-            status: "awaiting_input",
-            phase: "clarify",
-            error: null,
-          });
-          this.events.emit(session.id, runId, "message.completed", message);
-          this.events.emit(session.id, runId, "run.updated", awaiting);
-          this.events.emit(session.id, runId, "run.awaiting_input", {
-            run: awaiting,
-            questions: decision.questions,
-          });
-        });
-        preflightTrace.finish({ status: "ok" });
-        return;
-      }
-      if (decision.route === "plan" && currentRun.plan.length === 0) {
-        this.events.transaction(() => {
-          this.database.setPlan(runId, decision.steps);
           this.database.createCheckpoint({
             runId,
-            phase: "plan",
+            phase: "preflight",
             turnCount: 0,
-            lastMessageSequence: this.database.latestMessageSequence(session.id),
+            lastMessageSequence: this.database.getMessage(input.messageId).sequence,
             contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
             safeToResume: true,
           });
-          this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+          this.events.emit(session.id, runId, "run.updated", routed);
         });
-      }
-      preflightTrace.finish({ status: "ok" });
-      if (decision.route === "plan" && input.mode === "plan" && !resumeFromCheckpoint) {
-        this.events.transaction(() => {
-          const awaiting = this.database.updateRun(runId, {
-            status: "awaiting_confirmation",
-            phase: "preflight",
-            error: null,
-          });
-          const response = this.database.responseForRun(runId);
-          if (response) {
-            const updated = this.database.updateResponse(response.id, { status: "awaiting_confirmation" });
-            const activity = this.database.addResponseActivity({
-              responseId: response.id,
-              kind: "status",
-              status: "awaiting_confirmation",
-              text: "等待确认执行计划",
+        if (decision.route === "clarify") {
+          const content = decision.questions.map((question, index) => `${index + 1}. ${question}`).join("\n");
+          this.events.transaction(() => {
+            const message = this.database.insertMessage({
+              sessionId: session.id,
+              runId,
+              role: "assistant",
+              status: "complete",
+              content,
+              payload: {
+                role: "assistant",
+                content: [{ type: "text", text: content }],
+                api: session.model.provider,
+                provider: session.model.provider,
+                model: session.model.id,
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  totalTokens: 0,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                },
+                stopReason: "stop",
+                timestamp: Date.now(),
+              } as AssistantMessage,
             });
-            this.events.emit(session.id, runId, "response.updated", updated);
-            this.events.emit(session.id, runId, "response.activity", { responseId: response.id, activity });
-          }
-          this.events.emit(session.id, runId, "run.updated", awaiting);
-          this.events.emit(session.id, runId, "run.awaiting_input", {
-            run: awaiting,
-            confirmationRequired: true,
-            plan: awaiting.plan,
+            const awaiting = this.database.updateRun(runId, {
+              status: "awaiting_input",
+              phase: "clarify",
+              error: null,
+            });
+            this.events.emit(session.id, runId, "message.completed", message);
+            this.events.emit(session.id, runId, "run.updated", awaiting);
+            this.events.emit(session.id, runId, "run.awaiting_input", {
+              run: awaiting,
+              questions: decision.questions,
+            });
           });
-        });
+          return "clarify";
+        }
+        if (decision.route === "plan" && currentRun.plan.length === 0) {
+          this.events.transaction(() => {
+            this.database.setPlan(runId, decision.steps);
+            this.database.createCheckpoint({
+              runId,
+              phase: "plan",
+              turnCount: 0,
+              lastMessageSequence: this.database.latestMessageSequence(session.id),
+              contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
+              safeToResume: true,
+            });
+            this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+          });
+        }
+        if (
+          decision.route === "plan" &&
+          input.mode === "plan" &&
+          !resumeFromCheckpoint &&
+          !this.database.getExecutionSettings(this.database.sessionOwner(session.id) ?? "").autoApprove
+        ) {
+          this.events.transaction(() => {
+            const awaiting = this.database.updateRun(runId, {
+              status: "awaiting_confirmation",
+              phase: "preflight",
+              error: null,
+            });
+            const response = this.database.responseForRun(runId);
+            if (response) {
+              const updated = this.database.updateResponse(response.id, { status: "awaiting_confirmation" });
+              const activity = this.database.addResponseActivity({
+                responseId: response.id,
+                kind: "status",
+                status: "awaiting_confirmation",
+                text: "等待确认执行计划",
+              });
+              this.events.emit(session.id, runId, "response.updated", updated);
+              this.events.emit(session.id, runId, "response.activity", { responseId: response.id, activity });
+            }
+            this.events.emit(session.id, runId, "run.updated", awaiting);
+            this.events.emit(session.id, runId, "run.awaiting_input", {
+              run: awaiting,
+              confirmationRequired: true,
+              plan: awaiting.plan,
+            });
+          });
+          return "awaiting_confirmation";
+        }
+        this.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
+        return "running";
+      });
+      injectRuntimeFault("checkpoint.created");
+      injectRuntimeFault("preflight.completed");
+      preflightTrace.finish({ status: "ok" });
+      if (preflightStatus !== "running") {
+        if (preflightStatus === "clarify") this.orchestrator.pause(session.id);
         return;
       }
-      this.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
       const budget = { turns: this.database.getRun(runId).turnCount };
       if (decision.route === "plan") {
         for (const step of this.database.listPlan(runId)) {
@@ -1600,11 +1630,12 @@ export class UmaRuntime {
         injectRuntimeFault("verify.completed");
       }
       if (input.mode === "agent" || input.mode === "plan") {
-        this.persistTurnRollup(session.id, runId);
+        // 同一轮的 turn/day/session 摘要和裁剪必须原子提交，避免独立 fsync 与半更新摘要。
+        this.database.withTransaction(() => this.persistTurnRollup(session.id, runId));
         await this.extractMemories(session, runId, controller.signal);
       }
-      this.appendAssumptionsToResult(session.id, runId);
       this.events.transaction(() => {
+        this.appendAssumptionsToResult(session.id, runId);
         const completed = this.database.updateRun(runId, { status: "completed", error: null });
         this.database.addAudit({
           runId,
@@ -1617,7 +1648,7 @@ export class UmaRuntime {
         const response = this.database.responseForRun(runId);
         if (response) {
           this.database.updateResponseAttachmentStatus(response.id, "sent");
-          const final = [...this.database.listMessages(session.id)]
+          const final = [...this.database.listMessages(session.id, runId)]
             .reverse()
             .find((item) => item.runId === runId && item.role === "assistant");
           const updated = this.database.updateResponse(response.id, {
@@ -1688,7 +1719,7 @@ export class UmaRuntime {
   }
 
   private persistTurnRollup(sessionId: string, runId: string): void {
-    const items = this.database.listMessages(sessionId).filter((item) => item.runId === runId);
+    const items = this.database.listMessages(sessionId, runId);
     if (!items.length) return;
     const publicText = items
       .filter((item) => item.role !== "tool")
@@ -1702,32 +1733,22 @@ export class UmaRuntime {
       toSequence: items.at(-1)?.sequence ?? 1,
       summary: publicText,
     });
-    const all = this.database.listMessages(sessionId);
-    const latest = all.at(-1);
-    if (!latest) return;
-    const day = new Date(latest.createdAt).toISOString().slice(0, 10);
-    const daily = all.filter((item) => new Date(item.createdAt).toISOString().startsWith(day));
-    const summarize = (values: TranscriptItem[], limit: number) =>
-      values
-        .filter((item) => item.role !== "tool")
-        .slice(-limit)
-        .map((item) => `${item.role}: ${item.content}`)
-        .join("\n")
-        .slice(0, 8_000);
-    if (daily.length)
-      this.database.replaceAggregateRollup({
-        sessionId,
-        kind: "day",
-        fromSequence: daily[0]?.sequence ?? 1,
-        toSequence: daily.at(-1)?.sequence ?? 1,
-        summary: `${day}\n${summarize(daily, 100)}`,
-      });
+    const context = this.database.rollupContext(sessionId);
+    if (!context) return;
+    this.database.replaceAggregateRollup({
+      sessionId,
+      kind: "day",
+      fromSequence: context.dayFirstSequence,
+      toSequence: context.dayLastSequence,
+      summary: `${context.day}
+${context.dailyText}`,
+    });
     this.database.replaceAggregateRollup({
       sessionId,
       kind: "session",
-      fromSequence: all[0]?.sequence ?? 1,
-      toSequence: latest.sequence,
-      summary: summarize(all, 50),
+      fromSequence: context.firstSequence,
+      toSequence: context.lastSequence,
+      summary: context.sessionText,
     });
     this.database.maintainMemoryRollups(sessionId);
   }
@@ -1736,8 +1757,8 @@ export class UmaRuntime {
     const ownerId = this.database.sessionOwner(session.id);
     if (!ownerId) throw new Error("Session owner is missing");
     const runMessages = this.database
-      .listMessages(session.id)
-      .filter((item) => item.runId === runId && item.status === "complete");
+      .listMessages(session.id, runId)
+      .filter((item) => item.status === "complete");
     const boundary = runMessages.at(-1);
     if (!boundary) return;
     const context = await this.contextManager.buildForMessage(
@@ -2348,18 +2369,14 @@ export class UmaRuntime {
     const run = this.database.getRun(runId);
     const assumptions = run.assumptions.filter((item) => !isSecretLike(item));
     if (!assumptions.length) return;
-    const final = [...this.database.listMessages(sessionId)]
+    const final = [...this.database.listMessages(sessionId, runId)]
       .reverse()
       .find((item) => item.runId === runId && item.role === "assistant" && item.status === "complete");
     if (!final || final.content.includes("执行假设：")) return;
     const content = `${final.content}\n\n执行假设：\n${assumptions.map((item) => `- ${item}`).join("\n")}`;
-    this.database.withTransaction(() => {
-      this.database.updateMessage(final.id, { content });
-    });
-    this.events.emitTransientDelta(sessionId, runId, {
-      messageId: final.id,
-      append: content.slice(final.content.length),
-      updatedAt: Date.now(),
+    this.events.transaction(() => {
+      const message = this.database.updateMessage(final.id, { content });
+      this.events.emit(sessionId, runId, "message.completed", message);
     });
   }
 
@@ -2385,6 +2402,7 @@ export class UmaRuntime {
       const message = pendingAssistant;
       const content = textFromMessage(message);
       const append = content.slice(streamedLength);
+      const offset = streamedLength;
       streamedLength = content.length;
       pendingAssistant = undefined;
       flushTimer = undefined;
@@ -2393,6 +2411,7 @@ export class UmaRuntime {
         messageId: assistantItem.id,
         ...(responseId ? { responseId } : {}),
         append,
+        offset,
         updatedAt: Date.now(),
       });
     };
@@ -2471,6 +2490,9 @@ export class UmaRuntime {
             });
           activeModelTrace?.finish({
             status: message.stopReason === "error" || message.stopReason === "aborted" ? "error" : "ok",
+            ...(message.stopReason === "error" || message.stopReason === "aborted"
+              ? { error: { name: "ModelError", message: message.errorMessage ?? message.stopReason } }
+              : {}),
           });
           activeModelTrace = undefined;
           this.database.addAudit({
@@ -2651,7 +2673,7 @@ export class UmaRuntime {
     decision: PreflightDecision,
     signal: AbortSignal,
   ): Promise<void> {
-    const final = [...this.database.listMessages(session.id)]
+    const final = [...this.database.listMessages(session.id, runId)]
       .reverse()
       .find((item) => item.runId === runId && item.role === "assistant" && item.status === "complete");
     if (!final) throw new Error("Planned run produced no final response");

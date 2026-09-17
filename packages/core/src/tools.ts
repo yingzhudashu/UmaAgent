@@ -43,6 +43,33 @@ function jsonToolResult(value: unknown, empty = "咸鱼 Adapter 没有返回数�
   });
 }
 
+// 参数 schema 不含账号或会话状态；复用只读定义，避免每个 Run 重建 TypeBox 类型树。
+const readSchema = Type.Object({
+  path: Type.String(),
+  offset: Type.Optional(Type.Integer({ minimum: 1 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000 })),
+});
+const writeSchema = Type.Object({ path: Type.String(), content: Type.String() });
+const editSchema = Type.Object({ path: Type.String(), oldText: Type.String(), newText: Type.String() });
+const pathSchema = Type.Object({ path: Type.Optional(Type.String()) });
+const searchSchema = Type.Object({ query: Type.String(), path: Type.Optional(Type.String()) });
+const shellSchema = Type.Object({ command: Type.String() });
+const fetchSchema = Type.Object({ url: Type.String() });
+const memoryWriteSchema = Type.Object({
+  content: Type.String(),
+  scope: Type.Optional(Type.Union([Type.Literal("session"), Type.Literal("global")])),
+});
+const querySchema = Type.Object({
+  query: Type.String(),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+});
+const attachmentSchema = Type.Object({ attachmentId: Type.String() });
+const smathPathSchema = Type.Object({ path: Type.Optional(Type.String()) });
+const smathWriteSchema = Type.Object({
+  path: Type.String(),
+  content: Type.String({ maxLength: 1_000_000 }),
+});
+
 function createXianyuTools(api: XianyuAgentApi): AgentTool[] {
   return [
     defineTool({
@@ -468,7 +495,7 @@ export function createBuiltinTools(input: {
       name: "schedule_manage",
       label: "Manage schedule",
       description:
-        "List, create, update, run, or delete persistent scheduled tasks. Changes require approval.",
+        "List, create, update, run, or delete persistent scheduled tasks. Changes use the account execution policy.",
       parameters: Type.Object({
         operation: Type.Union([
           Type.Literal("list"),
@@ -530,31 +557,6 @@ export function createBuiltinTools(input: {
   ];
   if (!session.workspace) throw new Error("Session workspace is required");
   const workspace = session.workspace;
-  const readSchema = Type.Object({
-    path: Type.String(),
-    offset: Type.Optional(Type.Integer({ minimum: 1 })),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000 })),
-  });
-  const writeSchema = Type.Object({ path: Type.String(), content: Type.String() });
-  const editSchema = Type.Object({ path: Type.String(), oldText: Type.String(), newText: Type.String() });
-  const pathSchema = Type.Object({ path: Type.Optional(Type.String()) });
-  const searchSchema = Type.Object({ query: Type.String(), path: Type.Optional(Type.String()) });
-  const shellSchema = Type.Object({ command: Type.String() });
-  const fetchSchema = Type.Object({ url: Type.String() });
-  const memoryWriteSchema = Type.Object({
-    content: Type.String(),
-    scope: Type.Optional(Type.Union([Type.Literal("session"), Type.Literal("global")])),
-  });
-  const querySchema = Type.Object({
-    query: Type.String(),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-  });
-  const attachmentSchema = Type.Object({ attachmentId: Type.String() });
-  const smathPathSchema = Type.Object({ path: Type.Optional(Type.String()) });
-  const smathWriteSchema = Type.Object({
-    path: Type.String(),
-    content: Type.String({ maxLength: 1_000_000 }),
-  });
   const ownerId = database.sessionOwner(session.id);
   if (!ownerId) throw new Error("Session owner is missing");
   const smathTools: AgentTool[] = smath
@@ -596,7 +598,7 @@ export function createBuiltinTools(input: {
             name: `smath_${operation}`,
             label: `${operation === "create" ? "Create" : "Update"} SMath worksheet`,
             description:
-              "Write a worksheet source file in this user's isolated SMath workspace. Requires approval.",
+              "Write a worksheet source file in this user's isolated SMath workspace. Uses the account execution policy.",
             parameters: smathWriteSchema,
             executionMode: "sequential",
             async execute(_id, params, signal) {
@@ -613,7 +615,8 @@ export function createBuiltinTools(input: {
         defineTool({
           name: "smath_delete",
           label: "Delete SMath worksheet",
-          description: "Delete one worksheet in this user's isolated SMath workspace. Requires approval.",
+          description:
+            "Delete one worksheet in this user's isolated SMath workspace. Uses the account execution policy.",
           parameters: Type.Object({ path: Type.String() }),
           executionMode: "sequential",
           async execute(_id, params, signal) {
@@ -629,7 +632,8 @@ export function createBuiltinTools(input: {
         defineTool({
           name: "smath_calculate",
           label: "Calculate SMath worksheet",
-          description: "Run a worksheet through the isolated SMath worker. Requires approval.",
+          description:
+            "Run a worksheet through the isolated SMath worker. Uses the account execution policy.",
           parameters: Type.Object({ path: Type.String() }),
           executionMode: "sequential",
           async execute(_id, params, signal) {
@@ -737,7 +741,8 @@ export function createBuiltinTools(input: {
     defineTool({
       name: "shell",
       label: "Run shell",
-      description: "Run a non-interactive shell command in the session workspace. Requires approval.",
+      description:
+        "Run a non-interactive shell command in the session workspace. Uses the account execution policy.",
       parameters: shellSchema,
       executionMode: "sequential",
       async execute(_id, params, signal) {
@@ -758,7 +763,8 @@ export function createBuiltinTools(input: {
     defineTool({
       name: "memory_write",
       label: "Remember",
-      description: "Store an explicit durable fact in session or global memory. Requires approval.",
+      description:
+        "Store an explicit durable fact in session or global memory. Uses the account execution policy.",
       parameters: memoryWriteSchema,
       executionMode: "sequential",
       async execute(_id, params) {

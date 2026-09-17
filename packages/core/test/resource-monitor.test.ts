@@ -19,6 +19,7 @@ it("persists normalized CPU, combined WAL and stops its periodic sampler", async
   const monitor = new ResourceMonitor(store, database, () => 2);
   try {
     monitor.start();
+    await store.flush();
     const [sample] = store.listResources();
     if (!sample) throw new Error("Missing resource sample");
     expect(sample).toMatchObject({ activeRuns: 2, queuedRuns: 0 });
@@ -30,9 +31,11 @@ it("persists normalized CPU, combined WAL and stops its periodic sampler", async
         100,
     );
     vi.advanceTimersByTime(30_000);
+    await store.flush();
     expect(store.listResources()).toHaveLength(2);
     monitor.stop();
     vi.advanceTimersByTime(60_000);
+    await store.flush();
     expect(store.listResources()).toHaveLength(2);
   } finally {
     monitor.stop();

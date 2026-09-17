@@ -1,6 +1,8 @@
 import type { CreateScheduledTaskRequest, ScheduledTask, ScheduledTaskRun } from "@uma-agent/protocol";
 import { Clock3, History, Play, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
+import { useOperation } from "../components/OperationFeedback.js";
+import { useUnsavedForm } from "../components/UnsavedChanges.js";
 import { displayStatus, scheduleKindLabels, scheduleRunStatusLabels } from "../statusLabels.js";
 
 export function ScheduleArea({
@@ -15,33 +17,62 @@ export function ScheduleArea({
 }: {
   schedules: ScheduledTask[];
   disabled: boolean;
-  create: (input: CreateScheduledTaskRequest) => void;
-  toggle: (id: string, enabled: boolean) => void;
-  run: (id: string) => void;
-  remove: (id: string) => void;
+  create: (input: CreateScheduledTaskRequest) => unknown;
+  toggle: (id: string, enabled: boolean) => unknown;
+  run: (id: string) => unknown;
+  remove: (id: string) => unknown;
   loadRuns: (id: string) => Promise<ScheduledTaskRun[]>;
-  cancelRun: (id: string) => void;
+  cancelRun: (id: string) => unknown;
 }) {
+  const operation = useOperation();
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [kind, setKind] = useState<"once" | "interval" | "cron">("interval");
   const [value, setValue] = useState("3600000");
   const [timezone, setTimezone] = useState("Asia/Shanghai");
+  const reset = () => {
+    setName("");
+    setPrompt("");
+    setKind("interval");
+    setValue("3600000");
+    setTimezone("Asia/Shanghai");
+  };
+  const leave = useUnsavedForm(
+    name !== "" ||
+      prompt !== "" ||
+      kind !== "interval" ||
+      value !== "3600000" ||
+      timezone !== "Asia/Shanghai",
+    reset,
+  );
   const [history, setHistory] = useState<Record<string, ScheduledTaskRun[]>>({});
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     let schedule: CreateScheduledTaskRequest["schedule"];
     if (kind === "once") schedule = { kind, at: Date.parse(value) };
     else if (kind === "interval") schedule = { kind, everyMs: Number(value) };
     else schedule = { kind, expression: value, timezone };
-    create({ name: name.trim(), prompt: prompt.trim(), schedule });
+    if (
+      !(await operation.execute(() => {
+        if (!name.trim() || !prompt.trim()) throw new Error("名称和任务不能为空");
+        if (schedule.kind === "once" && (!Number.isFinite(schedule.at) || schedule.at <= Date.now()))
+          throw new Error("请选择未来的有效时间");
+        if (
+          schedule.kind === "interval" &&
+          (!Number.isSafeInteger(schedule.everyMs) || schedule.everyMs < 1000)
+        )
+          throw new Error("间隔必须为至少 1000 的整数毫秒");
+        return create({ name: name.trim(), prompt: prompt.trim(), schedule });
+      }))
+    )
+      return;
     setShowForm(false);
-    setName("");
-    setPrompt("");
+    reset();
   };
   return (
     <section className="settings-section settings-section--operation">
+      {operation.feedback}
       <div className="settings-section-heading">
         <div>
           <h3>调度</h3>
@@ -59,15 +90,26 @@ export function ScheduleArea({
         <form className="settings-form settings-form--compact" onSubmit={submit}>
           <label>
             名称
-            <input required value={name} onChange={(event) => setName(event.target.value)} />
+            <input
+              required
+              disabled={operation.busy || disabled}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
           </label>
           <label>
             任务
-            <textarea required value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+            <textarea
+              required
+              disabled={operation.busy || disabled}
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+            />
           </label>
           <label>
             类型
             <select
+              disabled={operation.busy || disabled}
               value={kind}
               onChange={(event) => {
                 const next = event.target.value as typeof kind;
@@ -88,19 +130,29 @@ export function ScheduleArea({
           </label>
           <label>
             {kind === "once" ? "ISO 时间" : kind === "cron" ? "Cron 表达式" : "间隔毫秒"}
-            <input required value={value} onChange={(event) => setValue(event.target.value)} />
+            <input
+              required
+              disabled={operation.busy || disabled}
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+            />
           </label>
           {kind === "cron" && (
             <label>
               时区
-              <input required value={timezone} onChange={(event) => setTimezone(event.target.value)} />
+              <input
+                required
+                disabled={operation.busy || disabled}
+                value={timezone}
+                onChange={(event) => setTimezone(event.target.value)}
+              />
             </label>
           )}
           <div className="settings-form-actions">
-            <button type="button" onClick={() => setShowForm(false)}>
+            <button type="button" disabled={operation.busy} onClick={() => leave(() => setShowForm(false))}>
               取消
             </button>
-            <button className="primary settings-primary" type="submit" disabled={disabled}>
+            <button className="primary settings-primary" type="submit" disabled={operation.busy || disabled}>
               创建
             </button>
           </div>
@@ -135,8 +187,8 @@ export function ScheduleArea({
                     className="settings-icon-button"
                     title="立即运行"
                     aria-label="立即运行"
-                    disabled={disabled}
-                    onClick={() => run(item.id)}
+                    disabled={operation.busy || disabled}
+                    onClick={() => operation.confirm("立即运行调度？", item.name, () => run(item.id))}
                   >
                     <Play size={14} aria-hidden="true" />
                   </button>
@@ -145,8 +197,8 @@ export function ScheduleArea({
                     className="settings-icon-button"
                     title={item.enabled ? "停用调度" : "启用调度"}
                     aria-label={item.enabled ? "停用调度" : "启用调度"}
-                    disabled={disabled}
-                    onClick={() => toggle(item.id, !item.enabled)}
+                    disabled={operation.busy || disabled}
+                    onClick={() => void operation.execute(() => toggle(item.id, !item.enabled))}
                   >
                     <Clock3 size={14} aria-hidden="true" />
                   </button>
@@ -156,8 +208,10 @@ export function ScheduleArea({
                     title="查看运行历史"
                     aria-label="查看运行历史"
                     onClick={() =>
-                      void loadRuns(item.id).then((runs) =>
-                        setHistory((current) => ({ ...current, [item.id]: runs })),
+                      void operation.execute(() =>
+                        loadRuns(item.id).then((runs) =>
+                          setHistory((current) => ({ ...current, [item.id]: runs })),
+                        ),
                       )
                     }
                   >
@@ -168,8 +222,12 @@ export function ScheduleArea({
                     className="settings-icon-button"
                     title="删除调度"
                     aria-label="删除调度"
-                    disabled={disabled}
-                    onClick={() => remove(item.id)}
+                    disabled={operation.busy || disabled}
+                    onClick={() =>
+                      operation.confirm("删除调度？", "删除后不再产生新的运行，已有运行不因此取消。", () =>
+                        remove(item.id),
+                      )
+                    }
                   >
                     <Trash2 size={14} aria-hidden="true" />
                   </button>
@@ -190,8 +248,12 @@ export function ScheduleArea({
                             <button
                               type="button"
                               className="text-action"
-                              disabled={disabled}
-                              onClick={() => cancelRun(entry.id)}
+                              disabled={operation.busy || disabled}
+                              onClick={() =>
+                                operation.confirm("取消这次运行？", "此操作不删除调度规则。", () =>
+                                  cancelRun(entry.id),
+                                )
+                              }
                             >
                               取消
                             </button>

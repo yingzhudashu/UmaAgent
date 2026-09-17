@@ -62,7 +62,7 @@ const durableEvent = (
   sequence: number,
 ): AgentEventEnvelope =>
   ({
-    protocolVersion: 15,
+    protocolVersion: 16,
     sessionId: "session-1",
     runId: "run-1",
     sequence,
@@ -79,14 +79,14 @@ describe("streaming snapshot projection", () => {
     applyDurableEvent(client, "session-1", durableEvent("response.started", response(2), 2));
     applyDurableEvent(client, "session-1", durableEvent("message.started", transcriptItem("第一段"), 3));
     applyStreamingEvent(client, "session-1", {
-      protocolVersion: 15,
+      protocolVersion: 16,
       sessionId: "session-1",
       runId: "run-1",
       sequence: 0,
       timestamp: 4,
       transient: true,
       type: "message.delta",
-      payload: { messageId: "assistant-1", append: "第二段", updatedAt: 4 },
+      payload: { messageId: "assistant-1", append: "第二段", offset: 3, updatedAt: 4 },
     });
     applyDurableEvent(client, "session-1", durableEvent("response.updated", response(3), 5));
 

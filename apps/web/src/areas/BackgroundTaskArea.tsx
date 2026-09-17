@@ -1,6 +1,8 @@
 import type { BackgroundTask } from "@uma-agent/protocol";
 import { ExternalLink, Plus, Trash2, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
+import { useOperation } from "../components/OperationFeedback.js";
+import { useUnsavedForm } from "../components/UnsavedChanges.js";
 import { displayStatus, taskStatusLabels } from "../statusLabels.js";
 
 export function BackgroundTaskArea({
@@ -13,23 +15,26 @@ export function BackgroundTaskArea({
 }: {
   tasks: BackgroundTask[];
   disabled: boolean;
-  create: (prompt: string) => void;
-  cancel: (id: string) => void;
-  remove: (id: string) => void;
-  openRun: (task: BackgroundTask) => void;
+  create: (prompt: string) => unknown;
+  cancel: (id: string) => unknown;
+  remove: (id: string) => unknown;
+  openRun: (task: BackgroundTask) => unknown;
 }) {
+  const operation = useOperation();
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
-  const submit = (event: FormEvent) => {
+  useUnsavedForm(prompt !== "", () => setPrompt(""));
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     const value = prompt.trim();
     if (!value) return;
-    create(value);
+    if (!(await operation.execute(() => create(value)))) return;
     setPrompt("");
     setOpen(false);
   };
   return (
     <section className="settings-section settings-section--operation">
+      {operation.feedback}
       <div className="settings-section-heading">
         <div>
           <h3>后台任务</h3>
@@ -48,6 +53,7 @@ export function BackgroundTaskArea({
           <label htmlFor="background-task-prompt">任务内容</label>
           <textarea
             id="background-task-prompt"
+            disabled={operation.busy || disabled}
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             rows={3}
@@ -55,7 +61,11 @@ export function BackgroundTaskArea({
           />
           <div className="settings-form-actions">
             <span className="settings-help">任务会在当前会话的后台队列中执行。</span>
-            <button type="submit" className="primary settings-primary" disabled={disabled || !prompt.trim()}>
+            <button
+              type="submit"
+              className="primary settings-primary"
+              disabled={operation.busy || disabled || !prompt.trim()}
+            >
               创建任务
             </button>
           </div>
@@ -93,8 +103,8 @@ export function BackgroundTaskArea({
                       className="settings-icon-button"
                       title="取消任务"
                       aria-label="取消任务"
-                      disabled={disabled}
-                      onClick={() => cancel(task.id)}
+                      disabled={operation.busy || disabled}
+                      onClick={() => operation.confirm("取消后台任务？", task.prompt, () => cancel(task.id))}
                     >
                       <X size={14} aria-hidden="true" />
                     </button>
@@ -104,8 +114,14 @@ export function BackgroundTaskArea({
                       className="settings-icon-button"
                       title="删除记录"
                       aria-label="删除记录"
-                      disabled={disabled}
-                      onClick={() => remove(task.id)}
+                      disabled={operation.busy || disabled}
+                      onClick={() =>
+                        operation.confirm(
+                          "删除任务记录？",
+                          `删除“${task.prompt}”的任务记录？记录删除后无法恢复。`,
+                          () => remove(task.id),
+                        )
+                      }
                     >
                       <Trash2 size={14} aria-hidden="true" />
                     </button>

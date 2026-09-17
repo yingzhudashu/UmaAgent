@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import defaultAvatarUrl from "../assets/cat-avatar.png";
 import { Markdown } from "../Markdown.js";
 import { responseStatusLabels } from "../statusLabels.js";
+import { ActionMenu } from "./ActionMenu.js";
 import { type QualityOperationView, QualityPanel } from "./QualityPanel.js";
 
 function toolStatus(item: TranscriptItem): string {
@@ -68,6 +69,7 @@ export function ResponseCard({
   onQualityRetry?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState("");
   const [previewAttachment, setPreviewAttachment] = useState<string>();
   const [previewError, setPreviewError] = useState(false);
   const previewRef = useRef<HTMLDialogElement>(null);
@@ -96,9 +98,15 @@ export function ResponseCard({
   const hasPlan = planItems.length > 0 && run?.interactionMode === "plan";
   const terminal = (["completed", "failed", "cancelled"] as ResponseStatus[]).includes(response.status);
   const copy = async () => {
-    await navigator.clipboard?.writeText(finalContent);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(finalContent);
+      setCopyError("");
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopyError("复制失败，请选择正文后手动复制。");
+    }
   };
   const updatedAt = response.updatedAt || response.createdAt;
   useEffect(() => {
@@ -114,7 +122,7 @@ export function ResponseCard({
         <img
           src={
             session?.assistantAvatarAttachmentId
-              ? `/api/v15/attachments/${encodeURIComponent(session.assistantAvatarAttachmentId)}/content`
+              ? `/api/v16/attachments/${encodeURIComponent(session.assistantAvatarAttachmentId)}/content`
               : defaultAvatarUrl
           }
           alt=""
@@ -223,32 +231,37 @@ export function ResponseCard({
           <button type="button" className="text-action" onClick={() => void copy()} title="复制内容">
             {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "已复制" : "复制"}
           </button>
-          {finalAssistant && onReview && (
-            <button
-              type="button"
-              className="text-action"
-              disabled={qualityOperation?.status === "running"}
-              title="只分析答案，不修改内容"
-              onClick={() => onReview(finalAssistant.id)}
-            >
-              {qualityOperation?.status === "running" && qualityOperation.kind === "review"
-                ? "审查中…"
-                : "审查"}
-            </button>
+          {finalAssistant && (onReview || onImprove) && (
+            <ActionMenu label="回复更多操作">
+              {finalAssistant && onReview && (
+                <button
+                  type="button"
+                  className="text-action"
+                  disabled={qualityOperation?.status === "running"}
+                  title="只分析答案，不修改内容"
+                  onClick={() => onReview(finalAssistant.id)}
+                >
+                  {qualityOperation?.status === "running" && qualityOperation.kind === "review"
+                    ? "审查中…"
+                    : "审查"}
+                </button>
+              )}
+              {finalAssistant && onImprove && (
+                <button
+                  type="button"
+                  className="text-action"
+                  disabled={qualityOperation?.status === "running"}
+                  title="根据审查建议生成新答案"
+                  onClick={() => onImprove(finalAssistant.id)}
+                >
+                  {qualityOperation?.status === "running" && qualityOperation.kind === "improve"
+                    ? "改进中…"
+                    : "改进"}
+                </button>
+              )}
+            </ActionMenu>
           )}
-          {finalAssistant && onImprove && (
-            <button
-              type="button"
-              className="text-action"
-              disabled={qualityOperation?.status === "running"}
-              title="根据审查建议生成新答案"
-              onClick={() => onImprove(finalAssistant.id)}
-            >
-              {qualityOperation?.status === "running" && qualityOperation.kind === "improve"
-                ? "改进中…"
-                : "改进"}
-            </button>
-          )}
+          {copyError && <output className="error-text">{copyError}</output>}
         </div>
         {qualityOperation && onQualityRetry && (
           <QualityPanel operation={qualityOperation} onRetry={onQualityRetry} />
@@ -269,7 +282,7 @@ export function ResponseCard({
                     title="预览图片"
                   >
                     <img
-                      src={`/api/v15/attachments/${encodeURIComponent(attachment.id)}/content`}
+                      src={`/api/v16/attachments/${encodeURIComponent(attachment.id)}/content`}
                       alt={attachment.name}
                       loading="lazy"
                       decoding="async"
@@ -314,7 +327,7 @@ export function ResponseCard({
         >
           {previewAttachment && !previewError ? (
             <img
-              src={`/api/v15/attachments/${encodeURIComponent(previewAttachment)}/content`}
+              src={`/api/v16/attachments/${encodeURIComponent(previewAttachment)}/content`}
               alt="原图预览"
               onError={() => setPreviewError(true)}
             />

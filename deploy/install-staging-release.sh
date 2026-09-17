@@ -26,7 +26,15 @@ umaagent_gid=$(id -g umaagent)
 }
 grep -q '"port"[[:space:]]*:[[:space:]]*3211' "$env_dir/uma.config.json"
 grep -q '"host"[[:space:]]*:[[:space:]]*"127\.0\.0\.1"' "$env_dir/uma.config.json"
-grep -q 'staging.robotclaw.site' "$env_dir/uma.config.json"
+# 实际测试域名只存在于受限配置；验证 HTTPS Origin，避免把私人主机写入源码。
+/opt/node-v22.23.2-linux-x64/bin/node - "$env_dir/uma.config.json" <<'NODE'
+const config = require(process.argv[2]);
+const origins = config.server.webOrigins;
+if (!Array.isArray(origins) || !origins.length || origins.some(value => {
+  const url = new URL(value);
+  return url.protocol !== 'https:' || url.origin !== value;
+})) throw new Error('Staging requires explicit HTTPS origins');
+NODE
 grep -q '"maxParallelSessions"[[:space:]]*:[[:space:]]*1' "$env_dir/uma.config.json"
 ! grep -q '"xianyu"' "$env_dir/uma.config.json" || { echo "Xianyu is not enabled in staging" >&2; exit 1; }
 
@@ -56,11 +64,11 @@ ln -sfn -- "$release_real" "$current_link.next"
 mv -Tf "$current_link.next" "$current_link"
 systemctl start uma-browser-worker-staging.service uma-agent-staging.service
 for _ in $(seq 1 30); do
-  curl --fail --silent http://127.0.0.1:3211/api/v15/health/ready >/dev/null && break
+  curl --fail --silent http://127.0.0.1:3211/api/v16/health/ready >/dev/null && break
   sleep 1
 done
-curl --fail --silent http://127.0.0.1:3211/api/v15/health/live >/dev/null
-curl --fail --silent http://127.0.0.1:3211/api/v15/health/ready >/dev/null
+curl --fail --silent http://127.0.0.1:3211/api/v16/health/live >/dev/null
+curl --fail --silent http://127.0.0.1:3211/api/v16/health/ready >/dev/null
 ss -lnt '( sport = :3211 or sport = :3231 )' | grep -E '127\.0\.0\.1:(3211|3231)'
 systemctl is-active --quiet uma-agent-staging.service
 systemctl is-active --quiet uma-browser-worker-staging.service

@@ -1,56 +1,90 @@
 package site.robotclaw.umaagent
 
+import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
-import android.os.Build
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 
-private val LightColors = lightColorScheme(
-    primary = Color(0xFF1769AA),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFD3E9FF),
-    onPrimaryContainer = Color(0xFF082E4A),
-    secondary = Color(0xFF2F6F55),
-    secondaryContainer = Color(0xFFB8ECCC),
-    tertiary = Color(0xFF8A5A00),
-    error = Color(0xFFB3261E),
-    background = Color(0xFFF7F9FC),
-    surface = Color(0xFFFFFFFF),
-    surfaceVariant = Color(0xFFE8EDF2),
-)
-
-private val DarkColors = darkColorScheme(
-    primary = Color(0xFF8CC8FF),
-    onPrimary = Color(0xFF003354),
-    primaryContainer = Color(0xFF0E4D78),
-    onPrimaryContainer = Color(0xFFD3E9FF),
-    secondary = Color(0xFF78D6AA),
-    secondaryContainer = Color(0xFF16513B),
-    tertiary = Color(0xFFF4BF65),
-    error = Color(0xFFFFB4AB),
-    background = Color(0xFF101418),
-    surface = Color(0xFF171C20),
-    surfaceVariant = Color(0xFF283038),
-)
+private val LightColors =
+    lightColorScheme(
+        primary = Color(0xFF365F45),
+        onPrimary = Color.White,
+        secondary = Color(0xFF365F45),
+        secondaryContainer = Color(0xFFE6EFE7),
+        onSecondaryContainer = Color(0xFF17212B),
+        primaryContainer = Color(0xFFE6EFE7),
+        onPrimaryContainer = Color(0xFF17212B),
+        background = Color(0xFFF5F3ED),
+        surface = Color.White,
+        onSurface = Color(0xFF17212B),
+        surfaceTint = Color(0xFF365F45),
+        surfaceContainer = Color(0xFFEDF0E9),
+        surfaceContainerLow = Color(0xFFF3F5EF),
+        surfaceContainerHigh = Color(0xFFE7EBE2),
+        surfaceContainerHighest = Color(0xFFE0E6DC),
+        surfaceContainerLowest = Color.White,
+        onSurfaceVariant = Color(0xFF52616E),
+        outline = Color(0xFF7B8A98),
+        surfaceVariant = Color(0xFFE6EFE7),
+    )
+private val DarkColors =
+    darkColorScheme(
+        primary = Color(0xFFA5D6B0),
+        onPrimary = Color(0xFF153C23),
+        secondary = Color(0xFFA5D6B0),
+        secondaryContainer = Color(0xFF263D30),
+        onSecondaryContainer = Color(0xFFD6EFDE),
+        primaryContainer = Color(0xFF263D30),
+        onPrimaryContainer = Color(0xFFD6EFDE),
+        background = Color(0xFF111820),
+        surface = Color(0xFF1B2632),
+        onSurface = Color(0xFFF1F5F9),
+        surfaceTint = Color(0xFFA5D6B0),
+        surfaceContainer = Color(0xFF202B26),
+        surfaceContainerLow = Color(0xFF18231F),
+        surfaceContainerHigh = Color(0xFF29352E),
+        surfaceContainerHighest = Color(0xFF334037),
+        surfaceContainerLowest = Color(0xFF101814),
+        onSurfaceVariant = Color(0xFFBCC8D5),
+        outline = Color(0xFF65768A),
+        surfaceVariant = Color(0xFF293E54),
+    )
 
 @Composable
-fun UmaAgentTheme(content: @Composable () -> Unit) {
-    val context = LocalContext.current
-    val dark = isSystemInDarkTheme()
-    val colors = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && dark -> dynamicDarkColorScheme(context)
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> dynamicLightColorScheme(context)
-        dark -> DarkColors
-        else -> LightColors
-    }
+fun UmaAgentTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+    val view = LocalView.current
+    if (!view.isInEditMode)
+        SideEffect {
+            // 系统图标跟随应用的实际主题，而不是仅跟随系统主题，浅色背景不再显示白色状态图标。
+            (view.context as? Activity)?.window?.let { window ->
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !darkTheme
+                    isAppearanceLightNavigationBars = !darkTheme
+                }
+            }
+        }
     MaterialTheme(
-        colorScheme = colors,
+        colorScheme = if (darkTheme) DarkColors else LightColors,
+        typography =
+            Typography(
+                bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
+                bodyMedium = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
+                bodySmall = TextStyle(fontSize = 14.sp, lineHeight = 21.sp),
+            ),
+        shapes =
+            Shapes(
+                small = RoundedCornerShape(8.dp),
+                medium = RoundedCornerShape(12.dp),
+                large = RoundedCornerShape(20.dp),
+            ),
         content = content,
     )
 }

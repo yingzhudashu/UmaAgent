@@ -4,25 +4,33 @@
     "port": 3211,
     "stateDir": "/var/lib/uma-agent-staging/state",
     "workspaceRoots": ["/srv/uma-workspace-staging"],
-    "webOrigins": ["https://staging.robotclaw.site"],
+    "webOrigins": ["https://staging.agent.example.com"],
     "maxUploadBytes": 20971520
   },
   "auth": { "webSessionHours": 24 },
   "providers": {
     "openai": {
       "driver": "openai",
-      "baseUrl": "https://api.tcvps.cn/v1",
+      "baseUrl": "https://model.example.com/v1",
       "apiKeyEnv": "OPENAI_API_KEY"
     }
   },
   "imageGeneration": {
-    "baseUrl": "https://newapi.stuhelper.com/v1",
+    "baseUrl": "https://images.example.com/v1",
     "apiKeyEnv": "IMAGE_GENERATION_API_KEY"
   },
   "models": {
     "gpt-5.6-sol": {
       "provider": "openai",
       "name": "GPT-5.6 Sol",
+      "api": "openai-completions",
+      "contextWindow": 258000,
+      "maxOutputTokens": 128000,
+      "capabilities": { "tools": true, "vision": true, "reasoning": true, "structuredOutput": true }
+    },
+    "gpt-6-astra": {
+      "provider": "openai",
+      "name": "GPT-6 Astra",
       "api": "openai-completions",
       "contextWindow": 258000,
       "maxOutputTokens": 128000,

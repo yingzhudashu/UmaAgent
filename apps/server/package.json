@@ -6,8 +6,8 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "node --watch --import tsx src/main.ts",
-    "start": "node dist/main.js"
+    "dev": "node --max-semi-space-size=4 --watch --import tsx src/main.ts",
+    "start": "node --max-semi-space-size=4 dist/main.js"
   },
   "dependencies": {
     "@fastify/cors": "11.1.0",

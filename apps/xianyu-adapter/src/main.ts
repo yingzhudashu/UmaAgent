@@ -146,7 +146,7 @@ export function createConfiguredXianyuAdapter(
         "content-type": "application/json",
       };
       if (span) headers.traceparent = `00-${span.traceId}-${span.spanId}-01`;
-      const response = await fetch(`${state.core.serverUrl.replace(/\/$/, "")}/api/v15${path}`, {
+      const response = await fetch(`${state.core.serverUrl.replace(/\/$/, "")}/api/v16${path}`, {
         method: "POST",
         headers,
         body: JSON.stringify(body),

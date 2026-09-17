@@ -11,6 +11,7 @@ import type { UmaDatabase } from "./database.js";
 export class ResourceMonitor {
   private timer: NodeJS.Timeout | undefined;
   private readonly eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+  private lastMaintenance = 0;
   private previousCpu = process.cpuUsage();
   private previousResourceTime = performance.now();
 
@@ -75,6 +76,10 @@ export class ResourceMonitor {
         queuedRuns,
       };
       this.store.recordResource(snapshot);
+      if (snapshot.capturedAt - this.lastMaintenance >= 3_600_000) {
+        this.store.maintain(snapshot.capturedAt);
+        this.lastMaintenance = snapshot.capturedAt;
+      }
       this.eventLoopDelay.reset();
     } catch (error) {
       process.emitWarning(

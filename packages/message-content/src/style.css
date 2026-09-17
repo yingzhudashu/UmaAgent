@@ -1,0 +1,108 @@
+@import "katex/dist/katex.min.css";
+.uma-message {
+  font:
+    16px / 1.5 system-ui,
+    sans-serif;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.uma-message > :first-child {
+  margin-top: 0;
+}
+.uma-message > :last-child {
+  margin-bottom: 0;
+}
+.uma-message p,
+.uma-message ul,
+.uma-message ol,
+.uma-message blockquote {
+  margin: 0.65em 0;
+}
+.uma-message h1,
+.uma-message h2,
+.uma-message h3 {
+  line-height: 1.35;
+  margin: 1em 0 0.5em;
+}
+.uma-message h1 {
+  font-size: 1.35em;
+}
+.uma-message h2 {
+  font-size: 1.2em;
+}
+.uma-message h3 {
+  font-size: 1.1em;
+}
+.uma-message ul,
+.uma-message ol {
+  padding-inline-start: 1.5em;
+}
+.uma-message pre {
+  overflow-x: auto;
+  max-width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--message-code-bg, #eee);
+  white-space: pre;
+}
+.uma-message code {
+  font:
+    0.875em / 1.6 ui-monospace,
+    monospace;
+}
+.uma-message table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+  border-collapse: collapse;
+}
+.uma-message td,
+.uma-message th {
+  border: 1px solid var(--message-border, #aab5ad);
+  padding: 8px;
+  min-width: 60px;
+}
+.uma-message img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+.uma-message blockquote {
+  border-inline-start: 3px solid var(--message-border, #aab5ad);
+  padding-inline-start: 12px;
+}
+.uma-message a {
+  color: var(--message-link, #365f45);
+  text-underline-offset: 3px;
+}
+.uma-message .math-block {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.uma-message .katex-display {
+  margin: 0.5em 0;
+}
+.uma-message .code-copy {
+  font: inherit;
+  padding: 8px 12px;
+  min-height: 48px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--message-border, #aab5ad);
+  border-radius: 8px;
+}
+
+.uma-message img.image-failed {
+  min-height: 48px;
+  padding: 8px;
+  border: 1px dashed currentColor;
+}
+
+.uma-message .code-copy {
+  display: block;
+  margin-block: 8px;
+}
+.uma-message img {
+  display: block;
+}

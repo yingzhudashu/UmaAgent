@@ -80,13 +80,13 @@ jobs:
             wait_healthy uma-core
           }
           start_core
-          ci_token=$(docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v15/auth/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:'ci-persistence'})}).then(async r=>{if(!r.ok)throw new Error('CI registration failed');console.log((await r.json()).token)})")
-          docker exec -e UMA_CI_TOKEN="$ci_token" uma-core node -e "fetch('http://127.0.0.1:3210/api/v15/sessions',{method:'POST',headers:{authorization:'Bearer '+process.env.UMA_CI_TOKEN,'content-type':'application/json'},body:JSON.stringify({title:'CI persistence'})}).then(async r=>{if(!r.ok)throw new Error(await r.text())})"
+          ci_token=$(docker exec uma-core node -e "fetch('http://127.0.0.1:3210/api/v16/auth/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({label:'ci-persistence'})}).then(async r=>{if(!r.ok)throw new Error('CI registration failed');console.log((await r.json()).token)})")
+          docker exec -e UMA_CI_TOKEN="$ci_token" uma-core node -e "fetch('http://127.0.0.1:3210/api/v16/sessions',{method:'POST',headers:{authorization:'Bearer '+process.env.UMA_CI_TOKEN,'content-type':'application/json'},body:JSON.stringify({title:'CI persistence'})}).then(async r=>{if(!r.ok)throw new Error(await r.text())})"
 
           docker stop uma-core >/dev/null
           docker rm uma-core >/dev/null
           start_core
-          docker exec -e UMA_CI_TOKEN="$ci_token" uma-core node -e "fetch('http://127.0.0.1:3210/api/v15/sessions',{headers:{authorization:'Bearer '+process.env.UMA_CI_TOKEN}}).then(r=>r.json()).then(items=>{if(!items.some(item=>item.title==='CI persistence'))process.exit(1)})"
+          docker exec -e UMA_CI_TOKEN="$ci_token" uma-core node -e "fetch('http://127.0.0.1:3210/api/v16/sessions',{headers:{authorization:'Bearer '+process.env.UMA_CI_TOKEN}}).then(r=>r.json()).then(items=>{if(!items.some(item=>item.title==='CI persistence'))process.exit(1)})"
 
           docker create --name uma-core-lock --network "$network" \
             -e IMAGE_GENERATION_API_KEY=ci-placeholder-image-key \

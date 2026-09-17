@@ -10,7 +10,7 @@ const root = resolve(".");
 const stateDir = await mkdtemp(join(tmpdir(), `uma-eval-${process.pid}-`));
 const junitPath = join(stateDir, "eval-faux.xml");
 
-const server = spawn(process.execPath, ["scripts/faux-server.mjs"], {
+const server = spawn(process.execPath, ["--max-semi-space-size=4", "scripts/faux-server.mjs"], {
   cwd: root,
   env: {
     ...process.env,
@@ -33,7 +33,7 @@ async function waitUntilReady() {
   for (let attempt = 0; attempt < 120; attempt++) {
     if (server.exitCode !== null) throw new Error(`Faux Core exited early:\n${serverOutput}`);
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/api/v15/health/ready`);
+      const response = await fetch(`http://127.0.0.1:${port}/api/v16/health/ready`);
       if (response.ok) return;
     } catch {
       // Startup is still in progress.

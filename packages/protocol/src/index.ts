@@ -817,6 +817,7 @@ export const PublicConfigSchema = Strict({
 export type PublicConfig = Static<typeof PublicConfigSchema>;
 
 export const ResourceKindSchema = Type.Union([
+  Type.Literal("execution-settings"),
   Type.Literal("tasks"),
   Type.Literal("schedules"),
   Type.Literal("memory"),
@@ -920,7 +921,7 @@ export const ShortcutResponseSchema = Strict({
 export type ShortcutResponse = Static<typeof ShortcutResponseSchema>;
 
 /** Canonical read-only shortcut names shared by Web, CLI, and channel adapters. */
-export { AGENT_SHORTCUT_COMMANDS, type AgentShortcutCommand } from "./commands.js";
+export { AGENT_SHORTCUT_CATALOG, AGENT_SHORTCUT_COMMANDS, type AgentShortcutCommand } from "./commands.js";
 
 export const SkillInstallRequestSchema = Strict({
   source: Type.Union([Type.Literal("local"), Type.Literal("clawhub")]),
@@ -1164,3 +1165,7 @@ export interface ChannelAdapter {
   handleInbound(input: ChannelInboundMessage): Promise<void>;
   renderEvent(event: AgentEventEnvelope): Promise<void>;
 }
+
+/** 当前认证账号的执行策略，不接受客户端指定其他账号。 */
+export const ExecutionSettingsSchema = Strict({ autoApprove: Type.Boolean() });
+export type ExecutionSettings = Type.Static<typeof ExecutionSettingsSchema>;

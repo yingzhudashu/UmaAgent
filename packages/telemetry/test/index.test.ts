@@ -56,7 +56,9 @@ describe("TelemetryStore", () => {
       store.start(record);
       store.finish({ ...record, status: "ok", endedAt: 2, durationMs: 1, events: [] });
     }
+    await store.flush();
     const first = store.listSpans({ runId: "own-run", scopeToRun: true, limit: 1 });
+    await store.flush();
     const last = store.listSpans({ runId: "own-run", scopeToRun: true, limit: 1, offset: 1 });
     await store.close();
     expect(first.spans.map((span) => span.spanId)).toEqual(["own"]);
@@ -75,6 +77,7 @@ describe("TelemetryStore", () => {
     const span = new TraceService(store, "test").startRoot("run-failure", "session-failure");
     const result = await span.startSpan({ name: "business" }, async () => "business-result");
     span.finish({ status: "ok" });
+    await store.flush();
     const summary = store.summarize(0, Date.now());
     await store.close();
     expect(result).toBe("business-result");
@@ -110,6 +113,7 @@ describe("TelemetryStore", () => {
     expect(span.traceId).toBe("4bf92f3577b34da6a3ce929d0e0e4736");
     expect(span.spanId).toMatch(/^[0-9a-f]{16}$/);
     span.finish({ status: "ok" });
+    await store.flush();
     expect(store.listSpans({ runId: "run-1" }).spans[0]).toMatchObject({
       traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
       parentSpanId: "00f067aa0ba902b7",
@@ -138,6 +142,7 @@ describe("TelemetryStore", () => {
       activeRuns: 1,
       queuedRuns: 2,
     });
+    await store.flush();
     expect(store.listResources(0, 200, 10)).toMatchObject([
       { id: "sample-1", walBytes: 64, queuedRuns: 2, sampleDurationMs: 1_000, cpuPercent: 0.0003 },
     ]);
@@ -179,6 +184,7 @@ describe("TelemetryStore", () => {
         events: [],
       });
     }
+    await store.flush();
     expect(
       store
         .listSpans({ runId: "run-1" })
@@ -218,6 +224,7 @@ describe("TelemetryStore", () => {
       attributes: { authorization: "secret", safe: "value" },
       events: [{ name: "checkpoint", occurredAt: 15, attributes: { token: "secret", safe: "event" } }],
     });
+    await store.flush();
     const page = store.listSpans({ runId: "run-1", limit: 1 });
     expect(page.hasMore).toBe(false);
     expect(page.spans[0]).toMatchObject({
@@ -231,6 +238,7 @@ describe("TelemetryStore", () => {
         },
       ],
     });
+    await store.flush();
     expect(store.summarize(0, 100)).toEqual({
       spans: 1,
       incomplete: 0,
@@ -254,6 +262,16 @@ describe("TelemetryStore", () => {
       "request failed: Authorization: [REDACTED]; cookie: [REDACTED]; api_key=[REDACTED] prompt=[REDACTED] [REDACTED_URL] [REDACTED]",
     );
     expect(redactErrorMessage("ECONNRESET while calling provider")).toBe("ECONNRESET while calling provider");
+    for (const payload of [
+      'body=["private phrase", {"nested": ["more private"]}]',
+      '"body":{"nested":{"value":"private"},"tail":"also private"}',
+      'payload error prompt=[\n"private phrase",\n["truncated private"',
+    ]) {
+      const redacted = redactErrorMessage(`ECONNRESET ${payload}`);
+      expect(redacted).toContain("ECONNRESET");
+      expect(redacted).toContain("[REDACTED]");
+      expect(redacted).not.toContain("private");
+    }
 
     const root = await mkdtemp(join(tmpdir(), "uma-telemetry-errors-"));
     roots.push(root);
@@ -282,8 +300,10 @@ describe("TelemetryStore", () => {
       errorMessage: "Bearer abc.def; api_key=secret-value; ECONNRESET",
       events: [],
     });
+    await store.flush();
     const span = store.listSpans({ traceId: "trace-error" }).spans[0];
     expect(span?.errorMessage).toBe("[REDACTED]; api_key=[REDACTED]; ECONNRESET");
+    await store.flush();
     const stored = store.db.prepare("SELECT error_message FROM spans WHERE span_id=?").get("span-error") as {
       error_message?: unknown;
     };
@@ -304,8 +324,11 @@ describe("TelemetryStore", () => {
     });
     span.addEvent("request.failed", { detail: "Bearer private-event-value" });
     span.finish({ status: "ok" });
+    await store.flush();
     const record = store.listSpans({ runId: "run-values" }).spans[0];
+    await store.flush();
     const storedAttributes = JSON.stringify(store.db.prepare("SELECT attributes_json FROM spans").all());
+    await store.flush();
     const storedEvents = JSON.stringify(store.db.prepare("SELECT attributes_json FROM span_events").all());
     await store.close();
     expect(record?.attributes).toMatchObject({
@@ -339,7 +362,9 @@ describe("TelemetryStore", () => {
     store.start(record);
     store.finish(record);
     store.finish(record);
+    await store.flush();
     expect(store.db.prepare("SELECT COUNT(*) AS count FROM span_events").get()).toEqual({ count: 1 });
+    await store.flush();
     expect(store.summarize(0, 10).spans).toBe(1);
     await store.close();
   });
@@ -379,6 +404,7 @@ describe("TelemetryStore", () => {
         events: [],
       });
     }
+    await store.flush();
     expect(store.summarize(0, 10)).toMatchObject({
       latencyMs: { p50: 5, p95: 9, p99: 9 },
       stageLatencyMs: {
@@ -436,7 +462,9 @@ describe("TelemetryStore", () => {
       events: [],
     });
     store.maintain(100 * 86_400_000);
+    await store.flush();
     expect(store.listSpans({ traceId: "trace-old" }).spans).toEqual([]);
+    await store.flush();
     expect(
       store.db.prepare("SELECT count,total_duration_ms FROM span_aggregates WHERE name='old'").get(),
     ).toEqual({ count: 1, total_duration_ms: 1 });

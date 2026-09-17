@@ -60,17 +60,22 @@ import {
   toScheduledTask,
   toScheduledTaskRun,
 } from "./database-utils.js";
+import { ExecutionPolicyRepository } from "./execution-policy-repository.js";
 import { MessageRepository } from "./message-repository.js";
+import { ResponseRepository } from "./response-repository.js";
 import { findRestartRecoverableRuns, SERVER_RESTART_ERROR } from "./run-recovery.js";
 import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
+import { prepareStatement } from "./sql-statements.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 24;
+const SCHEMA_VERSION = 25;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   readonly stateDir: string;
   private readonly auditEvaluations: AuditEvaluationRepository;
+  private readonly executionPolicy: ExecutionPolicyRepository;
+  private readonly responses: ResponseRepository;
   private readonly messages: MessageRepository;
   private readonly sessions: SessionRepository;
   private transactionDepth = 0;
@@ -79,17 +84,19 @@ export class UmaDatabase {
     this.stateDir = stateDir;
     mkdirSync(stateDir, { recursive: true });
     this.db = new DatabaseSync(join(stateDir, "state.db"));
+    this.executionPolicy = new ExecutionPolicyRepository(this.db);
+    this.responses = new ResponseRepository(this.db);
     this.messages = new MessageRepository(this.db);
     this.sessions = new SessionRepository(this.db);
     // 两个库各预留约 1.4 MiB 的 WAL；为单次事务越过 checkpoint 阈值留下余量。
     this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA wal_autocheckpoint = 350;");
-    const version = integer(row(this.db.prepare("PRAGMA user_version"))?.user_version);
+    const version = integer(row(prepareStatement(this.db, "PRAGMA user_version"))?.user_version);
     if (version === 0) {
       this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
     } else if (version !== SCHEMA_VERSION) {
       this.db.close();
       throw new Error(
-        `Unsupported database schema ${version}; expected ${SCHEMA_VERSION}. Delete state.db and start with schema ${SCHEMA_VERSION}.`,
+        `Unsupported database schema ${version}; expected ${SCHEMA_VERSION}. Run the explicit offline upgrade tool after backing up the database.`,
       );
     }
     validateSchema(this.db);
@@ -97,27 +104,27 @@ export class UmaDatabase {
       this.withTransaction(operation),
     );
     const interrupted = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id,session_id FROM runs WHERE status IN ('queued','preflight','running','verifying')",
       ),
     );
     this.withTransaction(() => {
       const now = Date.now();
-      this.db
-        .prepare(
-          "UPDATE runs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('queued','preflight','running','verifying')",
-        )
-        .run(SERVER_RESTART_ERROR, now);
-      this.db
-        .prepare("UPDATE messages SET status = 'cancelled', updated_at = ? WHERE status = 'streaming'")
-        .run(now);
+      prepareStatement(
+        this.db,
+        "UPDATE runs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('queued','preflight','running','verifying')",
+      ).run(SERVER_RESTART_ERROR, now);
+      prepareStatement(
+        this.db,
+        "UPDATE messages SET status = 'cancelled', updated_at = ? WHERE status = 'streaming'",
+      ).run(now);
       this.markUncertainActions();
       this.markActiveBackgroundTasksInterrupted();
-      this.db
-        .prepare(
-          "UPDATE model_calls SET status='abandoned',error='Server restarted during model request',updated_at=? WHERE status='started'",
-        )
-        .run(now);
+      prepareStatement(
+        this.db,
+        "UPDATE model_calls SET status='abandoned',error='Server restarted during model request',updated_at=? WHERE status='started'",
+      ).run(now);
       for (const value of interrupted) {
         const runId = text(value.id);
         const response = this.responseForRun(runId);
@@ -138,7 +145,7 @@ export class UmaDatabase {
    */
   isReady(): boolean {
     try {
-      this.db.prepare("SELECT 1").get();
+      prepareStatement(this.db, "SELECT 1").get();
       return true;
     } catch {
       return false;
@@ -170,14 +177,14 @@ export class UmaDatabase {
   }
 
   sessionOwner(id: string): string | undefined {
-    const value = row(this.db.prepare("SELECT user_id FROM sessions WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT user_id FROM sessions WHERE id=?"), id);
     return value?.user_id ? text(value.user_id) : undefined;
   }
 
   isChannelSession(id: string, channel = "xianyu"): boolean {
     return Boolean(
       row(
-        this.db.prepare("SELECT 1 AS found FROM channel_sessions WHERE session_id=? AND channel=?"),
+        prepareStatement(this.db, "SELECT 1 AS found FROM channel_sessions WHERE session_id=? AND channel=?"),
         id,
         channel,
       ),
@@ -185,33 +192,34 @@ export class UmaDatabase {
   }
 
   responseSession(id: string): string | undefined {
-    const value = row(this.db.prepare("SELECT session_id FROM responses WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT session_id FROM responses WHERE id=?"), id);
     return value ? text(value.session_id) : undefined;
   }
 
   runSession(id: string): string | undefined {
-    const value = row(this.db.prepare("SELECT session_id FROM runs WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT session_id FROM runs WHERE id=?"), id);
     return value ? text(value.session_id) : undefined;
   }
 
   approvalSession(id: string): string | undefined {
-    const value = row(this.db.prepare("SELECT session_id FROM approvals WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT session_id FROM approvals WHERE id=?"), id);
     return value ? text(value.session_id) : undefined;
   }
 
   attachmentSession(id: string): string | undefined {
-    const value = row(this.db.prepare("SELECT session_id FROM attachments WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT session_id FROM attachments WHERE id=?"), id);
     return value?.session_id ? text(value.session_id) : undefined;
   }
 
   channelSession(id: string): ChannelSessionMetadata | undefined {
-    const value = row(this.db.prepare("SELECT * FROM channel_sessions WHERE session_id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM channel_sessions WHERE session_id=?"), id);
     return value ? this.toChannelSession(value) : undefined;
   }
 
   listChannelSessions(channel = "xianyu"): Array<{ session: Session; metadata: ChannelSessionMetadata }> {
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT s.*,c.channel,c.tenant_id,c.conversation_id,c.thread_id,c.kind,c.display_name,c.external_user_id,c.item_id,c.unread_count,c.last_inbound_at,c.created_at AS channel_created_at,c.updated_at AS channel_updated_at FROM channel_sessions c JOIN sessions s ON s.id=c.session_id WHERE c.channel=? ORDER BY c.updated_at DESC",
       ),
       channel,
@@ -232,28 +240,28 @@ export class UmaDatabase {
     itemId?: string;
   }): ChannelSessionMetadata {
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO channel_sessions(session_id,channel,tenant_id,conversation_id,thread_id,kind,display_name,external_user_id,item_id,created_at,updated_at) VALUES(?,'xianyu',?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        input.sessionId,
-        input.tenantId,
-        input.conversationId,
-        input.threadId ?? "",
-        input.kind,
-        input.displayName ?? null,
-        input.externalUserId ?? null,
-        input.itemId ?? null,
-        now,
-        now,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO channel_sessions(session_id,channel,tenant_id,conversation_id,thread_id,kind,display_name,external_user_id,item_id,created_at,updated_at) VALUES(?,'xianyu',?,?,?,?,?,?,?,?,?)",
+    ).run(
+      input.sessionId,
+      input.tenantId,
+      input.conversationId,
+      input.threadId ?? "",
+      input.kind,
+      input.displayName ?? null,
+      input.externalUserId ?? null,
+      input.itemId ?? null,
+      now,
+      now,
+    );
     return this.channelSession(input.sessionId) as ChannelSessionMetadata;
   }
 
   findChannelSession(tenantId: string, conversationId: string, threadId = ""): string | undefined {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT session_id FROM channel_sessions WHERE channel='xianyu' AND tenant_id=? AND conversation_id=? AND thread_id=?",
       ),
       tenantId,
@@ -273,41 +281,40 @@ export class UmaDatabase {
     const current = this.channelSession(input.sessionId);
     if (!current) throw new Error("Channel session not found");
     const now = Date.now();
-    this.db
-      .prepare(
-        "UPDATE channel_sessions SET display_name=?,external_user_id=?,item_id=?,unread_count=unread_count+?,last_inbound_at=?,updated_at=? WHERE session_id=?",
-      )
-      .run(
-        input.displayName ?? current.displayName ?? null,
-        input.externalUserId ?? current.externalUserId ?? null,
-        input.itemId ?? current.itemId ?? null,
-        input.inbound ? 1 : 0,
-        input.inbound ? now : (current.lastInboundAt ?? null),
-        now,
-        input.sessionId,
-      );
+    prepareStatement(
+      this.db,
+      "UPDATE channel_sessions SET display_name=?,external_user_id=?,item_id=?,unread_count=unread_count+?,last_inbound_at=?,updated_at=? WHERE session_id=?",
+    ).run(
+      input.displayName ?? current.displayName ?? null,
+      input.externalUserId ?? current.externalUserId ?? null,
+      input.itemId ?? current.itemId ?? null,
+      input.inbound ? 1 : 0,
+      input.inbound ? now : (current.lastInboundAt ?? null),
+      now,
+      input.sessionId,
+    );
     return this.channelSession(input.sessionId) as ChannelSessionMetadata;
   }
 
   markChannelSessionRead(sessionId: string): void {
-    this.db
-      .prepare("UPDATE channel_sessions SET unread_count=0,updated_at=? WHERE session_id=?")
-      .run(Date.now(), sessionId);
+    prepareStatement(
+      this.db,
+      "UPDATE channel_sessions SET unread_count=0,updated_at=? WHERE session_id=?",
+    ).run(Date.now(), sessionId);
   }
 
   xianyuAutoReplyEnabled(): boolean {
     const value = row(
-      this.db.prepare("SELECT auto_reply_enabled FROM channel_settings WHERE channel='xianyu'"),
+      prepareStatement(this.db, "SELECT auto_reply_enabled FROM channel_settings WHERE channel='xianyu'"),
     );
     return integer(value?.auto_reply_enabled) === 1;
   }
 
   setXianyuAutoReply(enabled: boolean): boolean {
-    this.db
-      .prepare(
-        "INSERT INTO channel_settings(channel,auto_reply_enabled,updated_at) VALUES('xianyu',?,?) ON CONFLICT(channel) DO UPDATE SET auto_reply_enabled=excluded.auto_reply_enabled,updated_at=excluded.updated_at",
-      )
-      .run(enabled ? 1 : 0, Date.now());
+    prepareStatement(
+      this.db,
+      "INSERT INTO channel_settings(channel,auto_reply_enabled,updated_at) VALUES('xianyu',?,?) ON CONFLICT(channel) DO UPDATE SET auto_reply_enabled=excluded.auto_reply_enabled,updated_at=excluded.updated_at",
+    ).run(enabled ? 1 : 0, Date.now());
     return this.xianyuAutoReplyEnabled();
   }
 
@@ -319,35 +326,33 @@ export class UmaDatabase {
     status: "pending" | "draft" | "delivered" | "failed";
   }): { created: boolean; status: string } {
     const existing = row(
-      this.db.prepare("SELECT status FROM channel_deliveries WHERE idempotency_key=?"),
+      prepareStatement(this.db, "SELECT status FROM channel_deliveries WHERE idempotency_key=?"),
       input.idempotencyKey,
     );
     if (existing) return { created: false, status: text(existing.status) };
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO channel_deliveries(id,channel,direction,idempotency_key,session_id,message_id,status,created_at,updated_at,delivered_at) VALUES(?,'xianyu',?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        randomUUID(),
-        input.direction,
-        input.idempotencyKey,
-        input.sessionId,
-        input.messageId ?? null,
-        input.status,
-        now,
-        now,
-        input.status === "delivered" ? now : null,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO channel_deliveries(id,channel,direction,idempotency_key,session_id,message_id,status,created_at,updated_at,delivered_at) VALUES(?,'xianyu',?,?,?,?,?,?,?,?)",
+    ).run(
+      randomUUID(),
+      input.direction,
+      input.idempotencyKey,
+      input.sessionId,
+      input.messageId ?? null,
+      input.status,
+      now,
+      now,
+      input.status === "delivered" ? now : null,
+    );
     return { created: true, status: input.status };
   }
 
   attachChannelDeliveryMessage(idempotencyKey: string, messageId: string): void {
-    const result = this.db
-      .prepare(
-        "UPDATE channel_deliveries SET message_id=?,updated_at=? WHERE idempotency_key=? AND message_id IS NULL",
-      )
-      .run(messageId, Date.now(), idempotencyKey);
+    const result = prepareStatement(
+      this.db,
+      "UPDATE channel_deliveries SET message_id=?,updated_at=? WHERE idempotency_key=? AND message_id IS NULL",
+    ).run(messageId, Date.now(), idempotencyKey);
     if (result.changes === 0) throw new Error("Channel delivery not found or already attached");
   }
 
@@ -361,7 +366,8 @@ export class UmaDatabase {
       }
     | undefined {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id,session_id,message_id,direction,status FROM channel_deliveries WHERE idempotency_key=?",
       ),
       idempotencyKey,
@@ -380,7 +386,8 @@ export class UmaDatabase {
     messageId: string,
   ): { id: string; sessionId: string; status: string } | undefined {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id,session_id,status FROM channel_deliveries WHERE channel='xianyu' AND direction='outbound' AND message_id=?",
       ),
       messageId,
@@ -392,7 +399,8 @@ export class UmaDatabase {
 
   listChannelDraftMessageIds(sessionId: string): string[] {
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT message_id FROM channel_deliveries WHERE session_id=? AND direction='outbound' AND status='draft' AND message_id IS NOT NULL ORDER BY created_at",
       ),
       sessionId,
@@ -405,11 +413,10 @@ export class UmaDatabase {
     error?: string,
   ): void {
     const now = Date.now();
-    const result = this.db
-      .prepare(
-        "UPDATE channel_deliveries SET status=?,error=?,updated_at=?,delivered_at=? WHERE channel='xianyu' AND direction='outbound' AND message_id=?",
-      )
-      .run(status, error ?? null, now, status === "delivered" ? now : null, messageId);
+    const result = prepareStatement(
+      this.db,
+      "UPDATE channel_deliveries SET status=?,error=?,updated_at=?,delivered_at=? WHERE channel='xianyu' AND direction='outbound' AND message_id=?",
+    ).run(status, error ?? null, now, status === "delivered" ? now : null, messageId);
     if (result.changes === 0) throw new Error("Channel delivery not found");
   }
 
@@ -419,11 +426,10 @@ export class UmaDatabase {
     error?: string,
   ): void {
     const now = Date.now();
-    const result = this.db
-      .prepare(
-        "UPDATE channel_deliveries SET status=?,error=?,updated_at=?,delivered_at=? WHERE idempotency_key=?",
-      )
-      .run(status, error ?? null, now, status === "delivered" ? now : null, idempotencyKey);
+    const result = prepareStatement(
+      this.db,
+      "UPDATE channel_deliveries SET status=?,error=?,updated_at=?,delivered_at=? WHERE idempotency_key=?",
+    ).run(status, error ?? null, now, status === "delivered" ? now : null, idempotencyKey);
     if (result.changes === 0) throw new Error("Channel delivery not found");
   }
 
@@ -447,7 +453,10 @@ export class UmaDatabase {
 
   runOwner(id: string): string | undefined {
     const value = row(
-      this.db.prepare("SELECT s.user_id FROM runs r JOIN sessions s ON s.id=r.session_id WHERE r.id=?"),
+      prepareStatement(
+        this.db,
+        "SELECT s.user_id FROM runs r JOIN sessions s ON s.id=r.session_id WHERE r.id=?",
+      ),
       id,
     );
     return value?.user_id ? text(value.user_id) : undefined;
@@ -455,7 +464,10 @@ export class UmaDatabase {
 
   messageOwner(id: string): string | undefined {
     const value = row(
-      this.db.prepare("SELECT s.user_id FROM messages m JOIN sessions s ON s.id=m.session_id WHERE m.id=?"),
+      prepareStatement(
+        this.db,
+        "SELECT s.user_id FROM messages m JOIN sessions s ON s.id=m.session_id WHERE m.id=?",
+      ),
       id,
     );
     return value?.user_id ? text(value.user_id) : undefined;
@@ -463,7 +475,8 @@ export class UmaDatabase {
 
   taskOwner(id: string): string | undefined {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT s.user_id FROM background_tasks t JOIN sessions s ON s.id=t.session_id WHERE t.id=?",
       ),
       id,
@@ -473,7 +486,8 @@ export class UmaDatabase {
 
   attachmentOwner(id: string): string | undefined {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT COALESCE(a.owner_user_id,s.user_id) AS user_id FROM attachments a LEFT JOIN sessions s ON s.id=a.session_id WHERE a.id=?",
       ),
       id,
@@ -483,7 +497,10 @@ export class UmaDatabase {
 
   approvalOwner(id: string): string | undefined {
     const value = row(
-      this.db.prepare("SELECT s.user_id FROM approvals a JOIN sessions s ON s.id=a.session_id WHERE a.id=?"),
+      prepareStatement(
+        this.db,
+        "SELECT s.user_id FROM approvals a JOIN sessions s ON s.id=a.session_id WHERE a.id=?",
+      ),
       id,
     );
     return value?.user_id ? text(value.user_id) : undefined;
@@ -492,18 +509,19 @@ export class UmaDatabase {
   createUser(role: "admin" | "user" = "user"): { id: string; role: "admin" | "user"; status: "active" } {
     const id = randomUUID();
     const now = Date.now();
-    this.db
-      .prepare("INSERT INTO users(id,role,status,created_at,updated_at) VALUES(?,?,?,?,?)")
-      .run(id, role, "active", now, now);
+    prepareStatement(
+      this.db,
+      "INSERT INTO users(id,role,status,created_at,updated_at) VALUES(?,?,?,?,?)",
+    ).run(id, role, "active", now, now);
     return { id, role, status: "active" };
   }
 
   countUsers(): number {
-    return integer(row(this.db.prepare("SELECT COUNT(*) AS count FROM users"))?.count);
+    return integer(row(prepareStatement(this.db, "SELECT COUNT(*) AS count FROM users"))?.count);
   }
 
   getUser(id: string): { id: string; role: "admin" | "user"; status: "active" | "disabled" } | undefined {
-    const value = row(this.db.prepare("SELECT id,role,status FROM users WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT id,role,status FROM users WHERE id=?"), id);
     if (!value) return undefined;
     return {
       id: text(value.id),
@@ -512,9 +530,22 @@ export class UmaDatabase {
     };
   }
 
+  pendingExecutionPermissions(userId: string): { approvalIds: string[]; planRunIds: string[] } {
+    return this.executionPolicy.pendingExecutionPermissions(userId);
+  }
+
+  getExecutionSettings(userId: string): { autoApprove: boolean } {
+    return this.executionPolicy.getExecutionSettings(userId);
+  }
+
+  setExecutionSettings(userId: string, autoApprove: boolean): { autoApprove: boolean } {
+    // 策略修改与审计必须同一事务提交，不能出现无审计的授权。
+    return this.withTransaction(() => this.executionPolicy.setExecutionSettings(userId, autoApprove));
+  }
+
   touchUserLogin(id: string): void {
     const now = Date.now();
-    this.db.prepare("UPDATE users SET last_login_at=?,updated_at=? WHERE id=?").run(now, now, id);
+    prepareStatement(this.db, "UPDATE users SET last_login_at=?,updated_at=? WHERE id=?").run(now, now, id);
   }
 
   putAuthToken(input: {
@@ -524,11 +555,10 @@ export class UmaDatabase {
     label: string;
     scopes: string[];
   }): void {
-    this.db
-      .prepare(
-        "INSERT INTO auth_tokens(id,user_id,token_hash,label,scopes_json,expires_at,created_at) VALUES(?,?,?,?,?,NULL,?)",
-      )
-      .run(input.id, input.userId, input.tokenHash, input.label, JSON.stringify(input.scopes), Date.now());
+    prepareStatement(
+      this.db,
+      "INSERT INTO auth_tokens(id,user_id,token_hash,label,scopes_json,expires_at,created_at) VALUES(?,?,?,?,?,NULL,?)",
+    ).run(input.id, input.userId, input.tokenHash, input.label, JSON.stringify(input.scopes), Date.now());
   }
 
   findAuthToken(
@@ -536,8 +566,9 @@ export class UmaDatabase {
     tokenHash: string,
   ): { id: string; userId: string; role: "admin" | "user"; scopes: string[] } | undefined {
     const value = row(
-      this.db.prepare(
-        "SELECT t.id,t.user_id,u.role,u.status,t.scopes_json,t.expires_at,t.revoked_at FROM auth_tokens t JOIN users u ON u.id=t.user_id WHERE t.id=? AND t.token_hash=?",
+      prepareStatement(
+        this.db,
+        "SELECT t.id,t.user_id,u.role,u.status,t.scopes_json,t.expires_at,t.revoked_at,t.last_used_at FROM auth_tokens t JOIN users u ON u.id=t.user_id WHERE t.id=? AND t.token_hash=?",
       ),
       id,
       tokenHash,
@@ -545,10 +576,15 @@ export class UmaDatabase {
     if (
       !value ||
       text(value.status) !== "active" ||
-      (value.revoked_at !== null && value.revoked_at !== undefined)
+      (value.revoked_at !== null && value.revoked_at !== undefined) ||
+      (value.expires_at !== null && value.expires_at !== undefined && integer(value.expires_at) <= Date.now())
     )
       return undefined;
-    this.db.prepare("UPDATE auth_tokens SET last_used_at=? WHERE id=?").run(Date.now(), id);
+    // 最近使用时间是展示元数据，精度为一分钟；鉴权结果仍逐请求读取，撤销立即生效。
+    // 避免每次事件分页/运行轮询都触发一次 FULL synchronous 提交。
+    const now = Date.now();
+    if (value.last_used_at === null || now - integer(value.last_used_at) >= 60_000)
+      prepareStatement(this.db, "UPDATE auth_tokens SET last_used_at=? WHERE id=?").run(now, id);
     return {
       id: text(value.id),
       userId: text(value.user_id),
@@ -567,7 +603,8 @@ export class UmaDatabase {
     lastUsedAt?: number;
   }> {
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id,label,scopes_json,expires_at,revoked_at,created_at,last_used_at FROM auth_tokens WHERE user_id=? ORDER BY created_at DESC",
       ),
       userId,
@@ -586,9 +623,10 @@ export class UmaDatabase {
 
   revokeAuthToken(userId: string, id: string): boolean {
     return (
-      this.db
-        .prepare("UPDATE auth_tokens SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL")
-        .run(Date.now(), id, userId).changes > 0
+      prepareStatement(
+        this.db,
+        "UPDATE auth_tokens SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL",
+      ).run(Date.now(), id, userId).changes > 0
     );
   }
 
@@ -600,19 +638,18 @@ export class UmaDatabase {
     codeChallenge: string;
     expiresAt: number;
   }): void {
-    this.db
-      .prepare(
-        "INSERT INTO oauth_authorization_codes(code,user_id,client_id,redirect_uri,code_challenge,expires_at,created_at) VALUES(?,?,?,?,?,?,?)",
-      )
-      .run(
-        input.code,
-        input.userId,
-        input.clientId,
-        input.redirectUri,
-        input.codeChallenge,
-        input.expiresAt,
-        Date.now(),
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO oauth_authorization_codes(code,user_id,client_id,redirect_uri,code_challenge,expires_at,created_at) VALUES(?,?,?,?,?,?,?)",
+    ).run(
+      input.code,
+      input.userId,
+      input.clientId,
+      input.redirectUri,
+      input.codeChallenge,
+      input.expiresAt,
+      Date.now(),
+    );
   }
 
   consumeAuthorizationCode(code: string):
@@ -624,8 +661,11 @@ export class UmaDatabase {
         expiresAt: number;
       }
     | undefined {
-    const value = row(this.db.prepare("SELECT * FROM oauth_authorization_codes WHERE code=?"), code);
-    this.db.prepare("DELETE FROM oauth_authorization_codes WHERE code=?").run(code);
+    const value = row(
+      prepareStatement(this.db, "SELECT * FROM oauth_authorization_codes WHERE code=?"),
+      code,
+    );
+    prepareStatement(this.db, "DELETE FROM oauth_authorization_codes WHERE code=?").run(code);
     if (!value) return undefined;
     return {
       userId: text(value.user_id),
@@ -649,18 +689,17 @@ export class UmaDatabase {
     const session = this.sessions.create(input);
     const branchId = randomUUID();
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO conversation_branches(id,session_id,name,created_at,updated_at) VALUES(?,?,?,?,?)",
-      )
-      .run(branchId, session.id, "主分支", now, now);
-    this.db.prepare("UPDATE sessions SET active_branch_id=? WHERE id=?").run(branchId, session.id);
+    prepareStatement(
+      this.db,
+      "INSERT INTO conversation_branches(id,session_id,name,created_at,updated_at) VALUES(?,?,?,?,?)",
+    ).run(branchId, session.id, "主分支", now, now);
+    prepareStatement(this.db, "UPDATE sessions SET active_branch_id=? WHERE id=?").run(branchId, session.id);
     return this.getSession(session.id);
   }
 
   listBranches(sessionId: string) {
     return rows(
-      this.db.prepare("SELECT * FROM conversation_branches WHERE session_id=? ORDER BY created_at"),
+      prepareStatement(this.db, "SELECT * FROM conversation_branches WHERE session_id=? ORDER BY created_at"),
       sessionId,
     ).map((value) => ({
       id: text(value.id),
@@ -697,7 +736,8 @@ export class UmaDatabase {
 
   private allocateMessageSequence(sessionId: string): number {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "UPDATE sessions SET next_sequence=next_sequence+1, updated_at=? WHERE id=? RETURNING next_sequence-1 AS sequence",
       ),
       Date.now(),
@@ -709,7 +749,8 @@ export class UmaDatabase {
 
   allocateEventSequence(sessionId: string): number {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "UPDATE sessions SET next_event_sequence=next_event_sequence+1 WHERE id=? RETURNING next_event_sequence-1 AS sequence",
       ),
       sessionId,
@@ -734,29 +775,29 @@ export class UmaDatabase {
     const id = input.id ?? randomUUID();
     const now = Date.now();
     const sequence = this.allocateMessageSequence(input.sessionId);
-    this.db
-      .prepare(
-        "INSERT INTO messages(id,session_id,run_id,sequence,role,status,name,content,payload_json,source_json,parent_message_id,attachment_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.sessionId,
-        input.runId ?? null,
-        sequence,
-        input.role,
-        input.status,
-        input.name ?? null,
-        input.content,
-        input.payload ? JSON.stringify(input.payload) : null,
-        input.source ? JSON.stringify(input.source) : null,
-        input.parentMessageId ?? null,
-        JSON.stringify(input.attachmentIds ?? []),
-        now,
-        now,
-      );
-    this.db
-      .prepare("INSERT INTO history_fts(message_id,session_id,sequence,content) VALUES(?,?,?,?)")
-      .run(id, input.sessionId, sequence, input.content);
+    prepareStatement(
+      this.db,
+      "INSERT INTO messages(id,session_id,run_id,sequence,role,status,name,content,payload_json,source_json,parent_message_id,attachment_ids_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.sessionId,
+      input.runId ?? null,
+      sequence,
+      input.role,
+      input.status,
+      input.name ?? null,
+      input.content,
+      input.payload ? JSON.stringify(input.payload) : null,
+      input.source ? JSON.stringify(input.source) : null,
+      input.parentMessageId ?? null,
+      JSON.stringify(input.attachmentIds ?? []),
+      now,
+      now,
+    );
+    prepareStatement(
+      this.db,
+      "INSERT INTO history_fts(message_id,session_id,sequence,content) VALUES(?,?,?,?)",
+    ).run(id, input.sessionId, sequence, input.content);
     return this.messages.getMessage(id);
   }
 
@@ -764,26 +805,28 @@ export class UmaDatabase {
     id: string,
     patch: { content?: string; status?: TranscriptItem["status"]; payload?: AgentMessage },
   ): TranscriptItem {
-    const current = row(this.db.prepare("SELECT * FROM messages WHERE id=?"), id);
+    const current = row(prepareStatement(this.db, "SELECT * FROM messages WHERE id=?"), id);
     if (!current) throw new Error(`Message not found: ${id}`);
-    this.db
-      .prepare("UPDATE messages SET content=?, status=?, payload_json=?, updated_at=? WHERE id=?")
-      .run(
-        patch.content ?? text(current.content),
-        patch.status ?? text(current.status),
-        patch.payload
-          ? JSON.stringify(patch.payload)
-          : current.payload_json
-            ? text(current.payload_json)
-            : null,
-        Date.now(),
-        id,
-      );
+    prepareStatement(
+      this.db,
+      "UPDATE messages SET content=?, status=?, payload_json=?, updated_at=? WHERE id=?",
+    ).run(
+      patch.content ?? text(current.content),
+      patch.status ?? text(current.status),
+      patch.payload
+        ? JSON.stringify(patch.payload)
+        : current.payload_json
+          ? text(current.payload_json)
+          : null,
+      Date.now(),
+      id,
+    );
     if (patch.content !== undefined) {
-      this.db.prepare("DELETE FROM history_fts WHERE message_id=?").run(id);
-      this.db
-        .prepare("INSERT INTO history_fts(message_id,session_id,sequence,content) VALUES(?,?,?,?)")
-        .run(id, text(current.session_id), integer(current.sequence), patch.content);
+      prepareStatement(this.db, "DELETE FROM history_fts WHERE message_id=?").run(id);
+      prepareStatement(
+        this.db,
+        "INSERT INTO history_fts(message_id,session_id,sequence,content) VALUES(?,?,?,?)",
+      ).run(id, text(current.session_id), integer(current.sequence), patch.content);
     }
     return this.messages.getMessage(id);
   }
@@ -792,8 +835,12 @@ export class UmaDatabase {
     return this.messages.findMessageOwner(id);
   }
 
-  listMessages(sessionId: string): TranscriptItem[] {
-    return this.messages.listMessages(sessionId);
+  listMessages(sessionId: string, runId?: string): TranscriptItem[] {
+    return this.messages.listMessages(sessionId, runId);
+  }
+
+  rollupContext(sessionId: string) {
+    return this.messages.rollupContext(sessionId);
   }
 
   listHistory(sessionId: string, beforeSequence?: number, limit = 100): SessionHistoryPage {
@@ -813,7 +860,10 @@ export class UmaDatabase {
   }
 
   getContextSummary(sessionId: string): ContextSummary | undefined {
-    const value = row(this.db.prepare("SELECT * FROM context_summaries WHERE session_id=?"), sessionId);
+    const value = row(
+      prepareStatement(this.db, "SELECT * FROM context_summaries WHERE session_id=?"),
+      sessionId,
+    );
     if (!value) return undefined;
     return {
       sessionId,
@@ -824,11 +874,10 @@ export class UmaDatabase {
   }
 
   putContextSummary(sessionId: string, throughSequence: number, content: string): ContextSummary {
-    this.db
-      .prepare(
-        "INSERT INTO context_summaries(session_id,through_sequence,content,updated_at) VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET through_sequence=excluded.through_sequence,content=excluded.content,updated_at=excluded.updated_at WHERE excluded.through_sequence > context_summaries.through_sequence",
-      )
-      .run(sessionId, throughSequence, content, Date.now());
+    prepareStatement(
+      this.db,
+      "INSERT INTO context_summaries(session_id,through_sequence,content,updated_at) VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET through_sequence=excluded.through_sequence,content=excluded.content,updated_at=excluded.updated_at WHERE excluded.through_sequence > context_summaries.through_sequence",
+    ).run(sessionId, throughSequence, content, Date.now());
     return this.getContextSummary(sessionId) as ContextSummary;
   }
 
@@ -841,7 +890,10 @@ export class UmaDatabase {
     interactionMode: Run["interactionMode"],
     options: { targetMessageId?: string; queuePosition?: number } = {},
   ): { run: Run; created: boolean } {
-    const existing = row(this.db.prepare("SELECT id,session_id FROM runs WHERE message_id=?"), messageId);
+    const existing = row(
+      prepareStatement(this.db, "SELECT id,session_id FROM runs WHERE message_id=?"),
+      messageId,
+    );
     if (existing) {
       if (text(existing.session_id) !== sessionId)
         throw new Error("messageId is already used by another session");
@@ -849,25 +901,24 @@ export class UmaDatabase {
     }
     const id = randomUUID();
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO runs(id,session_id,message_id,target_message_id,interaction_mode,kind,status,phase,model_snapshot_json,thinking_level,queue_position,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        sessionId,
-        messageId,
-        options.targetMessageId ?? null,
-        interactionMode,
-        kind,
-        "queued",
-        "queued",
-        JSON.stringify(model),
-        thinkingLevel,
-        options.queuePosition ?? null,
-        now,
-        now,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO runs(id,session_id,message_id,target_message_id,interaction_mode,kind,status,phase,model_snapshot_json,thinking_level,queue_position,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      sessionId,
+      messageId,
+      options.targetMessageId ?? null,
+      interactionMode,
+      kind,
+      "queued",
+      "queued",
+      JSON.stringify(model),
+      thinkingLevel,
+      options.queuePosition ?? null,
+      now,
+      now,
+    );
     return { run: this.getRun(id), created: true };
   }
 
@@ -891,44 +942,60 @@ export class UmaDatabase {
       queuePosition?: number | null;
     },
   ): Run {
-    const current = this.getRun(id);
-    this.db
-      .prepare(
-        "UPDATE runs SET status=?,phase=?,task_class=?,goal=?,success_criteria_json=?,assumptions_json=?,turn_count=?,correction_count=?,route=?,reasoning_summary=?,error=?,clarification_count=?,target_message_id=?,result_message_id=?,queue_position=?,updated_at=? WHERE id=?",
-      )
-      .run(
-        patch.status ?? current.status,
-        patch.phase ?? current.phase,
-        patch.taskClass ?? current.taskClass ?? null,
-        patch.goal ?? current.goal ?? null,
-        JSON.stringify(patch.successCriteria ?? current.successCriteria),
-        JSON.stringify(patch.assumptions ?? current.assumptions),
-        patch.turnCount ?? current.turnCount,
-        patch.correctionCount ?? current.correctionCount,
-        patch.route ?? current.route ?? null,
-        patch.reasoningSummary ?? current.reasoningSummary ?? null,
-        patch.error === undefined ? (current.error ?? null) : patch.error,
-        patch.clarificationCount ?? current.clarificationCount ?? 0,
-        patch.targetMessageId === undefined ? (current.targetMessageId ?? null) : patch.targetMessageId,
-        patch.resultMessageId === undefined ? (current.resultMessageId ?? null) : patch.resultMessageId,
-        patch.queuePosition === undefined ? (current.queuePosition ?? null) : patch.queuePosition,
-        Date.now(),
-        id,
-      );
+    // 未提供的字段由 SQLite 原位保留，避免每次状态推进读取并解析完整模型、计划与恢复信息。
+    // 可清空字段另传 presence 标记，严格区分 undefined（保留）与 null（清空）。
+    const result = prepareStatement(
+      this.db,
+      `UPDATE runs SET status=COALESCE(?,status),phase=COALESCE(?,phase),
+      task_class=COALESCE(?,task_class),goal=COALESCE(?,goal),
+      success_criteria_json=COALESCE(?,success_criteria_json),assumptions_json=COALESCE(?,assumptions_json),
+      turn_count=COALESCE(?,turn_count),correction_count=COALESCE(?,correction_count),
+      route=COALESCE(?,route),reasoning_summary=COALESCE(?,reasoning_summary),
+      error=CASE WHEN ? THEN ? ELSE error END,clarification_count=COALESCE(?,clarification_count),
+      target_message_id=CASE WHEN ? THEN ? ELSE target_message_id END,
+      result_message_id=CASE WHEN ? THEN ? ELSE result_message_id END,
+      queue_position=CASE WHEN ? THEN ? ELSE queue_position END,updated_at=? WHERE id=?`,
+    ).run(
+      patch.status ?? null,
+      patch.phase ?? null,
+      patch.taskClass ?? null,
+      patch.goal ?? null,
+      patch.successCriteria === undefined ? null : JSON.stringify(patch.successCriteria),
+      patch.assumptions === undefined ? null : JSON.stringify(patch.assumptions),
+      patch.turnCount ?? null,
+      patch.correctionCount ?? null,
+      patch.route ?? null,
+      patch.reasoningSummary ?? null,
+      Number(patch.error !== undefined),
+      patch.error ?? null,
+      patch.clarificationCount ?? null,
+      Number(patch.targetMessageId !== undefined),
+      patch.targetMessageId ?? null,
+      Number(patch.resultMessageId !== undefined),
+      patch.resultMessageId ?? null,
+      Number(patch.queuePosition !== undefined),
+      patch.queuePosition ?? null,
+      Date.now(),
+      id,
+    );
+    if (!result.changes) throw new Error(`Run not found: ${id}`);
     return this.getRun(id);
   }
 
   setRunKind(id: string, kind: Run["kind"]): Run {
-    const result = this.db
-      .prepare("UPDATE runs SET kind=?,updated_at=? WHERE id=?")
-      .run(kind, Date.now(), id);
+    const result = prepareStatement(this.db, "UPDATE runs SET kind=?,updated_at=? WHERE id=?").run(
+      kind,
+      Date.now(),
+      id,
+    );
     if (!result.changes) throw new Error(`Run not found: ${id}`);
     return this.getRun(id);
   }
 
   setPlan(runId: string, titles: string[]): PlanStep[] {
-    this.db.prepare("DELETE FROM plan_steps WHERE run_id=?").run(runId);
-    const insert = this.db.prepare(
+    prepareStatement(this.db, "DELETE FROM plan_steps WHERE run_id=?").run(runId);
+    const insert = prepareStatement(
+      this.db,
       "INSERT INTO plan_steps(id,run_id,position,title,status) VALUES(?,?,?,?,?)",
     );
     titles.forEach((title, position) => {
@@ -939,21 +1006,21 @@ export class UmaDatabase {
 
   updatePlanStep(id: string, status: PlanStep["status"], error?: string): void {
     const now = Date.now();
-    this.db
-      .prepare(
-        "UPDATE plan_steps SET status=?, started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END, completed_at=CASE WHEN ? IN ('completed','failed') THEN ? ELSE completed_at END, error=? WHERE id=?",
-      )
-      .run(status, status, now, status, now, error ?? null, id);
+    prepareStatement(
+      this.db,
+      "UPDATE plan_steps SET status=?, started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END, completed_at=CASE WHEN ? IN ('completed','failed') THEN ? ELSE completed_at END, error=? WHERE id=?",
+    ).run(status, status, now, status, now, error ?? null, id);
   }
 
   listPlan(runId: string): PlanStep[] {
-    return rows(this.db.prepare("SELECT * FROM plan_steps WHERE run_id=? ORDER BY position"), runId).map(
-      toPlanStep,
-    );
+    return rows(
+      prepareStatement(this.db, "SELECT * FROM plan_steps WHERE run_id=? ORDER BY position"),
+      runId,
+    ).map(toPlanStep);
   }
 
   getRun(id: string): Run {
-    const value = row(this.db.prepare("SELECT * FROM runs WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM runs WHERE id=?"), id);
     if (!value) throw new Error(`Run not found: ${id}`);
     const resume = this.getRunResume(id, text(value.status) as RunStatus);
     return {
@@ -991,11 +1058,15 @@ export class UmaDatabase {
   private getRunResume(runId: string, status: RunStatus): Run["resume"] {
     if (status !== "interrupted") return undefined;
     const checkpoint = row(
-      this.db.prepare("SELECT * FROM run_checkpoints WHERE run_id=? ORDER BY checkpoint_no DESC LIMIT 1"),
+      prepareStatement(
+        this.db,
+        "SELECT * FROM run_checkpoints WHERE run_id=? ORDER BY checkpoint_no DESC LIMIT 1",
+      ),
       runId,
     );
     const pending = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id FROM run_actions WHERE run_id=? AND status IN ('uncertain','prepared','running') AND tool_class NOT IN ('read','attachment_read')",
       ),
       runId,
@@ -1022,7 +1093,8 @@ export class UmaDatabase {
     safeToResume: boolean;
   }): { id: string; checkpointNo: number } {
     const current = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT COALESCE(MAX(checkpoint_no),0) AS checkpoint_no FROM run_checkpoints WHERE run_id=?",
       ),
       input.runId,
@@ -1031,28 +1103,28 @@ export class UmaDatabase {
     const id = randomUUID();
     const phase = input.phase;
     if (!phase) throw new Error("Checkpoint phase is required");
-    this.db
-      .prepare(
-        "INSERT INTO run_checkpoints(id,run_id,checkpoint_no,phase,plan_step_id,turn_count,last_message_sequence,context_summary_sequence,safe_to_resume,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.runId,
-        checkpointNo,
-        phase,
-        input.planStepId ?? null,
-        input.turnCount,
-        input.lastMessageSequence,
-        input.contextSummarySequence ?? null,
-        input.safeToResume ? 1 : 0,
-        Date.now(),
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO run_checkpoints(id,run_id,checkpoint_no,phase,plan_step_id,turn_count,last_message_sequence,context_summary_sequence,safe_to_resume,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.runId,
+      checkpointNo,
+      phase,
+      input.planStepId ?? null,
+      input.turnCount,
+      input.lastMessageSequence,
+      input.contextSummarySequence ?? null,
+      input.safeToResume ? 1 : 0,
+      Date.now(),
+    );
     return { id, checkpointNo };
   }
 
   getLatestCheckpoint(runId: string): { id: string; phase: string; turnCount: number } | undefined {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id,phase,turn_count FROM run_checkpoints WHERE run_id=? ORDER BY checkpoint_no DESC LIMIT 1",
       ),
       runId,
@@ -1065,7 +1137,7 @@ export class UmaDatabase {
   listRunCheckpoints(runId: string): RunCheckpoint[] {
     this.getRun(runId);
     return rows(
-      this.db.prepare("SELECT * FROM run_checkpoints WHERE run_id=? ORDER BY checkpoint_no"),
+      prepareStatement(this.db, "SELECT * FROM run_checkpoints WHERE run_id=? ORDER BY checkpoint_no"),
       runId,
     ).map(toRunCheckpoint);
   }
@@ -1073,7 +1145,10 @@ export class UmaDatabase {
   latestMessageSequence(sessionId: string): number {
     return integer(
       row(
-        this.db.prepare("SELECT COALESCE(MAX(sequence),0) AS sequence FROM messages WHERE session_id=?"),
+        prepareStatement(
+          this.db,
+          "SELECT COALESCE(MAX(sequence),0) AS sequence FROM messages WHERE session_id=?",
+        ),
         sessionId,
       )?.sequence,
     );
@@ -1089,34 +1164,33 @@ export class UmaDatabase {
     input?: unknown;
   }): RunAction {
     const id = randomUUID();
-    this.db
-      .prepare(
-        "INSERT INTO run_actions(id,run_id,checkpoint_id,tool_call_id,tool_name,tool_class,idempotency_key,input_json,status,started_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.runId,
-        input.checkpointId ?? null,
-        input.toolCallId,
-        input.toolName,
-        input.toolClass,
-        input.idempotencyKey,
-        input.input === undefined ? null : JSON.stringify(redactAudit(input.input)),
-        "prepared",
-        null,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO run_actions(id,run_id,checkpoint_id,tool_call_id,tool_name,tool_class,idempotency_key,input_json,status,started_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.runId,
+      input.checkpointId ?? null,
+      input.toolCallId,
+      input.toolName,
+      input.toolClass,
+      input.idempotencyKey,
+      input.input === undefined ? null : JSON.stringify(redactAudit(input.input)),
+      "prepared",
+      null,
+    );
     return this.getRunAction(id);
   }
 
   getRunAction(id: string): RunAction {
-    const value = row(this.db.prepare("SELECT * FROM run_actions WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM run_actions WHERE id=?"), id);
     if (!value) throw new Error(`Run action not found: ${id}`);
     return toRunAction(value);
   }
 
   getRunActionByToolCall(runId: string, toolCallId: string): RunAction | undefined {
     const value = row(
-      this.db.prepare("SELECT * FROM run_actions WHERE run_id=? AND tool_call_id=?"),
+      prepareStatement(this.db, "SELECT * FROM run_actions WHERE run_id=? AND tool_call_id=?"),
       runId,
       toolCallId,
     );
@@ -1125,7 +1199,10 @@ export class UmaDatabase {
 
   listRunActions(runId: string): RunAction[] {
     return rows(
-      this.db.prepare("SELECT * FROM run_actions WHERE run_id=? ORDER BY COALESCE(started_at,0), id"),
+      prepareStatement(
+        this.db,
+        "SELECT * FROM run_actions WHERE run_id=? ORDER BY COALESCE(started_at,0), id",
+      ),
       runId,
     ).map(toRunAction);
   }
@@ -1135,24 +1212,23 @@ export class UmaDatabase {
     patch: { status?: RunAction["status"]; result?: unknown; error?: string | null },
   ): RunAction {
     const current = this.getRunAction(id);
-    this.db
-      .prepare(
-        "UPDATE run_actions SET status=?,result_json=?,error=?,started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END,completed_at=CASE WHEN ? IN ('completed','failed','rejected','acknowledged') THEN ? ELSE completed_at END WHERE id=?",
-      )
-      .run(
-        patch.status ?? current.status,
-        patch.result === undefined
-          ? current.result === undefined
-            ? null
-            : JSON.stringify(redactAudit(current.result))
-          : JSON.stringify(redactAudit(patch.result)),
-        patch.error === undefined ? (current.error ?? null) : patch.error,
-        patch.status ?? current.status,
-        Date.now(),
-        patch.status ?? current.status,
-        Date.now(),
-        id,
-      );
+    prepareStatement(
+      this.db,
+      "UPDATE run_actions SET status=?,result_json=?,error=?,started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END,completed_at=CASE WHEN ? IN ('completed','failed','rejected','acknowledged') THEN ? ELSE completed_at END WHERE id=?",
+    ).run(
+      patch.status ?? current.status,
+      patch.result === undefined
+        ? current.result === undefined
+          ? null
+          : JSON.stringify(redactAudit(current.result))
+        : JSON.stringify(redactAudit(patch.result)),
+      patch.error === undefined ? (current.error ?? null) : patch.error,
+      patch.status ?? current.status,
+      Date.now(),
+      patch.status ?? current.status,
+      Date.now(),
+      id,
+    );
     return this.getRunAction(id);
   }
 
@@ -1165,65 +1241,61 @@ export class UmaDatabase {
     const current = this.getRunAction(id);
     const placeholders = expected.map(() => "?").join(",");
     const now = Date.now();
-    const result = this.db
-      .prepare(
-        `UPDATE run_actions SET status=?,result_json=?,error=?,started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END,completed_at=CASE WHEN ? IN ('completed','failed','rejected','acknowledged') THEN ? ELSE completed_at END WHERE id=? AND status IN (${placeholders})`,
-      )
-      .run(
-        patch.status,
-        patch.result === undefined
-          ? current.result === undefined
-            ? null
-            : JSON.stringify(redactAudit(current.result))
-          : JSON.stringify(redactAudit(patch.result)),
-        patch.error === undefined ? (current.error ?? null) : patch.error,
-        patch.status,
-        now,
-        patch.status,
-        now,
-        id,
-        ...expected,
-      );
+    const result = prepareStatement(
+      this.db,
+      `UPDATE run_actions SET status=?,result_json=?,error=?,started_at=CASE WHEN ?='running' AND started_at IS NULL THEN ? ELSE started_at END,completed_at=CASE WHEN ? IN ('completed','failed','rejected','acknowledged') THEN ? ELSE completed_at END WHERE id=? AND status IN (${placeholders})`,
+    ).run(
+      patch.status,
+      patch.result === undefined
+        ? current.result === undefined
+          ? null
+          : JSON.stringify(redactAudit(current.result))
+        : JSON.stringify(redactAudit(patch.result)),
+      patch.error === undefined ? (current.error ?? null) : patch.error,
+      patch.status,
+      now,
+      patch.status,
+      now,
+      id,
+      ...expected,
+    );
     return { action: this.getRunAction(id), changed: result.changes === 1 };
   }
 
   getToolCallInput(id: string): unknown {
-    const value = row(this.db.prepare("SELECT input_json FROM tool_calls WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT input_json FROM tool_calls WHERE id=?"), id);
     if (!value) throw new Error(`Tool call not found: ${id}`);
     return parseJson(value.input_json, null);
   }
 
   markUncertainActions(): void {
-    this.db
-      .prepare(
-        "UPDATE run_actions SET status='prepared',started_at=NULL,error='Safe read action will be replayed after restart' WHERE status='running' AND tool_class IN ('read','attachment_read')",
-      )
-      .run();
-    this.db
-      .prepare(
-        "UPDATE run_actions SET status='uncertain',error='Server restarted before action completion' WHERE status='running'",
-      )
-      .run();
+    prepareStatement(
+      this.db,
+      "UPDATE run_actions SET status='prepared',started_at=NULL,error='Safe read action will be replayed after restart' WHERE status='running' AND tool_class IN ('read','attachment_read')",
+    ).run();
+    prepareStatement(
+      this.db,
+      "UPDATE run_actions SET status='uncertain',error='Server restarted before action completion' WHERE status='running'",
+    ).run();
   }
 
   interruptRunActions(runId: string, reason: string): RunAction[] {
-    this.db
-      .prepare(
-        "UPDATE run_actions SET status='prepared',started_at=NULL,error=? WHERE run_id=? AND status='running' AND tool_class IN ('read','attachment_read')",
-      )
-      .run(`${reason}; safe read action may be replayed`, runId);
-    this.db
-      .prepare(
-        "UPDATE run_actions SET status='uncertain',error=? WHERE run_id=? AND status='running' AND tool_class NOT IN ('read','attachment_read')",
-      )
-      .run(reason, runId);
+    prepareStatement(
+      this.db,
+      "UPDATE run_actions SET status='prepared',started_at=NULL,error=? WHERE run_id=? AND status='running' AND tool_class IN ('read','attachment_read')",
+    ).run(`${reason}; safe read action may be replayed`, runId);
+    prepareStatement(
+      this.db,
+      "UPDATE run_actions SET status='uncertain',error=? WHERE run_id=? AND status='running' AND tool_class NOT IN ('read','attachment_read')",
+    ).run(reason, runId);
     return this.listRunActions(runId).filter((action) => ["prepared", "uncertain"].includes(action.status));
   }
 
   hasPendingSideEffects(sessionId: string): boolean {
     return Boolean(
       row(
-        this.db.prepare(
+        prepareStatement(
+          this.db,
           "SELECT 1 AS pending FROM run_actions a JOIN runs r ON r.id=a.run_id WHERE r.session_id=? AND a.status IN ('prepared','running','uncertain') AND a.tool_class NOT IN ('read','attachment_read') LIMIT 1",
         ),
         sessionId,
@@ -1232,9 +1304,10 @@ export class UmaDatabase {
   }
 
   listRuns(sessionId: string): Run[] {
-    return rows(this.db.prepare("SELECT id FROM runs WHERE session_id=? ORDER BY created_at"), sessionId).map(
-      (value) => this.getRun(text(value.id)),
-    );
+    return rows(
+      prepareStatement(this.db, "SELECT id FROM runs WHERE session_id=? ORDER BY created_at"),
+      sessionId,
+    ).map((value) => this.getRun(text(value.id)));
   }
   listRestartRecoverableRuns(): Run[] {
     return findRestartRecoverableRuns(this.db, (id) => this.getRun(id));
@@ -1242,13 +1315,17 @@ export class UmaDatabase {
 
   listRecentRuns(sessionId: string, limit = 20): Run[] {
     const active = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id,created_at FROM runs WHERE session_id=? AND status NOT IN ('completed','failed','cancelled') ORDER BY created_at",
       ),
       sessionId,
     );
     const recent = rows(
-      this.db.prepare("SELECT id,created_at FROM runs WHERE session_id=? ORDER BY created_at DESC LIMIT ?"),
+      prepareStatement(
+        this.db,
+        "SELECT id,created_at FROM runs WHERE session_id=? ORDER BY created_at DESC LIMIT ?",
+      ),
       sessionId,
       limit,
     );
@@ -1260,7 +1337,8 @@ export class UmaDatabase {
 
   listQueuedRuns(sessionId: string): Run[] {
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id FROM runs WHERE session_id=? AND status='queued' ORDER BY COALESCE(queue_position, 2147483647), created_at",
       ),
       sessionId,
@@ -1268,12 +1346,15 @@ export class UmaDatabase {
   }
 
   queuedRunCount(): number {
-    return integer(row(this.db.prepare("SELECT COUNT(*) AS count FROM runs WHERE status='queued'"))?.count);
+    return integer(
+      row(prepareStatement(this.db, "SELECT COUNT(*) AS count FROM runs WHERE status='queued'"))?.count,
+    );
   }
 
   findActiveQualityRun(targetMessageId: string, kind: Run["kind"]): Run | undefined {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id FROM runs WHERE target_message_id=? AND kind=? AND status IN ('queued','preflight','running','verifying') ORDER BY created_at DESC LIMIT 1",
       ),
       targetMessageId,
@@ -1287,7 +1368,8 @@ export class UmaDatabase {
     const expected = current.map((run) => run.id);
     if (expected.length !== runIds.length || expected.some((id) => !runIds.includes(id)))
       throw new Error("Queue changed; reload the session snapshot");
-    const update = this.db.prepare(
+    const update = prepareStatement(
+      this.db,
       "UPDATE runs SET queue_position=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'",
     );
     runIds.forEach((id, index) => {
@@ -1300,7 +1382,7 @@ export class UmaDatabase {
     const run = this.getRun(runId);
     if (run.status !== "queued") throw new Error("Only queued runs can be prioritized");
     const queued = this.listQueuedRuns(run.sessionId).filter((item) => item.id !== runId);
-    const update = this.db.prepare("UPDATE runs SET queue_position=?,updated_at=? WHERE id=?");
+    const update = prepareStatement(this.db, "UPDATE runs SET queue_position=?,updated_at=? WHERE id=?");
     update.run(1, Date.now(), runId);
     queued.forEach((item, index) => {
       update.run(index + 2, Date.now(), item.id);
@@ -1310,7 +1392,10 @@ export class UmaDatabase {
 
   listPendingApprovals(sessionId: string): Approval[] {
     return rows(
-      this.db.prepare("SELECT id FROM approvals WHERE session_id=? AND status='pending' ORDER BY created_at"),
+      prepareStatement(
+        this.db,
+        "SELECT id FROM approvals WHERE session_id=? AND status='pending' ORDER BY created_at",
+      ),
       sessionId,
     ).map((value) => this.getApproval(text(value.id)));
   }
@@ -1318,17 +1403,17 @@ export class UmaDatabase {
   getSnapshot(sessionId: string): SessionSnapshot {
     const session = this.getSession(sessionId);
     const sessionState = row(
-      this.db.prepare("SELECT next_event_sequence FROM sessions WHERE id=?"),
+      prepareStatement(this.db, "SELECT next_event_sequence FROM sessions WHERE id=?"),
       sessionId,
     );
-    const allVisible = this.messages.listMessages(sessionId);
-    const visible = allVisible.slice(Math.max(0, allVisible.length - 100));
-    const hasMoreBefore = allVisible.length > visible.length;
+    const page = this.messages.listHistory(sessionId, undefined, 100);
+    const visible = page.items;
+    const hasMoreBefore = page.hasMore;
     const transcript = visible;
-    // 响应记录也必须遵循活动分支。否则编辑消息创建新分支后，旧分支的
-    // response 会被前端当作“孤立历史响应”重新渲染出来。
-    const activeMessageIds = new Set(allVisible.map((item) => item.id));
-    const activeRunIds = new Set(allVisible.flatMap((item) => (item.runId ? [item.runId] : [])));
+    // 分支过滤只保留标识，避免为了筛选响应再次解析整段历史正文。
+    const keys = this.messages.visibleKeys(sessionId);
+    const activeMessageIds = new Set(keys.map((item) => text(item.id)));
+    const activeRunIds = new Set(keys.flatMap((item) => (item.run_id ? [text(item.run_id)] : [])));
     return {
       session,
       transcript,
@@ -1344,7 +1429,7 @@ export class UmaDatabase {
       ),
       branches: this.listBranches(sessionId),
       queue: this.listQueuedRuns(sessionId).flatMap((run, index) => {
-        const value = row(this.db.prepare("SELECT id FROM messages WHERE id=?"), run.messageId);
+        const value = row(prepareStatement(this.db, "SELECT id FROM messages WHERE id=?"), run.messageId);
         return value ? [{ run, message: this.getMessage(run.messageId), position: index + 1 }] : [];
       }),
     };
@@ -1359,56 +1444,58 @@ export class UmaDatabase {
   }): Response {
     const id = input.id ?? randomUUID();
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO responses(id,session_id,run_id,message_id,status,content,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-      )
-      .run(id, input.sessionId, input.runId, input.messageId, input.status ?? "queued", "", now, now);
+    prepareStatement(
+      this.db,
+      "INSERT INTO responses(id,session_id,run_id,message_id,status,content,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+    ).run(id, input.sessionId, input.runId, input.messageId, input.status ?? "queued", "", now, now);
     return this.getResponse(id);
   }
 
   getResponse(id: string): Response {
-    const value = row(this.db.prepare("SELECT * FROM responses WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM responses WHERE id=?"), id);
     if (!value) throw new Error(`Response not found: ${id}`);
-    return this.toResponse(value);
+    return this.responses.get(value);
   }
 
   responseOwner(id: string): string | undefined {
     const value = row(
-      this.db.prepare("SELECT s.user_id FROM responses r JOIN sessions s ON s.id=r.session_id WHERE r.id=?"),
+      prepareStatement(
+        this.db,
+        "SELECT s.user_id FROM responses r JOIN sessions s ON s.id=r.session_id WHERE r.id=?",
+      ),
       id,
     );
     return value?.user_id ? text(value.user_id) : undefined;
   }
 
   listResponses(sessionId: string): Response[] {
-    return rows(
-      this.db.prepare("SELECT * FROM responses WHERE session_id=? ORDER BY created_at"),
-      sessionId,
-    ).map((value) => this.toResponse(value));
+    return this.responses.list(sessionId);
   }
 
   responseForRun(runId: string): Response | undefined {
-    const value = row(this.db.prepare("SELECT id FROM responses WHERE run_id=?"), runId);
+    const value = row(prepareStatement(this.db, "SELECT id FROM responses WHERE run_id=?"), runId);
     return value ? this.getResponse(text(value.id)) : undefined;
   }
 
   responseForMessage(messageId: string): Response | undefined {
-    const value = row(this.db.prepare("SELECT id FROM responses WHERE message_id=?"), messageId);
+    const value = row(prepareStatement(this.db, "SELECT id FROM responses WHERE message_id=?"), messageId);
     return value ? this.getResponse(text(value.id)) : undefined;
   }
 
   updateResponse(id: string, patch: { status?: ResponseStatus; content?: string }): Response {
-    const current = row(this.db.prepare("SELECT * FROM responses WHERE id=?"), id);
+    const current = row(prepareStatement(this.db, "SELECT * FROM responses WHERE id=?"), id);
     if (!current) throw new Error(`Response not found: ${id}`);
-    this.db
-      .prepare("UPDATE responses SET status=?,content=?,updated_at=? WHERE id=?")
-      .run(patch.status ?? text(current.status), patch.content ?? text(current.content), Date.now(), id);
+    prepareStatement(this.db, "UPDATE responses SET status=?,content=?,updated_at=? WHERE id=?").run(
+      patch.status ?? text(current.status),
+      patch.content ?? text(current.content),
+      Date.now(),
+      id,
+    );
     return this.getResponse(id);
   }
 
   updateResponseAttachmentStatus(responseId: string, status: NonNullable<Attachment["status"]>): void {
-    this.db.prepare("UPDATE attachments SET status=? WHERE response_id=?").run(status, responseId);
+    prepareStatement(this.db, "UPDATE attachments SET status=? WHERE response_id=?").run(status, responseId);
   }
 
   addResponseActivity(input: {
@@ -1421,20 +1508,19 @@ export class UmaDatabase {
   }): ResponseActivity {
     const id = randomUUID();
     const createdAt = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO response_activities(id,response_id,kind,status,text,tool_name,attachment_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.responseId,
-        input.kind,
-        input.status ?? null,
-        input.text ?? null,
-        input.toolName ?? null,
-        input.attachmentId ?? null,
-        createdAt,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO response_activities(id,response_id,kind,status,text,tool_name,attachment_id,created_at) VALUES(?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.responseId,
+      input.kind,
+      input.status ?? null,
+      input.text ?? null,
+      input.toolName ?? null,
+      input.attachmentId ?? null,
+      createdAt,
+    );
     return {
       id,
       responseId: input.responseId,
@@ -1444,40 +1530,6 @@ export class UmaDatabase {
       ...(input.toolName ? { toolName: input.toolName } : {}),
       ...(input.attachmentId ? { attachmentId: input.attachmentId } : {}),
       createdAt,
-    };
-  }
-
-  private toResponse(value: Row): Response {
-    const activities = rows(
-      this.db.prepare("SELECT * FROM response_activities WHERE response_id=? ORDER BY created_at"),
-      text(value.id),
-    ).map(
-      (item): ResponseActivity => ({
-        id: text(item.id),
-        responseId: text(item.response_id),
-        kind: text(item.kind) as ResponseActivity["kind"],
-        ...(item.status ? { status: text(item.status) as ResponseStatus } : {}),
-        ...(item.text !== null && item.text !== undefined ? { text: text(item.text) } : {}),
-        ...(item.tool_name ? { toolName: text(item.tool_name) } : {}),
-        ...(item.attachment_id ? { attachmentId: text(item.attachment_id) } : {}),
-        createdAt: integer(item.created_at),
-      }),
-    );
-    const attachments = rows(
-      this.db.prepare("SELECT * FROM attachments WHERE response_id=? ORDER BY created_at"),
-      text(value.id),
-    ).map((item) => toAttachment(item));
-    return {
-      id: text(value.id),
-      sessionId: text(value.session_id),
-      runId: text(value.run_id),
-      messageId: text(value.message_id),
-      status: text(value.status) as ResponseStatus,
-      content: text(value.content),
-      activities,
-      attachments,
-      createdAt: integer(value.created_at),
-      updatedAt: integer(value.updated_at),
     };
   }
 
@@ -1498,20 +1550,19 @@ export class UmaDatabase {
         type,
         payload: redactAudit(payload),
       };
-      this.db
-        .prepare(
-          "INSERT INTO session_events(id,session_id,run_id,sequence,protocol_version,type,payload_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
-        )
-        .run(
-          randomUUID(),
-          sessionId,
-          runId ?? null,
-          sequence,
-          PROTOCOL_VERSION,
-          type,
-          JSON.stringify(event.payload),
-          event.timestamp,
-        );
+      prepareStatement(
+        this.db,
+        "INSERT INTO session_events(id,session_id,run_id,sequence,protocol_version,type,payload_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
+      ).run(
+        randomUUID(),
+        sessionId,
+        runId ?? null,
+        sequence,
+        PROTOCOL_VERSION,
+        type,
+        JSON.stringify(event.payload),
+        event.timestamp,
+      );
       return event;
     });
   }
@@ -1519,12 +1570,13 @@ export class UmaDatabase {
   listEvents(sessionId: string, afterSequence: number, limit = 500): SessionEventPage {
     this.getSession(sessionId);
     const sessionState = row(
-      this.db.prepare("SELECT next_event_sequence FROM sessions WHERE id=?"),
+      prepareStatement(this.db, "SELECT next_event_sequence FROM sessions WHERE id=?"),
       sessionId,
     );
     const bounded = Math.max(1, Math.min(1000, limit));
     const values = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT * FROM session_events WHERE session_id=? AND sequence>? ORDER BY sequence LIMIT ?",
       ),
       sessionId,
@@ -1558,17 +1610,19 @@ export class UmaDatabase {
 
   createToolCall(input: { id: string; runId: string; name: string; args: unknown }): void {
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT OR REPLACE INTO tool_calls(id,run_id,name,input_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-      )
-      .run(input.id, input.runId, input.name, JSON.stringify(input.args), "running", now, now);
+    prepareStatement(
+      this.db,
+      "INSERT OR REPLACE INTO tool_calls(id,run_id,name,input_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+    ).run(input.id, input.runId, input.name, JSON.stringify(input.args), "running", now, now);
   }
 
   completeToolCall(id: string, result: unknown, failed: boolean): void {
-    this.db
-      .prepare("UPDATE tool_calls SET result_json=?, status=?, updated_at=? WHERE id=?")
-      .run(JSON.stringify(result), failed ? "error" : "complete", Date.now(), id);
+    prepareStatement(this.db, "UPDATE tool_calls SET result_json=?, status=?, updated_at=? WHERE id=?").run(
+      JSON.stringify(result),
+      failed ? "error" : "complete",
+      Date.now(),
+      id,
+    );
   }
 
   createApproval(input: {
@@ -1580,25 +1634,24 @@ export class UmaDatabase {
   }): Approval {
     const id = randomUUID();
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO approvals(id,session_id,run_id,tool_call_id,tool_name,input_json,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.sessionId,
-        input.runId,
-        input.toolCallId,
-        input.toolName,
-        JSON.stringify(input.args),
-        "pending",
-        now,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO approvals(id,session_id,run_id,tool_call_id,tool_name,input_json,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.sessionId,
+      input.runId,
+      input.toolCallId,
+      input.toolName,
+      JSON.stringify(input.args),
+      "pending",
+      now,
+    );
     return this.getApproval(id);
   }
 
   getApproval(id: string): Approval {
-    const value = row(this.db.prepare("SELECT * FROM approvals WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM approvals WHERE id=?"), id);
     if (!value) throw new Error(`Approval not found: ${id}`);
     return {
       id: text(value.id),
@@ -1614,17 +1667,19 @@ export class UmaDatabase {
   }
 
   resolveApproval(id: string, approved: boolean): Approval {
-    const result = this.db
-      .prepare("UPDATE approvals SET status=?, resolved_at=? WHERE id=? AND status='pending'")
-      .run(approved ? "approved" : "denied", Date.now(), id);
+    const result = prepareStatement(
+      this.db,
+      "UPDATE approvals SET status=?, resolved_at=? WHERE id=? AND status='pending'",
+    ).run(approved ? "approved" : "denied", Date.now(), id);
     if (result.changes === 0) return this.getApproval(id);
     return this.getApproval(id);
   }
 
   expireApproval(id: string): Approval {
-    this.db
-      .prepare("UPDATE approvals SET status='expired', resolved_at=? WHERE id=? AND status='pending'")
-      .run(Date.now(), id);
+    prepareStatement(
+      this.db,
+      "UPDATE approvals SET status='expired', resolved_at=? WHERE id=? AND status='pending'",
+    ).run(Date.now(), id);
     return this.getApproval(id);
   }
 
@@ -1642,34 +1697,36 @@ export class UmaDatabase {
   }): Attachment {
     const id = randomUUID();
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO attachments(id,session_id,response_id,owner_user_id,name,mime_type,size,sha256,status,expires_at,storage_path,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.sessionId ?? null,
-        input.responseId ?? null,
-        input.ownerUserId ?? (input.sessionId ? this.sessionOwner(input.sessionId) : null) ?? null,
-        input.name,
-        input.mimeType,
-        input.size,
-        input.sha256 ?? null,
-        input.status ?? "ready",
-        input.expiresAt ?? null,
-        input.storagePath,
-        now,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO attachments(id,session_id,response_id,owner_user_id,name,mime_type,size,sha256,status,expires_at,storage_path,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.sessionId ?? null,
+      input.responseId ?? null,
+      input.ownerUserId ?? (input.sessionId ? this.sessionOwner(input.sessionId) : null) ?? null,
+      input.name,
+      input.mimeType,
+      input.size,
+      input.sha256 ?? null,
+      input.status ?? "ready",
+      input.expiresAt ?? null,
+      input.storagePath,
+      now,
+    );
     return this.getAttachment(id) as Attachment;
   }
 
   getAttachment(id: string): Attachment | undefined {
-    const value = row(this.db.prepare("SELECT * FROM attachments WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM attachments WHERE id=?"), id);
     return value ? toAttachment(value) : undefined;
   }
 
   getAttachmentPath(id: string, sessionId?: string): string {
-    const value = row(this.db.prepare("SELECT session_id,storage_path FROM attachments WHERE id=?"), id);
+    const value = row(
+      prepareStatement(this.db, "SELECT session_id,storage_path FROM attachments WHERE id=?"),
+      id,
+    );
     if (!value) throw new Error(`Attachment not found: ${id}`);
     if (sessionId && (!value.session_id || text(value.session_id) !== sessionId))
       throw new Error(`Attachment belongs to another session: ${id}`);
@@ -1677,7 +1734,10 @@ export class UmaDatabase {
   }
 
   validateAttachmentForSession(id: string, sessionId: string): void {
-    const value = row(this.db.prepare("SELECT session_id,status,expires_at FROM attachments WHERE id=?"), id);
+    const value = row(
+      prepareStatement(this.db, "SELECT session_id,status,expires_at FROM attachments WHERE id=?"),
+      id,
+    );
     if (!value) throw new Error(`Attachment not found: ${id}`);
     if (!value.session_id || text(value.session_id) !== sessionId)
       throw new Error(`Attachment belongs to another session: ${id}`);
@@ -1689,7 +1749,8 @@ export class UmaDatabase {
     const match = ftsQuery(query);
     if (!match) return [];
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT m.value FROM memory_fts f JOIN memory_facts m ON m.id=f.id WHERE memory_fts MATCH ? AND m.status='active' AND ((m.scope='global' AND m.owner_id=(SELECT user_id FROM sessions WHERE id=?)) OR (m.scope='session' AND m.session_id=?)) ORDER BY bm25(memory_fts) LIMIT ?",
       ),
       match,
@@ -1704,7 +1765,8 @@ export class UmaDatabase {
     const match = ftsQuery(query);
     if (!match) return [];
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT message_id FROM history_fts WHERE history_fts MATCH ? AND session_id=? ORDER BY bm25(history_fts) LIMIT ?",
       ),
       match,
@@ -1717,7 +1779,8 @@ export class UmaDatabase {
     this.getSession(sessionId);
     if (toSequence < fromSequence) throw new Error("Invalid history sequence range");
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id FROM messages WHERE session_id=? AND sequence BETWEEN ? AND ? ORDER BY sequence LIMIT 200",
       ),
       sessionId,
@@ -1737,43 +1800,45 @@ export class UmaDatabase {
     }>;
   }): KnowledgeSource {
     const existing = row(
-      this.db.prepare("SELECT id FROM knowledge_sources WHERE path=? AND owner_id=?"),
+      prepareStatement(this.db, "SELECT id FROM knowledge_sources WHERE path=? AND owner_id=?"),
       input.path,
       input.ownerId ?? "system",
     );
     const id = existing ? text(existing.id) : randomUUID();
     const now = Date.now();
     if (existing) {
-      const oldIds = rows(this.db.prepare("SELECT id FROM knowledge_chunks WHERE source_id=?"), id).map(
-        (value) => text(value.id),
-      );
-      for (const chunkId of oldIds) this.db.prepare("DELETE FROM knowledge_fts WHERE id=?").run(chunkId);
-      this.db.prepare("DELETE FROM knowledge_chunks WHERE source_id=?").run(id);
-      this.db
-        .prepare(
-          "UPDATE knowledge_sources SET name=?,document_count=?,status='indexed',error=NULL,updated_at=? WHERE id=?",
-        )
-        .run(input.name, new Set(input.chunks.map((chunk) => chunk.filePath)).size, now, id);
+      const oldIds = rows(
+        prepareStatement(this.db, "SELECT id FROM knowledge_chunks WHERE source_id=?"),
+        id,
+      ).map((value) => text(value.id));
+      for (const chunkId of oldIds)
+        prepareStatement(this.db, "DELETE FROM knowledge_fts WHERE id=?").run(chunkId);
+      prepareStatement(this.db, "DELETE FROM knowledge_chunks WHERE source_id=?").run(id);
+      prepareStatement(
+        this.db,
+        "UPDATE knowledge_sources SET name=?,document_count=?,status='indexed',error=NULL,updated_at=? WHERE id=?",
+      ).run(input.name, new Set(input.chunks.map((chunk) => chunk.filePath)).size, now, id);
     } else {
-      this.db
-        .prepare(
-          "INSERT INTO knowledge_sources(id,owner_id,name,path,document_count,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-        )
-        .run(
-          id,
-          input.ownerId ?? "system",
-          input.name,
-          input.path,
-          new Set(input.chunks.map((chunk) => chunk.filePath)).size,
-          "indexed",
-          now,
-          now,
-        );
+      prepareStatement(
+        this.db,
+        "INSERT INTO knowledge_sources(id,owner_id,name,path,document_count,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+      ).run(
+        id,
+        input.ownerId ?? "system",
+        input.name,
+        input.path,
+        new Set(input.chunks.map((chunk) => chunk.filePath)).size,
+        "indexed",
+        now,
+        now,
+      );
     }
-    const insertChunk = this.db.prepare(
+    const insertChunk = prepareStatement(
+      this.db,
       "INSERT INTO knowledge_chunks(id,source_id,file_path,position,content) VALUES(?,?,?,?,?)",
     );
-    const insertFts = this.db.prepare(
+    const insertFts = prepareStatement(
+      this.db,
       "INSERT INTO knowledge_fts(id,source_id,file_path,content) VALUES(?,?,?,?)",
     );
     const embeddings: Array<{ chunkId: string; model: string; vector: number[]; contentHash: string }> = [];
@@ -1783,8 +1848,9 @@ export class UmaDatabase {
       insertFts.run(chunkId, id, chunk.filePath, chunk.content);
       if (chunk.embedding) embeddings.push({ chunkId, ...chunk.embedding });
     });
-    this.db.prepare("DELETE FROM knowledge_embeddings WHERE source_id=?").run(id);
-    const insertEmbedding = this.db.prepare(
+    prepareStatement(this.db, "DELETE FROM knowledge_embeddings WHERE source_id=?").run(id);
+    const insertEmbedding = prepareStatement(
+      this.db,
       "INSERT INTO knowledge_embeddings(chunk_id,source_id,model,vector_json,content_hash,created_at) VALUES(?,?,?,?,?,?)",
     );
     for (const embedding of embeddings)
@@ -1801,27 +1867,28 @@ export class UmaDatabase {
 
   createKnowledgeSource(input: { name: string; path: string; ownerId?: string }): KnowledgeSource {
     const existing = row(
-      this.db.prepare("SELECT id FROM knowledge_sources WHERE path=? AND owner_id=?"),
+      prepareStatement(this.db, "SELECT id FROM knowledge_sources WHERE path=? AND owner_id=?"),
       input.path,
       input.ownerId ?? "system",
     );
     const now = Date.now();
     const id = existing ? text(existing.id) : randomUUID();
     if (existing) {
-      for (const value of rows(this.db.prepare("SELECT id FROM knowledge_chunks WHERE source_id=?"), id))
-        this.db.prepare("DELETE FROM knowledge_fts WHERE id=?").run(text(value.id));
-      this.db.prepare("DELETE FROM knowledge_chunks WHERE source_id=?").run(id);
-      this.db
-        .prepare(
-          "UPDATE knowledge_sources SET name=?,status='queued',error=NULL,document_count=0,updated_at=? WHERE id=?",
-        )
-        .run(input.name, now, id);
+      for (const value of rows(
+        prepareStatement(this.db, "SELECT id FROM knowledge_chunks WHERE source_id=?"),
+        id,
+      ))
+        prepareStatement(this.db, "DELETE FROM knowledge_fts WHERE id=?").run(text(value.id));
+      prepareStatement(this.db, "DELETE FROM knowledge_chunks WHERE source_id=?").run(id);
+      prepareStatement(
+        this.db,
+        "UPDATE knowledge_sources SET name=?,status='queued',error=NULL,document_count=0,updated_at=? WHERE id=?",
+      ).run(input.name, now, id);
     } else
-      this.db
-        .prepare(
-          "INSERT INTO knowledge_sources(id,owner_id,name,path,document_count,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-        )
-        .run(id, input.ownerId ?? "system", input.name, input.path, 0, "queued", now, now);
+      prepareStatement(
+        this.db,
+        "INSERT INTO knowledge_sources(id,owner_id,name,path,document_count,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+      ).run(id, input.ownerId ?? "system", input.name, input.path, 0, "queued", now, now);
     return this.getKnowledgeSource(id);
   }
 
@@ -1830,24 +1897,28 @@ export class UmaDatabase {
     status: KnowledgeSource["status"],
     error?: string,
   ): KnowledgeSource {
-    const result = this.db
-      .prepare("UPDATE knowledge_sources SET status=?,error=?,updated_at=? WHERE id=?")
-      .run(status, error ?? null, Date.now(), id);
+    const result = prepareStatement(
+      this.db,
+      "UPDATE knowledge_sources SET status=?,error=?,updated_at=? WHERE id=?",
+    ).run(status, error ?? null, Date.now(), id);
     if (result.changes === 0) throw new Error(`Knowledge source not found: ${id}`);
     return this.getKnowledgeSource(id);
   }
 
   deleteKnowledgeSource(id: string): void {
     this.withTransaction(() => {
-      for (const value of rows(this.db.prepare("SELECT id FROM knowledge_chunks WHERE source_id=?"), id))
-        this.db.prepare("DELETE FROM knowledge_fts WHERE id=?").run(text(value.id));
-      const result = this.db.prepare("DELETE FROM knowledge_sources WHERE id=?").run(id);
+      for (const value of rows(
+        prepareStatement(this.db, "SELECT id FROM knowledge_chunks WHERE source_id=?"),
+        id,
+      ))
+        prepareStatement(this.db, "DELETE FROM knowledge_fts WHERE id=?").run(text(value.id));
+      const result = prepareStatement(this.db, "DELETE FROM knowledge_sources WHERE id=?").run(id);
       if (result.changes === 0) throw new Error(`Knowledge source not found: ${id}`);
     });
   }
 
   getKnowledgeSource(id: string): KnowledgeSource {
-    const value = row(this.db.prepare("SELECT * FROM knowledge_sources WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM knowledge_sources WHERE id=?"), id);
     if (!value) throw new Error(`Knowledge source not found: ${id}`);
     return {
       id: text(value.id),
@@ -1864,14 +1935,17 @@ export class UmaDatabase {
   listKnowledgeSources(ownerId?: string): KnowledgeSource[] {
     return rows(
       ownerId
-        ? this.db.prepare("SELECT id FROM knowledge_sources WHERE owner_id=? ORDER BY created_at DESC")
-        : this.db.prepare("SELECT id FROM knowledge_sources ORDER BY created_at DESC"),
+        ? prepareStatement(
+            this.db,
+            "SELECT id FROM knowledge_sources WHERE owner_id=? ORDER BY created_at DESC",
+          )
+        : prepareStatement(this.db, "SELECT id FROM knowledge_sources ORDER BY created_at DESC"),
       ...(ownerId ? [ownerId] : []),
     ).map((value) => this.getKnowledgeSource(text(value.id)));
   }
 
   knowledgeOwner(id: string): string | undefined {
-    const value = row(this.db.prepare("SELECT owner_id FROM knowledge_sources WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT owner_id FROM knowledge_sources WHERE id=?"), id);
     return value ? text(value.owner_id) : undefined;
   }
 
@@ -1884,10 +1958,12 @@ export class UmaDatabase {
     const match = ftsQuery(query);
     if (!match) return [];
     const statement = sourceId
-      ? this.db.prepare(
+      ? prepareStatement(
+          this.db,
           "SELECT f.source_id,s.name AS source_name,f.file_path,f.content FROM knowledge_fts f JOIN knowledge_sources s ON s.id=f.source_id WHERE knowledge_fts MATCH ? AND f.source_id=? AND (? IS NULL OR s.owner_id=?) ORDER BY bm25(knowledge_fts) LIMIT ?",
         )
-      : this.db.prepare(
+      : prepareStatement(
+          this.db,
           "SELECT f.source_id,s.name AS source_name,f.file_path,f.content FROM knowledge_fts f JOIN knowledge_sources s ON s.id=f.source_id WHERE knowledge_fts MATCH ? AND (? IS NULL OR s.owner_id=?) ORDER BY bm25(knowledge_fts) LIMIT ?",
         );
     const values = sourceId
@@ -1906,8 +1982,9 @@ export class UmaDatabase {
     entries: Array<{ chunkId: string; model: string; vector: number[]; contentHash: string }>,
   ): void {
     this.withTransaction(() => {
-      this.db.prepare("DELETE FROM knowledge_embeddings WHERE source_id=?").run(sourceId);
-      const insert = this.db.prepare(
+      prepareStatement(this.db, "DELETE FROM knowledge_embeddings WHERE source_id=?").run(sourceId);
+      const insert = prepareStatement(
+        this.db,
         "INSERT INTO knowledge_embeddings(chunk_id,source_id,model,vector_json,content_hash,created_at) VALUES(?,?,?,?,?,?)",
       );
       for (const entry of entries)
@@ -1929,7 +2006,8 @@ export class UmaDatabase {
     model?: string,
   ): Array<{ sourceId: string; sourceName: string; filePath: string; content: string; score: number }> {
     const values = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT e.source_id,e.model,e.vector_json,c.file_path,c.content,s.name AS source_name FROM knowledge_embeddings e JOIN knowledge_chunks c ON c.id=e.chunk_id JOIN knowledge_sources s ON s.id=e.source_id WHERE (? IS NULL OR s.owner_id=?) AND (? IS NULL OR e.model=?)",
       ),
       ownerId ?? null,
@@ -1957,16 +2035,17 @@ export class UmaDatabase {
   }
 
   putWebSession(hash: string, expiresAt: number, userId?: string): void {
-    this.db
-      .prepare("INSERT OR REPLACE INTO web_sessions(id_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)")
-      .run(hash, userId ?? null, expiresAt, Date.now());
+    prepareStatement(
+      this.db,
+      "INSERT OR REPLACE INTO web_sessions(id_hash,user_id,expires_at,created_at) VALUES(?,?,?,?)",
+    ).run(hash, userId ?? null, expiresAt, Date.now());
   }
 
   hasWebSession(hash: string): boolean {
-    this.db.prepare("DELETE FROM web_sessions WHERE expires_at<?").run(Date.now());
+    prepareStatement(this.db, "DELETE FROM web_sessions WHERE expires_at<?").run(Date.now());
     return Boolean(
       row(
-        this.db.prepare("SELECT 1 AS ok FROM web_sessions WHERE id_hash=? AND expires_at>=?"),
+        prepareStatement(this.db, "SELECT 1 AS ok FROM web_sessions WHERE id_hash=? AND expires_at>=?"),
         hash,
         Date.now(),
       ),
@@ -1975,7 +2054,8 @@ export class UmaDatabase {
 
   webSessionUser(hash: string): { userId: string; role: "admin" | "user" } | undefined {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT s.user_id,u.role,u.status,s.expires_at FROM web_sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=?",
       ),
       hash,
@@ -1991,12 +2071,13 @@ export class UmaDatabase {
   }
 
   deleteWebSession(hash: string): void {
-    this.db.prepare("DELETE FROM web_sessions WHERE id_hash=?").run(hash);
+    prepareStatement(this.db, "DELETE FROM web_sessions WHERE id_hash=?").run(hash);
   }
 
   findAwaitingRun(sessionId: string): Run | undefined {
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id FROM runs WHERE session_id=? AND status='awaiting_input' ORDER BY updated_at DESC LIMIT 1",
       ),
       sessionId,
@@ -2012,27 +2093,26 @@ export class UmaDatabase {
     prompt: string;
   }): BackgroundTask {
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO background_tasks(id,parent_session_id,session_id,source_type,source_schedule_id,source_schedule_run_id,prompt,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        input.id,
-        input.parentSessionId ?? null,
-        input.sessionId,
-        input.source?.type ?? null,
-        input.source?.scheduleId ?? null,
-        input.source?.scheduleRunId ?? null,
-        input.prompt,
-        "pending",
-        now,
-        now,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO background_tasks(id,parent_session_id,session_id,source_type,source_schedule_id,source_schedule_run_id,prompt,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      input.id,
+      input.parentSessionId ?? null,
+      input.sessionId,
+      input.source?.type ?? null,
+      input.source?.scheduleId ?? null,
+      input.source?.scheduleRunId ?? null,
+      input.prompt,
+      "pending",
+      now,
+      now,
+    );
     return this.getBackgroundTask(input.id);
   }
 
   getBackgroundTask(id: string): BackgroundTask {
-    const value = row(this.db.prepare("SELECT * FROM background_tasks WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM background_tasks WHERE id=?"), id);
     if (!value) throw new Error(`Background task not found: ${id}`);
     return {
       id: text(value.id),
@@ -2058,16 +2138,17 @@ export class UmaDatabase {
   }
 
   findBackgroundTaskByRunId(runId: string): BackgroundTask | undefined {
-    const value = row(this.db.prepare("SELECT id FROM background_tasks WHERE run_id=?"), runId);
+    const value = row(prepareStatement(this.db, "SELECT id FROM background_tasks WHERE run_id=?"), runId);
     return value ? this.getBackgroundTask(text(value.id)) : undefined;
   }
 
   listBackgroundTasks(userId?: string): BackgroundTask[] {
     const statement = userId
-      ? this.db.prepare(
+      ? prepareStatement(
+          this.db,
           "SELECT t.id FROM background_tasks t JOIN sessions s ON s.id=t.session_id WHERE s.user_id=? ORDER BY t.updated_at DESC",
         )
-      : this.db.prepare("SELECT id FROM background_tasks ORDER BY updated_at DESC");
+      : prepareStatement(this.db, "SELECT id FROM background_tasks ORDER BY updated_at DESC");
     return rows(statement, ...(userId ? [userId] : [])).map((value) =>
       this.getBackgroundTask(text(value.id)),
     );
@@ -2077,7 +2158,7 @@ export class UmaDatabase {
     const task = this.getBackgroundTask(id);
     if (["pending", "running"].includes(task.status))
       throw new Error("Only terminal background tasks can be deleted");
-    const result = this.db.prepare("DELETE FROM background_tasks WHERE id=?").run(id);
+    const result = prepareStatement(this.db, "DELETE FROM background_tasks WHERE id=?").run(id);
     if (result.changes === 0) throw new Error(`Background task not found: ${id}`);
   }
 
@@ -2091,16 +2172,17 @@ export class UmaDatabase {
     },
   ): BackgroundTask {
     const current = this.getBackgroundTask(id);
-    this.db
-      .prepare("UPDATE background_tasks SET status=?,run_id=?,result=?,error=?,updated_at=? WHERE id=?")
-      .run(
-        patch.status ?? current.status,
-        patch.runId ?? current.runId ?? null,
-        patch.result ?? current.result ?? null,
-        patch.error === undefined ? (current.error ?? null) : patch.error,
-        Date.now(),
-        id,
-      );
+    prepareStatement(
+      this.db,
+      "UPDATE background_tasks SET status=?,run_id=?,result=?,error=?,updated_at=? WHERE id=?",
+    ).run(
+      patch.status ?? current.status,
+      patch.runId ?? current.runId ?? null,
+      patch.result ?? current.result ?? null,
+      patch.error === undefined ? (current.error ?? null) : patch.error,
+      Date.now(),
+      id,
+    );
     return this.getBackgroundTask(id);
   }
 
@@ -2120,7 +2202,8 @@ export class UmaDatabase {
     const now = Date.now();
     const storedId = this.withTransaction(() => {
       const duplicate = row(
-        this.db.prepare(
+        prepareStatement(
+          this.db,
           "SELECT id FROM memory_facts WHERE owner_id=? AND scope=? AND COALESCE(session_id,'')=COALESCE(?,'') AND key=? AND value=? AND status IN ('active','candidate') ORDER BY updated_at DESC LIMIT 1",
         ),
         input.ownerId ?? "system",
@@ -2133,7 +2216,8 @@ export class UmaDatabase {
       const previous =
         input.status === "active"
           ? row(
-              this.db.prepare(
+              prepareStatement(
+                this.db,
                 "SELECT id,value FROM memory_facts WHERE owner_id=? AND scope=? AND COALESCE(session_id,'')=COALESCE(?,'') AND key=? AND status='active' ORDER BY updated_at DESC LIMIT 1",
               ),
               input.ownerId ?? "system",
@@ -2143,39 +2227,40 @@ export class UmaDatabase {
             )
           : undefined;
       if (previous && text(previous.value) !== input.value)
-        this.db
-          .prepare("UPDATE memory_facts SET status='superseded',updated_at=? WHERE id=?")
-          .run(now, text(previous.id));
-      this.db
-        .prepare(
-          "INSERT INTO memory_facts(id,owner_id,session_id,scope,key,value,category,confidence,evidence,source_run_id,status,supersedes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        )
-        .run(
-          id,
-          input.ownerId ?? "system",
-          input.sessionId ?? null,
-          input.scope,
-          input.key,
-          input.value,
-          input.category,
-          input.confidence,
-          input.evidence ?? null,
-          input.sourceRunId ?? null,
-          input.status,
-          previous && text(previous.value) !== input.value ? text(previous.id) : null,
+        prepareStatement(this.db, "UPDATE memory_facts SET status='superseded',updated_at=? WHERE id=?").run(
           now,
-          now,
+          text(previous.id),
         );
-      this.db
-        .prepare("INSERT INTO memory_fts(id,content) VALUES(?,?)")
-        .run(id, `${input.key} ${input.value}`);
+      prepareStatement(
+        this.db,
+        "INSERT INTO memory_facts(id,owner_id,session_id,scope,key,value,category,confidence,evidence,source_run_id,status,supersedes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      ).run(
+        id,
+        input.ownerId ?? "system",
+        input.sessionId ?? null,
+        input.scope,
+        input.key,
+        input.value,
+        input.category,
+        input.confidence,
+        input.evidence ?? null,
+        input.sourceRunId ?? null,
+        input.status,
+        previous && text(previous.value) !== input.value ? text(previous.id) : null,
+        now,
+        now,
+      );
+      prepareStatement(this.db, "INSERT INTO memory_fts(id,content) VALUES(?,?)").run(
+        id,
+        `${input.key} ${input.value}`,
+      );
       return id;
     });
     return this.getMemoryFact(storedId);
   }
 
   getMemoryFact(id: string): MemoryFact {
-    const value = row(this.db.prepare("SELECT * FROM memory_facts WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM memory_facts WHERE id=?"), id);
     if (!value) throw new Error(`Memory fact not found: ${id}`);
     return {
       id: text(value.id),
@@ -2195,7 +2280,7 @@ export class UmaDatabase {
   }
 
   memoryOwner(id: string): string | undefined {
-    const value = row(this.db.prepare("SELECT owner_id FROM memory_facts WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT owner_id FROM memory_facts WHERE id=?"), id);
     return value ? text(value.owner_id) : undefined;
   }
 
@@ -2203,51 +2288,56 @@ export class UmaDatabase {
     const values = status
       ? rows(
           ownerId
-            ? this.db.prepare(
+            ? prepareStatement(
+                this.db,
                 "SELECT id FROM memory_facts WHERE status=? AND owner_id=? ORDER BY updated_at DESC,rowid DESC",
               )
-            : this.db.prepare(
+            : prepareStatement(
+                this.db,
                 "SELECT id FROM memory_facts WHERE status=? ORDER BY updated_at DESC,rowid DESC",
               ),
           ...(ownerId ? [status, ownerId] : [status]),
         )
       : rows(
           ownerId
-            ? this.db.prepare(
+            ? prepareStatement(
+                this.db,
                 "SELECT id FROM memory_facts WHERE owner_id=? ORDER BY updated_at DESC,rowid DESC",
               )
-            : this.db.prepare("SELECT id FROM memory_facts ORDER BY updated_at DESC,rowid DESC"),
+            : prepareStatement(this.db, "SELECT id FROM memory_facts ORDER BY updated_at DESC,rowid DESC"),
           ...(ownerId ? [ownerId] : []),
         );
     return values.map((value) => this.getMemoryFact(text(value.id)));
   }
 
   updateMemoryFact(id: string, status: MemoryFact["status"]): MemoryFact {
-    const result = this.db
-      .prepare("UPDATE memory_facts SET status=?,updated_at=? WHERE id=?")
-      .run(status, Date.now(), id);
+    const result = prepareStatement(this.db, "UPDATE memory_facts SET status=?,updated_at=? WHERE id=?").run(
+      status,
+      Date.now(),
+      id,
+    );
     if (result.changes === 0) throw new Error(`Memory fact not found: ${id}`);
     return this.getMemoryFact(id);
   }
 
   deleteMemoryFact(id: string): void {
     this.withTransaction(() => {
-      const result = this.db.prepare("DELETE FROM memory_facts WHERE id=?").run(id);
+      const result = prepareStatement(this.db, "DELETE FROM memory_facts WHERE id=?").run(id);
       if (result.changes === 0) throw new Error(`Memory fact not found: ${id}`);
-      this.db.prepare("DELETE FROM memory_fts WHERE id=?").run(id);
+      prepareStatement(this.db, "DELETE FROM memory_fts WHERE id=?").run(id);
     });
   }
 
   addMemoryRollup(input: Omit<MemoryRollup, "id" | "createdAt">): MemoryRollup {
     const id = randomUUID();
     const createdAt = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO memory_rollups(id,session_id,kind,from_sequence,to_sequence,summary,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id,kind,from_sequence,to_sequence) DO UPDATE SET summary=excluded.summary,created_at=excluded.created_at",
-      )
-      .run(id, input.sessionId, input.kind, input.fromSequence, input.toSequence, input.summary, createdAt);
+    prepareStatement(
+      this.db,
+      "INSERT INTO memory_rollups(id,session_id,kind,from_sequence,to_sequence,summary,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id,kind,from_sequence,to_sequence) DO UPDATE SET summary=excluded.summary,created_at=excluded.created_at",
+    ).run(id, input.sessionId, input.kind, input.fromSequence, input.toSequence, input.summary, createdAt);
     const value = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT * FROM memory_rollups WHERE session_id=? AND kind=? AND from_sequence=? AND to_sequence=?",
       ),
       input.sessionId,
@@ -2268,7 +2358,10 @@ export class UmaDatabase {
 
   listMemoryRollups(sessionId: string, limit = 20): MemoryRollup[] {
     return rows(
-      this.db.prepare("SELECT * FROM memory_rollups WHERE session_id=? ORDER BY to_sequence DESC LIMIT ?"),
+      prepareStatement(
+        this.db,
+        "SELECT * FROM memory_rollups WHERE session_id=? ORDER BY to_sequence DESC LIMIT ?",
+      ),
       sessionId,
       Math.max(1, Math.min(100, limit)),
     ).map((value) => ({
@@ -2284,68 +2377,69 @@ export class UmaDatabase {
 
   replaceAggregateRollup(input: Omit<MemoryRollup, "id" | "createdAt">): MemoryRollup {
     if (input.kind === "turn") return this.addMemoryRollup(input);
-    this.db
-      .prepare("DELETE FROM memory_rollups WHERE session_id=? AND kind=?")
-      .run(input.sessionId, input.kind);
+    prepareStatement(this.db, "DELETE FROM memory_rollups WHERE session_id=? AND kind=?").run(
+      input.sessionId,
+      input.kind,
+    );
     return this.addMemoryRollup(input);
   }
 
   maintainMemoryRollups(sessionId: string): void {
-    this.db
-      .prepare(
-        "DELETE FROM memory_rollups WHERE id IN (SELECT id FROM memory_rollups WHERE session_id=? AND kind='turn' ORDER BY to_sequence DESC LIMIT -1 OFFSET 500)",
-      )
-      .run(sessionId);
-    this.db
-      .prepare(
-        "DELETE FROM memory_rollups WHERE id IN (SELECT id FROM memory_rollups WHERE session_id=? AND kind='day' ORDER BY to_sequence DESC LIMIT -1 OFFSET 90)",
-      )
-      .run(sessionId);
+    prepareStatement(
+      this.db,
+      "DELETE FROM memory_rollups WHERE id IN (SELECT id FROM memory_rollups WHERE session_id=? AND kind='turn' ORDER BY to_sequence DESC LIMIT -1 OFFSET 500)",
+    ).run(sessionId);
+    prepareStatement(
+      this.db,
+      "DELETE FROM memory_rollups WHERE id IN (SELECT id FROM memory_rollups WHERE session_id=? AND kind='day' ORDER BY to_sequence DESC LIMIT -1 OFFSET 90)",
+    ).run(sessionId);
   }
 
   getAgentProfile(userId = "system"): AgentProfile {
-    this.db
-      .prepare("INSERT OR IGNORE INTO agent_profiles(user_id,content,updated_at) VALUES(?,?,?)")
-      .run(userId, "", 0);
+    prepareStatement(
+      this.db,
+      "INSERT OR IGNORE INTO agent_profiles(user_id,content,updated_at) VALUES(?,?,?)",
+    ).run(userId, "", 0);
     const value = row(
-      this.db.prepare("SELECT content,updated_at FROM agent_profiles WHERE user_id=?"),
+      prepareStatement(this.db, "SELECT content,updated_at FROM agent_profiles WHERE user_id=?"),
       userId,
     );
     return { content: text(value?.content), updatedAt: integer(value?.updated_at) };
   }
 
   putAgentProfile(content: string, userId = "system"): AgentProfile {
-    this.db
-      .prepare(
-        "INSERT INTO agent_profiles(user_id,content,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at",
-      )
-      .run(userId, content, Date.now());
+    prepareStatement(
+      this.db,
+      "INSERT INTO agent_profiles(user_id,content,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at",
+    ).run(userId, content, Date.now());
     return this.getAgentProfile(userId);
   }
 
   addQualityAssessment(input: Omit<QualityAssessment, "id" | "createdAt">): QualityAssessment {
     const id = randomUUID();
     const createdAt = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO quality_assessments(id,run_id,target_message_id,passed,issues_json,suggestions_json,iteration,created_at) VALUES(?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.runId,
-        input.targetMessageId,
-        input.passed ? 1 : 0,
-        JSON.stringify(input.issues),
-        JSON.stringify(input.suggestions),
-        input.iteration,
-        createdAt,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO quality_assessments(id,run_id,target_message_id,passed,issues_json,suggestions_json,iteration,created_at) VALUES(?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.runId,
+      input.targetMessageId,
+      input.passed ? 1 : 0,
+      JSON.stringify(input.issues),
+      JSON.stringify(input.suggestions),
+      input.iteration,
+      createdAt,
+    );
     return { id, createdAt, ...input };
   }
 
   listQualityAssessments(runId: string): QualityAssessment[] {
     return rows(
-      this.db.prepare("SELECT * FROM quality_assessments WHERE run_id=? ORDER BY iteration,created_at"),
+      prepareStatement(
+        this.db,
+        "SELECT * FROM quality_assessments WHERE run_id=? ORDER BY iteration,created_at",
+      ),
       runId,
     ).map((value) => ({
       id: text(value.id),
@@ -2361,7 +2455,8 @@ export class UmaDatabase {
 
   listQualityForMessage(messageId: string): QualityAssessment[] {
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT run_id FROM quality_assessments WHERE target_message_id=? GROUP BY run_id ORDER BY MIN(created_at)",
       ),
       messageId,
@@ -2378,7 +2473,8 @@ export class UmaDatabase {
     updatedAt: number;
   }> {
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT id,kind,status,result_message_id,error,created_at,updated_at FROM runs WHERE target_message_id=? AND kind IN ('review','improve') ORDER BY created_at,id",
       ),
       messageId,
@@ -2396,7 +2492,8 @@ export class UmaDatabase {
   listActivity(sessionId: string, limit = 200): Array<Record<string, unknown>> {
     this.getSession(sessionId);
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT sequence,type,payload_json,created_at FROM session_events WHERE session_id=? ORDER BY sequence DESC LIMIT ?",
       ),
       sessionId,
@@ -2415,34 +2512,33 @@ export class UmaDatabase {
     input: Omit<SkillPackage, "id" | "installedAt" | "updatedAt"> & { installPath: string },
   ): SkillPackage {
     const existing = row(
-      this.db.prepare("SELECT id,installed_at FROM skill_packages WHERE name=?"),
+      prepareStatement(this.db, "SELECT id,installed_at FROM skill_packages WHERE name=?"),
       input.name,
     );
     const id = existing ? text(existing.id) : randomUUID();
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO skill_packages(id,name,version,source_type,source_reference,install_path,content_hash,status,risk,diagnostics_json,installed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET version=excluded.version,source_type=excluded.source_type,source_reference=excluded.source_reference,install_path=excluded.install_path,content_hash=excluded.content_hash,status=excluded.status,risk=excluded.risk,diagnostics_json=excluded.diagnostics_json,updated_at=excluded.updated_at",
-      )
-      .run(
-        id,
-        input.name,
-        input.version,
-        input.source.type,
-        input.source.reference,
-        input.installPath,
-        input.contentHash,
-        input.status,
-        input.risk,
-        JSON.stringify(input.diagnostics),
-        existing ? integer(existing.installed_at) : now,
-        now,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO skill_packages(id,name,version,source_type,source_reference,install_path,content_hash,status,risk,diagnostics_json,installed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET version=excluded.version,source_type=excluded.source_type,source_reference=excluded.source_reference,install_path=excluded.install_path,content_hash=excluded.content_hash,status=excluded.status,risk=excluded.risk,diagnostics_json=excluded.diagnostics_json,updated_at=excluded.updated_at",
+    ).run(
+      id,
+      input.name,
+      input.version,
+      input.source.type,
+      input.source.reference,
+      input.installPath,
+      input.contentHash,
+      input.status,
+      input.risk,
+      JSON.stringify(input.diagnostics),
+      existing ? integer(existing.installed_at) : now,
+      now,
+    );
     return this.getSkillPackage(id);
   }
 
   getSkillPackage(id: string): SkillPackage {
-    const value = row(this.db.prepare("SELECT * FROM skill_packages WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM skill_packages WHERE id=?"), id);
     if (!value) throw new Error(`Skill package not found: ${id}`);
     return {
       id: text(value.id),
@@ -2462,21 +2558,22 @@ export class UmaDatabase {
   }
 
   getSkillPackagePath(id: string): string {
-    const value = row(this.db.prepare("SELECT install_path FROM skill_packages WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT install_path FROM skill_packages WHERE id=?"), id);
     if (!value) throw new Error(`Skill package not found: ${id}`);
     return text(value.install_path);
   }
 
   listSkillPackages(): SkillPackage[] {
-    return rows(this.db.prepare("SELECT id FROM skill_packages ORDER BY name")).map((value) =>
+    return rows(prepareStatement(this.db, "SELECT id FROM skill_packages ORDER BY name")).map((value) =>
       this.getSkillPackage(text(value.id)),
     );
   }
 
   updateSkillPackageStatus(id: string, status: SkillPackage["status"]): SkillPackage {
-    const result = this.db
-      .prepare("UPDATE skill_packages SET status=?,updated_at=? WHERE id=?")
-      .run(status, Date.now(), id);
+    const result = prepareStatement(
+      this.db,
+      "UPDATE skill_packages SET status=?,updated_at=? WHERE id=?",
+    ).run(status, Date.now(), id);
     if (!result.changes) throw new Error(`Skill package not found: ${id}`);
     return this.getSkillPackage(id);
   }
@@ -2486,26 +2583,25 @@ export class UmaDatabase {
   ): OptimizationProposal {
     const id = randomUUID();
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO optimization_proposals(id,title,evidence_json,risk,recommendation,validation_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.title,
-        JSON.stringify(input.evidence),
-        input.risk,
-        input.recommendation,
-        JSON.stringify(input.validation),
-        input.status,
-        now,
-        now,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO optimization_proposals(id,title,evidence_json,risk,recommendation,validation_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.title,
+      JSON.stringify(input.evidence),
+      input.risk,
+      input.recommendation,
+      JSON.stringify(input.validation),
+      input.status,
+      now,
+      now,
+    );
     return this.getOptimizationProposal(id);
   }
 
   getOptimizationProposal(id: string): OptimizationProposal {
-    const value = row(this.db.prepare("SELECT * FROM optimization_proposals WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM optimization_proposals WHERE id=?"), id);
     if (!value) throw new Error(`Optimization proposal not found: ${id}`);
     return {
       id: text(value.id),
@@ -2521,9 +2617,9 @@ export class UmaDatabase {
   }
 
   listOptimizationProposals(): OptimizationProposal[] {
-    return rows(this.db.prepare("SELECT id FROM optimization_proposals ORDER BY created_at DESC")).map(
-      (value) => this.getOptimizationProposal(text(value.id)),
-    );
+    return rows(
+      prepareStatement(this.db, "SELECT id FROM optimization_proposals ORDER BY created_at DESC"),
+    ).map((value) => this.getOptimizationProposal(text(value.id)));
   }
 
   addOptimizationApplication(
@@ -2531,30 +2627,29 @@ export class UmaDatabase {
   ): OptimizationApplication {
     const id = randomUUID();
     const createdAt = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO optimization_applications(id,proposal_id,workspace,changes_json,backups_json,validation_command,validation_status,validation_output,status,rollback_status,error,created_at,completed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.proposalId,
-        input.workspace,
-        JSON.stringify(input.changes),
-        JSON.stringify(input.backups),
-        input.validationCommand,
-        input.validationStatus,
-        input.validationOutput ?? null,
-        input.status,
-        input.rollbackStatus,
-        input.error ?? null,
-        createdAt,
-        input.completedAt ?? null,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO optimization_applications(id,proposal_id,workspace,changes_json,backups_json,validation_command,validation_status,validation_output,status,rollback_status,error,created_at,completed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.proposalId,
+      input.workspace,
+      JSON.stringify(input.changes),
+      JSON.stringify(input.backups),
+      input.validationCommand,
+      input.validationStatus,
+      input.validationOutput ?? null,
+      input.status,
+      input.rollbackStatus,
+      input.error ?? null,
+      createdAt,
+      input.completedAt ?? null,
+    );
     return this.getOptimizationApplication(id);
   }
 
   getOptimizationApplication(id: string): OptimizationApplication {
-    const value = row(this.db.prepare("SELECT * FROM optimization_applications WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM optimization_applications WHERE id=?"), id);
     if (!value) throw new Error(`Optimization application not found: ${id}`);
     return {
       id: text(value.id),
@@ -2584,33 +2679,33 @@ export class UmaDatabase {
   ): OptimizationApplication {
     const current = this.getOptimizationApplication(id);
     const next = { ...current, ...patch };
-    this.db
-      .prepare(
-        "UPDATE optimization_applications SET validation_status=?,validation_output=?,status=?,rollback_status=?,error=?,completed_at=? WHERE id=?",
-      )
-      .run(
-        next.validationStatus,
-        next.validationOutput ?? null,
-        next.status,
-        next.rollbackStatus,
-        next.error ?? null,
-        next.completedAt ?? null,
-        id,
-      );
+    prepareStatement(
+      this.db,
+      "UPDATE optimization_applications SET validation_status=?,validation_output=?,status=?,rollback_status=?,error=?,completed_at=? WHERE id=?",
+    ).run(
+      next.validationStatus,
+      next.validationOutput ?? null,
+      next.status,
+      next.rollbackStatus,
+      next.error ?? null,
+      next.completedAt ?? null,
+      id,
+    );
     return this.getOptimizationApplication(id);
   }
 
   listOptimizationApplications(limit = 100): OptimizationApplication[] {
     return rows(
-      this.db.prepare("SELECT id FROM optimization_applications ORDER BY created_at DESC LIMIT ?"),
+      prepareStatement(this.db, "SELECT id FROM optimization_applications ORDER BY created_at DESC LIMIT ?"),
       Math.max(1, Math.min(500, limit)),
     ).map((value) => this.getOptimizationApplication(text(value.id)));
   }
 
   updateOptimizationProposal(id: string, status: "accepted" | "rejected"): OptimizationProposal {
-    const result = this.db
-      .prepare("UPDATE optimization_proposals SET status=?,updated_at=? WHERE id=?")
-      .run(status, Date.now(), id);
+    const result = prepareStatement(
+      this.db,
+      "UPDATE optimization_proposals SET status=?,updated_at=? WHERE id=?",
+    ).run(status, Date.now(), id);
     if (!result.changes) throw new Error(`Optimization proposal not found: ${id}`);
     return this.getOptimizationProposal(id);
   }
@@ -2674,27 +2769,26 @@ export class UmaDatabase {
   }): ScheduledTask {
     const id = randomUUID();
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO scheduled_tasks(id,owner_id,name,prompt,message_mode,schedule_json,enabled,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.ownerId ?? "system",
-        input.name,
-        input.prompt,
-        input.messageMode,
-        JSON.stringify(input.schedule),
-        input.enabled ? 1 : 0,
-        input.nextRunAt ?? null,
-        now,
-        now,
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO scheduled_tasks(id,owner_id,name,prompt,message_mode,schedule_json,enabled,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.ownerId ?? "system",
+      input.name,
+      input.prompt,
+      input.messageMode,
+      JSON.stringify(input.schedule),
+      input.enabled ? 1 : 0,
+      input.nextRunAt ?? null,
+      now,
+      now,
+    );
     return this.getScheduledTask(id);
   }
 
   getScheduledTask(id: string): ScheduledTask {
-    const value = row(this.db.prepare("SELECT * FROM scheduled_tasks WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM scheduled_tasks WHERE id=?"), id);
     if (!value) throw new Error(`Scheduled task not found: ${id}`);
     return toScheduledTask(value);
   }
@@ -2702,20 +2796,21 @@ export class UmaDatabase {
   listScheduledTasks(ownerId?: string): ScheduledTask[] {
     return rows(
       ownerId
-        ? this.db.prepare("SELECT * FROM scheduled_tasks WHERE owner_id=? ORDER BY created_at DESC")
-        : this.db.prepare("SELECT * FROM scheduled_tasks ORDER BY created_at DESC"),
+        ? prepareStatement(this.db, "SELECT * FROM scheduled_tasks WHERE owner_id=? ORDER BY created_at DESC")
+        : prepareStatement(this.db, "SELECT * FROM scheduled_tasks ORDER BY created_at DESC"),
       ...(ownerId ? [ownerId] : []),
     ).map(toScheduledTask);
   }
 
   scheduledTaskOwner(id: string): string | undefined {
-    const value = row(this.db.prepare("SELECT owner_id FROM scheduled_tasks WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT owner_id FROM scheduled_tasks WHERE id=?"), id);
     return value ? text(value.owner_id) : undefined;
   }
 
   listDueScheduledTasks(now: number): ScheduledTask[] {
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT * FROM scheduled_tasks WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at<=? ORDER BY next_run_at",
       ),
       now,
@@ -2744,26 +2839,25 @@ export class UmaDatabase {
       nextRunAt: patch.nextRunAt === undefined ? current.nextRunAt : (patch.nextRunAt ?? undefined),
       lastRunAt: patch.lastRunAt === undefined ? current.lastRunAt : (patch.lastRunAt ?? undefined),
     };
-    this.db
-      .prepare(
-        "UPDATE scheduled_tasks SET name=?,prompt=?,message_mode=?,schedule_json=?,enabled=?,next_run_at=?,last_run_at=?,updated_at=? WHERE id=?",
-      )
-      .run(
-        next.name,
-        next.prompt,
-        next.messageMode,
-        JSON.stringify(next.schedule),
-        next.enabled ? 1 : 0,
-        next.nextRunAt ?? null,
-        next.lastRunAt ?? null,
-        Date.now(),
-        id,
-      );
+    prepareStatement(
+      this.db,
+      "UPDATE scheduled_tasks SET name=?,prompt=?,message_mode=?,schedule_json=?,enabled=?,next_run_at=?,last_run_at=?,updated_at=? WHERE id=?",
+    ).run(
+      next.name,
+      next.prompt,
+      next.messageMode,
+      JSON.stringify(next.schedule),
+      next.enabled ? 1 : 0,
+      next.nextRunAt ?? null,
+      next.lastRunAt ?? null,
+      Date.now(),
+      id,
+    );
     return this.getScheduledTask(id);
   }
 
   deleteScheduledTask(id: string): void {
-    const result = this.db.prepare("DELETE FROM scheduled_tasks WHERE id=?").run(id);
+    const result = prepareStatement(this.db, "DELETE FROM scheduled_tasks WHERE id=?").run(id);
     if (result.changes === 0) throw new Error(`Scheduled task not found: ${id}`);
   }
 
@@ -2776,28 +2870,28 @@ export class UmaDatabase {
     if (this.hasActiveScheduledTaskRun(input.scheduledTaskId))
       throw new Error("Scheduled task already has an active run");
     const id = randomUUID();
-    this.db
-      .prepare(
-        "INSERT INTO scheduled_task_runs(id,scheduled_task_id,occurrence_key,trigger,status,scheduled_for) VALUES(?,?,?,?,?,?)",
-      )
-      .run(id, input.scheduledTaskId, input.occurrenceKey, input.trigger, "claimed", input.scheduledFor);
+    prepareStatement(
+      this.db,
+      "INSERT INTO scheduled_task_runs(id,scheduled_task_id,occurrence_key,trigger,status,scheduled_for) VALUES(?,?,?,?,?,?)",
+    ).run(id, input.scheduledTaskId, input.occurrenceKey, input.trigger, "claimed", input.scheduledFor);
     return this.getScheduledTaskRun(id);
   }
 
   getScheduledTaskRun(id: string): ScheduledTaskRun {
-    const value = row(this.db.prepare("SELECT * FROM scheduled_task_runs WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM scheduled_task_runs WHERE id=?"), id);
     if (!value) throw new Error(`Scheduled task run not found: ${id}`);
     return toScheduledTaskRun(value);
   }
 
   findScheduledTaskRunByRunId(runId: string): ScheduledTaskRun | undefined {
-    const value = row(this.db.prepare("SELECT * FROM scheduled_task_runs WHERE run_id=?"), runId);
+    const value = row(prepareStatement(this.db, "SELECT * FROM scheduled_task_runs WHERE run_id=?"), runId);
     return value ? toScheduledTaskRun(value) : undefined;
   }
 
   listScheduledTaskRuns(scheduledTaskId: string): ScheduledTaskRun[] {
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT * FROM scheduled_task_runs WHERE scheduled_task_id=? ORDER BY scheduled_for DESC",
       ),
       scheduledTaskId,
@@ -2807,7 +2901,8 @@ export class UmaDatabase {
   hasActiveScheduledTaskRun(scheduledTaskId: string): boolean {
     return Boolean(
       row(
-        this.db.prepare(
+        prepareStatement(
+          this.db,
           "SELECT 1 AS ok FROM scheduled_task_runs WHERE scheduled_task_id=? AND status IN ('claimed','running','awaiting_resume') LIMIT 1",
         ),
         scheduledTaskId,
@@ -2828,26 +2923,25 @@ export class UmaDatabase {
     }>,
   ): ScheduledTaskRun {
     const current = this.getScheduledTaskRun(id);
-    this.db
-      .prepare(
-        "UPDATE scheduled_task_runs SET background_task_id=?,run_id=?,status=?,resume_json=?,started_at=?,completed_at=?,error=? WHERE id=?",
-      )
-      .run(
-        patch.backgroundTaskId ?? current.backgroundTaskId ?? null,
-        patch.runId ?? current.runId ?? null,
-        patch.status ?? current.status,
-        patch.resume === undefined
-          ? current.resume
-            ? JSON.stringify(current.resume)
-            : null
-          : patch.resume
-            ? JSON.stringify(patch.resume)
-            : null,
-        patch.startedAt ?? current.startedAt ?? null,
-        patch.completedAt ?? current.completedAt ?? null,
-        patch.error === undefined ? (current.error ?? null) : patch.error,
-        id,
-      );
+    prepareStatement(
+      this.db,
+      "UPDATE scheduled_task_runs SET background_task_id=?,run_id=?,status=?,resume_json=?,started_at=?,completed_at=?,error=? WHERE id=?",
+    ).run(
+      patch.backgroundTaskId ?? current.backgroundTaskId ?? null,
+      patch.runId ?? current.runId ?? null,
+      patch.status ?? current.status,
+      patch.resume === undefined
+        ? current.resume
+          ? JSON.stringify(current.resume)
+          : null
+        : patch.resume
+          ? JSON.stringify(patch.resume)
+          : null,
+      patch.startedAt ?? current.startedAt ?? null,
+      patch.completedAt ?? current.completedAt ?? null,
+      patch.error === undefined ? (current.error ?? null) : patch.error,
+      id,
+    );
     return this.getScheduledTaskRun(id);
   }
 
@@ -2876,33 +2970,30 @@ export class UmaDatabase {
   }
 
   recoverScheduledTaskRuns(): ScheduledTaskRun[] {
-    this.db
-      .prepare(
-        "UPDATE background_tasks SET status='pending',error=NULL,updated_at=? WHERE status='interrupted' AND run_id IS NULL AND id IN (SELECT background_task_id FROM scheduled_task_runs WHERE status='running' AND run_id IS NULL)",
-      )
-      .run(Date.now());
-    this.db
-      .prepare(
-        "UPDATE scheduled_task_runs SET status='claimed',error=NULL WHERE status='running' AND run_id IS NULL",
-      )
-      .run();
-    this.db
-      .prepare(
-        "UPDATE scheduled_task_runs SET status='awaiting_resume',error='Background run requires explicit resume' WHERE status='running' AND run_id IS NOT NULL",
-      )
-      .run();
+    prepareStatement(
+      this.db,
+      "UPDATE background_tasks SET status='pending',error=NULL,updated_at=? WHERE status='interrupted' AND run_id IS NULL AND id IN (SELECT background_task_id FROM scheduled_task_runs WHERE status='running' AND run_id IS NULL)",
+    ).run(Date.now());
+    prepareStatement(
+      this.db,
+      "UPDATE scheduled_task_runs SET status='claimed',error=NULL WHERE status='running' AND run_id IS NULL",
+    ).run();
+    prepareStatement(
+      this.db,
+      "UPDATE scheduled_task_runs SET status='awaiting_resume',error='Background run requires explicit resume' WHERE status='running' AND run_id IS NOT NULL",
+    ).run();
     return rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT * FROM scheduled_task_runs WHERE status IN ('claimed','awaiting_resume') ORDER BY scheduled_for",
       ),
     ).map(toScheduledTaskRun);
   }
 
   markActiveBackgroundTasksInterrupted(): void {
-    this.db
-      .prepare(
-        "UPDATE background_tasks SET status='interrupted',error='Server restarted during execution',updated_at=? WHERE status IN ('pending','running')",
-      )
-      .run(Date.now());
+    prepareStatement(
+      this.db,
+      "UPDATE background_tasks SET status='interrupted',error='Server restarted during execution',updated_at=? WHERE status IN ('pending','running')",
+    ).run(Date.now());
   }
 }

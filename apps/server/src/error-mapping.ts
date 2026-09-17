@@ -59,7 +59,9 @@ export function mapServerError(
             : validation
               ? 400
               : 500;
-  if (schemaMismatch) message = "Server state does not match this release; reset state explicitly.";
+  if (schemaMismatch)
+    message =
+      "Server state does not match this release; back up state and run the supported offline upgrade.";
   else if (databaseFailure)
     message = "The server could not persist this operation. Retry after checking server state.";
   return {

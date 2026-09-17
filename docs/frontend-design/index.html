@@ -1,0 +1,5691 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>UmaAgent 前端设计规格</title><style>body{margin:0;background:#F5F3ED;color:#17212B;font:16px/1.7 "Microsoft YaHei","Segoe UI",sans-serif}aside{position:fixed;width:244px;top:0;bottom:0;padding:24px 16px;overflow:auto;background:#FFFFFF}aside a{display:block;padding:8px;font-size:13px}main{margin-left:280px;padding:32px;max-width:1440px}a{color:#365F45}img{max-width:100%;max-height:900px;display:block;margin:20px auto;background:white;border:1px solid #7B8A98}.table{overflow:auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #7B8A98;padding:12px;vertical-align:top;min-width:110px}h2{margin-top:70px;border-top:2px solid #7B8A98;padding-top:24px}code{word-break:break-word;background:#E6EFE7;padding:2px 5px}@media(max-width:800px){aside{position:static;width:auto;max-height:230px}main{margin:0;padding:16px}}</style><aside><strong>UmaAgent</strong><p>当前设计 · 界面索引</p><a href="#um-01">UM-01 登录与创建账户</a><a href="#um-02">UM-02 一次性令牌保存</a><a href="#um-03">UM-03 工作台与会话导航</a><a href="#um-04">UM-04 会话重命名与删除</a><a href="#um-05">UM-05 对话输入与附件草稿</a><a href="#um-06">UM-06 回复、引用与消息操作</a><a href="#um-07">UM-07 模型、思考与队列策略</a><a href="#um-08">UM-08 附件预览与下载</a><a href="#um-09">UM-09 消息审查与改进</a><a href="#um-10">UM-10 运行计划、确认与取消</a><a href="#um-11">UM-11 工具审批</a><a href="#um-12">UM-12 消息队列与编辑</a><a href="#um-13">UM-13 后台任务</a><a href="#um-14">UM-14 调度列表与开关</a><a href="#um-15">UM-15 新建调度</a><a href="#um-16">UM-16 调度运行历史</a><a href="#um-17">UM-17 知识库列表与检索</a><a href="#um-18">UM-18 添加知识来源</a><a href="#um-19">UM-19 Skill与MCP资源</a><a href="#um-20">UM-20 候选记忆审核</a><a href="#um-21">UM-21 质量中心</a><a href="#um-22">UM-22 账号执行权限、Profile 与外观</a><a href="#um-23">UM-23 账户切换、配置与更新</a><a href="#um-24">UM-24 咸鱼工作台与会话</a><a href="#um-25">UM-25 咸鱼登录与扫码状态</a><a href="#um-26">UM-26 渠道服务与自动回复</a><a href="#um-27">UM-27 渠道草稿与人工发送</a><a href="#um-28">UM-28 快捷命令与命令结果</a><a href="#um-29">UM-29 平板、更多与离线状态</a><a href="#um-30">UM-30 运行诊断报告</a><a href="#um-31">UM-31 评测历史与用例详情</a><a href="#um-32">UM-32 只读优化提案</a></aside><main><h1>UmaAgent 前端设计实施规格</h1>
+<p>通用Agent对话、执行计划、后台任务和管理员渠道工作台的独立前端实施合同。</p>
+<blockquote>
+<p>文档修订日期：2026-09-17。本文是目标设计合同，不代表当前代码已实现全部目标行为。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。</p>
+</blockquote>
+<p><a href="../frontend-design/index.html">图文阅读版与界面索引</a> · <a href="../frontend-design/spec.json">结构化界面规格</a> · <a href="../release-acceptance.md">审查与验收记录</a></p>
+<h2>1. 权威顺序与实施范围</h2>
+<p>电脑端为Windows浏览器/Web/PWA，当前没有Electron或原生Windows客户端，禁止凭空增加托盘进程。Android为Compose，手机/平板同一业务合同。普通用户与管理员入口按服务端角色决定；管理员可在同一身份下进入普通Agent工作台，切换普通账号是另一项操作。CLI不作为图形前端。</p>
+<p>同一交付中：交互表和字段规则 &gt; 几何规范 &gt; SVG 示例值。示例值是合成测试数据，不是默认业务数据。业务状态只取服务端或本地桥接回执；画面不允许推断业务成功。若未来协议改变，必须升级本文件与 spec.json；不得让开发者自行猜测一个静默替代行为。</p>
+<h2>2. 现状证据与设计差额</h2>
+<p>Android为独立验收重点，页面与操作详见 docs/android-design.zh-CN.md；当前实现和验收结果以发布验收文档为准。</p>
+<h3>本轮实施基线</h3>
+<div class="table"><table>
+<thead>
+<tr>
+<th>范围</th>
+<th>实施规则</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>protocol</td>
+<td>Protocol v16 / HTTP /api/v16 / SQLite schema 25</td>
+</tr>
+<tr>
+<td>serverChanges</td>
+<td>账号级免审批默认开启；统一执行策略、增量同步与 trace，详见后端设计。</td>
+</tr>
+<tr>
+<td>web.styleEntry</td>
+<td>styles.css then design-system.css</td>
+</tr>
+<tr>
+<td>web.shell</td>
+<td>220px navigation + main workspace</td>
+</tr>
+<tr>
+<td>web.contentWidth</td>
+<td>960px</td>
+</tr>
+<tr>
+<td>web.avatar</td>
+<td>desktop: 48px、mobile: 38px</td>
+</tr>
+<tr>
+<td>web.bodyTypography</td>
+<td>16/24</td>
+</tr>
+<tr>
+<td>web.detailTypography</td>
+<td>12/18</td>
+</tr>
+<tr>
+<td>web.navigation</td>
+<td>工作区设置包含账号执行权限、外观、账号 Profile、应用和账号操作；会话设置只编辑当前会话。</td>
+</tr>
+<tr>
+<td>web.pendingWrites</td>
+<td>创建回执前禁用输入与发送；消息提交期间禁止重复提交；最新消息按钮锚定输入区上沿。</td>
+</tr>
+<tr>
+<td>web.composer</td>
+<td>输入区使用有名称的原生按钮和文本框；上传按钮可通过Tab与Enter操作；正文上限20000字符，Enter发送、Shift+Enter换行，中文输入法组合期间不发送。</td>
+</tr>
+<tr>
+<td>web.mobileNavigation</td>
+<td>手机壳使用内容minmax(0,1fr)+导航auto两行；底部导航以实际高度占位，支持200%字体和安全区，禁止用固定64px留白补偿覆盖导航。输入区与底部导航必须无交叠。</td>
+</tr>
+<tr>
+<td>web.formProtection</td>
+<td>任务、调度、资源、Profile与会话身份登记未保存状态；导航离开确认，局部编辑取消只丢弃当前表单。聊天草稿独立保存。完整组合验收见release-acceptance。 会话身份同步仅替换未修改字段；保存中禁用编辑，失败保留草稿。 知识目录与技能目录独立登记，局部取消不清其他表单；任务、调度和资源在写入期间锁定字段。</td>
+</tr>
+<tr>
+<td>web.qualityLoading</td>
+<td>质量按当前标签查询和刷新；运行诊断支持24小时/7天/30天，区间以同一个结束时刻生成，报告显示实际起止时间。</td>
+</tr>
+<tr>
+<td>web.registration</td>
+<td>注册令牌复制成功或勾选手动保存后才允许继续；复制失败保留文本。</td>
+</tr>
+<tr>
+<td>web.commands</td>
+<td>命令只调用Core executeShortcut，不预读管理页面数据；无搜索结果不能执行旧选中项，提交锁阻止双击重复请求；原生dialog处理焦点限制、Escape和返回焦点。 Ctrl+K/Meta+K仅在UmaAgent焦点范围内生效；方向键切换可见命令，Enter执行，输入法组合不触发选择。</td>
+</tr>
+<tr>
+<td>web.actionMenus</td>
+<td>辅助操作使用一层原生disclosure，Tab发现；上下方向键循环跳过禁用项，Home/End到首尾，Escape关闭并还原入口焦点。</td>
+</tr>
+<tr>
+<td>android.shell</td>
+<td>UmaShell</td>
+</tr>
+<tr>
+<td>android.singlePaneBelowDp</td>
+<td>600</td>
+</tr>
+<tr>
+<td>android.railFromDp</td>
+<td>600</td>
+</tr>
+<tr>
+<td>android.dualPaneFromDp</td>
+<td>840</td>
+</tr>
+<tr>
+<td>android.imeInsetsOwner</td>
+<td>聊天根节点消费聊天键盘Insets；二级表单由Shell消费；同一路径只消费一次</td>
+</tr>
+<tr>
+<td>android.navigation</td>
+<td>UmaShell 使用 Compose Navigation 管理页面栈；对话、会话、任务为一级页面，更多菜单进入调度、资源、记忆、质量、设置和管理员渠道页。二级页面显示返回并隐藏一级导航；Profile 返回设置。顶栏单行显示页面名称与连接摘要；会话标题归聊天头部。</td>
+</tr>
+<tr>
+<td>android.composer</td>
+<td>附件与发送为48dp图标按钮，消息输入独占剩余宽度；键盘打开隐藏底栏，聊天由ChatScreen消费IME，二级表单由Shell消费；成功回执后清空草稿，失败保留。 提交期间禁用文本编辑，避免成功回执清空在途期间新输入的草稿。</td>
+</tr>
+<tr>
+<td>android.conversationScroll</td>
+<td>首次打开定位到末尾；仅在用户保持末尾时跟随流式内容，上翻历史后不抢滚动；显示“最新消息”按钮恢复跟随，切换会话重置跟随状态。</td>
+</tr>
+<tr>
+<td>android.bodyTypography</td>
+<td>16sp / 24sp</td>
+</tr>
+<tr>
+<td>android.actions</td>
+<td>复制与更多常显；编辑、重试、审查、改进、队列排序进入一级菜单；设置提供账号级免审批。</td>
+</tr>
+<tr>
+<td>android.rendering</td>
+<td>离线共享 marked/DOMPurify/KaTeX 正文；增量按4ms窗口合并（预算上限50ms），终态立即校准；使用解析后的投影，不逐事件拉快照。 正文比较保留上次渲染结构，复制反馈与图片错误状态不会导致未变块重复替换。</td>
+</tr>
+<tr>
+<td>android.formProtection</td>
+<td>会话设置按字段保存远端基线，Profile恢复后重读保留脏草稿；导航与系统返回保护未提交表单，包括双栏首页。管理写入归账号ViewModel所有，返回只停止当前页面等待，账号切换取消旧任务。 知识上传与知识源登记同属账号ViewModel任务，离页不中断；未知结果不自动重试。 账号切换检查所有会话未发送正文、附件及未确认发送；未提交命令修改关闭先确认。 资源目录/技能表单打开后停用重复入口，提交锁定字段；创建回执后先清理表单再刷新列表，读取失败不诱导重复创建。</td>
+</tr>
+<tr>
+<td>android.settingsLayout</td>
+<td>字号≥1.5或可用宽度&lt;300dp时，设置行采用标题、说明、操作纵向布局，避免尾部控件把说明挤成逐字竖排。</td>
+</tr>
+<tr>
+<td>android.diagnostics</td>
+<td>运行诊断提供24小时/7天/30天时间窗，切换与刷新均发送明确epoch区间。 首屏直接显示运行、模型、工具和Trace摘要，服务与失败明细按需展开，去除重复时间区间。 多标签页不重复大标题，耗时一位小数；Run Trace按已加载父子关系缩进最多四层，ID可选且复制反馈真实结果。</td>
+</tr>
+<tr>
+<td>android.registration</td>
+<td>注册令牌复制成功或勾选手动保存后才允许继续；复制失败保留文本。</td>
+</tr>
+<tr>
+<td>android.imageDecoding</td>
+<td>会话头像后台采样至最长边512像素，由所有消息共享Bitmap；附件预览后台解码，加载、失败与成功分别呈现。上传与恢复默认立即更新头像。</td>
+</tr>
+<tr>
+<td>android.lifecycle</td>
+<td>UI采用AndroidX生命周期感知状态收集；后台仍接收、投影及保存运行结果，停止驱动不可见页面重组，恢复前台读取最新状态。</td>
+</tr>
+<tr>
+<td>android.sessionIdentity</td>
+<td>会话快照及缺口补拉同步会话名称、模型与头像标识，不在逐token发布时解析身份；当前头像后台读取并校验账号、会话和附件ID，非当前会话只更新列表。</td>
+</tr>
+<tr>
+<td>android.queueReceipts</td>
+<td>队列及会话写入回执校验账号和会话；切换后不覆盖新会话队列、加载、取消状态或编辑弹窗，不跳回旧会话；写入先同步锁定入口。名称及头像更新列表，删除清理对应草稿与缓存。 模型切换成功/失败回执也核对发起会话；删除当前会话清理发送、取消、附件及未确认状态。</td>
+</tr>
+<tr>
+<td>android.runStatus</td>
+<td>准备、执行和校验阶段保留停止入口，使用v16 Run状态文案；业务澄清继续由用户输入。</td>
+</tr>
+<tr>
+<td>compatibility</td>
+<td>服务仅接受当前协议；schema24→25仅通过显式离线工具一次性升级，不保留运行时兼容层。</td>
+</tr>
+</tbody></table>
+</div><h2>3. 视觉、布局与组件规范</h2>
+<p>所有数字为目标值；Windows/Web 使用 CSS px，Android 使用 dp，字体使用 sp。SVG 画布代表逻辑视口，不含外部显示器边框。默认缩放 100%。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>尺寸/组件</th>
+<th>规范</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Web/Windows 基准</td>
+<td>1440×900；桌面壳使用220导航+主工作区；会话、设置、队列与输入区共用960最大内容宽度，正文与头像间距至少12</td>
+</tr>
+<tr>
+<td>中等宽度</td>
+<td>840–1199：导航220；正文左右24；右侧检查器一律覆盖，不压缩聊天</td>
+</tr>
+<tr>
+<td>紧凑宽度</td>
+<td>320–839：单栏；导航折叠为覆盖层，内容边距16；手机基准390×844</td>
+</tr>
+<tr>
+<td>Android 断点</td>
+<td>&lt;600 单栏、600–839 使用80宽 Navigation Rail+单内容、≥840 Rail+320宽列表+剩余详情；只有≥840才双栏，防止600dp塞入三列</td>
+</tr>
+<tr>
+<td>系统栏</td>
+<td>Android 图示状态栏24/手势16仅为基准；实际读取系统 Insets；Windows 原生标题栏由系统控制，图示32仅标位置；不得自绘红黄绿圆点</td>
+</tr>
+<tr>
+<td>导航与顶栏</td>
+<td>应用顶栏64；手机底部导航56+系统底栏Inset；图中表单内容可独立纵向滚动；未显示字段在同一滚动容器中</td>
+</tr>
+<tr>
+<td>正文层级</td>
+<td>页标题24/32、分区20/28、会话正文16/24、控件14/20、折叠详情与辅助12/18；字体Segoe UI/微软雅黑，Android系统字体；字号不小于12</td>
+</tr>
+<tr>
+<td>间距</td>
+<td>4、8、12、16、24、32、48；表单字段组间10，分区间24；屏幕图按字段类型使用78或126高的组；字段label到输入顶26</td>
+</tr>
+<tr>
+<td>控件</td>
+<td>输入框48高；多行输入最小96/最大240后内部滚动；按钮44高，Android点击区域扩为48；按钮左右16；图标20；焦点2px描边+2px间隔</td>
+</tr>
+<tr>
+<td>外观</td>
+<td>卡片圆角12、输入与按钮8、手机Sheet顶部20；边框1；图标取本项目现有线性图标体系，线宽1.75；禁止Emoji代替常规导航图标</td>
+</tr>
+<tr>
+<td>弹层</td>
+<td>桌面对话框宽480，复杂审批640；最大高度视口-64，内容滚动、操作栏固定；手机为全宽Sheet或全屏详情，最大高度可用视口-24</td>
+</tr>
+<tr>
+<td>层叠</td>
+<td>正文0、悬浮工具10、遮罩40、Sheet/Dialog50、Toast60；业务详情最多一个模态层，子详情在层内切换；仅允许一次阻止丢失修改的原生确认覆盖编辑表单，底层不可操作，取消后还原编辑焦点，禁止继续叠加业务详情</td>
+</tr>
+<tr>
+<td>操作优先级</td>
+<td>交互表第一项为主操作，第二项为次操作；其余放右上“更多操作”菜单；菜单顺序与表一致；危险项置底并用危险文字色</td>
+</tr>
+<tr>
+<td>长内容</td>
+<td>列表标题2行省略，详情允许换行；逻辑路径/标识可中部省略，详情可复制全值；代码、表格内部横滚，不使页面横滚；所有图都是首屏示例</td>
+</tr>
+<tr>
+<td>动效</td>
+<td>按钮反馈即时；展开160ms ease-out、Sheet200ms、Toast4秒；减少动态效果开启时动画0ms；骨架不闪烁、不模拟百分比</td>
+</tr>
+</tbody></table>
+</div><p>深色主题明确映射：bg=#111820，surface=#1B2632，text=#F1F5F9，muted=#BCC8D5，border=#65768A，selected=#293E54；主色文字在深色下用#A8D0FF，实心按钮背景固定为#365F45、文字#FFFFFF（与浅色主题的primary token一致）；#A8D0FF仅用于深色主题链接和文字，不作为白字按钮底色。Android固定使用本项目品牌色：浅色primary=#365F45、onPrimary=#FFFFFF；深色primary=#A5D6B0、onPrimary=#153C23、primaryContainer=#263D30、onPrimaryContainer=#D6EFDE，原生Material控件使用此语义映射。其余上述蓝色链接和白字实心按钮规则用于Web。本版不提供动态色开关。按钮hover叠加5%黑色，pressed叠加10%黑色（sRGB通道分别乘0.95/0.90并四舍五入），键盘focus使用2px #A8D0FF外圈，disabled使用surface背景和muted文字，并由真实disabled属性阻止提交。危险按钮浅色#B42318/白字，成功#067647，警告#8A4B08。</p>
+<p>会话正文16px/24px，折叠步骤12px/18px。Web头像48px，840px以下38px；消息列间距桌面14px、移动10px；回复卡片四周16px内边距。正文、队列和输入区最大960px，队列摘要位于输入区正常布局内，详情向上展开。状态摘要使用16px内边距和可收缩的两列，长路径可换行。Android正文bodyMedium，详细步骤bodySmall；回复头像24dp、聊天头部不显示装饰头像。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>Token</th>
+<th>浅色值</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>bg</td>
+<td><code>#F5F3ED</code></td>
+<td>bg</td>
+</tr>
+<tr>
+<td>surface</td>
+<td><code>#FFFFFF</code></td>
+<td>surface</td>
+</tr>
+<tr>
+<td>text</td>
+<td><code>#17212B</code></td>
+<td>text</td>
+</tr>
+<tr>
+<td>muted</td>
+<td><code>#52616E</code></td>
+<td>muted</td>
+</tr>
+<tr>
+<td>border</td>
+<td><code>#7B8A98</code></td>
+<td>border</td>
+</tr>
+<tr>
+<td>primary</td>
+<td><code>#365F45</code></td>
+<td>primary</td>
+</tr>
+<tr>
+<td>selected</td>
+<td><code>#E6EFE7</code></td>
+<td>selected</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/system-components.svg" alt="深浅色组件"></p>
+<p><img loading="lazy" src="../design-assets/final/system-ime.svg" alt="Android输入法与输入框间距"></p>
+<h3>统一交互规则（适用于下文每个界面和动作）</h3>
+<p>G01：进入页面先读缓存（若存在且属于当前账号），标记“上次同步”；同时发起只读刷新。首次无缓存显示骨架；成功空数组才显示“暂无…”。失败不删除已有数据。未知数值显示“未提供”，绝不能显示0冒充测量值。</p>
+<p>G02：点击任一写操作立即禁用该动作和冲突操作，按钮文字“处理中…”，输入保持；远端业务写入只在服务端明确成功后显示成功并清空对应草稿；纯本地动作与系统桥接按G13的本地完成条件判断。失去连接或超时显示“结果尚未确认”，先查询资源状态再允许重发；非幂等操作不得静默自动重试。只读请求可手动重试。</p>
+<p>G03：关闭表单/切换账户前如有未保存修改，弹“放弃未保存内容？”；默认焦点“继续编辑”，另有“放弃并离开”。普通页返回不弹确认。关闭模态层先返回其父层，焦点恢复到触发控件；正在提交时可离开但不假称操作被取消，后台结果按资源ID归并。跨账号迟到响应一律丢弃。</p>
+<p>G04：表单字段规范是UI约束，不能放宽协议上限。字符串按Unicode字符校验；仅在提交时去除首尾空白，正文保留换行与内部空白。字段失焦校验；提交先定位第一处错误；服务端422/400映射到字段，未能映射的显示表单顶部。未在字段表中列出的字段不允许由设计实现者自行新增。</p>
+<p>G05：Web/Windows Enter发送、Shift+Enter换行，输入法正在组合（isComposing）时Enter只确认候选；Android多行IME默认换行，使用显式发送按钮。正文与附件均为空时禁发；仅附件发送使用默认提示词。离线保留草稿但禁发；恢复连接后不自动发送。消息发送与文件上传分开反馈。</p>
+<p>G06：用户距底部≤80px时新增消息跟随；向上滚动超过80px暂停跟随，显示“查看新消息”；加载历史保留首个可见消息ID与偏移。打开/关闭检查器不重置会话。草稿按账号和会话隔离。Android 原子保存草稿及未确认发送ID，支持进程恢复；退出账号清除本机草稿。Web 草稿仅当前页面生命周期。重命名/主题/导航展开状态允许本机偏好保存，不保存Token或正文到普通偏好存储。</p>
+<p>G07：401先结束当前订阅，显示重新登录；403解释权限不足且不可通过按钮重试升级权限；404显示资源已不存在并返回列表；409重新获取最新状态并展示差异；429依据Retry-After倒计时；5xx允许手动重试读取。错误Toast不替代持久错误区。认证失败不循环重连。UI 15秒未确认提示“仍在等待”；60秒转“结果尚未确认”并允许查询，不能当作服务端已失败。</p>
+<p>G08：时间以协议值存储（ISO UTC或epoch毫秒依本项目），显示到本地时区；列表用相对时间，详情显示YYYY-MM-DD HH:mm:ss UTC±hh:mm。日期边界采用用户选择时区，不固定+8。所有示例名/时间/文件为合成数据。</p>
+<p>G09：所有控件用原生按钮/输入语义；Tab按视觉顺序、Esc关闭最上层弹窗；焦点圈全程可见；读屏按标题、状态、正文、操作顺序；错误用role=alert，流式按段以polite播报。触控最小48dp，不依赖hover/滑动唯一操作。字体200%时允许重排，禁止裁掉按钮文字。</p>
+<p>G10：手机IME与系统底栏不叠加：内容底部留白=max(IME.bottom,systemBars.bottom)，只有最外层消费系统Inset；键盘打开隐藏底部导航，输入框外底边距键盘顶部8dp，容差±2dp。Web嵌入容器使用可用动态视口高度，父壳与子页面不得同时增加bottom padding。系统返回优先收键盘、再收Sheet、再退页面。</p>
+<p>G11：界面图绑定的事件ID是验收ID。每条动作至少执行正常完成、不可执行/失败、双击和返回四类测试；local/system使用本地或系统完成条件，read/write使用远端回执；图片里的成功/失败是从处理中分支，绝不能按图横向顺序理解为成功后自动失败。任何与UI无关的trace/requestId只在“诊断详情”折叠区提供，不挤占普通工作流。</p>
+<p>G12：同组菜单项约定：启用只发送enabled=true、停用只发送false；启动只调start、停止只调stop、暂停只调pause、恢复只调resume；取消只调cancel、继续只调resume；保存已有对象调用update、新建调用create；刷新只读取或refresh，安装只调install；查/下载/打开是不同阶段，只在前一阶段成功后显示下一动作。交互表用“/”列出的互斥动作按这里绑定，不能一次点击同时调用所有API。</p>
+<h3>固定导航映射</h3>
+<div class="table"><table>
+<thead>
+<tr>
+<th>导航项</th>
+<th>目标页面</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>会话</td>
+<td>UM-03</td>
+</tr>
+<tr>
+<td>后台任务</td>
+<td>UM-13</td>
+</tr>
+<tr>
+<td>调度</td>
+<td>UM-14</td>
+</tr>
+<tr>
+<td>资源</td>
+<td>UM-17；页内标签切换知识UM-17、添加UM-18、Skill/MCP UM-19</td>
+</tr>
+<tr>
+<td>记忆</td>
+<td>UM-20</td>
+</tr>
+<tr>
+<td>质量</td>
+<td>UM-21</td>
+</tr>
+<tr>
+<td>设置</td>
+<td>UM-22；账户/关于入口UM-23</td>
+</tr>
+<tr>
+<td>咸鱼工作台</td>
+<td>UM-24（仅管理员）</td>
+</tr>
+</tbody></table>
+</div><p>同一导航项有多个页面时，进入表中第一个页面，页内标签按表列顺序出现；切换标签不重新认证。登录前这些业务导航全部隐藏；非法角色直接访问目标页返回无权限。Web路由采用应用内状态，不要求增加未实现的服务端URL。Android通知携带的资源ID仅用于本客户端查找，不拼接外部执行URL。</p>
+<h3>动作类别、网络例外与确认层（G13–G16）</h3>
+<p>G13：每个动作标记执行类别。纯本地动作以本地状态更新为完成条件，不等待网络、不得显示请求失败或“结果尚未确认”。复制与系统调用以对应Promise/系统回调为准；只表示文本已写剪贴板、选择器已返回或页面已打开，不代表业务成功。退出账户先清本地凭据与订阅，网络失败不能阻止退出。远端读取失败保留缓存，重试同一查询；远端写入才适用G02的未知结果核实规则。动作前置条件的明确离线许可优先于通用在线规则。</p>
+<p>G14：返回/取消表单时没有修改则直接关闭；有修改显示“放弃未保存内容？”，正文“离开后，本次未保存的修改将丢失。”；左“继续编辑”、右“放弃并离开”，默认焦点左，Esc/点击遮罩等同继续编辑。确认放弃只丢弃当前表单草稿。正在执行的远端写入不被返回键取消；其结果只更新原资源，不把用户强行带回原页。</p>
+<p>G15：名称含“删除”的动作必须确认：标题“删除{对象类型}？”，正文展示当前对象完整名称及该动作成功规则中的删除范围；左“取消”、右“确认删除”，默认焦点取消，危险按钮#B42318。确认前不发请求；取消不改变数据。拒绝审批/候选仅改变对应决策状态，不套用物理文件删除文案。对于本机文件删除，以归档审批页给定路径及权限为准，不能从列表直接删原件。</p>
+<p>G16：控件可见性按角色、平台、当前状态和动作前置条件共同决定。平台不存在的能力隐藏；当前状态不可用的操作保留并禁用，旁边展示具体原因。菜单按交互表顺序排布，删除项置底；桌面菜单宽280、每项44高，Android宽min(视口-32,360)、每项48高，长标签换行扩高。菜单锚定右上“更多操作”，超出底部时向上展开，最大高为可用视口-48并内部滚动。打开聚焦首个可用项；上下箭头移动、Enter执行、Esc关闭并还原焦点。点击遮罩只关闭菜单，不提交。</p>
+<h3>逐页导航高亮与回退归属</h3>
+<div class="table"><table>
+<thead>
+<tr>
+<th>页面ID</th>
+<th>Windows/Web导航归属</th>
+<th>Android导航归属</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>UM-01</td>
+<td>隐藏（认证壳）</td>
+<td>隐藏（认证壳）</td>
+</tr>
+<tr>
+<td>UM-02</td>
+<td>隐藏（认证壳）</td>
+<td>隐藏（认证壳）</td>
+</tr>
+<tr>
+<td>UM-03</td>
+<td>会话</td>
+<td>会话</td>
+</tr>
+<tr>
+<td>UM-04</td>
+<td>会话</td>
+<td>会话</td>
+</tr>
+<tr>
+<td>UM-05</td>
+<td>会话</td>
+<td>对话</td>
+</tr>
+<tr>
+<td>UM-06</td>
+<td>会话</td>
+<td>对话</td>
+</tr>
+<tr>
+<td>UM-07</td>
+<td>会话</td>
+<td>对话</td>
+</tr>
+<tr>
+<td>UM-08</td>
+<td>会话</td>
+<td>对话</td>
+</tr>
+<tr>
+<td>UM-09</td>
+<td>会话</td>
+<td>对话</td>
+</tr>
+<tr>
+<td>UM-10</td>
+<td>会话</td>
+<td>对话</td>
+</tr>
+<tr>
+<td>UM-11</td>
+<td>会话</td>
+<td>对话</td>
+</tr>
+<tr>
+<td>UM-12</td>
+<td>会话</td>
+<td>对话</td>
+</tr>
+<tr>
+<td>UM-13</td>
+<td>后台任务</td>
+<td>任务</td>
+</tr>
+<tr>
+<td>UM-14</td>
+<td>调度</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-15</td>
+<td>调度</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-16</td>
+<td>调度</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-17</td>
+<td>资源</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-18</td>
+<td>资源</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-19</td>
+<td>资源</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-20</td>
+<td>记忆</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-21</td>
+<td>质量</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-22</td>
+<td>设置</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-23</td>
+<td>设置</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-24</td>
+<td>咸鱼工作台</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-25</td>
+<td>咸鱼工作台</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-26</td>
+<td>咸鱼工作台</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-27</td>
+<td>咸鱼工作台</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-28</td>
+<td>会话</td>
+<td>对话</td>
+</tr>
+<tr>
+<td>UM-29</td>
+<td>设置</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-30</td>
+<td>质量</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-31</td>
+<td>质量</td>
+<td>更多</td>
+</tr>
+<tr>
+<td>UM-32</td>
+<td>质量</td>
+<td>更多</td>
+</tr>
+</tbody></table>
+</div><p>表中归属只用于本页支持的平台；页面注册表未列出的平台不产生该页面。认证页没有业务导航。由另一业务页临时打开的详情保留来源导航高亮；关闭详情恢复原选择。</p>
+<p>Android底部“对话”进入当前会话UM-05，无会话时显示新会话入口；“会话”进入UM-03；“任务”进入UM-13；“更多”进入UM-29，按调度、资源、记忆、质量、设置、咸鱼工作台顺序展示入口，咸鱼仅管理员可见。</p>
+<p>客户端验收修正：Web创建中和消息提交中锁定输入，避免误发到旧会话或重复提交。账号设置与会话设置分开承载。Android发送成功回执后才清空草稿，Profile通过Shell页面栈进入和返回，键盘打开时不显示底部导航。</p>
+<p><img loading="lazy" src="../design-assets/final/system-confirm-windows.svg" alt="系统确认与恢复示意"></p>
+<p><img loading="lazy" src="../design-assets/final/system-confirm-android.svg" alt="系统确认与恢复示意"></p>
+<p><img loading="lazy" src="../design-assets/final/system-recovery.svg" alt="系统确认与恢复示意"></p>
+<h2>4. 状态、数据与权限合同</h2>
+<div class="table"><table>
+<thead>
+<tr>
+<th>域</th>
+<th>合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>事件与认证</td>
+<td>Web PAT登录换服务端会话，嵌入模式使用已配置Core入口；浏览器不提供任意Origin编辑。Android安全保存PAT。成功bootstrap后再启用写操作。</td>
+</tr>
+<tr>
+<td>消息</td>
+<td>sendMessage(sessionId,text,{messageId,mode,attachmentIds})；body text1–1000000、附件最多20；前端正文上限20000（明确更严格UI值），messageId一次提交生成且重试复用。未知结果先查会话快照，不自动重发。</td>
+</tr>
+<tr>
+<td>模式</td>
+<td>plan先规划；免审批开启时服务端自动确认计划，关闭时返回awaiting_confirmation等待确认；agent执行许可同样遵循账号策略，默认开启；mode仅影响下一条消息。</td>
+</tr>
+<tr>
+<td>Run状态</td>
+<td>queued等待处理、preflight分析、awaiting_input等待回复、awaiting_confirmation等待计划确认、running执行、verifying验证、completed完成、failed失败、cancelled取消、interrupted暂停可继续。</td>
+</tr>
+<tr>
+<td>队列</td>
+<td>queue排队、preemptive抢占；切换通过updateSession确认生效；运行中不把取消按钮误称删除。</td>
+</tr>
+<tr>
+<td>消息历史</td>
+<td>历史getSessionHistory(beforeSequence,limit100)，向上加载；lastSequence去重及缺口回放；Snapshot更旧字段不能覆盖已接收较新事件。</td>
+</tr>
+<tr>
+<td>模型</td>
+<td>listModels读取真实provider/id/capabilities；不为自定义名称编造上下文上限。thinkingLevel仅off/minimal/low/medium/high/xhigh/max，并受模型能力约束。</td>
+</tr>
+<tr>
+<td>删除</td>
+<td>deleteSession是服务端删除会话，UI不承诺孤立记录仍可检索；任务仅终态允许删除记录；知识源删除解除索引且不声称删用户原文件。所有删除确认写出对象名。</td>
+</tr>
+<tr>
+<td>权限</td>
+<td>admin才能安装/启停/拒绝Skill、索引服务端路径与操作渠道。普通用户可用已授权知识上传/检索和会话能力；403必须保留权限边界，隐藏入口不替代后端鉴权。</td>
+</tr>
+<tr>
+<td>优化提案</td>
+<td>接受是人工待办，不执行补丁；不在UI添加apply/rollback入口。</td>
+</tr>
+</tbody></table>
+</div><h2>5. 页面注册表</h2>
+<div class="table"><table>
+<thead>
+<tr>
+<th>ID</th>
+<th>界面</th>
+<th>设备</th>
+<th>来源</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="#um-01">UM-01</a></td>
+<td>登录与创建账户</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/Login.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-02">UM-02</a></td>
+<td>一次性令牌保存</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/Login.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-03">UM-03</a></td>
+<td>工作台与会话导航</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/App.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-04">UM-04</a></td>
+<td>会话重命名与删除</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/SessionArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-05">UM-05</a></td>
+<td>对话输入与附件草稿</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/App.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-06">UM-06</a></td>
+<td>回复、引用与消息操作</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/components/ResponseCard.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-07">UM-07</a></td>
+<td>模型、思考与队列策略</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/components/ConversationHeader.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-08">UM-08</a></td>
+<td>附件预览与下载</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/Markdown.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-09">UM-09</a></td>
+<td>消息审查与改进</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/components/QualityPanel.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-10">UM-10</a></td>
+<td>运行计划、确认与取消</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/RunArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-11">UM-11</a></td>
+<td>工具审批</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/components/InspectorStatusPanels.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-12">UM-12</a></td>
+<td>消息队列与编辑</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/components/QueueDock.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-13">UM-13</a></td>
+<td>后台任务</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/BackgroundTaskArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-14">UM-14</a></td>
+<td>调度列表与开关</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/ScheduleArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-15">UM-15</a></td>
+<td>新建调度</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/ScheduleArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-16">UM-16</a></td>
+<td>调度运行历史</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/ScheduleArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-17">UM-17</a></td>
+<td>知识库列表与检索</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/ResourceArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-18">UM-18</a></td>
+<td>添加知识来源</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/ResourceArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-19">UM-19</a></td>
+<td>Skill与MCP资源</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/ResourceArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-20">UM-20</a></td>
+<td>候选记忆审核</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/MemoryArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-21">UM-21</a></td>
+<td>质量中心</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/DiagnosticsArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-22">UM-22</a></td>
+<td>账号执行权限、Profile 与外观</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/components/SessionSettingsPanel.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-23">UM-23</a></td>
+<td>账户切换、配置与更新</td>
+<td>Web, Android</td>
+<td><code>android/app/src/main/java/site/robotclaw/umaagent/UmaSettings.kt</code></td>
+</tr>
+<tr>
+<td><a href="#um-24">UM-24</a></td>
+<td>咸鱼工作台与会话</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/XianyuWorkspace.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-25">UM-25</a></td>
+<td>咸鱼登录与扫码状态</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/XianyuWorkspace.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-26">UM-26</a></td>
+<td>渠道服务与自动回复</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/XianyuWorkspace.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-27">UM-27</a></td>
+<td>渠道草稿与人工发送</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/XianyuWorkspace.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-28">UM-28</a></td>
+<td>快捷命令与命令结果</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/components/CommandPalette.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-29">UM-29</a></td>
+<td>平板、更多与离线状态</td>
+<td>Tablet, Android</td>
+<td><code>android/app/src/main/java/site/robotclaw/umaagent/UmaShell.kt</code></td>
+</tr>
+<tr>
+<td><a href="#um-30">UM-30</a></td>
+<td>运行诊断报告</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/DiagnosticsArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-31">UM-31</a></td>
+<td>评测历史与用例详情</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/EvaluationArea.tsx</code></td>
+</tr>
+<tr>
+<td><a href="#um-32">UM-32</a></td>
+<td>只读优化提案</td>
+<td>Web, Android</td>
+<td><code>apps/web/src/areas/OptimizationArea.tsx</code></td>
+</tr>
+</tbody></table>
+</div><p><a id="um-01"></a></p>
+<h2>UM-01 · 登录与创建账户</h2>
+<p><strong>入口与返回</strong>：未认证进入；登录成功普通用户UM-03、管理员UM-24；注册成功UM-02。</p>
+<p><strong>角色/设备</strong>：未登录；Web, Android。</p>
+<p><strong>导航归属</strong>：认证页不展示业务导航</p>
+<p><strong>布局</strong>：未认证壳：无业务侧栏、无底部导航；桌面居中480宽表单，手机左右16；应用名称、表单标题、字段、操作顺序展示。注册与登录互斥，发行页只显示新令牌。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/Login.tsx</code>。login(token)/register(label)/syncBootstrap。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>服务地址</td>
+<td>record</td>
+<td>由部署配置提供</td>
+<td>服务地址由部署/构建配置提供；不把Origin白名单当用户字段</td>
+</tr>
+<tr>
+<td>访问令牌</td>
+<td>password</td>
+<td>••••••••••••••••</td>
+<td>登录必填；不进入URL、控制台或截图数据</td>
+</tr>
+<tr>
+<td>令牌名称</td>
+<td>input</td>
+<td>mobile</td>
+<td>注册模式显示；1–80字符；不是账号用户名；只在注册模式可见，图中默认登录隐藏本字段。</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：登录/注册是两个互斥表单，切换模式清除错误；已发行Token不能靠返回键重放注册。</p>
+<p><strong>空态/加载/错误</strong>：初次进入立即显示本页表单；只有读取本机配置期间显示“正在读取配置…”，不显示“暂无记录”或列表空态。服务失败在表单顶部持续显示，字段错误在对应字段下显示，保留输入并聚焦首个错误。认证请求需要在线；本机配置保存按该动作前置条件执行。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-01-web.svg" alt="UM-01 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-01-android.svg" alt="UM-01 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-01.I01 — 登录</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“登录”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>client.login(token);syncBootstrap()</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“登录”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>按user.role与workspace路由进入工作台；不展示一次性令牌页。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“登录”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-01-i01.svg" alt="UM-01.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-01.I02 — 创建新账户</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“创建新账户”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>client.register(label)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“创建新账户”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>进入UM-02一次性Token展示；不是密码注册。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“创建新账户”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-01-i02.svg" alt="UM-01.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-02"></a></p>
+<h2>UM-02 · 一次性令牌保存</h2>
+<p><strong>入口与返回</strong>：仅UM-01注册成功进入；离开不再重复展示。</p>
+<p><strong>角色/设备</strong>：刚注册用户；Web, Android。</p>
+<p><strong>导航归属</strong>：认证页不展示业务导航</p>
+<p><strong>布局</strong>：未认证壳：无业务侧栏、无底部导航；桌面居中480宽表单，手机左右16；应用名称、表单标题、字段、操作顺序展示。注册与登录互斥，发行页只显示新令牌。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/Login.tsx</code>。register返回的token仅当前内存。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>访问令牌</td>
+<td>textarea</td>
+<td>示例：仅此一次显示的新令牌</td>
+<td>全值可选取；图稿不得放真实令牌</td>
+</tr>
+<tr>
+<td>保存状态</td>
+<td>record</td>
+<td>尚未确认已保存</td>
+<td>不会因剪贴板调用失败而标记已保存</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：刷新/进程终止可能丢失展示，离开前必须提示不可再次查看；继续按钮不是无条件丢弃Token。</p>
+<p><strong>空态/加载/错误</strong>：初次进入立即显示本页表单；只有读取本机配置期间显示“正在读取配置…”，不显示“暂无记录”或列表空态。服务失败在表单顶部持续显示，字段错误在对应字段下显示，保留输入并聚焦首个错误。认证请求需要在线；本机配置保存按该动作前置条件执行。一次性令牌页的数据丢失时说明“令牌已不可恢复，请返回登录”，不自动重新注册。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-02-web.svg" alt="UM-02 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-02-android.svg" alt="UM-02 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-02.I01 — 复制令牌</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>新Token存在；无需网络。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>system（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>navigator.clipboard / Android Clipboard</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>等待系统剪贴板写入回调；本动作暂时禁用，不要求联网。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>成功提示已复制；继续按钮可用。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>权限拒绝或系统写入失败时显示“复制失败，请手动选择文本复制”；内容不清空，不显示已复制，不自动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>离线复制成功后显示“已复制”4秒；模拟剪贴板拒绝时保留文本且不显示成功。只有回调成功才能勾记令牌已复制。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-02-i01.svg" alt="UM-02.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-02.I02 — 继续进入</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户已复制或勾选“我已手动保存令牌”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>syncBootstrap</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“继续进入”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>用户明确确认已保存后进入工作台；不再次注册。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“继续进入”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-02-i02.svg" alt="UM-02.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-03"></a></p>
+<h2>UM-03 · 工作台与会话导航</h2>
+<p><strong>入口与返回</strong>：登录成功/侧栏会话/底部对话；返回优先关闭检查器。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：工作区入口、更多工具、工作台状态、会话列表四组各自拥有唯一职责。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/App.tsx</code>。syncBootstrap/getSession/createSession；持久事件游标订阅与缺口补拉。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>当前会话</td>
+<td>record</td>
+<td>研究资料梳理</td>
+<td>标题从Session返回，200字符上限</td>
+</tr>
+<tr>
+<td>连接</td>
+<td>record</td>
+<td>已连接 · 刚刚同步</td>
+<td>bootstrap与事件连接各自状态</td>
+</tr>
+<tr>
+<td>最近会话</td>
+<td>record</td>
+<td>研究资料 / 今日待办 / 新会话</td>
+<td>会话updatedAt降序，ID稳定；本地筛选当前已加载集合</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：桌面侧栏220；抽屉宽480覆盖工作区；移动抽屉全屏。空首页建议只填草稿不自动发。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载工作台与会话导航”；成功无记录显示“暂无工作台与会话导航记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-03-web.svg" alt="UM-03 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-03-android.svg" alt="UM-03 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-03.I01 — 新会话</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“新会话”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>createSession()</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“新会话”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>回执成功才选中新会话，聚焦输入框；失败不生成空白假会话。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“新会话”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-03-i01.svg" alt="UM-03.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-03.I02 — 打开会话</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>点击已有会话，可离线读取缓存。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>read（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>getSession(id) + subscribeSession(id,cursor)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“打开会话”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>切换订阅，载入当前快照，草稿按会话隔离。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>读取失败保留已加载内容并标“上次同步”，首次无缓存显示错误面板；按G07显示对应错误原因，手动重试相同查询，不要求核实写入结果。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“打开会话”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-03-i02.svg" alt="UM-03.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-03.I03 — 打开检查器</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>无需联网。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.inspector</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地覆盖层。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>显示运行/连接/审批/同步/设置入口，不压缩窄屏消息区。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“打开检查器”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-03-i03.svg" alt="UM-03.I03 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-04"></a></p>
+<h2>UM-04 · 会话重命名与删除</h2>
+<p><strong>入口与返回</strong>：当前会话标题→更多；返回同一会话。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：会话；Android：会话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/SessionArea.tsx</code>。updateSession/deleteSession。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>会话标题</td>
+<td>input</td>
+<td>研究资料梳理</td>
+<td>1–200字符，提交trim</td>
+</tr>
+<tr>
+<td>删除范围</td>
+<td>record</td>
+<td>此会话与服务端相关会话数据</td>
+<td>不声称仅删除索引；引用历史的可用性依返回结果</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：无滑动立即删除、无不存在的归档接口；返回放弃未保存标题必须确认。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载会话重命名与删除”；成功无记录显示“暂无会话重命名与删除记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-04-web.svg" alt="UM-04 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-04-android.svg" alt="UM-04 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-04.I01 — 保存名称</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“保存名称”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>updateSession(id,{title})</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“保存名称”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>成功后列表和顶栏同时更新；失败保留原标题与编辑草稿。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“保存名称”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-04-i01.svg" alt="UM-04.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-04.I02 — 删除会话</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点删除，确认框展示会话名，默认焦点取消；在线。 按G15确认对象与删除范围；确认前不发送请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>deleteSession(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“删除会话”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>确认对象名后删除；成功清除本会话缓存/订阅，选择剩余最近会话或空首页。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>409运行中时引导先取消或等待；其他错误保留会话。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“删除会话”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-04-i02.svg" alt="UM-04.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-05"></a></p>
+<h2>UM-05 · 对话输入与附件草稿</h2>
+<p><strong>入口与返回</strong>：当前会话底部输入；从任意资源引用回到此处。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：聊天模板：顶部会话标题与最多2条上下文信息；用户消息右对齐、助手回答左对齐；消息内容最大960宽，手机铺满减32；正文独立滚动，输入面板按多行内容增长并限制最大高度，固定在操作栏上方；其余字段在消息关联详情中展开。空态不生成假历史消息。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/App.tsx</code>。sendMessage + upload。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>工作模式</td>
+<td>select</td>
+<td>Agent</td>
+<td>Agent/Plan，仅下一条请求</td>
+</tr>
+<tr>
+<td>消息</td>
+<td>textarea</td>
+<td>请按主题总结这三份资料。</td>
+<td>1–20000字符UI上限；IME遵循G05</td>
+</tr>
+<tr>
+<td>附件</td>
+<td>record</td>
+<td>research.pdf · 上传完成</td>
+<td>最多20项，上传未完成/失败时禁发；通过attachmentId发送</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：正文与附件均为空时禁发；仅有已上传附件时，客户端提供“请查看附件。”默认正文。结果未确认时保留并锁定原正文、附件和模式，先核对历史，再复用原 messageId 手动重试。附件独立上传，不能把上传成功误报为消息已发送。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载对话输入与附件草稿”；成功无记录显示“暂无对话输入与附件草稿记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-05-web.svg" alt="UM-05 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-05-android.svg" alt="UM-05 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-05.I01 — 发送</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“发送”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>sendMessage(sessionId,text,{messageId,mode,attachmentIds})</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“发送”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>收到runId后将草稿变为已提交消息，进入UM-06；服务端排队显示队列位置。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“发送”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-05-i01.svg" alt="UM-05.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-05.I02 — 添加附件</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“添加附件”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>upload(file,name,sessionId)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“添加附件”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>上传完成显示文件名和可移除状态；不发送消息。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>失败保留附件卡，提供重试和移除；不得清空正文。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“添加附件”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-05-i02.svg" alt="UM-05.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-05.I03 — 移除草稿附件</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>附件属于未发送草稿。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.removeAttachment</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地即时移除。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>只解除本次消息附件关联，不删除已上传资源。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“移除草稿附件”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-05-i03.svg" alt="UM-05.I03 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-06"></a></p>
+<h2>UM-06 · 回复、引用与消息操作</h2>
+<p><strong>入口与返回</strong>：UM-05提交后或历史消息点击；返回保持滚动。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：聊天模板：顶部会话标题与最多2条上下文信息；用户消息右对齐、助手回答左对齐；消息内容最大960宽，手机铺满减32；正文独立滚动，输入面板按多行内容增长并限制最大高度，固定在操作栏上方；其余字段在消息关联详情中展开。空态不生成假历史消息。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/components/ResponseCard.tsx</code>。Response/TranscriptItem；quality操作API。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>当前阶段</td>
+<td>record</td>
+<td>正在执行</td>
+<td>真实Run/Response状态，不以定时器模拟</td>
+</tr>
+<tr>
+<td>回答</td>
+<td>message</td>
+<td>资料分为方法、实验与结论三个主题。</td>
+<td>安全Markdown；不执行内嵌脚本</td>
+</tr>
+<tr>
+<td>引用</td>
+<td>record</td>
+<td>资料A · 第2节</td>
+<td>链接目标来自返回数据，未提供页码不编造</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：流式滚动按G06。用户消息编辑→editMessage并形成新运行，不能假装修改旧执行结果；在更多菜单提供“编辑后提交”进入正文表单并保留原消息。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载回复、引用与消息操作”；成功无记录显示“暂无回复、引用与消息操作记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-06-web.svg" alt="UM-06 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-06-android.svg" alt="UM-06 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-06.I01 — 复制回答</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>存在可读文本；无需在线。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>system（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>clipboard.writeText(message.content)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>等待系统剪贴板写入回调；本动作暂时禁用，不要求联网。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>复制选定回答；成功Toast。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>权限拒绝或系统写入失败时显示“复制失败，请手动选择文本复制”；内容不清空，不显示已复制，不自动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>离线复制成功后显示已复制反馈；模拟剪贴板拒绝时保留正文且不显示成功。反馈仅表示复制完成，不改变消息状态。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-06-i01.svg" alt="UM-06.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-06.I02 — 查看引用</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“查看引用”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>read（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>attachmentContent / safe external URL</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“查看引用”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>打开UM-08附件预览或系统浏览器；只允许明确协议。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>读取失败保留已加载内容并标“上次同步”，首次无缓存显示错误面板；按G07显示对应错误原因，手动重试相同查询，不要求核实写入结果。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“查看引用”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-06-i02.svg" alt="UM-06.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-06.I03 — 审查与改进</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“审查与改进”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>reviewMessage / improveMessage</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“审查与改进”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>进入UM-09，质量运行按messageId关联，不覆盖原回答。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“审查与改进”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-06-i03.svg" alt="UM-06.I03 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-07"></a></p>
+<h2>UM-07 · 模型、思考与队列策略</h2>
+<p><strong>入口与返回</strong>：会话顶栏模型入口；关闭返回对话。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/components/ConversationHeader.tsx</code>。listModels/updateSession。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>模型</td>
+<td>select</td>
+<td>gpt-6-astra</td>
+<td>内置项+自定义名称；provider保持当前值</td>
+</tr>
+<tr>
+<td>自定义模型名</td>
+<td>input</td>
+<td>my-model</td>
+<td>1–200字符UI上限；不含空白控制字符；相同provider/id去重</td>
+</tr>
+<tr>
+<td>思考强度</td>
+<td>select</td>
+<td>high</td>
+<td>仅协议枚举与模型能力交集</td>
+</tr>
+<tr>
+<td>消息策略</td>
+<td>select</td>
+<td>queue</td>
+<td>queue排队 / preemptive抢占</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：自定义名称不修改baseURL/API key/Provider配置；首次模型请求失败显示服务端原因，不改用其他模型。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载模型、思考与队列策略”；成功无记录显示“暂无模型、思考与队列策略记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-07-web.svg" alt="UM-07 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-07-android.svg" alt="UM-07 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-07.I01 — 应用到会话</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“应用到会话”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>updateSession(id,{model,thinkingLevel,queueMode})</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“应用到会话”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>回执后顶栏和设置同时更新；草稿/历史不变。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“应用到会话”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-07-i01.svg" alt="UM-07.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-07.I02 — 添加自定义名</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>名称合法且不重复；无需验证模型真实可用。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.modelChoices</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地选择项更新，不调用模型。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>本设备当前provider下记忆该名称；无能力元数据标“能力未提供”。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“添加自定义名”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-07-i02.svg" alt="UM-07.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-08"></a></p>
+<h2>UM-08 · 附件预览与下载</h2>
+<p><strong>入口与返回</strong>：消息附件/知识引用；返回原消息锚点。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/Markdown.tsx</code>。attachmentContent(id)/downloadAttachment(id)。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>附件</td>
+<td>record</td>
+<td>research.pdf</td>
+<td>服务端name/MIME/size</td>
+</tr>
+<tr>
+<td>预览</td>
+<td>record</td>
+<td>第1页 · 适配宽度</td>
+<td>图片contain；文本转义；PDF使用安全查看器，缺支持显示下载入口</td>
+</tr>
+<tr>
+<td>来源</td>
+<td>record</td>
+<td>当前会话附件</td>
+<td>不能把它说成电脑任意本地文件</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：未知/不支持MIME显示文件卡与下载，不嵌入可执行HTML；预览失败仍保留文件元数据。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载附件预览与下载”；成功无记录显示“暂无附件预览与下载记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-08-web.svg" alt="UM-08 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-08-android.svg" alt="UM-08 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-08.I01 — 下载文件</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“下载文件”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>read（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>downloadAttachment(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“下载文件”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>经鉴权获取blob后系统保存；取消保存不显示已下载。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>读取失败保留已加载内容并标“上次同步”，首次无缓存显示错误面板；按G07显示对应错误原因，手动重试相同查询，不要求核实写入结果。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“下载文件”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-08-i01.svg" alt="UM-08.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-08.I02 — 关闭预览</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>无需联网。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.closePreview</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地关闭。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>释放objectURL，返回原消息与滚动位置。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“关闭预览”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-08-i02.svg" alt="UM-08.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-09"></a></p>
+<h2>UM-09 · 消息审查与改进</h2>
+<p><strong>入口与返回</strong>：UM-06更多→审查或改进。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/components/QualityPanel.tsx</code>。reviewMessage/improveMessage/listMessageQuality。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>目标消息</td>
+<td>record</td>
+<td>资料总结回答</td>
+<td>固定messageId</td>
+</tr>
+<tr>
+<td>审查反馈</td>
+<td>textarea</td>
+<td>补充引用并精简结论</td>
+<td>仅审查使用，可空；UI最多2000字符；改进不提交此字段</td>
+</tr>
+<tr>
+<td>质量结果</td>
+<td>record</td>
+<td>完整性：待检查</td>
+<td>没有结果时不显示分数</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：进行中禁止同消息并发质量请求；失败不覆盖先前报告；评测百分比分母0时显示未提供。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载消息审查与改进”；成功无记录显示“暂无消息审查与改进记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-09-web.svg" alt="UM-09 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-09-android.svg" alt="UM-09 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-09.I01 — 执行审查</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“执行审查”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>reviewMessage(messageId,feedback)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“执行审查”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>显示独立审查运行与历史，成功后展开证据。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“执行审查”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-09-i01.svg" alt="UM-09.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-09.I02 — 提交改进</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“提交改进”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>improveMessage(messageId,{})</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“提交改进”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>生成独立改进运行，保留原回答和历史。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“提交改进”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-09-i02.svg" alt="UM-09.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-10"></a></p>
+<h2>UM-10 · 运行计划、确认与取消</h2>
+<p><strong>入口与返回</strong>：检查器→运行；Plan消息返回计划时自动提示。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/RunArea.tsx</code>。getRun/listRunActions/listRunCheckpoints/confirmPlan/resumeRun/cancelRun。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>运行</td>
+<td>record</td>
+<td>等待确认执行计划</td>
+<td>Run.status</td>
+</tr>
+<tr>
+<td>计划步骤</td>
+<td>record</td>
+<td>1.读取资料  2.生成摘要  3.验证引用</td>
+<td>以返回顺序展示，列表可展开</td>
+</tr>
+<tr>
+<td>假设与成功标准</td>
+<td>record</td>
+<td>每个结论附来源</td>
+<td>服务端字段存在才显示</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：计划确认与工具审批分别展示；失败/已完成运行不可再次确认；不直接重放原任务作为“继续”。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载运行计划、确认与取消”；成功无记录显示“暂无运行计划、确认与取消记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-10-web.svg" alt="UM-10 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-10-android.svg" alt="UM-10 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-10.I01 — 确认计划</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>状态awaiting_confirmation且在线。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>confirmPlan(runId)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“确认计划”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>只在awaiting_confirmation时有效；成功显示运行状态，不等同工具权限全获批。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“确认计划”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-10-i01.svg" alt="UM-10.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-10.I02 — 取消运行</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“取消运行”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>cancelRun(runId)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“取消运行”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>收到cancelled才显示已取消；期间取消按钮禁用。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“取消运行”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-10-i02.svg" alt="UM-10.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-10.I03 — 继续运行</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>服务端Run.resume可恢复。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>resumeRun(runId)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“继续运行”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>仅interrupted且可恢复时启用；成功显示新运行进度。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“继续运行”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-10-i03.svg" alt="UM-10.I03 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-11"></a></p>
+<h2>UM-11 · 工具审批</h2>
+<p><strong>入口与返回</strong>：审批条/检查器审批入口；处理后回运行。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/components/InspectorStatusPanels.tsx</code>。resolveApproval(id,approved)。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>操作</td>
+<td>record</td>
+<td>写入摘要文件</td>
+<td>工具名/动作说明来自Approval</td>
+</tr>
+<tr>
+<td>影响范围</td>
+<td>record</td>
+<td>当前授权工作目录</td>
+<td>仅列服务端提供的对象</td>
+</tr>
+<tr>
+<td>决策</td>
+<td>record</td>
+<td>等待你的批准</td>
+<td>未决定时有批准/拒绝；已决定只读</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：只有待审批项可操作；深链403禁止显示可用按钮；点击遮罩等同暂不处理，不自动拒绝。</p>
+<p><strong>空态/加载/错误</strong>：只有实际待审批项才显示入口；默认免审批且无待处理项时隐藏空审批区。读取失败显示错误并可重试，已作出的决策以服务端回执为准。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-11-web.svg" alt="UM-11 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-11-android.svg" alt="UM-11 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-11.I01 — 批准操作</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“批准操作”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>resolveApproval(id,true)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“批准操作”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>只有成功回执后解除审批阻塞；保留决策结果。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“批准操作”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-11-i01.svg" alt="UM-11.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-11.I02 — 拒绝操作</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“拒绝操作”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>resolveApproval(id,false)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“拒绝操作”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>显示已拒绝，运行后续由Core决定，不自动改成失败。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“拒绝操作”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-11-i02.svg" alt="UM-11.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-12"></a></p>
+<h2>UM-12 · 消息队列与编辑</h2>
+<p><strong>入口与返回</strong>：队列摘要→展开。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/components/QueueDock.tsx</code>。listQueue/reorderQueue/editMessage/prioritizeRun。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>当前运行</td>
+<td>record</td>
+<td>正在总结资料</td>
+<td>只读</td>
+</tr>
+<tr>
+<td>队列</td>
+<td>record</td>
+<td>1.补充引用  2.生成待办</td>
+<td>稳定messageId/runId</td>
+</tr>
+<tr>
+<td>待发送文本</td>
+<td>textarea</td>
+<td>补充每个结论的来源</td>
+<td>仅排队项可编辑</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：顺序以服务端为准；409重载队列，不静默覆盖另一设备改动；运行中项不能被当作排队项重排。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载消息队列与编辑”；成功无记录显示“暂无消息队列与编辑记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-12-web.svg" alt="UM-12 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-12-android.svg" alt="UM-12 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-12.I01 — 保存队列编辑</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“保存队列编辑”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>editMessage(messageId,text)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“保存队列编辑”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>回执替换该排队项正文，保留其他位置。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“保存队列编辑”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-12-i01.svg" alt="UM-12.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-12.I02 — 移至队首</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“移至队首”；字段校验通过、在线、权限允许且此动作无在途请求。 此控件仅触发“移至队首”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>prioritizeRun(runId)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“移至队首”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>上移/下移/移至队首三菜单项生成完整新序列；首项上移与末项下移禁用。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“移至队首”，仅调用prioritizeRun(runId)一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-12-i02.svg" alt="UM-12.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-12.I03 — 上移</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“上移”；字段校验通过、在线、权限允许且此动作无在途请求。 此控件仅触发“上移”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>reorderQueue(sessionId,runIds)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“上移”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>上移/下移/移至队首三菜单项生成完整新序列；首项上移与末项下移禁用。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“上移”，仅调用reorderQueue(sessionId,runIds)一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-12-i03.svg" alt="UM-12.I03 操作前、处理中、成功与失败"></p>
+<p><strong>UM-12.I04 — 下移</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“下移”；字段校验通过、在线、权限允许且此动作无在途请求。 此控件仅触发“下移”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>reorderQueue(sessionId,runIds)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“下移”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>上移/下移/移至队首三菜单项生成完整新序列；首项上移与末项下移禁用。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“下移”，仅调用reorderQueue(sessionId,runIds)一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-12-i04.svg" alt="UM-12.I04 操作前、处理中、成功与失败"></p>
+<p><strong>UM-12.I05 — 取消队列项</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“取消队列项”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>cancelRun(runId)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“取消队列项”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>仅取消选中排队运行；不清空整个队列。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“取消队列项”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-12-i05.svg" alt="UM-12.I05 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-13"></a></p>
+<h2>UM-13 · 后台任务</h2>
+<p><strong>入口与返回</strong>：任务导航/更多→后台任务。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：后台任务；Android：任务。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/BackgroundTaskArea.tsx</code>。listTasks/createTask/getTask/cancelTask/deleteTask。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>任务内容</td>
+<td>textarea</td>
+<td>每天研究进展汇总</td>
+<td>1–20000字符UI值</td>
+</tr>
+<tr>
+<td>任务列表</td>
+<td>record</td>
+<td>研究汇总 · 执行中</td>
+<td>返回status+sessionId，终态与进行中分组</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：任务“打开运行”是导航到其sessionId和runId，不创建第二次任务。失败重试只能由用户另建任务，未提供retry API不加重试任务按钮。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载后台任务”；成功无记录显示“暂无后台任务记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-13-web.svg" alt="UM-13 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-13-android.svg" alt="UM-13 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-13.I01 — 创建任务</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“创建任务”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>createTask(prompt,parentSessionId)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“创建任务”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>成功插入新任务，点击其会话可追踪；表单清空。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“创建任务”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-13-i01.svg" alt="UM-13.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-13.I02 — 取消任务</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“取消任务”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>cancelTask(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“取消任务”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>回执显示cancelled；不删除历史。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“取消任务”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-13-i02.svg" alt="UM-13.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-13.I03 — 删除记录</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>目标为终态，确认框明确任务名。 按G15确认对象与删除范围；确认前不发送请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>deleteTask(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“删除记录”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>只允许completed/failed/cancelled，确认后移除记录。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“删除记录”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-13-i03.svg" alt="UM-13.I03 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-14"></a></p>
+<h2>UM-14 · 调度列表与开关</h2>
+<p><strong>入口与返回</strong>：更多→调度。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：调度；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/ScheduleArea.tsx</code>。listSchedules/updateSchedule/runSchedule/deleteSchedule。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>调度</td>
+<td>record</td>
+<td>早间简报</td>
+<td>名称、规则摘要、enabled</td>
+</tr>
+<tr>
+<td>下次时间</td>
+<td>record</td>
+<td>2026-09-10 09:00 UTC+08:00</td>
+<td>按明确时区显示；无nextRunAt显示未安排</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：新建入口进入UM-15；历史入口UM-16；disabled不阻止查看历史。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载调度列表与开关”；成功无记录显示“暂无调度列表与开关记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-14-web.svg" alt="UM-14 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-14-android.svg" alt="UM-14 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-14.I01 — 启用调度</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“启用调度”；字段校验通过、在线、权限允许且此动作无在途请求。 此控件仅触发“启用调度”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>updateSchedule(id,{enabled:true})</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“启用调度”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>回执更新开关与下次时间；失败回滚，不影响已运行实例。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“启用调度”，仅调用updateSchedule(id,{enabled:true})一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-14-i01.svg" alt="UM-14.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-14.I02 — 停用调度</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“停用调度”；字段校验通过、在线、权限允许且此动作无在途请求。 此控件仅触发“停用调度”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>updateSchedule(id,{enabled:false})</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“停用调度”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>回执更新开关与下次时间；失败回滚，不影响已运行实例。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“停用调度”，仅调用updateSchedule(id,{enabled:false})一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-14-i02.svg" alt="UM-14.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-14.I03 — 立即运行</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“立即运行”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>runSchedule(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“立即运行”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>创建一次manual实例并显示runId，不改变定时规则。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“立即运行”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-14-i03.svg" alt="UM-14.I03 操作前、处理中、成功与失败"></p>
+<p><strong>UM-14.I04 — 删除调度</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“删除调度”；字段校验通过、在线、权限允许且此动作无在途请求。 按G15确认对象与删除范围；确认前不发送请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>deleteSchedule(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“删除调度”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>确认后不再产生新实例，当前运行状态依服务端回执，不假称全部取消。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“删除调度”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-14-i04.svg" alt="UM-14.I04 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-15"></a></p>
+<h2>UM-15 · 新建调度</h2>
+<p><strong>入口与返回</strong>：UM-14新建；取消回列表。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：调度；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/ScheduleArea.tsx</code>。createSchedule({name,prompt,schedule})。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>名称</td>
+<td>input</td>
+<td>早间简报</td>
+<td>1–200字符UI限制</td>
+</tr>
+<tr>
+<td>任务</td>
+<td>textarea</td>
+<td>整理今天需要跟进的事项</td>
+<td>1–20000字符UI限制</td>
+</tr>
+<tr>
+<td>类型</td>
+<td>select</td>
+<td>interval</td>
+<td>once / interval / cron</td>
+</tr>
+<tr>
+<td>时间规则</td>
+<td>input</td>
+<td>3600000</td>
+<td>interval 输入整数毫秒，至少1000；once 输入带时区偏移的 ISO 时间；cron 输入表达式</td>
+</tr>
+<tr>
+<td>时区</td>
+<td>input</td>
+<td>Asia/Shanghai</td>
+<td>仅 cron 展示 IANA 时区，当前默认 Asia/Shanghai；once 的时区由 ISO 值给出</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：当前界面按间隔毫秒直接提交 everyMs；once 将 ISO 时间解析为 epoch 毫秒并校验未来时间；cron 向服务端提交 expression 与 timezone。当前没有日期选择器、分钟单位换算或 DST 专用交互，不把这些目标描述为已有能力。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载新建调度”；成功无记录显示“暂无新建调度记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-15-web.svg" alt="UM-15 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-15-android.svg" alt="UM-15 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-15.I01 — 创建调度</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“创建调度”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>createSchedule</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“创建调度”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>服务端成功才关闭并清空表单；列表显示真实nextRunAt。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“创建调度”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-15-i01.svg" alt="UM-15.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-15.I02 — 取消创建</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户取消。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.closeForm</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>无远端请求。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>保留列表；非空编辑按G03确认。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“取消创建”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-15-i02.svg" alt="UM-15.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-16"></a></p>
+<h2>UM-16 · 调度运行历史</h2>
+<p><strong>入口与返回</strong>：UM-14某调度历史；返回该调度。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：调度；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/ScheduleArea.tsx</code>。listScheduleRuns/cancelScheduleRun/getScheduleRun。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>历史实例</td>
+<td>record</td>
+<td>早间简报 · 手动 · 执行中</td>
+<td>created/scheduledFor及trigger</td>
+</tr>
+<tr>
+<td>运行结果</td>
+<td>record</td>
+<td>等待回复</td>
+<td>claimed/running/completed/failed/cancelled/awaiting_resume</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：记录为空与请求失败必须区分；时区显示与调度编辑一致。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载调度运行历史”；成功无记录显示“暂无调度运行历史记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-16-web.svg" alt="UM-16 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-16-android.svg" alt="UM-16 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-16.I01 — 查看实例</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“查看实例”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>read（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>getScheduleRun(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“查看实例”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>展示独立实例结果与运行链接，不修改调度。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>读取失败保留已加载内容并标“上次同步”，首次无缓存显示错误面板；按G07显示对应错误原因，手动重试相同查询，不要求核实写入结果。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“查看实例”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-16-i01.svg" alt="UM-16.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-16.I02 — 取消实例</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>实例状态允许取消。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>cancelScheduleRun(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“取消实例”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>只取消claimed/running/awaiting_resume实例，调度规则不变。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“取消实例”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-16-i02.svg" alt="UM-16.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-17"></a></p>
+<h2>UM-17 · 知识库列表与检索</h2>
+<p><strong>入口与返回</strong>：更多→资源→知识库。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：资源；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/ResourceArea.tsx</code>。listKnowledge/searchKnowledge/deleteKnowledge/reindexKnowledge。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>关键词</td>
+<td>input</td>
+<td>断线恢复</td>
+<td>非空检索；可选知识源ID</td>
+</tr>
+<tr>
+<td>知识源</td>
+<td>record</td>
+<td>研究笔记 · ready</td>
+<td>名称、documentCount、状态</td>
+</tr>
+<tr>
+<td>搜索命中</td>
+<td>message</td>
+<td>恢复后先获取快照再接收增量</td>
+<td>sourceName/filePath/snippet；不伪造引用</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：添加来源进入UM-18；Skill/MCP单独页不混成通用文件删除。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载知识库列表与检索”；成功无记录显示“暂无知识库列表与检索记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-17-web.svg" alt="UM-17 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-17-android.svg" alt="UM-17 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-17.I01 — 搜索知识</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“搜索知识”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>read（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>searchKnowledge(query,sourceId,20)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“搜索知识”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>展示当前范围前20命中，注明范围与数量。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>读取失败保留已加载内容并标“上次同步”，首次无缓存显示错误面板；按G07显示对应错误原因，手动重试相同查询，不要求核实写入结果。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“搜索知识”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-17-i01.svg" alt="UM-17.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-17.I02 — 重建索引</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“重建索引”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>reindexKnowledge(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“重建索引”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>回执后显示indexing，完成状态由刷新返回；不立即宣称ready。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“重建索引”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-17-i02.svg" alt="UM-17.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-17.I03 — 删除知识源</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“删除知识源”；字段校验通过、在线、权限允许且此动作无在途请求。 按G15确认对象与删除范围；确认前不发送请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>deleteKnowledge(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“删除知识源”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>确认名称后删除索引来源；不声称删除用户原文件。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“删除知识源”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-17-i03.svg" alt="UM-17.I03 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-18"></a></p>
+<h2>UM-18 · 添加知识来源</h2>
+<p><strong>入口与返回</strong>：资源→添加知识。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：资源；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/ResourceArea.tsx</code>。uploadKnowledge/indexKnowledgeAttachment或admin indexKnowledge。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>名称</td>
+<td>input</td>
+<td>研究资料</td>
+<td>1–200字符UI限制</td>
+</tr>
+<tr>
+<td>文件</td>
+<td>record</td>
+<td>research.pdf</td>
+<td>系统文件选择；上传成功取得attachmentId</td>
+</tr>
+<tr>
+<td>服务端路径</td>
+<td>input</td>
+<td>/srv/knowledge/research</td>
+<td>仅管理员可见，明确是Core服务器路径，不是浏览器电脑路径</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：不发明依赖引用数阻止删除的功能；没有该字段时不得写死保护。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载添加知识来源”；成功无记录显示“暂无添加知识来源记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-18-web.svg" alt="UM-18 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-18-android.svg" alt="UM-18 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-18.I01 — 上传并索引</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“上传并索引”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>upload→indexKnowledgeAttachment(name,attachmentId,sessionId)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“上传并索引”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>上传成功再建索引；失败区分上传和索引阶段，保留成功attachmentId。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“上传并索引”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-18-i01.svg" alt="UM-18.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-18.I02 — 添加服务器目录</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>admin角色且路径合法；普通用户隐藏此操作。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>indexKnowledge(name,path)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“添加服务器目录”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>仅管理员、在线；服务端验证路径范围后返回知识源。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“添加服务器目录”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-18-i02.svg" alt="UM-18.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-19"></a></p>
+<h2>UM-19 · Skill与MCP资源</h2>
+<p><strong>入口与返回</strong>：资源→技能与MCP。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：资源；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/ResourceArea.tsx</code>。skillState/refreshSkills/installSkill/setSkillStatus/mcpStatus。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>技能引用</td>
+<td>input</td>
+<td>owner/repository/skill</td>
+<td>管理员安装输入；不自动执行下载内容</td>
+</tr>
+<tr>
+<td>技能包</td>
+<td>record</td>
+<td>research-helper · disabled</td>
+<td>来源、状态与审核信息</td>
+</tr>
+<tr>
+<td>MCP</td>
+<td>record</td>
+<td>knowledge · 已连接 · 3工具</td>
+<td>只读状态，无假开关</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：普通用户仅查看已授权资源；不显示修改Core密钥字段。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载Skill与MCP资源”；成功无记录显示“暂无Skill与MCP资源记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-19-web.svg" alt="UM-19 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-19-android.svg" alt="UM-19 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-19.I01 — 刷新资源</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“刷新资源”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>refreshSkills; mcpStatus</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“刷新资源”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>更新可用技能和MCP状态，不重启服务。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“刷新资源”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-19-i01.svg" alt="UM-19.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-19.I02 — 安装技能</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>admin且引用非空。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>installSkill({reference})</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“安装技能”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>admin提交，显示返回安装/待审核状态，不默认启用。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“安装技能”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-19-i02.svg" alt="UM-19.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-19.I03 — 启用技能</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>admin且操作与当前状态不同。 此控件仅触发“启用技能”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>setSkillStatus(id,enable)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“启用技能”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>菜单三项分别提交对应枚举；回执更新，拒绝需确认对象名。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“启用技能”，仅调用setSkillStatus(id,enable)一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-19-i03.svg" alt="UM-19.I03 操作前、处理中、成功与失败"></p>
+<p><strong>UM-19.I04 — 停用技能</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>admin且操作与当前状态不同。 此控件仅触发“停用技能”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>setSkillStatus(id,disable)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“停用技能”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>菜单三项分别提交对应枚举；回执更新，拒绝需确认对象名。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“停用技能”，仅调用setSkillStatus(id,disable)一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-19-i04.svg" alt="UM-19.I04 操作前、处理中、成功与失败"></p>
+<p><strong>UM-19.I05 — 拒绝技能</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>admin且操作与当前状态不同。 此控件仅触发“拒绝技能”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>setSkillStatus(id,reject)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“拒绝技能”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>菜单三项分别提交对应枚举；回执更新，拒绝需确认对象名。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“拒绝技能”，仅调用setSkillStatus(id,reject)一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-19-i05.svg" alt="UM-19.I05 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-20"></a></p>
+<h2>UM-20 · 候选记忆审核</h2>
+<p><strong>入口与返回</strong>：更多→记忆。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：记忆；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/MemoryArea.tsx</code>。listMemoryFacts/reviewMemoryFact。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>候选信息</td>
+<td>record</td>
+<td>偏好：回答先结论后证据</td>
+<td>key/value来自服务端</td>
+</tr>
+<tr>
+<td>可信度</td>
+<td>record</td>
+<td>0.86</td>
+<td>0–1；无证据不自行补推断</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：MemoryFact 状态为 candidate 候选、active 生效、superseded 被替代和 rejected 拒绝；更多菜单提供接受/拒绝，当前已生效的对应动作禁用。服务端回执后更新状态，不删除原始审计记录。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载候选记忆审核”；成功无记录显示“暂无候选记忆审核记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-20-web.svg" alt="UM-20 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-20-android.svg" alt="UM-20 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-20.I01 — 保留记忆</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“保留记忆”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>reviewMemoryFact(id,active)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“保留记忆”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>服务端确认后从待审列表更新状态。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“保留记忆”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-20-i01.svg" alt="UM-20.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-20.I02 — 拒绝记忆</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“拒绝记忆”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>reviewMemoryFact(id,rejected)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“拒绝记忆”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>显示拒绝状态，不删除其他记忆。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“拒绝记忆”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-20-i02.svg" alt="UM-20.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-21"></a></p>
+<h2>UM-21 · 质量中心</h2>
+<p><strong>入口与返回</strong>：更多→质量；分为诊断/评测/优化三个标签。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：质量；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/DiagnosticsArea.tsx</code>。diagnosticsReport/listEvaluationReports/listEvaluationTrends/listOptimizationProposals。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>诊断</td>
+<td>record</td>
+<td>运行12 / 成功10 · 工具失败2</td>
+<td>真实计数；Trace缺数据为未提供</td>
+</tr>
+<tr>
+<td>评测</td>
+<td>record</td>
+<td>faux · 8/10 · P95 420ms</td>
+<td>显示mode/suiteVersion/时间，不能解释为真机指标</td>
+</tr>
+<tr>
+<td>优化提案</td>
+<td>record</td>
+<td>减少重复读取 · 待决策</td>
+<td>风险、证据、建议，接受不会自动改代码</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：本页只做导航与概览；三个入口各自独立页面、独立加载、错误与滚动，不同时渲染全部报告。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载诊断、评测与人工优化”；成功无记录显示“暂无诊断、评测与人工优化记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-21-web.svg" alt="UM-21 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-21-android.svg" alt="UM-21 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-21.I01 — 运行诊断</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>已登录，可先读缓存。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.open(UM-30)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地导航。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>进入运行诊断页，失败反馈与其它报告独立。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“运行诊断”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-21-i01.svg" alt="UM-21.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-21.I02 — 评测历史</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>已登录，可先读缓存。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.open(UM-31)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地导航。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>进入评测列表，默认最近30天趋势。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“评测历史”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-21-i02.svg" alt="UM-21.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-21.I03 — 人工优化</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>已登录，可先读缓存。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.open(UM-32)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地导航。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>进入只读优化提案页。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“人工优化”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-21-i03.svg" alt="UM-21.I03 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>三个标签可键盘切换；标签切换请求互不覆盖；评测展开每case字段完整；任何接受提案都不会调用applyOptimization。</p>
+<p><a id="um-22"></a></p>
+<h2>UM-22 · 账号执行权限、Profile 与外观</h2>
+<p><strong>入口与返回</strong>：更多→设置。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：设置；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：设置按执行权限、本机外观、助手偏好、连接、应用更新和账户分组。Profile 为带返回导航的子页，开关保存期间明确反馈。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/components/SessionSettingsPanel.tsx</code>。getExecutionSettings/updateExecutionSettings/updateAgentProfile/publicConfig。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>免审批</td>
+<td>select</td>
+<td>开启（默认）</td>
+<td>账号级 autoApprove；工具、Shell、计划、调度和渠道统一遵循；保存成功才更新开关</td>
+</tr>
+<tr>
+<td>Agent Profile</td>
+<td>textarea</td>
+<td>以简洁中文回答，优先说明结论。</td>
+<td>最多50000字符；真实保存回执后更新</td>
+</tr>
+<tr>
+<td>主题</td>
+<td>select</td>
+<td>跟随系统</td>
+<td>system/light/dark；Android使用固定品牌色</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：账号执行权限和 Profile 只在设置编辑，本机主题独立存储。助手名称、头像及模型属于当前会话，只在会话设置编辑；不能在账号设置重复提供编辑入口。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载账号设置”；Profile内容为空显示可编辑空表单；执行策略未读到回执时禁用开关。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-22-web.svg" alt="UM-22 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-22-android.svg" alt="UM-22 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-22.I02 — 保存Profile</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“保存Profile”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>updateAgentProfile(content)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“保存Profile”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>回执显示已保存；失败保留草稿。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“保存Profile”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-22-i02.svg" alt="UM-22.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-22.I04 — 切换免审批</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>已读取账号策略且在线；保存期间禁用开关。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>getExecutionSettings/updateExecutionSettings(autoApprove)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>显示正在保存，保留服务端已确认值。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>采用服务端回执；开启时处理该账号既有待审批并记录审计，关闭影响后续审批点。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>保留原值，显示错误和重新读取入口。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回设置；退出账号丢弃迟到响应。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>默认开启、关闭再开启、失败回滚、跨账号隔离及既有待审批释放。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-22-i04.svg" alt="UM-22.I04 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-23"></a></p>
+<h2>UM-23 · 账户切换、配置与更新</h2>
+<p><strong>入口与返回</strong>：设置→账户/关于。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：设置；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：账户操作归设置页账户分组。Android普通环境仅保留切换账号；测试包另显示退出账号及测试网关。更新使用独立应用更新分组，重新加载配置归管理员快捷命令。</p>
+<p><strong>数据绑定</strong>：<code>android/app/src/main/java/site/robotclaw/umaagent/UmaSettings.kt</code>。logout/close/clearCacheNamespace；reloadConfig；Android Update。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>身份</td>
+<td>record</td>
+<td>普通用户</td>
+<td>读取服务端role；不能由客户端选角色</td>
+</tr>
+<tr>
+<td>Core版本</td>
+<td>record</td>
+<td>服务端返回值</td>
+<td>只读，不使用文档硬编码</td>
+</tr>
+<tr>
+<td>客户端版本</td>
+<td>record</td>
+<td>构建返回值</td>
+<td>Android按实际versionCode检查</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：退出前检查所有会话的未发送正文、附件及未确认发送，非空时先确认；不停止后台任务或渠道Adapter；断网仍可完成本地退出。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载账户切换、配置与更新”；成功无记录显示“暂无账户切换、配置与更新记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-23-web.svg" alt="UM-23 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-23-android.svg" alt="UM-23 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-23.I01 — 退出并切换账号</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户明确退出；有未保存表单先按G14确认；离线可执行，不要求认证仍有效。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>system（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>logout;close;clearCacheNamespace</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>关闭本账号订阅，清理本账号凭据、内存草稿与缓存命名空间；不等待服务端。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>清除本机凭据、缓存及所有会话草稿后回到登录；旧请求及订阅取消，旧账号回执丢弃。Android切换账号保留测试网关认证，测试环境的退出账号及测试网关同时清理该认证。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>系统调用失败时保留当前界面并显示系统返回原因；允许手动重试。没有系统回调时只能显示“已发起”，不能推断目标动作完成。退出账户的本地清理不等待网络回执。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>离线触发“退出并切换账号”，按系统回调和成功规则核对结果；拒绝系统权限或对象消失时显示真实错误，不显示服务端成功。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-23-i01.svg" alt="UM-23.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-23.I02 — 重新加载配置</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>当前账号有权限；403不自动重试。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>reloadConfig</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“重新加载配置”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>按授权返回需要重启/已重载状态；不显示API key。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“重新加载配置”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-23-i02.svg" alt="UM-23.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-23.I03 — 检查更新</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“检查更新”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>system（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>Android Update / Web install prompt</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“检查更新”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>Android显示真实清单与下载入口；Web仅在浏览器可安装时提供PWA安装。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>按系统更新/下载/节点控制回调显示具体失败原因，保留可核实的当前阶段。只在前一阶段满足本页规则时允许下一动作；重试不跳过权限、文件完整性或签名检查。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>核对本页系统调用及成功规则；模拟拒绝、取消、离线和重复点击，不能把已发起、下载完成或打开安装器当作安装成功。节点停止只改变本机节点。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-23-i03.svg" alt="UM-23.I03 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-24"></a></p>
+<h2>UM-24 · 咸鱼工作台与会话</h2>
+<p><strong>入口与返回</strong>：管理员登录默认入口；普通Agent设置→咸鱼；返回普通工作台保持管理员身份。</p>
+<p><strong>角色/设备</strong>：仅管理员；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：咸鱼工作台；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/XianyuWorkspace.tsx</code>。xianyuWorkspace/getSession/xianyuMarkRead。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>工作区</td>
+<td>record</td>
+<td>咸鱼工作台 · 管理员</td>
+<td>常驻独立标题</td>
+</tr>
+<tr>
+<td>渠道会话</td>
+<td>record</td>
+<td>买家A · 商品咨询 · 未读2</td>
+<td>来自渠道会话列表，不混普通Agent会话</td>
+</tr>
+<tr>
+<td>草稿</td>
+<td>message</td>
+<td>您好，这款商品目前有货。</td>
+<td>消息草稿必须显式发送才进入外部渠道</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：角色只有admin可到达；深链403显示无权限；不能把“进入普通工作台”和“切换普通账号”合并。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载咸鱼工作台与会话”；成功无记录显示“暂无咸鱼工作台与会话记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-24-web.svg" alt="UM-24 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-24-android.svg" alt="UM-24 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-24.I01 — 打开渠道会话</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“打开渠道会话”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>read（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>getSession(id);xianyuMarkRead(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“打开渠道会话”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>加载已选渠道历史并更新其未读数；不发送内容。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>读取失败保留已加载内容并标“上次同步”，首次无缓存显示错误面板；按G07显示对应错误原因，手动重试相同查询，不要求核实写入结果。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“打开渠道会话”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-24-i01.svg" alt="UM-24.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-24.I02 — 进入普通工作台</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>admin已认证；无需换Token。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.workspace=agent</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地导航。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>同一管理员认证切换Agent工作台；不清Cookie、不停止Adapter。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“进入普通工作台”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-24-i02.svg" alt="UM-24.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-24.I03 — 切换普通账号</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户明确退出；有未保存表单先按G14确认；离线可执行，不要求认证仍有效。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>system（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>logout / UM-01</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>关闭本账号订阅，清理本账号凭据、内存草稿与缓存命名空间；不等待服务端。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>清理当前客户端认证与缓存，由另一PAT重新登录。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>系统调用失败时保留当前界面并显示系统返回原因；允许手动重试。没有系统回调时只能显示“已发起”，不能推断目标动作完成。退出账户的本地清理不等待网络回执。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>离线触发“切换普通账号”，按系统回调和成功规则核对结果；拒绝系统权限或对象消失时显示真实错误，不显示服务端成功。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-24-i03.svg" alt="UM-24.I03 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-25"></a></p>
+<h2>UM-25 · 咸鱼登录与扫码状态</h2>
+<p><strong>入口与返回</strong>：UM-24渠道未登录→渠道登录。</p>
+<p><strong>角色/设备</strong>：仅管理员；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：咸鱼工作台；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/XianyuWorkspace.tsx</code>。xianyuLoginStart/xianyuLoginStatus。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>登录状态</td>
+<td>record</td>
+<td>等待扫码</td>
+<td>按Adapter返回状态映射</td>
+</tr>
+<tr>
+<td>扫码信息</td>
+<td>record</td>
+<td>二维码/授权页面由服务端返回</td>
+<td>真实二维码图片区域，不绘制假可扫二维码</td>
+</tr>
+<tr>
+<td>有效期</td>
+<td>record</td>
+<td>由返回数据提供</td>
+<td>未提供时显示未提供，不伪造倒计时</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：离开停止前端状态轮询但不自动清渠道Cookie；服务登录不同于Core账号登录。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载咸鱼登录与扫码状态”；成功无记录显示“暂无咸鱼登录与扫码状态记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-25-web.svg" alt="UM-25 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-25-android.svg" alt="UM-25 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-25.I01 — 开始渠道登录</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“开始渠道登录”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>xianyuLoginStart</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“开始渠道登录”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>显示返回二维码/安全授权链接并读取loginStatus；不重复启动登录。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“开始渠道登录”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-25-i01.svg" alt="UM-25.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-25.I02 — 刷新登录状态</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“刷新登录状态”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>read（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>xianyuLoginStatus</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“刷新登录状态”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>成功回执才显示已登录；过期显示重新开始。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>读取失败保留已加载内容并标“上次同步”，首次无缓存显示错误面板；按G07显示对应错误原因，手动重试相同查询，不要求核实写入结果。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“刷新登录状态”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-25-i02.svg" alt="UM-25.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-26"></a></p>
+<h2>UM-26 · 渠道服务与自动回复</h2>
+<p><strong>入口与返回</strong>：UM-24展开服务控制。</p>
+<p><strong>角色/设备</strong>：仅管理员；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：咸鱼工作台；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/XianyuWorkspace.tsx</code>。xianyuStart/Pause/Resume/Stop/SetAutoReply。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>服务状态</td>
+<td>record</td>
+<td>运行中</td>
+<td>真实Adapter状态</td>
+</tr>
+<tr>
+<td>自动回复</td>
+<td>record</td>
+<td>关闭</td>
+<td>开关实际影响对外回复；默认以服务端当前值为准</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：普通导航退出不触发服务控制。所有外部回复能力必须有明确文案，不用不明“继续”。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载渠道服务与自动回复”；成功无记录显示“暂无渠道服务与自动回复记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-26-web.svg" alt="UM-26 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-26-android.svg" alt="UM-26 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-26.I01 — 启动服务</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“启动服务”；字段校验通过、在线、权限允许且此动作无在途请求。 此控件仅触发“启动服务”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>xianyuStart()</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“启动服务”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>菜单明确各动作，仅对应状态启用；回执刷新服务状态。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“启动服务”，仅调用xianyuStart()一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-26-i01.svg" alt="UM-26.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-26.I02 — 暂停服务</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“暂停服务”；字段校验通过、在线、权限允许且此动作无在途请求。 此控件仅触发“暂停服务”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>xianyuPause()</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“暂停服务”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>菜单明确各动作，仅对应状态启用；回执刷新服务状态。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“暂停服务”，仅调用xianyuPause()一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-26-i02.svg" alt="UM-26.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-26.I03 — 恢复服务</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“恢复服务”；字段校验通过、在线、权限允许且此动作无在途请求。 此控件仅触发“恢复服务”。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>xianyuResume()</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“恢复服务”禁用并显示“处理中…”；其它冲突动作锁定。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>菜单明确各动作，仅对应状态启用；回执刷新服务状态。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>When点击“恢复服务”，仅调用xianyuResume()一次；按本页状态及G02判定成功/失败。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-26-i03.svg" alt="UM-26.I03 操作前、处理中、成功与失败"></p>
+<p><strong>UM-26.I04 — 停止服务</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“停止服务”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>xianyuStop</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“停止服务”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>确认停止影响后提交；成功显示已停止，不注销Core账户。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“停止服务”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-26-i04.svg" alt="UM-26.I04 操作前、处理中、成功与失败"></p>
+<p><strong>UM-26.I05 — 修改自动回复</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“修改自动回复”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>xianyuSetAutoReply(enabled)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“修改自动回复”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>开启前说明将自动向渠道回复并确认；保存成功后更新开关。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“修改自动回复”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-26-i05.svg" alt="UM-26.I05 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-27"></a></p>
+<h2>UM-27 · 渠道草稿与人工发送</h2>
+<p><strong>入口与返回</strong>：UM-24选择回复草稿→发送预览。</p>
+<p><strong>角色/设备</strong>：仅管理员；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：咸鱼工作台；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/XianyuWorkspace.tsx</code>。xianyuSendDraft(activeSessionId,messageId)。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>接收会话</td>
+<td>record</td>
+<td>买家A · 商品咨询</td>
+<td>只读接收目标，必须可见</td>
+</tr>
+<tr>
+<td>待发送内容</td>
+<td>textarea</td>
+<td>您好，这款商品目前有货。</td>
+<td>固定草稿messageId，不允许预览后偷偷变更</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：这是外部消息发送，按钮不称“保存”；发送前始终可预览目标与正文，不借普通Agent对话入口隐式发送。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载渠道草稿与人工发送”；成功无记录显示“暂无渠道草稿与人工发送记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-27-web.svg" alt="UM-27 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-27-android.svg" alt="UM-27 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-27.I01 — 确认发送到渠道</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“确认发送到渠道”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>xianyuSendDraft(sessionId,messageId)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“确认发送到渠道”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>回执ok后标已发送；提示外部目标与时间。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>结果未知先刷新渠道历史，禁止自动再次发送。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“确认发送到渠道”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-27-i01.svg" alt="UM-27.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-27.I02 — 返回修改</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>未开始发送。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.navigateChannelDraft</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地导航。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>保留未发送草稿，回渠道会话。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“返回修改”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-27-i02.svg" alt="UM-27.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-28"></a></p>
+<h2>UM-28 · 快捷命令与命令结果</h2>
+<p><strong>入口与返回</strong>：Web Ctrl+K/工具栏命令；Android更多→快捷命令。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/components/CommandPalette.tsx</code>。packages/protocol/src/commands.json 为目录；Web client.executeShortcut、Android UmaViewModel.executeShortcut 统一调用 Core。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>命令搜索</td>
+<td>input</td>
+<td>任务</td>
+<td>只过滤已注册命令，不执行任意shell</td>
+</tr>
+<tr>
+<td>命令</td>
+<td>record</td>
+<td>列出任务</td>
+<td>名称、说明、权限</td>
+</tr>
+<tr>
+<td>输出</td>
+<td>record</td>
+<td>共3项后台任务</td>
+<td>转义文本；长内容可选取</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：方向键选中、Enter执行、Esc关闭；输入文字不是直接运行命令。 Web和Android支持命令、中文名称与说明搜索，显示管理员权限。Android保留参数命令输入；选中目录项填入输入框，只有点击执行才写入。关闭弹窗不取消已发送写入，账号切换仍隔离回执。 Android未提交命令修改关闭时确认，搜索条件本身不算业务草稿；已提交写入归账号ViewModel，关闭只停止等待。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载快捷命令与命令结果”；成功无记录显示“暂无快捷命令与命令结果记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-28-web.svg" alt="UM-28 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-28-android.svg" alt="UM-28 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-28.I01 — 执行选中命令</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“执行选中命令”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>executeShortcut(sessionId,command)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“执行选中命令”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>仅注册命令映射执行，显示返回output；执行许可遵循账号免审批策略，权限与工作区边界始终检查。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“执行选中命令”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-28-i01.svg" alt="UM-28.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-28.I02 — 关闭命令</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>Esc/关闭按钮；无需网络。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.closePalette</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地关闭。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>返回触发控件，保留草稿。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“关闭命令”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-28-i02.svg" alt="UM-28.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-29"></a></p>
+<h2>UM-29 · 平板、更多与离线状态</h2>
+<p><strong>入口与返回</strong>：手机更多导航/平板宽屏/事件断连。</p>
+<p><strong>角色/设备</strong>：已登录用户；Tablet, Android。</p>
+<p><strong>导航归属</strong>：电脑端：设置；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>android/app/src/main/java/site/robotclaw/umaagent/UmaShell.kt</code>。MobileSection与SyncState；UI适配目标。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>更多入口</td>
+<td>record</td>
+<td>调度 / 资源 / 记忆 / 质量 / 设置</td>
+<td>管理员额外渠道；每项回各自同名页面</td>
+</tr>
+<tr>
+<td>当前连接</td>
+<td>record</td>
+<td>离线 · 上次同步09:41</td>
+<td>读缓存明确标记</td>
+</tr>
+<tr>
+<td>未发送草稿</td>
+<td>textarea</td>
+<td>请总结这次的研究结果</td>
+<td>离线保留，但不自动排队发送</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：≥840双栏保留选择与滚动，600–839仅Rail+单内容；IME使用G10。移动高级页面已提供Compose入口，逐页和组合验收状态以发布验收为准。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载平板、更多与离线状态”；成功无记录显示“暂无平板、更多与离线状态记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-29-tablet.svg" alt="UM-29 Tablet 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-29-android.svg" alt="UM-29 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-29.I01 — 打开更多功能</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>已登录；读取页允许离线。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.navigate(section)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地导航。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>路由到对应界面ID；切换布局不重建会话。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“打开更多功能”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-29-i01.svg" alt="UM-29.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-29.I02 — 重新连接</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“重新连接”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>client.connectEvents / Android sync</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“重新连接”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>完成bootstrap/回放后恢复写控件；不自动发送离线草稿。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“重新连接”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-29-i02.svg" alt="UM-29.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-30"></a></p>
+<h2>UM-30 · 运行诊断报告</h2>
+<p><strong>入口与返回</strong>：质量中心→运行诊断；返回质量中心。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：质量；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/DiagnosticsArea.tsx</code>。diagnosticsReport(from,to)。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>时间窗</td>
+<td>select</td>
+<td>最近24小时</td>
+<td>UI固定最近24小时/7天/30天，转换明确epoch区间</td>
+</tr>
+<tr>
+<td>运行</td>
+<td>record</td>
+<td>10/12完成 · 恢复率8.3%</td>
+<td>summary.runs/recoveryFrequency；分母0显示未提供</td>
+</tr>
+<tr>
+<td>模型耗时</td>
+<td>record</td>
+<td>provider/model · 平均480ms</td>
+<td>slowModels平均值不能标为P95</td>
+</tr>
+<tr>
+<td>工具失败</td>
+<td>record</td>
+<td>文件读取 · 2次</td>
+<td>toolFailures名称/次数/latestError</td>
+</tr>
+<tr>
+<td>Trace</td>
+<td>record</td>
+<td>已记录52 · 不完整1 · 活跃2</td>
+<td>spans/incomplete/active/errorRate/writeFailures/otlpExportFailures/services</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：审批瓶颈额外列tool/requested/denied；UI文案说明拒绝率，不将拒绝等同工具失败。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载运行诊断报告”；成功无记录显示“暂无运行诊断报告记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-30-web.svg" alt="UM-30 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-30-android.svg" alt="UM-30 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-30.I01 — 刷新诊断</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“刷新诊断”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>read（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>diagnosticsReport(from,to)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“刷新诊断”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>更新当前时间窗所有模块和获取时间；模块未提供明确标记。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>读取失败保留已加载内容并标“上次同步”，首次无缓存显示错误面板；按G07显示对应错误原因，手动重试相同查询，不要求核实写入结果。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“刷新诊断”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-30-i01.svg" alt="UM-30.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-30.I02 — 展开服务明细</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>报告有services数组；无需联网。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>local（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>local.expandTraceServices</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>本地展开。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>显示每服务spans/errors与写入失败，折叠不丢时间窗。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>不产生网络错误；目标对象在本地已移除则提示“内容已不可用”并保留当前页面。前置条件不满足时禁用并说明原因。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 本页前置条件满足；When 点击“展开服务明细”；Then 本地状态立即符合成功规则。断网重复执行仍可用；返回恢复焦点，不产生远端写请求。切换类连续点击按当前值逐次切换。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-30-i02.svg" alt="UM-30.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-31"></a></p>
+<h2>UM-31 · 评测历史与用例详情</h2>
+<p><strong>入口与返回</strong>：质量中心→评测历史；点击报告展开。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：质量；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/EvaluationArea.tsx</code>。listEvaluationReports(limit100)/listEvaluationTrends(最近30天)/getEvaluationReport。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>趋势分组</td>
+<td>record</td>
+<td>核心流程 · 80%通过</td>
+<td>group/passedCases/totalCases/durationMs.p95</td>
+</tr>
+<tr>
+<td>报告</td>
+<td>record</td>
+<td>faux · suite-1 · 8/10</td>
+<td>id/status/mode/suiteVersion/createdAt/durationMs</td>
+</tr>
+<tr>
+<td>用例</td>
+<td>record</td>
+<td>来源检索 · 通过 · 420ms</td>
+<td>每例name/passed/category/durationMs/error</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：报告排序createdAt降序；显示当前最多100条与时间范围，不宣称全量历史。faux与real标签始终可见。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载评测历史与用例详情”；成功无记录显示“暂无评测历史与用例详情记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-31-web.svg" alt="UM-31 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-31-android.svg" alt="UM-31 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-31.I01 — 刷新评测</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“刷新评测”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>read（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>listEvaluationReports(100);listEvaluationTrends</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“刷新评测”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>仅展示实际已有报告，不启动真实评测/收费模型调用。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>读取失败保留已加载内容并标“上次同步”，首次无缓存显示错误面板；按G07显示对应错误原因，手动重试相同查询，不要求核实写入结果。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“刷新评测”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-31-i01.svg" alt="UM-31.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-31.I02 — 打开报告详情</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“打开报告详情”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>read（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>getEvaluationReport(id)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“打开报告详情”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>展开该报告完整cases；加载失败保留摘要。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>读取失败保留已加载内容并标“上次同步”，首次无缓存显示错误面板；按G07显示对应错误原因，手动重试相同查询，不要求核实写入结果。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“打开报告详情”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-31-i02.svg" alt="UM-31.I02 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<p><a id="um-32"></a></p>
+<h2>UM-32 · 只读优化提案</h2>
+<p><strong>入口与返回</strong>：质量中心→人工优化。</p>
+<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
+<p><strong>导航归属</strong>：电脑端：质量；Android：更多。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
+<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/areas/OptimizationArea.tsx</code>。listOptimizationProposals/generateOptimizationProposals/decideOptimizationProposal。</p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>控件（从上到下）</th>
+<th>类型</th>
+<th>图中示例</th>
+<th>校验/显示合同</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>提案</td>
+<td>record</td>
+<td>减少重复读取</td>
+<td>title/recommendation</td>
+</tr>
+<tr>
+<td>证据</td>
+<td>record</td>
+<td>同类读取共出现12次</td>
+<td>逐条evidence，不自行造证据</td>
+</tr>
+<tr>
+<td>风险与状态</td>
+<td>record</td>
+<td>low · pending</td>
+<td>risk low/medium/high，status pending/accepted/rejected</td>
+</tr>
+</tbody></table>
+</div><p><strong>页面规则</strong>：无apply/rollback按钮；已决策项只读；不把此功能与对话回答改进混为一体。</p>
+<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载只读优化提案”；成功无记录显示“暂无只读优化提案记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
+<p><img loading="lazy" src="../design-assets/final/UM-32-web.svg" alt="UM-32 Web 布局"></p>
+<p><img loading="lazy" src="../design-assets/final/UM-32-android.svg" alt="UM-32 Android 布局"></p>
+<h3>交互合同与状态图</h3>
+<p><strong>UM-32.I01 — 生成只读提案</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“生成只读提案”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>generateOptimizationProposals</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“生成只读提案”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>返回后刷新提案列表，生成失败保留旧提案。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“生成只读提案”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-32-i01.svg" alt="UM-32.I01 操作前、处理中、成功与失败"></p>
+<p><strong>UM-32.I02 — 接受为人工待办</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“接受为人工待办”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>decideOptimizationProposal(id,accepted)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“接受为人工待办”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>pending→accepted后标记待人工处理，绝不应用补丁。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“接受为人工待办”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-32-i02.svg" alt="UM-32.I02 操作前、处理中、成功与失败"></p>
+<p><strong>UM-32.I03 — 拒绝提案</strong></p>
+<div class="table"><table>
+<thead>
+<tr>
+<th>条目</th>
+<th>精确定义</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>触发与前置</td>
+<td>用户点击“拒绝提案”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
+</tr>
+<tr>
+<td>执行类别</td>
+<td>write（按G13解释）</td>
+</tr>
+<tr>
+<td>事件/调用</td>
+<td><code>decideOptimizationProposal(id,rejected)</code></td>
+</tr>
+<tr>
+<td>处理中</td>
+<td>“拒绝提案”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
+</tr>
+<tr>
+<td>成功</td>
+<td>pending→rejected，仅记录决策。</td>
+</tr>
+<tr>
+<td>失败/重试</td>
+<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
+</tr>
+<tr>
+<td>返回/取消</td>
+<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
+</tr>
+<tr>
+<td>验收</td>
+<td>Given 操作前示例数据；When 触发“拒绝提案”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
+</tr>
+</tbody></table>
+</div><p><img loading="lazy" src="../design-assets/final/UM-32-i03.svg" alt="UM-32.I03 操作前、处理中、成功与失败"></p>
+<h3>页面验收</h3>
+<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
+<h2>6. 平台与系统级行为</h2>
+<p>Windows Web/PWA：浏览器/系统窗口控件位于右侧；支持Ctrl+K命令、Ctrl+F浏览器查找（不抢占），不使用macOS Command键提示；PWA安装入口只在浏览器提供安装事件时显示。</p>
+<p>Android：底部固定对话/会话/任务/更多；更多包含调度、资源、记忆、质量、设置，管理员额外咸鱼入口；≥600Rail、≥840会话列表+正文双栏。系统文件选择器取得URI后上传，不承诺进程被杀后上传继续；返回前台重新检查附件状态，失败项保留手动重试。</p>
+<p>消息通知只显示已授权内容摘要；无当前系统通知实现的能力不得显示已通知。本机外观支持跟随系统、浅色和深色，采用品牌绿。所有角色切换使用独立标题，普通工作台入口与“切换普通账号”明确分开。</p>
+<h2>7. 发布验收门槛</h2>
+<ol>
+<li>页面注册表全部可通过规定入口到达，返回后定位不丢失；没有孤立按钮、无意义“继续”按钮、正文写JSON或未说明的占位框。</li>
+<li>每个事件ID核对前置/处理中/成功/失败/返回，写请求双击只产生一次有效动作。断网/超时不能显示成功或重放未知写请求。</li>
+<li>像素验收以SVG中的结构和几何表为基准：布局尺寸偏差≤2px/dp，字体使用指定系统栈；系统标题栏、字体栅格化、平台文件选择器由OS决定，不要求跨OS像素一致。</li>
+<li>覆盖Web 1440×900/1024×768/390×844/320×640；Android 390×844、600×960、840×900、1024×768，字体100%/200%，深浅色、键盘打开、长文本；Windows Web/PWA另测125%/150%浏览器缩放；当前无原生桌面客户端，不设置托盘验收项。</li>
+<li>对比度：普通文字≥4.5:1，大标题和控件边界≥3:1；Tab/读屏/减少动态效果通过；账号隔离、403深链、离线只读、换账号迟到写入逐条验证。</li>
+<li>设计校验仅证明设计资料、源码绑定与静态图稿自洽。设备、网络、性能及真实模型以 docs/release-acceptance.md 的独立实测结果为准；全局 G03/G14 的所有表单丢弃确认尚未完成逐项验证，不得标为已实现或已验收。</li>
+</ol>
+<h2>8. 来源快照与复刻方法</h2>
+<p>所有相对源码路径相对于当前项目根目录。渲染命令：<code>python docs/frontend-design/render.py</code>。静态复核命令：<code>python docs/frontend-design/validate.py</code>（Python 3、playwright、Pillow，以及本机Microsoft Edge）。渲染只写当前项目的设计文档和 final 图稿；不会写产品源码或请求外部接口。设计源为 spec.json，生成文档与图稿需同步提交；校验报告与预览输出到忽略的 artifacts/acceptance/design，不作为版本化过程文件。图稿为结构规格，不替代设备截图与行为验收。</p>
+<p>设计方法参考：<a href="https://github.com/diuzhev26-glitch/imagegen-frontend-mobile">imagegen-frontend-mobile</a>。采用其平台原生、可读性、连续屏幕一致性要求；本交付为精确 SVG 线框/结构图，未调用外部绘图服务。</p>
+</main></html>

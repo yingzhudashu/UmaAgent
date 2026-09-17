@@ -4,7 +4,7 @@
     "port": 3210,
     "stateDir": "/var/lib/uma-agent/state",
     "workspaceRoots": ["/srv/uma-workspace"],
-    "webOrigins": ["https://robotclaw.site", "https://www.robotclaw.site"],
+    "webOrigins": ["https://agent.example.com", "https://www.agent.example.com"],
     "maxUploadBytes": 20971520
   },
   "xianyu": {
@@ -15,12 +15,12 @@
   "providers": {
     "openai": {
       "driver": "openai",
-      "baseUrl": "https://api.tcvps.cn/v1",
+      "baseUrl": "https://model.example.com/v1",
       "apiKeyEnv": "OPENAI_API_KEY"
     }
   },
   "imageGeneration": {
-    "baseUrl": "https://newapi.stuhelper.com/v1",
+    "baseUrl": "https://images.example.com/v1",
     "apiKeyEnv": "IMAGE_GENERATION_API_KEY"
   },
   "models": {
@@ -36,6 +36,14 @@
         "reasoning": true,
         "structuredOutput": true
       }
+    },
+    "gpt-6-astra": {
+      "provider": "openai",
+      "name": "GPT-6 Astra",
+      "api": "openai-completions",
+      "contextWindow": 258000,
+      "maxOutputTokens": 128000,
+      "capabilities": { "tools": true, "vision": true, "reasoning": true, "structuredOutput": true }
     }
   },
   "roles": {

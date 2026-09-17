@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本为 UmaAgent 1.3.0、Protocol v15 和 SQLite schema 24。schema 24 是当前格式；旧版本数据库直接拒绝启动，发布前清理旧 state.db，不执行迁移。
+当前版本为 Core 1.3.0、Android 1.4.0、Protocol v16、SQLite schema 25。服务只接受当前格式；schema 24 通过 scripts/upgrade-state.mjs 显式离线备份并转换，不保留运行时兼容。
 
 ## 已落地的边界
 
@@ -11,6 +11,8 @@
 - 架构检查阻止旧 API 残留、跨包深层导入、非入口裸 `console.*`，并阻止已记录的大文件继续增长。
 
 ## 性能预算
+
+正式 Core 和验收子进程均使用 `--max-semi-space-size=4`，正常 GC；此前未限制年轻代的失败对照保留。参数只约束年轻代半空间，不限制模型输入或关闭 Trace。
 
 固定 Faux 基线位于 `scripts/perf-baseline.json`，默认运行 1 个 Session、20 条请求和连续事件分页，并逐 Run 检查 Trace。它不代表 100 个 Session 或百万事件的容量验证。`UMA_PERF_MESSAGES` 可用于另行压测；固定对比保持 20 条请求、同一 Node 版本和机器负载。
 
@@ -32,14 +34,19 @@
 
 ```text
 npm run check
-npm test
 npm run test:coverage
+npm run build
+npm run build:web:embed
 npm run test:eval:faux
+npm run test:web:e2e
 npm run test:perf
 npm run test:soak:faux
-npm run test:web:e2e
 ```
 
-本地验收结果集中记录在 [发布验收](release-acceptance.md)，避免多份文档维护不一致的测试数量和性能数字。Faux 结果只证明隔离模型下的行为，真实 Provider smoke/perf/soak 单独验收。
+固定性能对照使用同机、同 Node 版本三轮；保留每轮全部指标，不拼接最优值。并发、长历史、大回复和工具调用另行记录，不替代固定负载。四小时 Faux soak 使用正常 GC，无强制 GC 或放宽预算。失败时保留独立临时数据库和每分钟样本，成功后只清理本次创建的临时目录。
 
-Docker 和 4 小时 soak 由 CI/nightly 执行；本机没有 Docker 时只运行 Node/SQLite 级门禁。MiniAgent 差异审计见 `docs/miniagent-feature-matrix.md`，真实外部网关仅在显式授权时运行。
+Android 设备矩阵脚本为 scripts/android-device-matrix.py，使用独立 debug 包，覆盖窄屏、手机、平板、双栏、大字号和横屏，并恢复设备设置。模拟器不能替代厂商真机。受控增量到正文显示 p95≤100ms，正常交互不能出现超过 700ms 的冻结帧。
+
+真实 Provider smoke、eval、20 请求性能与最多五分钟或 50 Run 的短时 soak 独立运行；配置只从指定文件和环境变量读取。2026-09-17 用户明确授权私人服务器发布；仍不发送闲鱼真实消息。Linux Native 发布验证与隔离性能测试分别记录，Docker、真机等未执行项保持未通过。
+
+本地结果集中记录在 [发布验收](release-acceptance.md)，其他文档不复制测试数量和性能结论。

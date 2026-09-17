@@ -81,7 +81,7 @@ describe("Xianyu delivery boundary", () => {
   });
 
   const internal = (path: string, payload: Record<string, unknown>, headers = internalHeaders) =>
-    app.inject({ method: "POST", url: `/api/v15/xianyu/internal/${path}`, headers, payload });
+    app.inject({ method: "POST", url: `/api/v16/xianyu/internal/${path}`, headers, payload });
   const buyer = async (conversationId = "buyer-1") => {
     const response = await internal("session", { tenantId: "xianyu", conversationId });
     expect(response.statusCode, response.body).toBe(200);
@@ -94,7 +94,7 @@ describe("Xianyu delivery boundary", () => {
       (
         await app.inject({
           method: "POST",
-          url: "/api/v15/xianyu/internal/session",
+          url: "/api/v16/xianyu/internal/session",
           remoteAddress: "203.0.113.1",
           headers: internalHeaders,
           payload: {},
@@ -129,7 +129,7 @@ describe("Xianyu delivery boundary", () => {
     for (const headers of [userHeaders, adminHeaders]) {
       const result = await app.inject({
         method: "POST",
-        url: `/api/v15/xianyu/sessions/${sessionId}/read`,
+        url: `/api/v16/xianyu/sessions/${sessionId}/read`,
         headers,
       });
       expect(result.statusCode).toBe(headers === userHeaders ? 403 : 200);
@@ -138,7 +138,7 @@ describe("Xianyu delivery boundary", () => {
       (
         await app.inject({
           method: "POST",
-          url: "/api/v15/xianyu/sessions/missing/read",
+          url: "/api/v16/xianyu/sessions/missing/read",
           headers: adminHeaders,
         })
       ).statusCode,
@@ -147,7 +147,7 @@ describe("Xianyu delivery boundary", () => {
       (
         await app.inject({
           method: "PUT",
-          url: "/api/v15/xianyu/settings/auto-reply",
+          url: "/api/v16/xianyu/settings/auto-reply",
           headers: adminHeaders,
           payload: { enabled: "yes" },
         })
@@ -157,7 +157,7 @@ describe("Xianyu delivery boundary", () => {
       (
         await app.inject({
           method: "GET",
-          url: `/api/v15/sessions/${sessionId}/snapshot`,
+          url: `/api/v16/sessions/${sessionId}/snapshot`,
           headers: userHeaders,
         })
       ).statusCode,
@@ -175,7 +175,7 @@ describe("Xianyu delivery boundary", () => {
     expect(inbound.statusCode, inbound.body).toBe(200);
     const { runId } = inbound.json<{ runId: string }>();
     await vi.waitFor(() => expect(runtime.getRun(runId).status).toBe("completed"));
-    const runTrace = runtime.listTrace({ runId });
+    const runTrace = await runtime.listTrace({ runId });
     expect(runTrace.traceId).toBe(parent.split("-")[1]);
     expect(runTrace.spans).toEqual(
       expect.arrayContaining([
@@ -206,7 +206,7 @@ describe("Xianyu delivery boundary", () => {
     const send = () =>
       app.inject({
         method: "POST",
-        url: `/api/v15/xianyu/sessions/${sessionId}/drafts/${reply.id}/send`,
+        url: `/api/v16/xianyu/sessions/${sessionId}/drafts/${reply.id}/send`,
         headers: { ...adminHeaders, traceparent: parent },
       });
     expect((await send()).statusCode).toBe(200);
@@ -215,7 +215,7 @@ describe("Xianyu delivery boundary", () => {
     const propagated = new Headers(adapterFetch.mock.calls[0]?.[1]?.headers).get("traceparent");
     expect(propagated?.split("-")[1]).toBe(parent.split("-")[1]);
     expect(runtime.database.channelDeliveryForMessage(reply.id)?.status).toBe("delivered");
-    const logout = await app.inject({ method: "POST", url: "/api/v15/auth/logout", headers: adminHeaders });
+    const logout = await app.inject({ method: "POST", url: "/api/v16/auth/logout", headers: adminHeaders });
     expect(logout.statusCode).toBe(204);
     expect(adapterFetch).toHaveBeenCalledTimes(1);
     expect(runtime.database.isChannelSession(sessionId)).toBe(true);

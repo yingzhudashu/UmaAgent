@@ -6,6 +6,7 @@ import {
   PROTOCOL_VERSION,
   type ResourceInvalidated,
   type ResourceKind,
+  type SessionSnapshot,
 } from "@uma-agent/protocol";
 import Value from "typebox/value";
 import type { UmaDatabase } from "./database.js";
@@ -18,8 +19,23 @@ export class EventHub {
   private resourceListeners = new Set<ResourceListener>();
   private pending: AgentEventEnvelope[] | undefined;
   private pendingResources: Map<ResourceKind, string | undefined> | undefined;
+  private readonly streaming = new Map<
+    string,
+    { runId: string | undefined; content: string; updatedAt: number }
+  >();
 
   constructor(private readonly database: UmaDatabase) {}
+
+  /** 临时正文不写业务库，但进入会话或重连时必须能取得完整的当前前缀。 */
+  overlaySnapshot(snapshot: SessionSnapshot): SessionSnapshot {
+    return {
+      ...snapshot,
+      transcript: snapshot.transcript.map((item) => {
+        const draft = this.streaming.get(item.id);
+        return draft ? { ...item, content: draft.content, updatedAt: draft.updatedAt } : item;
+      }),
+    };
+  }
 
   subscribe(listener: EventListener): () => void {
     this.listeners.add(listener);
@@ -84,6 +100,28 @@ export class EventHub {
   }
 
   private broadcast(event: AgentEventEnvelope): void {
+    const payload = event.payload as Record<string, unknown>;
+    if (event.type === "message.started" && payload.status === "streaming")
+      this.streaming.set(String(payload.id), {
+        runId: event.runId,
+        content: String(payload.content ?? ""),
+        updatedAt: event.timestamp,
+      });
+    else if (event.type === "message.delta") {
+      const delta = event.payload as MessageDelta;
+      const draft = this.streaming.get(delta.messageId);
+      if (draft && delta.offset === draft.content.length) {
+        draft.content += delta.append;
+        draft.updatedAt = delta.updatedAt;
+      }
+    } else if (event.type === "message.completed")
+      this.streaming.delete(String(payload.id ?? payload.messageId));
+    else if (
+      event.type === "run.updated" &&
+      ["completed", "failed", "cancelled", "interrupted"].includes(String(payload.status))
+    ) {
+      for (const [id, draft] of this.streaming) if (draft.runId === event.runId) this.streaming.delete(id);
+    }
     for (const listener of this.listeners) {
       try {
         listener(event);

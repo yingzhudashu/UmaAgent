@@ -1,4 +1,4 @@
-import { type AgentMessage, convertToLlm, estimateContextTokens } from "@earendil-works/pi-agent-core";
+import { type AgentMessage, convertToLlm } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ThinkingLevel } from "@earendil-works/pi-ai";
 import { assertContextCapacity } from "./context-manager.js";
 import type { UmaDatabase } from "./database.js";
@@ -32,8 +32,8 @@ export class ModelCallService {
   async complete(input: ModelCompletionInput): Promise<AssistantMessage> {
     const model = this.models.forRole(input.role);
     const messages = convertToLlm(input.messages);
-    const contextTokens = estimateContextTokens(input.messages).tokens;
-    assertContextCapacity(model, input.messages, input.systemPrompt);
+    // 容量校验与遥测共享一次估算，长历史不再重复遍历；模型输入保持完整。
+    const contextTokens = assertContextCapacity(model, input.messages, input.systemPrompt);
     const span = input.trace?.child(`model.${input.purpose}`, "model", {
       provider: model.provider,
       model: model.id,
@@ -46,14 +46,16 @@ export class ModelCallService {
         : {}),
     });
     const startedAt = Date.now();
-    const callId = this.database.startModelCall({
-      runId: input.runId,
-      provider: model.provider,
-      model: model.id,
-      role: `${input.role}:${input.purpose}`,
-    });
-    injectRuntimeFault("model.started");
+    let callId: string | undefined;
+    let finishing = false;
     try {
+      callId = this.database.startModelCall({
+        runId: input.runId,
+        provider: model.provider,
+        model: model.id,
+        role: `${input.role}:${input.purpose}`,
+      });
+      injectRuntimeFault("model.started");
       // pi-ai owns the single retry loop. Keeping retries out of this service prevents
       // nested retry budgets while retaining Retry-After handling and abortable waits.
       const response = await this.models.models.completeSimple(
@@ -73,6 +75,7 @@ export class ModelCallService {
         },
       );
       const failed = response.stopReason === "error" || response.stopReason === "aborted";
+      finishing = true;
       this.database.finishModelCall(callId, {
         status: failed ? "failed" : "completed",
         durationMs: Date.now() - startedAt,
@@ -96,15 +99,23 @@ export class ModelCallService {
       injectRuntimeFault("model.completed");
       return response;
     } catch (error) {
-      this.database.finishModelCall(callId, {
-        status: "failed",
-        durationMs: Date.now() - startedAt,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // Trace 必须先终结；业务库创建/结算失败也不能留下永久运行中的 Span。
       span?.finish({
         status: "error",
         error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
       });
+      if (callId && !finishing) {
+        try {
+          this.database.finishModelCall(callId, {
+            status: "failed",
+            durationMs: Date.now() - startedAt,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } catch (accountingError) {
+          // 结算只尝试一次，保留原始模型失败和数据库失败，禁止盲重试未知结果的写入。
+          throw new AggregateError([error, accountingError], "Model call and accounting both failed");
+        }
+      }
       throw error;
     }
   }

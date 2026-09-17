@@ -1,9 +1,12 @@
+import type { UmaClient } from "@uma-agent/client";
 import type { Approval, Run, RunAction, RunCheckpoint } from "@uma-agent/protocol";
 import { Check, ChevronRight, RotateCcw, X } from "lucide-react";
+import { TracePanel } from "../components/TracePanel.js";
 import { runStatusLabels } from "../statusLabels.js";
 
 export function RunPanel({
   run,
+  client,
   checkpoints,
   actions,
   retry,
@@ -12,6 +15,7 @@ export function RunPanel({
   disabled,
 }: {
   run: Run | undefined;
+  client: UmaClient;
   checkpoints: RunCheckpoint[];
   actions: RunAction[];
   retry: () => void;
@@ -22,6 +26,7 @@ export function RunPanel({
   if (!run) return <div className="empty-panel">暂无运行信息</div>;
   return (
     <div className="run-panel">
+      <TracePanel client={client} runId={run.id} />
       <div className="panel-label">当前运行</div>
       <div className={`status status-${run.status}`}>{runStatusLabels[run.status]}</div>
       {run.reasoningSummary && (

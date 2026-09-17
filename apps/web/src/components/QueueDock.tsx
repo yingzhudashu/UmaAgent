@@ -1,6 +1,8 @@
 import type { Run, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
 import { ArrowDown, ArrowUp, Check, ChevronsUp, GripVertical, Pencil, Trash2, X } from "lucide-react";
 import { useState } from "react";
+import { ActionMenu } from "./ActionMenu.js";
+import { useUnsavedForm } from "./UnsavedChanges.js";
 
 type QueueItem = SessionSnapshot["queue"][number];
 type ActiveRun = Run | undefined;
@@ -49,6 +51,11 @@ export function QueueDock({
   const [draft, setDraft] = useState("");
   const [pendingAction, setPendingAction] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  const editingItem = queue.find((item) => item.run.id === editingId);
+  const leave = useUnsavedForm(Boolean(editingItem && draft !== editingItem.message.content), () => {
+    setEditingId(undefined);
+    setDraft("");
+  });
   const hasRunning = Boolean(running && activeStatuses.has(running.status));
   if (!hasRunning && queue.length === 0) return null;
 
@@ -71,7 +78,7 @@ export function QueueDock({
     void perform(`move:${ids[nextIndex]}`, () => reorder(ids));
   };
   const drop = (targetId: string) => {
-    if (!draggedId || draggedId === targetId) return;
+    if (disabled || pendingAction || editingId || !draggedId || draggedId === targetId) return;
     const ids = queue.map((item) => item.run.id);
     const from = ids.indexOf(draggedId);
     const to = ids.indexOf(targetId);
@@ -140,7 +147,7 @@ export function QueueDock({
                   <li
                     className={`queue-dock__item ${draggedId === item.run.id ? "is-dragged" : ""}`}
                     key={item.run.id}
-                    draggable={!disabled && !editing}
+                    draggable={!disabled && !busy && !editingId}
                     onDragStart={() => setDraggedId(item.run.id)}
                     onDragEnd={() => setDraggedId(undefined)}
                     onDragOver={(event) => event.preventDefault()}
@@ -151,11 +158,14 @@ export function QueueDock({
                     {editing ? (
                       <input
                         className="queue-dock__editor"
+                        aria-label="队列消息内容"
+                        disabled={disabled || busy}
                         value={draft}
                         onChange={(event) => setDraft(event.target.value)}
                         onKeyDown={(event) => {
-                          if (event.key === "Escape") setEditingId(undefined);
-                          if (event.key === "Enter" && draft.trim()) {
+                          if (busy || disabled) return;
+                          if (event.key === "Escape") leave(() => setEditingId(undefined));
+                          if (event.key === "Enter" && !event.nativeEvent.isComposing && draft.trim()) {
                             void perform(`edit:${item.run.id}`, async () => {
                               await edit(item, draft.trim());
                               setEditingId(undefined);
@@ -177,7 +187,7 @@ export function QueueDock({
                             className="icon"
                             title="保存编辑"
                             aria-label="保存编辑"
-                            disabled={busy || !draft.trim()}
+                            disabled={disabled || busy || !draft.trim()}
                             onClick={() =>
                               void perform(`edit:${item.run.id}`, async () => {
                                 await edit(item, draft.trim());
@@ -193,29 +203,31 @@ export function QueueDock({
                             title="取消编辑"
                             aria-label="取消编辑"
                             disabled={busy}
-                            onClick={() => setEditingId(undefined)}
+                            onClick={() => leave(() => setEditingId(undefined))}
                           >
                             <X size={15} />
                           </button>
                         </>
                       ) : (
-                        <>
+                        <ActionMenu label={`队列第 ${item.position} 条更多操作`}>
                           <button
                             type="button"
-                            className="icon"
+                            className="text-action"
                             title="编辑消息"
                             aria-label="编辑消息"
                             disabled={disabled || busy}
-                            onClick={() => {
-                              setEditingId(item.run.id);
-                              setDraft(item.message.content);
-                            }}
+                            onClick={() =>
+                              leave(() => {
+                                setEditingId(item.run.id);
+                                setDraft(item.message.content);
+                              })
+                            }
                           >
-                            <Pencil size={15} />
+                            <Pencil size={15} /> 编辑消息
                           </button>
                           <button
                             type="button"
-                            className="icon"
+                            className="text-action"
                             title="移至队首"
                             aria-label="移至队首"
                             disabled={disabled || busy || index === 0}
@@ -223,39 +235,39 @@ export function QueueDock({
                               void perform(`prioritize:${item.run.id}`, () => prioritize(item.run.id))
                             }
                           >
-                            <ChevronsUp size={15} />
+                            <ChevronsUp size={15} /> 移至队首
                           </button>
                           <button
                             type="button"
-                            className="icon"
+                            className="text-action"
                             title="上移"
                             aria-label="上移"
                             disabled={disabled || busy || index === 0}
                             onClick={() => move(index, -1)}
                           >
-                            <ArrowUp size={15} />
+                            <ArrowUp size={15} /> 上移
                           </button>
                           <button
                             type="button"
-                            className="icon"
+                            className="text-action"
                             title="下移"
                             aria-label="下移"
                             disabled={disabled || busy || index === queue.length - 1}
                             onClick={() => move(index, 1)}
                           >
-                            <ArrowDown size={15} />
+                            <ArrowDown size={15} /> 下移
                           </button>
                           <button
                             type="button"
-                            className="icon danger-icon"
+                            className="text-action danger-icon"
                             title="取消消息"
                             aria-label="取消消息"
                             disabled={disabled || busy}
                             onClick={() => void perform(`cancel:${item.run.id}`, () => cancel(item.run.id))}
                           >
-                            <Trash2 size={15} />
+                            <Trash2 size={15} /> 取消消息
                           </button>
-                        </>
+                        </ActionMenu>
                       )}
                     </div>
                   </li>

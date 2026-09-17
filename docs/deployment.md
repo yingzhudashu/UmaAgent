@@ -2,9 +2,9 @@
 
 ## 1. 部署前确认
 
-推荐起点：Linux x86_64、2 核 CPU、4 GiB 内存和 20 GiB 可用磁盘；启用 Chromium Browser Worker 时建议 4 核、8 GiB。需要 Docker Engine 24+、Compose v2、Git，以及可访问模型 Provider 的出站 HTTPS。Node 原生部署要求 Node.js 22.19.0 或更新的 22.x。
+推荐起点：Linux x86_64、2 核 CPU、4 GiB 内存和 20 GiB 可用磁盘；启用 Chromium Browser Worker 时建议 4 核、8 GiB。生产采用 Native systemd，需要 Git 和可访问模型 Provider 的出站 HTTPS；可选的容器隔离验证另需 Docker Engine 24+、Compose v2。Node 原生部署要求 Node.js >=22.19.0；当前本机验收为 Node 24.15.0，生产使用模板中固定的运行时。
 
-部署前运行：
+容器隔离验证先运行以下命令；Native 直接使用第3节 Native 小节的 `/etc/uma-agent` 配置及环境文件：
 
 ```bash
 git status --short
@@ -25,19 +25,23 @@ openssl rand -hex 32 # UMA_XIANYU_CONTROL_TOKEN
 
 ## 2. 生产配置
 
-编辑 `deploy/uma.config.production.json`：
+容器编辑 `deploy/uma.config.production.json`；Native 编辑 `/etc/uma-agent/uma.config.json`。共同检查：
 
 - 将 `server.webOrigins` 改为 Web 实际使用的精确 Origin，例如 `https://agent.example.com`。不接受通配符、路径或结尾 `/`。
 - 核对 Provider `baseUrl`、模型 ID、API 类型、上下文窗口、输出上限和 capabilities。示例值不是对任意 Provider 的兼容承诺。
-- 若启用语义知识检索，设置 `EMBEDDING_API_KEY`，并在配置中保持 `embedding.enabled=true`；默认使用 SiliconFlow `BAAI/bge-m3`。未配置 Embedding 时仅使用显式配置的关键词检索，不会隐式切换运行模式。
+- 若启用语义知识检索，设置 `EMBEDDING_API_KEY`，并在配置中保持 `embedding.enabled=true`；默认使用 SiliconFlow `BAAI/bge-m3`。启用但缺少密钥时拒绝启动；仅在显式禁用时使用关键词检索。供应商失败或向量缺失使该次索引失败并显示错误，不把缺失向量的索引标记成功。
 - 密钥只通过 `apiKeyEnv` 和 `authTokenEnv` 引用环境变量，不能写进 JSON。
 - 多用户 Web/移动端认证使用用户个人令牌；个人令牌只保存哈希，Web Cookie 绑定用户。原生 App 的 PKCE redirect 必须通过 `UMA_OAUTH_REDIRECTS` 显式配置为 `clientId|redirectUri`，禁止通配符。
-- `workspaceRoots` 保持为容器内路径 `/data/workspace`。远程客户端路径不是服务器工作区路径。
+- `workspaceRoots` 必须使用部署环境的实际目录：容器为 `/data/workspace`，Native 模板为 `/srv/uma-workspace`。远程客户端路径不是服务器工作区路径。
 - 只在对应服务确实启动时加入 MCP；readiness 会要求配置中的所有 MCP 已连接。
 
 配置是严格 JSON，未知字段会使 Core 拒绝启动。非回环 HTTP MCP 必须设置 `authTokenEnv`。
 
+Core 启动统一使用 `--max-semi-space-size=4`，限制年轻代半空间为4MiB，避免长会话的短寿命对象让 V8 自动扩大堆。该参数已同步 npm、systemd、Docker 和隔离验收脚本；不限制模型上下文、不改变 SQLite FULL 同步、不调用强制 GC。手工启动 Core 时也应保留此参数，不可仅在性能测试中启用。Linux/容器仍须独立实测。
+
 ## 3. 启动 Core
+
+### 可选容器隔离部署
 
 先验证 Compose 展开结果。此命令会检查缺失的必填环境变量，但不会显示 `.env` 之外未引用的密钥：
 
@@ -75,7 +79,7 @@ docker compose \
 
 ### Native Node/systemd 部署
 
-生产发布使用专用系统用户和 Native systemd；state、workspace、配置和环境文件必须放在不同目录。Docker Compose 仅用于本地/CI 隔离验证：
+当前生产发布链路采用专用系统用户和 Native systemd；state、workspace、配置和环境文件必须放在不同目录。上文 Compose 命令用于可选的本地/CI 隔离验证；文件名 production 表示容器加固配置，不代表本轮已完成容器生产验收。
 
 本仓库提供可直接安装的原生 systemd 模板；部署者应将示例中的域名、路径和用户替换为目标环境值：
 
@@ -118,11 +122,11 @@ journalctl -u uma-agent -n 200 --no-pager
 Liveness 只表示进程事件循环可响应；readiness 还检查数据库、工作区、模型目录和 MCP：
 
 ```bash
-curl --fail http://127.0.0.1:3210/api/v15/health/live
-curl --fail http://127.0.0.1:3210/api/v15/health/ready
+curl --fail http://127.0.0.1:3210/api/v16/health/live
+curl --fail http://127.0.0.1:3210/api/v16/health/ready
 curl --fail \
   -H "Authorization: Bearer ${UMA_TOKEN}" \
-  http://127.0.0.1:3210/api/v15/sessions
+  http://127.0.0.1:3210/api/v16/sessions
 ```
 
 再从另一台设备验证 SDK/CLI，而不是只在服务器本机测试：
@@ -134,7 +138,7 @@ npm run cli -- doctor
 npm run cli -- chat
 ```
 
-`ready` 成功并不代表模型推理一定成功；必须发送一条实际消息，确认模型流式输出、工具审批和终态事件都可用。随后在 Web 中创建一个 Session，重启 Core，确认 Session 和历史仍存在：
+`ready` 成功并不代表模型推理一定成功；必须发送一条实际消息，确认模型流式输出、工具审批和终态事件都可用。随后在 Web 中创建一个 Session，重启 Core，确认 Session 和历史仍存在。Native 使用 `sudo systemctl restart uma-agent`；下面两条 Compose 操作仅适用于容器隔离环境：
 
 ```bash
 docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml restart uma
@@ -151,7 +155,7 @@ docker compose \
 
 ## 5. TLS 与反向代理
 
-Core 生产容器仍绑定宿主机 `127.0.0.1:3210`，由同机 Caddy/Nginx 终止 TLS。不要直接把 Core 改成宿主机公网端口。样例位于：
+容器隔离部署的 Core 仍绑定宿主机 `127.0.0.1:3210`，由同机 Caddy/Nginx 终止 TLS。不要直接把 Core 改成宿主机公网端口。样例位于：
 
 - `deploy/Caddyfile.example`
 - `deploy/nginx.conf.example`
@@ -253,12 +257,12 @@ Browser Worker 容器根文件系统只读、capabilities 全部移除；它不�
 - `.env` 权限设为 `0600`；日志、工单和截图中不得出现 Authorization、Cookie、API Key 或 Secret。
 - Browser Worker 必须保留 Bearer Token；它阻止私网、保留地址和非 HTTP(S) 导航，但仍应部署在受限网络。
 - Xianyu Adapter 不挂载 `/data/state` 或 `/data/workspace`。
-- 定期检查 `docker compose logs`、磁盘、`state.db-wal` 大小和容器重启次数。
+- Native 定期检查 `journalctl -u uma-agent`、磁盘、两库 WAL 和服务重启次数；容器隔离环境检查 `docker compose logs` 和容器状态。
 - 配置中的 Provider URL 和 MCP URL 必须是受信地址；不要在 URL 中放用户名、密码或 Token。
 
 ## 9. 停机备份与恢复
 
-SQLite 使用 WAL。可靠备份必须先停止写入；不要只复制正在运行的 `state.db`。
+SQLite 使用 WAL。完整目录备份必须先停止所有业务和遥测写入；不要只复制正在运行的 `state.db`。Native 的 `deploy/backup-native.sh` 使用其固定路径打包 state、telemetry、workspace、配置及渠道状态；执行前检查目标服务和目录是否与部署一致。下文命令只适用于 Compose 卷。
 
 ```bash
 mkdir -p backups
@@ -285,13 +289,13 @@ docker run --rm \
   alpine sh -c 'find /target -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && tar xzf /backup/uma-state.tgz -C /target'
 ```
 
-数据库当前使用 schema 24；旧数据库直接拒绝启动。格式更替不能走保留对象指纹的常规 Promote：先停止 Core 和所有遥测写入服务，备份，再清理已确认旧库的 `state.db`、`state.db-wal`、`state.db-shm`。遥测表缺少 `sample_duration_ms`、`cpu_percent` 或 `wal_bytes` 时同样清理 `telemetry.db` 及其 WAL/SHM，由新版本初始化；不执行 migration。不要删除 Adapter 的 Cookie 文件。
+数据库当前使用 schema 25，只接受当前格式。schema 24 升级必须先停止 Core，再执行 `node scripts/upgrade-state.mjs /绝对路径/state.db`。工具取得与 Core 相同的锁，检查原库及外键，生成带时间戳的 schema24 备份并检查备份，然后在事务中增加账号执行策略与审计表并更新版本；失败回滚，重跑已升级库会拒绝。升级后验证 user_version=25、integrity_check=ok 与 foreign_key_check 为空，再启动当前版本。保留必要备份；回退必须停止写入并恢复匹配版本的完整备份，禁止把 25 库交给旧服务。其他旧格式不提供转换，不能靠删除真实数据解决版本差异。不要删除 Adapter Cookie。
 
-空库会清除原有账户与会话，须重新建立管理员、普通用户和发布保护 PAT。旧 release 无法读取新 schema；回到旧版本只能在隔离路径恢复匹配的完整备份，不能仅切换代码指针后继续读新数据库。当前 schema 内的常规发布继续使用下述对象保护门禁。
+离线24→25升级保留现有账户、令牌、会话和运行记录；禁止用初始化空库代替升级。旧 release 无法读取新 schema；回到旧版本只能在隔离路径恢复匹配的完整备份，不能仅切换代码指针后继续读新数据库。当前 schema 内的常规发布继续使用下述对象保护门禁。
 
 ## 10. Trace、资源报告与真实 API 验证
 
-Core 的业务数据使用 schema 24 `state.db`；Trace 与资源样本统一写入 `UMA_TELEMETRY_DIR` 下的 `telemetry.db`，state.db 不包含历史 Trace/资源表。生产把该目录授权给 Core、Server、Browser Worker、SMath Worker 与 Xianyu Adapter；各 Worker 不获得业务 state 的访问权。SMath Worker 和 Xianyu Adapter 缺少 UMA_TELEMETRY_DIR 时直接拒绝启动；共享目录需要服务用户的组写权限，不能只设置 systemd ReadWritePaths。Client、Server HTTP、WebSocket、Run、queue、preflight、model、tool、MCP、Browser、SMath 和 Xianyu Adapter 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v15/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户必须提供自己拥有的 runId，查询只展开该 Run 及其 Worker 子树；管理员可按 Run 或 traceId 查询包含入口 HTTP/Adapter 的完整链路。外部 traceparent 不是授权凭据，复用 traceId 不扩大查询权限。Trace 不保存 prompt、模型正文、完整 URL、Cookie、Token 或原始工具参数。资源每 30 秒及查询资源报告时采样；`cpuPercent = (cpuUserMicros + cpuSystemMicros) / (sampleDurationMs × 1000 × 可用逻辑核数) × 100`，WAL 为 state 与 telemetry 两库合计。资源快照和诊断报告分别通过 `/api/v15/reports/resources` 与 `/api/v15/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
+Core 的业务数据使用 schema 25 `state.db`；Trace 与资源样本统一写入 `UMA_TELEMETRY_DIR` 下的 `telemetry.db`，state.db 不包含历史 Trace/资源表。生产把该目录授权给 Core、Server、Browser Worker、SMath Worker 与 Xianyu Adapter；各 Worker 不获得业务 state 的访问权。SMath Worker 和 Xianyu Adapter 缺少 UMA_TELEMETRY_DIR 时直接拒绝启动；共享目录需要服务用户的组写权限，不能只设置 systemd ReadWritePaths。Client、Server HTTP、WebSocket、Run、queue、preflight、model、tool、MCP、Browser、SMath 和 Xianyu Adapter 阶段通过 W3C `traceparent` 形成跨服务 Span 树；查询入口为 `GET /api/v16/traces?runId=:runId`，支持 `offset`/`limit` 分页。普通用户必须提供自己拥有的 runId，查询只展开该 Run 及其 Worker 子树；管理员可按 Run 或 traceId 查询包含入口 HTTP/Adapter 的完整链路。外部 traceparent 不是授权凭据，复用 traceId 不扩大查询权限。Trace 不保存 prompt、模型正文、完整 URL、Cookie、Token 或原始工具参数。资源每 30 秒及查询资源报告时采样；`cpuPercent = (cpuUserMicros + cpuSystemMicros) / (sampleDurationMs × 1000 × 可用逻辑核数) × 100`，WAL 为 state 与 telemetry 两库合计。资源快照和诊断报告分别通过 `/api/v16/reports/resources` 与 `/api/v16/reports/diagnostics` 读取，均只允许管理员。候选校验和 Promote 与 systemd 服务一样固定使用 `/opt/node-v22.23.2-linux-x64/bin/node`；系统包管理器提供的 Node 不属于该运行时边界。
 
 真实测试只接受明确的 UmaAgent 环境变量，并在临时目录生成隔离配置、state、workspace、用户和令牌。它不读取 MiniAgent 配置，也不得使用生产保护 PAT。缺少授权或密钥时命令直接失败，不切换 Faux：
 
@@ -326,6 +330,8 @@ sudo /opt/uma-agent/releases/<release>/deploy/promote-native-release.sh \
 
 ## 11. 故障排查
 
+Native 使用 `systemctl status uma-agent`、`journalctl -u uma-agent -n 200 --no-pager`；以下为容器隔离环境命令：
+
 ```bash
 docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml ps
 docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml logs --tail=200 uma
@@ -355,13 +361,28 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 ## 12. 部署验收清单
 
 - [ ] `.env`、生产配置和备份未被 Git 跟踪，也未进入 Docker build context。
-- [ ] `docker compose config --quiet`、镜像构建和全部容器健康检查通过。
+- [ ] Native service 和固定 Node 路径验证通过；选择容器时另验 `docker compose config --quiet`、镜像构建和全部容器健康检查。
 - [ ] liveness、readiness、Bearer API、Web 登录和远程 CLI doctor 通过。
 - [ ] 真实模型对话、流式输出、审批、取消和恢复通过。
 - [ ] 创建数据后重启 Core，Snapshot、历史和 cursor 连续。
 - [ ] 第二个 Core 无法获取同一状态目录锁。
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
-- [ ] 完成一次停机备份，并在隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v15 和 schema 24；旧 state.db 已按发布策略备份/清理，新库完整性检查通过，并保留可回滚 release。
+- [ ] 完成一次停机备份，并在隔离目录或隔离卷中演练恢复。
+- [ ] 确认当前应用版本、Protocol v16 和 schema 25；schema 24 已按离线工具备份/转换，数据库完整性检查通过，并保留可回滚 release。
 - [ ] Android APK 使用线上同一正式签名证书，`latest.json` 的版本、路径、大小和 SHA-256 与 APK 一致。
 - [ ] Android 真机完成更新、PAT 登录、进程重启、会话读取和消息发送；Debug APK 未被发布到生产。
+
+
+## 私人部署信息与本次发布
+
+仓库中的域名全部为通用示例；实际服务 Origin、模型网关、SSH 目标和签名材料保存在运维机器的用户目录，不提交 Git。Android 使用 Gradle 属性 `umaBaseUrl` / `umaStagingBaseUrl` 或环境变量 `UMA_ANDROID_BASE_URL` / `UMA_ANDROID_STAGING_BASE_URL` 注入 HTTPS Origin，更新清单为同 Origin 下的 `/app/latest.json`。`site.robotclaw.umaagent` 是稳定的应用标识，不是服务器地址；修改会破坏覆盖升级，因此保留。正式发布必须注入实际地址并使用既有证书。
+
+schema 24→25 首次发布先完成停机备份、加密下载和解密哈希验证，再运行 `deploy/upgrade-native-release.sh RELEASE_DIR SHARED_NODE_MODULES`。该入口校验候选、记录保护账号对象指纹、停服、执行独立迁移及受保护发布。迁移失败且库仍为 24 时恢复原服务；库已为 25 后的任何发布失败都会停止服务并保留数据，禁止自动切回 schema 24 的旧 Core。数据库恢复是单独的维护操作，需要保留失败现场并核对恢复点，不能覆盖新写入。
+
+反向代理必须同步使用 `/api/v16/`（含事件 WebSocket），删除旧版本路径。先验证候选和备份，再切换服务及代理，执行 `nginx -t` 后 reload；保留站点其他代理规则、证书和资产不变。Android 更新清单的最低支持版本为 14，与本次删除旧协议一致。
+
+2026-09-17 用户明确授权部署私人服务器。发布仍受本报告列明的已知性能限制约束；完成发布不等于整体性能验收通过。本次已完成 Native 发布、schema25 升级、v16 代理、Web 嵌入和原证书签名 Android 发布；公网与保护对象核验通过，详见发布验收报告。敏感主机名、地址、保护账号和凭据不进入报告。
+
+依赖在独立的版本目录准备，release 的 `node_modules` 链接固定指向该目录。安装时校验指定依赖，服务启动时校验当前 release 自己的依赖链接，避免更新全局共享指针影响旧版本回退。不得在已发布的 release 目录在线安装或修改依赖。
+
+嵌入构建将 KaTeX 字体输出为随包发布的独立文件，宿主必须同时复制 `.js`、`.css`、`.woff2`、`.woff`、`.ttf` 文件，并保持相对路径。构建清单约束 CSS≤1MiB、入口 JS≤10MiB；不得放宽宿主的资源上限来掩盖打包问题。Android 离线正文资源不受嵌入构建配置影响。

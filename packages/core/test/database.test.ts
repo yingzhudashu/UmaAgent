@@ -23,6 +23,73 @@ afterEach(async () =>
 );
 
 describe("UmaDatabase", () => {
+  it("preserves omitted Run fields while applying empty, zero and explicit null patches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-run-patch-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    try {
+      const session = db.createSession({
+        title: "patch",
+        workspace: root,
+        model: modelSnapshot.ref,
+        thinkingLevel: "off",
+      });
+      const { run } = db.createRun(session.id, "patch-message", modelSnapshot, "off", "agent", "agent");
+      db.updateRun(run.id, {
+        goal: "目标",
+        successCriteria: ["完成"],
+        assumptions: ["默认值"],
+        error: "失败",
+        queuePosition: 2,
+        turnCount: 3,
+      });
+      expect(db.updateRun(run.id, { phase: "execute" })).toMatchObject({
+        goal: "目标",
+        successCriteria: ["完成"],
+        assumptions: ["默认值"],
+        error: "失败",
+        queuePosition: 2,
+        turnCount: 3,
+      });
+      const cleared = db.updateRun(run.id, {
+        goal: "",
+        successCriteria: [],
+        assumptions: [],
+        error: null,
+        queuePosition: 0,
+        turnCount: 0,
+      });
+      expect(cleared).toMatchObject({ successCriteria: [], assumptions: [], queuePosition: 0, turnCount: 0 });
+      expect(cleared.error).toBeUndefined();
+      expect(cleared.goal).toBeUndefined();
+      expect(db.updateRun(run.id, { queuePosition: null }).queuePosition).toBeUndefined();
+      expect(() => db.updateRun("missing", { status: "running" })).toThrow("Run not found");
+    } finally {
+      db.close();
+    }
+  });
+  it("coalesces token usage timestamps without caching expiry or revocation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-auth-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    try {
+      const user = db.createUser("user");
+      db.putAuthToken({ id: "token", userId: user.id, tokenHash: "hash", label: "test", scopes: ["user"] });
+      expect(db.findAuthToken("token", "hash")?.userId).toBe(user.id);
+      const changed = db.db.prepare("SELECT total_changes() AS count").get()?.count;
+      expect(db.findAuthToken("token", "hash")?.userId).toBe(user.id);
+      expect(db.db.prepare("SELECT total_changes() AS count").get()?.count).toBe(changed);
+      db.db.prepare("UPDATE auth_tokens SET last_used_at=? WHERE id='token'").run(Date.now() - 60_001);
+      expect(db.findAuthToken("token", "hash")).toBeDefined();
+      expect(db.listAuthTokens(user.id)[0]?.lastUsedAt).toBeGreaterThan(Date.now() - 1000);
+      db.db.prepare("UPDATE auth_tokens SET expires_at=1 WHERE id='token'").run();
+      expect(db.findAuthToken("token", "hash")).toBeUndefined();
+      db.db.prepare("UPDATE auth_tokens SET expires_at=NULL,revoked_at=1 WHERE id='token'").run();
+      expect(db.findAuthToken("token", "hash")).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
   it("persists sessions and enforces message idempotency", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-db-"));
     temporary.push(root);
@@ -78,11 +145,11 @@ describe("UmaDatabase", () => {
     },
   );
 
-  it("initializes the current schema directly at version 24", async () => {
+  it("initializes the current schema directly at version 25", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-schema-18-"));
     temporary.push(root);
     const db = testDatabase(root);
-    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(24);
+    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(25);
     const tables = new Set(
       (
         db.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
@@ -720,6 +787,47 @@ describe("UmaDatabase", () => {
     expect(JSON.stringify(audit)).not.toContain("session-secret");
     expect(audit.output).toMatchObject({ cookie: "[REDACTED]", result: "ok" });
     db.close();
+  });
+
+  it("preserves numeric model usage while redacting credentials from durable accounting", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-usage-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    try {
+      const session = db.createSession({ title: "usage", model: modelSnapshot.ref, thinkingLevel: "off" });
+      const run = db.createRun(session.id, "usage-message", modelSnapshot, "off", "agent", "agent").run;
+      const call = db.startModelCall({ runId: run.id, provider: "faux", model: "model", role: "fast" });
+      const usage = {
+        totalTokens: 42,
+        inputTokens: 30,
+        outputTokens: 12,
+        token: 12345,
+        nested: [{ accessToken: "private-credential", totalTokens: "private-string" }],
+      };
+      db.finishModelCall(call, { status: "completed", durationMs: 10, usage, error: "token=private-error" });
+      const stored = db.db.prepare("SELECT usage_json,error FROM model_calls WHERE id=?").get(call);
+      expect(JSON.parse(String(stored?.usage_json))).toEqual({
+        totalTokens: 42,
+        inputTokens: 30,
+        outputTokens: 12,
+        token: "[REDACTED]",
+        nested: [{ accessToken: "[REDACTED]", totalTokens: "[REDACTED]" }],
+      });
+      expect(stored?.error).toBe("token=[REDACTED]");
+      expect(db.operationsReport(0, Date.now()).model.totalTokens).toBe(42);
+      const audit = db.addAudit({
+        runId: run.id,
+        kind: "tool",
+        name: "usage",
+        status: "completed",
+        usage,
+        error: "Bearer private-error",
+      });
+      expect(JSON.stringify(audit)).not.toContain("private-");
+      expect(audit.usage).toMatchObject({ totalTokens: 42, token: "[REDACTED]" });
+    } finally {
+      db.close();
+    }
   });
 
   it("rolls back state and durable events together", async () => {

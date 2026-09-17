@@ -9,9 +9,11 @@
       "!!**/coverage",
       "!!**/node_modules",
       "!!**/test-results",
+      "!!artifacts",
       "!!**/build",
       "!!**/.gradle",
       "!!**/.tmp",
+      "!!android/app/src/main/assets/message",
       "!!apps/xianyu-adapter/src/resources"
     ]
   },

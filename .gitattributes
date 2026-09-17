@@ -1,0 +1,2 @@
+# Native deployment scripts must remain executable by Bash after Windows checkout.
+*.sh text eol=lf

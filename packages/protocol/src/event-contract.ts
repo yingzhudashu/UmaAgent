@@ -38,6 +38,7 @@ export const MessageDeltaSchema = Strict({
   messageId: Id,
   responseId: Type.Optional(Id),
   append: Type.String({ minLength: 1 }),
+  offset: Type.Integer({ minimum: 0 }),
   updatedAt: Timestamp,
 });
 export type MessageDelta = Static<typeof MessageDeltaSchema>;

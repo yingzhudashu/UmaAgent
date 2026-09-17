@@ -20,6 +20,8 @@ function parsePersonalToken(value: string): { id: string; secret: string } | und
 }
 
 export class AuthService {
+  /** 只复用同一 HTTP 请求的鉴权，不跨请求缓存撤销状态或权限。WeakMap 不延长请求寿命。 */
+  private readonly requestPrincipals = new WeakMap<FastifyRequest, AuthPrincipal | undefined>();
   private failures = new Map<string, { count: number; resetAt: number }>();
   private registrations = new Map<string, { count: number; resetAt: number }>();
   constructor(private readonly runtime: UmaRuntime) {}
@@ -35,19 +37,24 @@ export class AuthService {
   }
 
   principalFromRequest(request: FastifyRequest): AuthPrincipal | undefined {
+    if (this.requestPrincipals.has(request)) return this.requestPrincipals.get(request);
     const bearer = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
     const personal = this.personalPrincipal(bearer);
-    if (personal) return personal;
+    if (personal) {
+      this.requestPrincipals.set(request, personal);
+      return personal;
+    }
     const cookie = request.cookies[COOKIE_NAME];
     const session = cookie ? this.runtime.database.webSessionUser(hash(cookie)) : undefined;
-    return session
+    const principal: AuthPrincipal | undefined = session
       ? { userId: session.userId, role: session.role, method: "web", scopes: ["user"] }
       : undefined;
+    this.requestPrincipals.set(request, principal);
+    return principal;
   }
 
   bearerAuthenticated(request: FastifyRequest): boolean {
-    const bearer = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-    return Boolean(this.personalPrincipal(bearer));
+    return this.principalFromRequest(request)?.method === "access_token";
   }
 
   webSessionAuthenticated(request: FastifyRequest): boolean {

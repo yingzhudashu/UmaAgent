@@ -103,7 +103,7 @@ const config = {
 };
 await writeFile(configPath, JSON.stringify(config, null, 2));
 
-// 管理报告使用隔离测试库内的临时管理员；模型请求仍以普通用户执行。
+// 管理报告使用隔离测试库内的临时管理员；smoke、性能与 soak 的模型请求仍以普通用户执行，评测由测试管理员保存报告。
 // 凭据仅存于进程内存，绝不修改部署库或以空报告掩盖权限错误。
 const { UmaDatabase } = await import("../packages/core/dist/database.js");
 const database = new UmaDatabase(stateDir);
@@ -126,24 +126,29 @@ try {
 const reportOptions = { headers: { authorization: `Bearer ${adminToken}` } };
 
 let token = "";
-const server = spawn(process.execPath, ["apps/server/dist/main.js", `--config=${configPath}`], {
-  cwd: resolve("."),
-  env: {
-    ...process.env,
-    UMA_CONFIG: configPath,
-    UMA_TELEMETRY_DIR: stateDir,
-    UMA_IMAGE_TEST_KEY: "disabled",
+const server = spawn(
+  process.execPath,
+  ["--max-semi-space-size=4", "apps/server/dist/main.js", `--config=${configPath}`],
+  {
+    cwd: resolve("."),
+    env: {
+      ...process.env,
+      UMA_CONFIG: configPath,
+      UMA_TELEMETRY_DIR: stateDir,
+      UMA_IMAGE_TEST_KEY: "disabled",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
   },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+);
 let serverOutput = "";
+let soakDeadlineTimer;
 server.stdout.on("data", (chunk) => {
   serverOutput = `${serverOutput}${chunk}`.slice(-12_000);
 });
 server.stderr.on("data", (chunk) => {
   serverOutput = `${serverOutput}${chunk}`.slice(-12_000);
 });
-const base = `http://127.0.0.1:${port}/api/v15`;
+const base = `http://127.0.0.1:${port}/api/v16`;
 async function request(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
     ...options,
@@ -310,7 +315,7 @@ async function runEval() {
     env: {
       ...process.env,
       UMA_SERVER_URL: `http://127.0.0.1:${port}`,
-      UMA_TOKEN: token,
+      UMA_TOKEN: adminToken,
       EVAL_MODE: "real",
       EVAL_SUITE_VERSION: "real-1",
     },
@@ -339,7 +344,7 @@ async function runEval() {
   const traceIds = [];
   for (const item of report.cases ?? []) {
     if (!item.runId) continue;
-    const trace = await request(`/traces?runId=${encodeURIComponent(item.runId)}&limit=1`);
+    const trace = await request(`/traces?runId=${encodeURIComponent(item.runId)}&limit=1`, reportOptions);
     if (trace.traceId) traceIds.push(trace.traceId);
   }
   const diagnostics = await request("/reports/diagnostics?from=0", reportOptions);
@@ -378,20 +383,37 @@ try {
     const samples = [];
     const traces = [];
     const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-    const count = mode === "smoke" ? 1 : Number(process.env.UMA_REAL_MESSAGES ?? 10);
-    if (mode !== "soak" && (!Number.isInteger(count) || count < 1 || count > 1_000))
+    const count = mode === "smoke" ? 1 : Number(process.env.UMA_REAL_MESSAGES ?? (mode === "soak" ? 50 : 20));
+    if (!Number.isInteger(count) || count < 1 || count > (mode === "soak" ? 50 : 1_000))
       throw new Error("UMA_REAL_MESSAGES must be an integer in [1, 1000]");
     const soakMinutes = Number(process.env.UMA_REAL_SOAK_MINUTES ?? 5);
-    if (mode === "soak" && (!Number.isFinite(soakMinutes) || soakMinutes <= 0 || soakMinutes > 480))
-      throw new Error("UMA_REAL_SOAK_MINUTES must be in (0, 480]");
+    if (mode === "soak" && (!Number.isFinite(soakMinutes) || soakMinutes <= 0 || soakMinutes > 5))
+      throw new Error("UMA_REAL_SOAK_MINUTES must be in (0, 5]");
     const startedAt = Date.now();
     const deadline = mode === "soak" ? startedAt + soakMinutes * 60_000 : Number.POSITIVE_INFINITY;
+    // 先停止接收新 Run，再等待已受理请求；硬截止只处理在途供应商卡住的异常。
+    const admissionDeadline =
+      mode === "soak" ? deadline - 15_000 - Math.min(30_000, soakMinutes * 20_000) : deadline;
+    if (mode === "soak") {
+      // 预留关闭与日志写入时间；供应商卡住时也不得让短时实网测试无限越过五分钟。
+      soakDeadlineTimer = setTimeout(
+        () => {
+          console.error(
+            JSON.stringify({ event: "real.soak.deadline", passed: false, elapsedMs: Date.now() - startedAt }),
+          );
+          process.exitCode = 1;
+          server.kill("SIGTERM");
+        },
+        Math.max(1_000, soakMinutes * 60_000 - 15_000),
+      );
+    }
     let maxRss = 0;
     let maxWal = 0;
     let latestResource;
     let completed = 0;
     const errors = {};
-    for (let index = 0; mode === "soak" ? Date.now() < deadline : index < count; index++) {
+    const failures = [];
+    for (let index = 0; index < count && Date.now() < admissionDeadline; index++) {
       const result = await runOne(
         session.id,
         mode === "smoke" ? "Reply with exactly REAL_SMOKE_OK." : "Reply with exactly REAL_PERF_OK.",
@@ -404,7 +426,27 @@ try {
       maxRss = Math.max(maxRss, rss);
       maxWal = Math.max(maxWal, await walBytes());
       if (result.run.status === "completed") completed++;
-      else errors[result.run.status] = (errors[result.run.status] ?? 0) + 1;
+      else {
+        errors[result.run.status] = (errors[result.run.status] ?? 0) + 1;
+        failures.push({
+          runId: result.run.id,
+          traceId: result.traceId,
+          category: errorCategory(result.run.error),
+          summary: errorSummary(result.run.error),
+        });
+      }
+      // 长时间的实网测试按请求留证；失败原因先脱敏，不能只保留 failed 计数后删除隔离库。
+      if (mode !== "smoke")
+        console.log(
+          JSON.stringify({
+            event: "real.run",
+            index: index + 1,
+            status: result.run.status,
+            traceId: result.traceId,
+            elapsedMs: Date.now() - startedAt,
+            ...(result.run.status === "completed" ? {} : { error: failures.at(-1) }),
+          }),
+        );
       if (mode === "smoke") {
         console.log(
           JSON.stringify({
@@ -443,12 +485,14 @@ try {
         resource: latestResource ?? null,
         traceIds: traces.slice(0, 20),
         errors,
+        failures,
       };
       console.log(JSON.stringify(report));
       if (!report.passed) process.exitCode = 1;
     }
   }
 } finally {
+  if (soakDeadlineTimer) clearTimeout(soakDeadlineTimer);
   server.kill("SIGTERM");
   await new Promise((resolveExit) => {
     if (server.exitCode !== null) resolveExit();

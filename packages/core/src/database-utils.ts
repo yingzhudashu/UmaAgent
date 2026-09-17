@@ -58,7 +58,16 @@ export function redactAudit(value: unknown): unknown {
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) =>
-        /(authorization|cookie|api[_-]?key|password|secret|token)/i.test(key)
+        /(authorization|cookie|api[_-]?key|password|secret|token)/i.test(key) &&
+        // Token 用量是数值指标，不是访问令牌；只放行明确命名且有效的计数。
+        !(
+          /^(totalTokens|inputTokens|outputTokens|promptTokens|completionTokens|cachedTokens|reasoningTokens)$/.test(
+            key,
+          ) &&
+          typeof item === "number" &&
+          Number.isSafeInteger(item) &&
+          item >= 0
+        )
           ? [key, "[REDACTED]"]
           : [key, redactAudit(item)],
       ),

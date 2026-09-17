@@ -17,3 +17,11 @@ uma.config.json
 workspace
 backups
 deploy/uma.config.production.json
+artifacts
+android
+*.jks
+*.keystore
+*.pem
+*.key
+*.local.json
+*.local.properties

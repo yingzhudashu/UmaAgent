@@ -44,12 +44,12 @@ describe("EmbeddingService", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("fails open when disabled or unconfigured", async () => {
+  it("uses keyword mode only when explicitly disabled and rejects missing credentials", async () => {
     await expect(new EmbeddingService({ ...config, enabled: false }).embed("text")).resolves.toBeUndefined();
-    await expect(new EmbeddingService(config).embedBatch(["text"])).resolves.toEqual([undefined]);
+    expect(() => new EmbeddingService(config)).toThrow("TEST_EMBEDDING_KEY");
   });
 
-  it("retries transient failures and fails open after the retry budget", async () => {
+  it("retries transient failures and propagates exhausted batch failures", async () => {
     process.env.TEST_EMBEDDING_KEY = "secret";
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -64,6 +64,51 @@ describe("EmbeddingService", () => {
     fetchMock.mockRejectedValue(new Error("down"));
     await expect(
       new EmbeddingService({ ...config, retryAttempts: 1 }).embedBatch(["unavailable"]),
-    ).resolves.toEqual([undefined]);
+    ).rejects.toThrow("down");
+  });
+
+  it("hands queued permits over without leaking capacity across waves", async () => {
+    process.env.TEST_EMBEDDING_KEY = "secret";
+    let active = 0;
+    let peak = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active--;
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 2] }] }));
+    });
+    const service = new EmbeddingService({ ...config, retryAttempts: 0 });
+    for (let wave = 0; wave < 3; wave++) {
+      const values = await Promise.all(
+        Array.from({ length: 6 }, (_, index) => service.embed(`${wave}:${index}`)),
+      );
+      expect(values).toEqual(Array.from({ length: 6 }, () => [1, 2]));
+    }
+    expect(peak).toBe(2);
+  });
+
+  it("does not retry permanent HTTP or vector contract failures", async () => {
+    process.env.TEST_EMBEDDING_KEY = "secret";
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    for (const response of [
+      new Response("unauthorized", { status: 401 }),
+      new Response(JSON.stringify({ data: [] })),
+    ]) {
+      fetchMock.mockClear().mockResolvedValue(response);
+      await expect(new EmbeddingService(config).embed("invalid")).rejects.toThrow();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("rejects missing, empty and nonnumeric vectors rather than indexing partial results", async () => {
+    process.env.TEST_EMBEDDING_KEY = "secret";
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    for (const data of [[], [{ index: 0, embedding: [] }], [{ index: 0, embedding: ["invalid"] }]]) {
+      fetchMock.mockResolvedValue(new Response(JSON.stringify({ data })));
+      await expect(
+        new EmbeddingService({ ...config, retryAttempts: 0 }).embedBatch(["text"]),
+      ).rejects.toThrow("invalid vectors");
+    }
   });
 });

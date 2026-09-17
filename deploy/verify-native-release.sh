@@ -16,8 +16,8 @@ shared_real=$(readlink -f -- "$shared_dir")
 [[ -f "$release_real/deploy/uma-xianyu-adapter.service" ]] || { echo "missing xianyu adapter unit in $release_real" >&2; exit 1; }
 [[ -d "$release_real/packages/core/dist" ]] || { echo "missing core dist in $release_real" >&2; exit 1; }
 [[ -f "$release_real/RELEASE" ]] || { echo "missing RELEASE metadata in $release_real" >&2; exit 1; }
-grep -qx 'protocol=15' "$release_real/RELEASE" || { echo "release protocol is not 15" >&2; exit 1; }
-grep -qx 'schema=24' "$release_real/RELEASE" || { echo "release schema is not 24" >&2; exit 1; }
+grep -qx 'protocol=16' "$release_real/RELEASE" || { echo "release protocol is not 16" >&2; exit 1; }
+grep -qx 'schema=25' "$release_real/RELEASE" || { echo "release schema is not 25" >&2; exit 1; }
 [[ -d "$shared_real" ]] || { echo "missing shared dependencies: $shared_dir" >&2; exit 1; }
 
 case "$release_real" in
@@ -25,9 +25,9 @@ case "$release_real" in
   *) echo "release resolves outside $release_root: $release_real" >&2; exit 1 ;;
 esac
 
-for package in browser-worker channel-adapter cli client core eval-runner protocol server telemetry xianyu-adapter; do
+for package in browser-worker channel-adapter cli client core eval-runner protocol server smath-worker telemetry xianyu-adapter; do
   case "$package" in
-    browser-worker|cli|eval-runner|server|xianyu-adapter) parent=apps ;;
+    browser-worker|cli|eval-runner|server|smath-worker|xianyu-adapter) parent=apps ;;
     *) parent=packages ;;
   esac
   link="$release_real/node_modules/@uma-agent/$package"

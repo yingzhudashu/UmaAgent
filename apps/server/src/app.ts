@@ -13,6 +13,7 @@ import {
   CreateScheduledTaskRequestSchema,
   CreateSessionRequestSchema,
   EditMessageRequestSchema,
+  ExecutionSettingsSchema,
   ImproveMessageRequestSchema,
   PROTOCOL_VERSION,
   QueueReorderRequestSchema,
@@ -120,7 +121,7 @@ export async function createServer(
     origin: (origin, callback) =>
       callback(null, Boolean(origin && runtime.config.server.webOrigins.includes(origin))),
     credentials: true,
-    methods: ["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"],
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Authorization", "Content-Type", "Traceparent"],
     maxAge: 600,
     strictPreflight: true,
@@ -140,16 +141,16 @@ export async function createServer(
       return reply.code(403).send(errorBody(request.id, "forbidden", "Origin is required for Web sessions"));
     if (request.method === "OPTIONS") return reply.code(204).send();
     if (
-      !request.url.startsWith("/api/v15/") ||
-      request.url === "/api/v15/health/live" ||
-      request.url === "/api/v15/health/ready" ||
-      request.url === "/api/v15/auth/login" ||
-      request.url === "/api/v15/auth/register" ||
-      request.url === "/api/v15/auth/authorize" ||
-      request.url === "/api/v15/auth/token" ||
-      request.url === "/api/v15/maintenance" ||
-      request.url === "/api/v15/events" ||
-      request.url.startsWith("/api/v15/xianyu/internal/")
+      !request.url.startsWith("/api/v16/") ||
+      request.url === "/api/v16/health/live" ||
+      request.url === "/api/v16/health/ready" ||
+      request.url === "/api/v16/auth/login" ||
+      request.url === "/api/v16/auth/register" ||
+      request.url === "/api/v16/auth/authorize" ||
+      request.url === "/api/v16/auth/token" ||
+      request.url === "/api/v16/maintenance" ||
+      request.url === "/api/v16/events" ||
+      request.url.startsWith("/api/v16/xianyu/internal/")
     )
       return;
     if (!auth.requestAuthenticated(request))
@@ -162,9 +163,9 @@ export async function createServer(
     protocolVersion: PROTOCOL_VERSION,
     activeRuns: runtime.health().activeRuns,
   });
-  app.get("/api/v15/health/live", async () => health(true));
-  app.get("/api/v15/maintenance", async () => readMaintenance());
-  app.get("/api/v15/health/ready", async (_request, reply) => {
+  app.get("/api/v16/health/live", async () => health(true));
+  app.get("/api/v16/maintenance", async () => readMaintenance());
+  app.get("/api/v16/health/ready", async (_request, reply) => {
     const runtimeHealth = runtime.health();
     const workspacesReady = (
       await Promise.all(
@@ -183,7 +184,7 @@ export async function createServer(
     );
     return reply.code(value.status === "ok" ? 200 : 503).send(value);
   });
-  app.post<{ Body: { token?: string } }>("/api/v15/auth/login", async (request, reply) => {
+  app.post<{ Body: { token?: string } }>("/api/v16/auth/login", async (request, reply) => {
     if (!auth.loginAllowed(request.ip))
       return reply.code(429).send(errorBody(request.id, "rate_limited", "Too many login attempts", true));
     const personal = request.body?.token
@@ -205,7 +206,7 @@ export async function createServer(
     runtime.database.touchUserLogin(principal.userId);
     return { ok: true };
   });
-  app.post<{ Body: { label?: string } }>("/api/v15/auth/register", async (request, reply) => {
+  app.post<{ Body: { label?: string } }>("/api/v16/auth/register", async (request, reply) => {
     if (!auth.registrationAllowed(request.ip))
       return reply
         .code(429)
@@ -219,7 +220,7 @@ export async function createServer(
     });
     return reply.code(201).send({ userId: issued.userId, token: issued.token, tokenId: issued.id });
   });
-  app.get("/api/v15/auth/me", async (request) => {
+  app.get("/api/v16/auth/me", async (request) => {
     const principal = userPrincipal(auth, request);
     return {
       userId: principal.userId,
@@ -229,7 +230,20 @@ export async function createServer(
       tokens: runtime.database.listAuthTokens(principal.userId),
     };
   });
-  app.post("/api/v15/sync/bootstrap", async (request) => {
+  app.get("/api/v16/account/execution-settings", async (request) =>
+    runtime.database.getExecutionSettings(userPrincipal(auth, request).userId),
+  );
+  app.patch<{ Body: { autoApprove: boolean } }>(
+    "/api/v16/account/execution-settings",
+    async (request, reply) => {
+      if (!Value.Check(ExecutionSettingsSchema, request.body))
+        return reply
+          .code(400)
+          .send(errorBody(request.id, "invalid_request", "autoApprove must be a boolean"));
+      return runtime.updateExecutionSettings(userPrincipal(auth, request).userId, request.body.autoApprove);
+    },
+  );
+  app.post("/api/v16/sync/bootstrap", async (request) => {
     const principal = userPrincipal(auth, request);
     const sessions = runtime.listSessions(principal.userId).map((session) => ({
       session,
@@ -237,12 +251,12 @@ export async function createServer(
     }));
     return { user: { id: principal.userId, role: principal.role }, sessions, serverTime: Date.now() };
   });
-  app.post<{ Body: { label?: string } }>("/api/v15/auth/tokens", async (request) => {
+  app.post<{ Body: { label?: string } }>("/api/v16/auth/tokens", async (request) => {
     const principal = userPrincipal(auth, request);
     const issued = auth.issueToken(principal.userId, request.body?.label);
     return { token: issued.token, tokenId: issued.id };
   });
-  app.delete<{ Params: { id: string } }>("/api/v15/auth/tokens/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v16/auth/tokens/:id", async (request, reply) => {
     const principal = userPrincipal(auth, request);
     if (!runtime.database.revokeAuthToken(principal.userId, request.params.id))
       return reply.code(404).send(errorBody(request.id, "not_found", "Token not found"));
@@ -250,7 +264,7 @@ export async function createServer(
   });
   app.post<{
     Body: { token?: string; clientId?: string; redirectUri?: string; codeChallenge?: string };
-  }>("/api/v15/auth/authorize", async (request) => {
+  }>("/api/v16/auth/authorize", async (request) => {
     if (
       !request.body?.token ||
       !request.body.clientId ||
@@ -266,7 +280,7 @@ export async function createServer(
   });
   app.post<{
     Body: { code?: string; clientId?: string; redirectUri?: string; codeVerifier?: string };
-  }>("/api/v15/auth/token", async (request) => {
+  }>("/api/v16/auth/token", async (request) => {
     if (
       !request.body?.code ||
       !request.body.clientId ||
@@ -322,7 +336,7 @@ export async function createServer(
     requireAdmin(request);
     return action();
   };
-  app.post("/api/v15/auth/logout", async (request, reply) => {
+  app.post("/api/v16/auth/logout", async (request, reply) => {
     const origin = request.headers.origin;
     auth.principalFromRequest(request);
     auth.logout(request, reply, {
@@ -334,17 +348,17 @@ export async function createServer(
 
   registerXianyuRoutes(app, runtime, xianyu, requireAdmin, requestTrace);
 
-  app.get("/api/v15/sessions", async (request) => {
+  app.get("/api/v16/sessions", async (request) => {
     const principal = userPrincipal(auth, request);
     return runtime.listSessions(principal.userId);
   });
-  app.post("/api/v15/sessions", async (request) => {
+  app.post("/api/v16/sessions", async (request) => {
     const body = request.body ?? {};
     if (!Value.Check(CreateSessionRequestSchema, body)) throw new Error("Invalid create-session request");
     const principal = userPrincipal(auth, request);
     return runtime.createSession(body, principal.userId);
   });
-  app.get<{ Params: { id: string } }>("/api/v15/sessions/:id/snapshot", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/sessions/:id/snapshot", async (request) =>
     ownedResult(
       request,
       runtime.database.sessionOwner(request.params.id),
@@ -352,7 +366,7 @@ export async function createServer(
       request.params.id,
     ),
   );
-  app.get<{ Params: { id: string } }>("/api/v15/responses/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/responses/:id", async (request) =>
     ownedResult(
       request,
       runtime.database.responseOwner(request.params.id),
@@ -361,7 +375,7 @@ export async function createServer(
     ),
   );
   app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: string } }>(
-    "/api/v15/sessions/:id/events",
+    "/api/v16/sessions/:id/events",
     async (request) =>
       ownedResult(
         request,
@@ -376,7 +390,7 @@ export async function createServer(
       ),
   );
   app.get<{ Params: { id: string }; Querystring: { before?: string; limit?: string } }>(
-    "/api/v15/sessions/:id/history",
+    "/api/v16/sessions/:id/history",
     async (request) =>
       ownedResult(
         request,
@@ -390,7 +404,7 @@ export async function createServer(
         request.params.id,
       ),
   );
-  app.post<{ Params: { id: string } }>("/api/v15/sessions/:id/compact", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v16/sessions/:id/compact", async (request) =>
     ownedResult(
       request,
       runtime.database.sessionOwner(request.params.id),
@@ -398,18 +412,18 @@ export async function createServer(
       request.params.id,
     ),
   );
-  app.patch<{ Params: { id: string } }>("/api/v15/sessions/:id", async (request) => {
+  app.patch<{ Params: { id: string } }>("/api/v16/sessions/:id", async (request) => {
     if (!Value.Check(UpdateSessionRequestSchema, request.body))
       throw new Error("Invalid update-session request");
     requireSessionOwner(request, request.params.id);
     return runtime.updateSession(request.params.id, request.body);
   });
-  app.delete<{ Params: { id: string } }>("/api/v15/sessions/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v16/sessions/:id", async (request, reply) => {
     requireSessionOwner(request, request.params.id);
     runtime.deleteSession(request.params.id);
     return reply.code(204).send();
   });
-  app.post<{ Params: { id: string } }>("/api/v15/sessions/:id/messages", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/v16/sessions/:id/messages", async (request, reply) => {
     if (!Value.Check(SendMessageRequestSchema, request.body)) throw new Error("Invalid message request");
     requireSessionOwner(request, request.params.id);
     const run = runtime.sendMessage(request.params.id, request.body, requestTrace(request));
@@ -420,7 +434,7 @@ export async function createServer(
     });
   });
   app.post<{ Params: { id: string }; Body: { runIds?: string[] } }>(
-    "/api/v15/sessions/:id/queue/reorder",
+    "/api/v16/sessions/:id/queue/reorder",
     async (request) => {
       if (!Value.Check(QueueReorderRequestSchema, request.body))
         throw new Error("Invalid queue reorder request");
@@ -428,7 +442,7 @@ export async function createServer(
       return runtime.reorderQueue(request.params.id, request.body.runIds);
     },
   );
-  app.get<{ Params: { id: string } }>("/api/v15/sessions/:id/queue", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/sessions/:id/queue", async (request) =>
     ownedResult(
       request,
       runtime.database.sessionOwner(request.params.id),
@@ -437,7 +451,7 @@ export async function createServer(
     ),
   );
   app.patch<{ Params: { id: string }; Body: { text?: string } }>(
-    "/api/v15/messages/:id",
+    "/api/v16/messages/:id",
     async (request, reply) => {
       if (!Value.Check(EditMessageRequestSchema, request.body))
         throw new Error("Invalid edit message request");
@@ -455,7 +469,7 @@ export async function createServer(
     },
   );
   app.post<{ Params: { id: string }; Body: { command?: string; messageId?: string } }>(
-    "/api/v15/sessions/:id/commands",
+    "/api/v16/sessions/:id/commands",
     async (request, reply) => {
       if (!Value.Check(CommandRequestSchema, request.body)) throw new Error("Invalid command request");
       requireSessionOwner(request, request.params.id);
@@ -468,7 +482,7 @@ export async function createServer(
       return reply.code(202).send({ runId: run.id, status: run.status });
     },
   );
-  app.post<{ Params: { id: string } }>("/api/v15/sessions/:id/shortcuts", async (request) => {
+  app.post<{ Params: { id: string } }>("/api/v16/sessions/:id/shortcuts", async (request) => {
     if (!Value.Check(ShortcutRequestSchema, request.body)) throw new Error("Invalid shortcut request");
     const ownerId = runtime.database.sessionOwner(request.params.id);
     requireSessionOwner(request, request.params.id);
@@ -481,7 +495,7 @@ export async function createServer(
     );
   });
   app.get<{ Params: { id: string }; Querystring: { q?: string; limit?: string } }>(
-    "/api/v15/sessions/:id/history/search",
+    "/api/v16/sessions/:id/history/search",
     async (request) =>
       ownedResult(
         request,
@@ -492,7 +506,7 @@ export async function createServer(
       ),
   );
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
-    "/api/v15/sessions/:id/activity",
+    "/api/v16/sessions/:id/activity",
     async (request) =>
       ownedResult(
         request,
@@ -501,13 +515,13 @@ export async function createServer(
         request.params.id,
       ),
   );
-  app.post<{ Params: { id: string } }>("/api/v15/sessions/:id/cancel", async (request, reply) => {
+  app.post<{ Params: { id: string } }>("/api/v16/sessions/:id/cancel", async (request, reply) => {
     requireSessionOwner(request, request.params.id);
     runtime.cancel(request.params.id);
     return reply.code(204).send();
   });
   app.post<{ Params: { id: string }; Body: { approved?: boolean } }>(
-    "/api/v15/approvals/:id",
+    "/api/v16/approvals/:id",
     async (request) =>
       ownedResult(
         request,
@@ -516,31 +530,31 @@ export async function createServer(
         runtime.database.approvalSession(request.params.id),
       ),
   );
-  app.get("/api/v15/models", async () => runtime.listModels());
-  app.get("/api/v15/skills", async (request) =>
+  app.get("/api/v16/models", async () => runtime.listModels());
+  app.get("/api/v16/skills", async (request) =>
     adminResult(request, () => ({
       available: runtime.listSkills(),
       packages: runtime.listSkillPackages(),
     })),
   );
-  app.post("/api/v15/skills/refresh", async (request) => adminResult(request, () => runtime.refreshSkills()));
-  app.post("/api/v15/admin/reload", async (request) => {
+  app.post("/api/v16/skills/refresh", async (request) => adminResult(request, () => runtime.refreshSkills()));
+  app.post("/api/v16/admin/reload", async (request) => {
     requireAdmin(request);
     if (!options.configLoader) throw new Error("Configuration reload is unavailable");
     return runtime.reloadConfig(await options.configLoader());
   });
-  app.get("/api/v15/admin/config", async (request) => adminResult(request, () => runtime.publicConfig()));
-  app.get<{ Querystring: { q?: string } }>("/api/v15/skills/search", async (request) =>
+  app.get("/api/v16/admin/config", async (request) => adminResult(request, () => runtime.publicConfig()));
+  app.get<{ Querystring: { q?: string } }>("/api/v16/skills/search", async (request) =>
     adminResult(request, () => runtime.searchSkills(request.query.q ?? "")),
   );
-  app.post("/api/v15/skills/install", async (request) => {
+  app.post("/api/v16/skills/install", async (request) => {
     requireAdmin(request);
     if (!Value.Check(SkillInstallRequestSchema, request.body))
       throw new Error("Invalid skill install request");
     return runtime.installSkill(request.body);
   });
   for (const status of ["enable", "disable", "reject"] as const)
-    app.post<{ Params: { id: string } }>(`/api/v15/skills/:id/${status}`, async (request) =>
+    app.post<{ Params: { id: string } }>(`/api/v16/skills/:id/${status}`, async (request) =>
       adminResult(request, () =>
         runtime.setSkillStatus(
           request.params.id,
@@ -548,22 +562,22 @@ export async function createServer(
         ),
       ),
     );
-  app.get("/api/v15/profile", async (request) => {
+  app.get("/api/v16/profile", async (request) => {
     const principal = userPrincipal(auth, request);
     return runtime.getAgentProfile(principal.userId);
   });
-  app.put<{ Body: { content?: string } }>("/api/v15/profile", async (request) => {
+  app.put<{ Body: { content?: string } }>("/api/v16/profile", async (request) => {
     const principal = userPrincipal(auth, request);
     if (typeof request.body?.content !== "string") throw new Error("Profile content is required");
     return runtime.updateAgentProfile(request.body.content, principal.userId);
   });
-  app.get("/api/v15/mcp", async (request) => adminResult(request, () => runtime.mcp.status()));
-  app.get("/api/v15/knowledge", async (request) => {
+  app.get("/api/v16/mcp", async (request) => adminResult(request, () => runtime.mcp.status()));
+  app.get("/api/v16/knowledge", async (request) => {
     const principal = userPrincipal(auth, request);
     return runtime.knowledge.list(principal.userId);
   });
   app.get<{ Querystring: { q?: string; sourceId?: string; limit?: string } }>(
-    "/api/v15/knowledge/search",
+    "/api/v16/knowledge/search",
     async (request) => {
       const principal = userPrincipal(auth, request);
       return runtime.knowledge.search(
@@ -575,7 +589,7 @@ export async function createServer(
     },
   );
   app.post<{ Body: { name?: string; path?: string; attachmentId?: string; sessionId?: string } }>(
-    "/api/v15/knowledge",
+    "/api/v16/knowledge",
     async (request) => {
       const principal = userPrincipal(auth, request);
       if (!request.body?.name || (!request.body.path && !request.body.attachmentId))
@@ -594,80 +608,80 @@ export async function createServer(
       return source;
     },
   );
-  app.delete<{ Params: { id: string } }>("/api/v15/knowledge/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v16/knowledge/:id", async (request, reply) => {
     requireOwned(request, runtime.database.knowledgeOwner(request.params.id));
     runtime.knowledge.delete(request.params.id);
     runtime.invalidateResource("knowledge", userPrincipal(auth, request).userId);
     return reply.code(204).send();
   });
-  app.post<{ Params: { id: string } }>("/api/v15/knowledge/:id/reindex", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v16/knowledge/:id/reindex", async (request) =>
     ownedResult(request, runtime.database.knowledgeOwner(request.params.id), () =>
       runtime.knowledge.reindex(request.params.id, userPrincipal(auth, request).userId),
     ),
   );
-  app.get("/api/v15/tasks", async (request) => {
+  app.get("/api/v16/tasks", async (request) => {
     const principal = userPrincipal(auth, request);
     return runtime.listTasks(principal.userId);
   });
-  app.post<{ Body: { prompt?: string; parentSessionId?: string } }>("/api/v15/tasks", async (request) => {
+  app.post<{ Body: { prompt?: string; parentSessionId?: string } }>("/api/v16/tasks", async (request) => {
     if (!request.body?.prompt || typeof request.body.prompt !== "string")
       throw new Error("prompt is required");
     if (request.body.parentSessionId) requireSessionOwner(request, request.body.parentSessionId);
     const principal = userPrincipal(auth, request);
     return runtime.createTask(request.body.prompt, request.body.parentSessionId, undefined, principal.userId);
   });
-  app.get<{ Params: { id: string } }>("/api/v15/tasks/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/tasks/:id", async (request) =>
     ownedResult(request, runtime.database.taskOwner(request.params.id), () =>
       runtime.getTask(request.params.id),
     ),
   );
-  app.get<{ Params: { id: string } }>("/api/v15/tasks/:id/snapshot", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/tasks/:id/snapshot", async (request) =>
     ownedResult(request, runtime.database.taskOwner(request.params.id), () =>
       runtime.getSnapshot(runtime.getTask(request.params.id).sessionId),
     ),
   );
-  app.post<{ Params: { id: string } }>("/api/v15/tasks/:id/cancel", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v16/tasks/:id/cancel", async (request) =>
     ownedResult(request, runtime.database.taskOwner(request.params.id), () =>
       runtime.cancelTask(request.params.id),
     ),
   );
-  app.delete<{ Params: { id: string } }>("/api/v15/tasks/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v16/tasks/:id", async (request, reply) => {
     requireOwned(request, runtime.database.taskOwner(request.params.id));
     runtime.deleteTask(request.params.id);
     return reply.code(204).send();
   });
-  app.get("/api/v15/schedules", async (request) => {
+  app.get("/api/v16/schedules", async (request) => {
     const principal = userPrincipal(auth, request);
     return runtime.listScheduledTasks(principal.userId);
   });
-  app.post("/api/v15/schedules", async (request) => {
+  app.post("/api/v16/schedules", async (request) => {
     const principal = userPrincipal(auth, request);
     if (!Value.Check(CreateScheduledTaskRequestSchema, request.body))
       throw new Error("Invalid scheduled task request");
     return runtime.createScheduledTask(request.body, principal.userId);
   });
-  app.patch<{ Params: { id: string } }>("/api/v15/schedules/:id", async (request) => {
+  app.patch<{ Params: { id: string } }>("/api/v16/schedules/:id", async (request) => {
     requireOwned(request, runtime.database.scheduledTaskOwner(request.params.id));
     if (!Value.Check(UpdateScheduledTaskRequestSchema, request.body))
       throw new Error("Invalid scheduled task update");
     return runtime.updateScheduledTask(request.params.id, request.body);
   });
-  app.delete<{ Params: { id: string } }>("/api/v15/schedules/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v16/schedules/:id", async (request, reply) => {
     requireOwned(request, runtime.database.scheduledTaskOwner(request.params.id));
     runtime.deleteScheduledTask(request.params.id);
     return reply.code(204).send();
   });
-  app.post<{ Params: { id: string } }>("/api/v15/schedules/:id/run", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v16/schedules/:id/run", async (request) =>
     ownedResult(request, runtime.database.scheduledTaskOwner(request.params.id), () =>
       runtime.runScheduledTask(request.params.id),
     ),
   );
-  app.get<{ Params: { id: string } }>("/api/v15/schedules/:id/runs", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/schedules/:id/runs", async (request) =>
     ownedResult(request, runtime.database.scheduledTaskOwner(request.params.id), () =>
       runtime.listScheduledTaskRuns(request.params.id),
     ),
   );
-  app.get<{ Params: { id: string } }>("/api/v15/schedule-runs/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/schedule-runs/:id", async (request) =>
     ownedResult(
       request,
       runtime.database.scheduledTaskOwner(
@@ -676,7 +690,7 @@ export async function createServer(
       () => runtime.getScheduledTaskRun(request.params.id),
     ),
   );
-  app.post<{ Params: { id: string } }>("/api/v15/schedule-runs/:id/cancel", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v16/schedule-runs/:id/cancel", async (request) =>
     ownedResult(
       request,
       runtime.database.scheduledTaskOwner(
@@ -686,14 +700,14 @@ export async function createServer(
     ),
   );
   app.get<{ Querystring: { status?: "active" | "candidate" | "superseded" | "rejected" } }>(
-    "/api/v15/memory",
+    "/api/v16/memory",
     async (request) => {
       const principal = userPrincipal(auth, request);
       return runtime.listMemoryFacts(request.query.status, principal.userId);
     },
   );
   app.post<{ Body: { sessionId?: string; scope?: "global" | "session"; content?: string } }>(
-    "/api/v15/memory",
+    "/api/v16/memory",
     async (request) => {
       const principal = userPrincipal(auth, request);
       if (!request.body?.sessionId || !request.body.content)
@@ -708,7 +722,7 @@ export async function createServer(
     },
   );
   app.post<{ Params: { id: string }; Body: { status?: "active" | "candidate" | "superseded" | "rejected" } }>(
-    "/api/v15/memory/:id",
+    "/api/v16/memory/:id",
     async (request) => {
       requireOwned(request, runtime.database.memoryOwner(request.params.id));
       const status = request.body?.status;
@@ -717,12 +731,12 @@ export async function createServer(
       return runtime.reviewMemoryFact(request.params.id, status);
     },
   );
-  app.delete<{ Params: { id: string } }>("/api/v15/memory/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string } }>("/api/v16/memory/:id", async (request, reply) => {
     requireOwned(request, runtime.database.memoryOwner(request.params.id));
     runtime.deleteMemoryFact(request.params.id);
     return reply.code(204).send();
   });
-  app.get<{ Params: { runId: string } }>("/api/v15/audit/runs/:runId", async (request) => {
+  app.get<{ Params: { runId: string } }>("/api/v16/audit/runs/:runId", async (request) => {
     const principal = userPrincipal(auth, request);
     if (principal.role === "admin") return runtime.audit(request.params.runId);
     return ownedResult(request, runtime.database.runOwner(request.params.runId), () =>
@@ -740,7 +754,7 @@ export async function createServer(
       offset?: string;
       limit?: string;
     };
-  }>("/api/v15/traces", async (request) => {
+  }>("/api/v16/traces", async (request) => {
     const principal = userPrincipal(auth, request);
     const query = request.query;
     const runId = query.runId?.trim() || undefined;
@@ -782,7 +796,7 @@ export async function createServer(
     );
   });
   app.get<{ Querystring: { from?: string; to?: string; limit?: string } }>(
-    "/api/v15/reports/resources",
+    "/api/v16/reports/resources",
     async (request) => {
       requireAdmin(request);
       const from = request.query.from === undefined ? 0 : Number(request.query.from);
@@ -801,7 +815,7 @@ export async function createServer(
       return runtime.listResourceSnapshots(from, request.query.to === undefined ? undefined : to, limit);
     },
   );
-  app.get<{ Querystring: { from?: string; to?: string } }>("/api/v15/reports/operations", async (request) => {
+  app.get<{ Querystring: { from?: string; to?: string } }>("/api/v16/reports/operations", async (request) => {
     requireAdmin(request);
     const to = request.query.to ? Number(request.query.to) : Date.now();
     const from = request.query.from ? Number(request.query.from) : to - 7 * 24 * 60 * 60_000;
@@ -810,7 +824,7 @@ export async function createServer(
     return runtime.database.operationsReport(from, to);
   });
   app.get<{ Querystring: { from?: string; to?: string } }>(
-    "/api/v15/reports/diagnostics",
+    "/api/v16/reports/diagnostics",
     async (request) => {
       requireAdmin(request);
       const from = Number(request.query.from ?? 0);
@@ -820,7 +834,7 @@ export async function createServer(
       return runtime.diagnosticsReport(from, to);
     },
   );
-  app.get("/api/v15/optimization-proposals", async (request) =>
+  app.get("/api/v16/optimization-proposals", async (request) =>
     adminResult(request, () => runtime.listOptimizationProposals()),
   );
   app.post<{
@@ -831,7 +845,7 @@ export async function createServer(
       validationCommand?: string;
       approved?: boolean;
     };
-  }>("/api/v15/optimization-proposals/preview", async (request) => {
+  }>("/api/v16/optimization-proposals/preview", async (request) => {
     requireAdmin(request);
     if (
       !request.body?.proposalId ||
@@ -856,7 +870,7 @@ export async function createServer(
       validationCommand?: string;
       approved?: boolean;
     };
-  }>("/api/v15/optimization-proposals/apply", async (request) => {
+  }>("/api/v16/optimization-proposals/apply", async (request) => {
     requireAdmin(request);
     if (
       !request.body?.proposalId ||
@@ -873,18 +887,18 @@ export async function createServer(
       request.body.approved === true,
     );
   });
-  app.get<{ Querystring: { limit?: string } }>("/api/v15/optimization-applications", async (request) =>
+  app.get<{ Querystring: { limit?: string } }>("/api/v16/optimization-applications", async (request) =>
     adminResult(request, () => runtime.optimizationExecution.list(Number(request.query.limit ?? 100))),
   );
-  app.post<{ Params: { id: string } }>("/api/v15/optimization-applications/:id/rollback", async (request) => {
+  app.post<{ Params: { id: string } }>("/api/v16/optimization-applications/:id/rollback", async (request) => {
     requireAdmin(request);
     return runtime.optimizationExecution.rollback(request.params.id);
   });
-  app.get<{ Querystring: { limit?: string } }>("/api/v15/evaluations", async (request) =>
+  app.get<{ Querystring: { limit?: string } }>("/api/v16/evaluations", async (request) =>
     adminResult(request, () => runtime.listEvaluationReports(Number(request.query.limit ?? 100))),
   );
   app.get<{ Querystring: { from?: string; to?: string; groupBy?: string } }>(
-    "/api/v15/evaluations/trends",
+    "/api/v16/evaluations/trends",
     async (request) => {
       requireAdmin(request);
       const from = Number(request.query.from ?? 0);
@@ -901,17 +915,17 @@ export async function createServer(
       return runtime.listEvaluationTrends(from, to, groupBy as "day" | "suite" | "mode");
     },
   );
-  app.get<{ Params: { id: string } }>("/api/v15/evaluations/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/evaluations/:id", async (request) =>
     adminResult(request, () => runtime.getEvaluationReport(request.params.id)),
   );
-  app.post("/api/v15/evaluations", async (request) => {
+  app.post("/api/v16/evaluations", async (request) => {
     requireAdmin(request);
     if (!Value.Check(CreateEvaluationReportSchema, request.body))
       throw new Error("Invalid evaluation report");
     return runtime.createEvaluationReport(request.body);
   });
   app.post<{ Body: { from?: number; to?: number } }>(
-    "/api/v15/optimization-proposals/generate",
+    "/api/v16/optimization-proposals/generate",
     async (request) => {
       requireAdmin(request);
       const from = request.body?.from ?? 0;
@@ -922,7 +936,7 @@ export async function createServer(
     },
   );
   app.post<{ Params: { id: string }; Body: { status?: "accepted" | "rejected" } }>(
-    "/api/v15/optimization-proposals/:id/decision",
+    "/api/v16/optimization-proposals/:id/decision",
     async (request) => {
       requireAdmin(request);
       if (request.body?.status !== "accepted" && request.body?.status !== "rejected")
@@ -930,7 +944,7 @@ export async function createServer(
       return runtime.decideOptimizationProposal(request.params.id, request.body.status);
     },
   );
-  app.get<{ Params: { id: string } }>("/api/v15/runs/:id", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/runs/:id", async (request) =>
     ownedResult(
       request,
       runtime.database.runOwner(request.params.id),
@@ -938,7 +952,7 @@ export async function createServer(
       runtime.database.runSession(request.params.id),
     ),
   );
-  app.post<{ Params: { id: string } }>("/api/v15/runs/:id/prioritize", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v16/runs/:id/prioritize", async (request) =>
     ownedResult(
       request,
       runtime.database.runOwner(request.params.id),
@@ -946,7 +960,7 @@ export async function createServer(
       runtime.database.runSession(request.params.id),
     ),
   );
-  app.get<{ Params: { id: string } }>("/api/v15/runs/:id/quality", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/runs/:id/quality", async (request) =>
     ownedResult(
       request,
       runtime.database.runOwner(request.params.id),
@@ -954,7 +968,7 @@ export async function createServer(
       runtime.database.runSession(request.params.id),
     ),
   );
-  app.get<{ Params: { id: string } }>("/api/v15/sessions/:id/quality", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/sessions/:id/quality", async (request) =>
     ownedResult(
       request,
       runtime.database.sessionOwner(request.params.id),
@@ -962,7 +976,7 @@ export async function createServer(
       request.params.id,
     ),
   );
-  app.get<{ Params: { id: string } }>("/api/v15/messages/:id/quality", async (request, reply) => {
+  app.get<{ Params: { id: string } }>("/api/v16/messages/:id/quality", async (request, reply) => {
     const sessionId = runtime.database.findMessageOwner(request.params.id)?.sessionId;
     const principal = requireOwned(request, runtime.database.messageOwner(request.params.id), sessionId);
     if (!consumeRateLimit(qualityReadRate, principal.userId))
@@ -972,7 +986,7 @@ export async function createServer(
     return runtime.listMessageQuality(request.params.id);
   });
   app.post<{ Params: { id: string }; Body: { feedback?: string } }>(
-    "/api/v15/messages/:id/review",
+    "/api/v16/messages/:id/review",
     async (request, reply) => {
       if (!Value.Check(ReviewMessageRequestSchema, request.body ?? {}))
         throw new Error("Invalid review request");
@@ -990,7 +1004,7 @@ export async function createServer(
     },
   );
   app.post<{ Params: { id: string }; Body: { force?: boolean; reset?: boolean } }>(
-    "/api/v15/messages/:id/improve",
+    "/api/v16/messages/:id/improve",
     async (request, reply) => {
       if (!Value.Check(ImproveMessageRequestSchema, request.body ?? {}))
         throw new Error("Invalid improve request");
@@ -1003,7 +1017,7 @@ export async function createServer(
       return reply.code(202).send({ runId: run.id, status: run.status });
     },
   );
-  app.get<{ Params: { id: string } }>("/api/v15/runs/:id/checkpoints", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/runs/:id/checkpoints", async (request) =>
     ownedResult(
       request,
       runtime.database.runOwner(request.params.id),
@@ -1011,7 +1025,7 @@ export async function createServer(
       runtime.database.runSession(request.params.id),
     ),
   );
-  app.get<{ Params: { id: string } }>("/api/v15/runs/:id/actions", async (request) =>
+  app.get<{ Params: { id: string } }>("/api/v16/runs/:id/actions", async (request) =>
     ownedResult(
       request,
       runtime.database.runOwner(request.params.id),
@@ -1019,7 +1033,7 @@ export async function createServer(
       runtime.database.runSession(request.params.id),
     ),
   );
-  app.post<{ Params: { id: string } }>("/api/v15/runs/:id/resume", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v16/runs/:id/resume", async (request) =>
     ownedResult(
       request,
       runtime.database.runOwner(request.params.id),
@@ -1027,7 +1041,7 @@ export async function createServer(
       runtime.database.runSession(request.params.id),
     ),
   );
-  app.post<{ Params: { id: string } }>("/api/v15/runs/:id/confirm-plan", async (request) =>
+  app.post<{ Params: { id: string } }>("/api/v16/runs/:id/confirm-plan", async (request) =>
     ownedResult(
       request,
       runtime.database.runOwner(request.params.id),
@@ -1036,7 +1050,7 @@ export async function createServer(
     ),
   );
   app.post<{ Params: { id: string; actionId: string }; Body: { decision?: string } }>(
-    "/api/v15/runs/:id/actions/:actionId/decide",
+    "/api/v16/runs/:id/actions/:actionId/decide",
     async (request) => {
       if (!Value.Check(RunActionDecisionSchema, request.body)) throw new Error("Invalid action decision");
       requireOwned(
@@ -1047,7 +1061,7 @@ export async function createServer(
       return runtime.decideRunAction(request.params.id, request.params.actionId, request.body.decision);
     },
   );
-  app.post<{ Params: { id: string } }>("/api/v15/runs/:id/cancel", async (request) => {
+  app.post<{ Params: { id: string } }>("/api/v16/runs/:id/cancel", async (request) => {
     requireOwned(
       request,
       runtime.database.runOwner(request.params.id),
@@ -1055,7 +1069,7 @@ export async function createServer(
     );
     return runtime.cancelRun(request.params.id);
   });
-  app.post("/api/v15/uploads", async (request) => {
+  app.post("/api/v16/uploads", async (request) => {
     const parts = request.parts();
     let sessionId: string | undefined;
     let purpose: string | undefined;
@@ -1075,7 +1089,7 @@ export async function createServer(
     return runtime.addAttachment({ ...(sessionId ? { sessionId } : {}), ...upload });
   });
   app.get<{ Params: { id: string }; Querystring: { download?: string } }>(
-    "/api/v15/attachments/:id/content",
+    "/api/v16/attachments/:id/content",
     async (request, reply) => {
       requireOwned(
         request,
@@ -1096,8 +1110,8 @@ export async function createServer(
         .send(data);
     },
   );
-  app.head("/api/v15/events", async (_request, reply) => reply.code(405).send());
-  app.get("/api/v15/events", { websocket: true }, (socket, request) => {
+  app.head("/api/v16/events", async (_request, reply) => reply.code(405).send());
+  app.get("/api/v16/events", { websocket: true }, (socket, request) => {
     const connectionSpan = httpTelemetry.startSpan("websocket.connection", requestTrace(request));
     if (request.method !== "GET") {
       socket.close(1003, "WebSocket requires GET");
@@ -1215,14 +1229,14 @@ export async function createServer(
     });
   });
   app.all("/api/*", async (request, reply) => {
-    const isCurrentVersion = request.url === "/api/v15" || request.url.startsWith("/api/v15/");
+    const isCurrentVersion = request.url === "/api/v16" || request.url.startsWith("/api/v16/");
     return reply
       .code(404)
       .send(
         errorBody(
           request.id,
           isCurrentVersion ? "not_found" : "unsupported_api_version",
-          isCurrentVersion ? "API route not found" : "Only API v15 is supported",
+          isCurrentVersion ? "API route not found" : "Only API v16 is supported",
         ),
       );
   });

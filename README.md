@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前版本为 `1.3.0`，协议版本为 `15`，SQLite schema 为 `24`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前 Core 版本为 `1.3.0`，Android 客户端版本为 `1.4.0`（versionCode `14`），协议版本为 `16`，SQLite schema 为 `25`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -9,7 +9,7 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 - Pi `0.84.2` 的多模型流式 Agent loop，支持 OpenAI Responses 与兼容 Chat Completions 端点
 - 自适应预检：直接执行、澄清或显示计划；计划任务结束后执行一次结果验证
 - SQLite WAL 会话、运行、transcript、工具、审批、附件、记忆和 FTS5 知识库
-- 服务器工作区边界、符号链接逃逸检查、HTTP SSRF 防护，以及 shell/不可控外部副作用审批
+- 服务器工作区边界、符号链接逃逸检查、HTTP SSRF 防护，以及统一账号执行策略（默认免审批，可在设置关闭）
 - `SKILL.md` 发现以及 MCP stdio/Streamable HTTP 工具
 - 共享 `@uma-agent/client`、行式 CLI、响应式 Web 工作台
 - Snapshot + 永久事件游标同步、运行检查点和显式副作用恢复决策
@@ -27,6 +27,8 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 - 持久化 Faux/real 评测报告、跨设备评测历史，以及知识搜索、重建索引和终态任务清理
 - 每个 Session 可独立设置助手名称和头像；头像仅接受图片附件并校验会话所有权
 
+Core 启动统一使用 `--max-semi-space-size=4`，限制年轻代半空间为4MiB，避免长会话的短寿命对象让 V8 自动扩大堆。该参数已同步 npm、systemd、Docker 和隔离验收脚本；不限制模型上下文、不改变 SQLite FULL 同步、不调用强制 GC。手工启动 Core 时也应保留此参数，不可仅在性能测试中启用。Linux/容器仍须独立实测。
+
 ## 本地启动
 
 要求 Node.js `>=22.19.0`。
@@ -39,7 +41,7 @@ $env:OPENAI_API_KEY = "你的模型密钥"
 npm run build
 npm start
 ```
-默认配置唯一使用 tcvps Provider（`https://api.tcvps.cn/v1`）。模型密钥通过 `$env:OPENAI_API_KEY` 注入；不支持备用 Provider 或自动故障转移。
+示例配置使用单一 OpenAI 兼容 Provider；请将示例网关替换为实际服务地址（`https://model.example.com/v1`）。模型密钥通过 `$env:OPENAI_API_KEY` 注入；不支持备用 Provider 或自动故障转移。
 打开 `http://127.0.0.1:3210`。CLI 使用：
 
 配置诊断和真实模型测试必须显式使用当前运行环境的配置文件与 env-file。诊断只请求 `/models`，不产生模型调用费用；`real-test` 会在临时 Core 和临时数据库中执行，绝不能连接生产 state：
@@ -127,43 +129,44 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 - 非回环 HTTP MCP 应设置 `authTokenEnv`，Core 从该环境变量注入 Bearer Token
 - `runtime.maxParallelSessions`：跨会话并发上限；单会话默认 FIFO，也可在 Session 上设为安全抢占模式
 
-数据库只接受当前 `PRAGMA user_version`。版本不匹配会拒绝启动；本项目不提供旧格式迁移或兼容层。
+数据库只接受当前 `PRAGMA user_version`。版本不匹配会拒绝启动。schema 24 数据库先停机，再运行 `node scripts/upgrade-state.mjs <state.db>`；工具自动备份并校验完整性。运行时无兼容层，其他旧格式不支持。
 
 ## API 摘要
 
-服务器支持多用户隔离：`POST /api/v15/auth/register` 创建用户并一次性返回个人令牌，
+服务器支持多用户隔离：`POST /api/v16/auth/register` 创建用户并一次性返回个人令牌，
 `/auth/login` 将令牌交换为绑定用户的 HttpOnly Cookie，`/auth/me`、`/auth/tokens` 提供令牌
 查询和撤销。Session、Run、Task、Approval、Message、Attachment 和工作区请求均按用户所有权
 校验。移动端或其他网页可使用 `/auth/authorize` + `/auth/token` 的 S256 PKCE 流程；服务器只
 接受环境变量 `UMA_OAUTH_REDIRECTS` 中的精确 `clientId|redirectUri` 配对。
 
-- `GET/POST /api/v15/sessions`
-- `GET /api/v15/sessions/:id/snapshot`
-- `GET /api/v15/sessions/:id/events?after=<sequence>` 增量事件
-- `GET /api/v15/sessions/:id/history?before=<sequence>` 历史分页
-- `POST /api/v15/sessions/:id/messages|cancel|compact`
-- `PATCH /api/v15/sessions/:id` 可更新 `title`、`queueMode`、`assistantName` 和 `assistantAvatarAttachmentId`
-- `POST /api/v15/messages/:id/review|improve`、`GET /api/v15/runs/:id/quality`
-- `POST /api/v15/sessions/:id/commands` 在 Core 工作区执行始终审批的 Shell 命令
-- `GET /api/v15/attachments/:id/content`
-- `GET /api/v15/runs/:id/checkpoints|actions`
-- `POST /api/v15/runs/:id/resume|cancel`
-- `POST /api/v15/runs/:id/actions/:actionId/decide`
-- `POST /api/v15/approvals/:id`、`POST /api/v15/uploads`
-- `GET /api/v15/health/live|ready`
-- `GET /api/v15/events` WebSocket
-- `/api/v15/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
-- `GET /api/v15/knowledge/search`、`POST /api/v15/knowledge/:id/reindex`
-- `GET/POST /api/v15/evaluations`、`GET /api/v15/evaluations/:id`
-- `DELETE /api/v15/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
-- `/api/v15/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
-- `/api/v15/skills/search|install` 与技能 enable/disable/reject 生命周期
-- `POST /api/v15/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
-- `GET /api/v15/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
-- `/api/v15/schedules` 调度 CRUD、立即执行与运行历史
-- `GET /api/v15/reports/operations|diagnostics|resources` 脱敏运行、Trace 延迟和 CPU/RSS/WAL 统计
-- `GET /api/v15/traces?runId=<runId>` 查询 Run 的完整持久化 Trace Span 树，也支持按 Trace、时间、状态和名称过滤
-- `/api/v15/optimization-proposals` 提供证据、建议和人工接受/拒绝；`/api/v15/optimization-applications` 提供验证、回滚记录
+- `GET/PATCH /api/v16/account/execution-settings` 读取或设置账号 autoApprove，默认 true
+- `GET/POST /api/v16/sessions`
+- `GET /api/v16/sessions/:id/snapshot`
+- `GET /api/v16/sessions/:id/events?after=<sequence>` 增量事件
+- `GET /api/v16/sessions/:id/history?before=<sequence>` 历史分页
+- `POST /api/v16/sessions/:id/messages|cancel|compact`
+- `PATCH /api/v16/sessions/:id` 可更新 `title`、`queueMode`、`assistantName` 和 `assistantAvatarAttachmentId`
+- `POST /api/v16/messages/:id/review|improve`、`GET /api/v16/runs/:id/quality`
+- `POST /api/v16/sessions/:id/commands` 在 Core 工作区执行遵循账号免审批策略的 Shell 命令
+- `GET /api/v16/attachments/:id/content`
+- `GET /api/v16/runs/:id/checkpoints|actions`
+- `POST /api/v16/runs/:id/resume|cancel`
+- `POST /api/v16/runs/:id/actions/:actionId/decide`
+- `POST /api/v16/approvals/:id`、`POST /api/v16/uploads`
+- `GET /api/v16/health/live|ready`
+- `GET /api/v16/events` WebSocket
+- `/api/v16/models`、`skills`、`mcp`、`knowledge`、`tasks`、`memory`、`audit`
+- `GET /api/v16/knowledge/search`、`POST /api/v16/knowledge/:id/reindex`
+- `GET/POST /api/v16/evaluations`、`GET /api/v16/evaluations/:id`
+- `DELETE /api/v16/tasks/:id` 仅删除终态任务记录，不删除关联 Session、Run 或审计链
+- `/api/v16/profile`、`sessions/:id/activity`、`sessions/:id/history/search`
+- `/api/v16/skills/search|install` 与技能 enable/disable/reject 生命周期
+- `POST /api/v16/admin/reload` 原子重载模型角色、技能和 MCP；静态字段返回 `restartRequired`
+- `GET /api/v16/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
+- `/api/v16/schedules` 调度 CRUD、立即执行与运行历史
+- `GET /api/v16/reports/operations|diagnostics|resources` 脱敏运行、Trace 延迟和 CPU/RSS/WAL 统计
+- `GET /api/v16/traces?runId=<runId>` 查询 Run 的完整持久化 Trace Span 树，也支持按 Trace、时间、状态和名称过滤
+- `/api/v16/optimization-proposals` 提供证据、建议和人工接受/拒绝；`/api/v16/optimization-applications` 提供验证、回滚记录
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。
 
@@ -187,7 +190,7 @@ uma xianyu history <conversation-id>
 uma xianyu item <item-id>
 ```
 
-Android 工程位于 `android/`，应用 ID 为 `site.robotclaw.umaagent`；生产 Core 地址由构建配置注入。登录页可直接注册隔离账户；注册返回的个人访问令牌仅展示一次，复制并继续后由 Android Keystore 加密保存。登录后提供对话、会话、任务、调度、资源和设置，管理员还可进入咸鱼工作台。手机使用底部导航和“更多”菜单，宽屏使用 Navigation Rail；支持系统深浅色主题和 Android 12+ 动态颜色，离线状态只读。
+Android 工程位于 `android/`，应用 ID 为 `site.robotclaw.umaagent`；生产 Core 地址由构建配置注入。登录页可直接注册隔离账户；注册返回的个人访问令牌仅展示一次，复制成功或确认手动保存后继续，由 Android Keystore 加密保存。登录后提供对话、会话、任务、调度、资源和设置，管理员还可进入咸鱼工作台。手机使用底部导航和“更多”菜单，宽屏使用 Navigation Rail；支持跟随系统、浅色、深色三种品牌主题；离线阅读缓存并保留草稿，禁止远端写入。
 
 ### Android 发布与登录故障排查
 
@@ -203,7 +206,7 @@ Android APK 是独立的静态发布物，不会随 Core Server 的 systemd 发�
 
 | 用户模式 `mode` | 系统路由 `route` | 行为 |
 | --- | --- | --- |
-| `plan` | `plan` | 先创建并执行步骤，再统一验证；敏感操作仍需审批。 |
+| `plan` | `plan` | 先创建并执行步骤，再统一验证；许可遵循账号 autoApprove 策略，业务澄清仍保留。 |
 | `agent` | `direct` | 进入完整 Agent loop，可按权限调用工具。 |
 | `agent` | `clarify` | 信息不足，Run 进入 `awaiting_input`，下一条消息补充原 Run。 |
 
@@ -219,7 +222,7 @@ Core 仅向上下文注入 Profile、active 事实和相关历史 rollup。事�
 
 ## 浏览器 Worker 与评测
 
-Browser Worker 是独立 MCP Streamable HTTP 服务，原生启动默认只监听 `127.0.0.1:3230`；Compose 中监听容器网络但不发布宿主机端口。它不挂载 Core 业务 state 或 workspace，只共享独立 telemetry 目录。所有页面请求和重定向都执行公网地址校验；普通浏览器 MCP 操作自动执行，只有被权限策略判定为不可控高风险的动作才要求审批。原生启动后在 `mcpServers` 中配置 `http://127.0.0.1:3230/mcp`：
+Browser Worker 是独立 MCP Streamable HTTP 服务，原生启动默认只监听 `127.0.0.1:3230`；Compose 中监听容器网络但不发布宿主机端口。它不挂载 Core 业务 state 或 workspace，只共享独立 telemetry 目录。所有页面请求和重定向都执行公网地址校验；普通浏览器 MCP 操作自动执行，关闭账号免审批后，被权限策略判定为需许可的动作才进入审批。未知副作用恢复始终需要明确决策。原生启动后在 `mcpServers` 中配置 `http://127.0.0.1:3230/mcp`：
 
 ```powershell
 $env:UMA_TELEMETRY_DIR = "D:\UmaAgentData\telemetry"
@@ -241,7 +244,7 @@ node apps/eval-runner/dist/main.js eval-suite.json
 
 ## 部署
 
-生产部署不要直接复用开发 `.env` 或修改受版本控制的配置。先创建本地密钥文件和生产配置：
+当前生产发布使用 Native systemd，详见部署文档。下面是可选的容器隔离验证，不代表已完成容器生产验收；不要直接复用开发 `.env` 或修改受版本控制的配置。先创建本地密钥文件和隔离配置：
 
 ```bash
 cp .env.example .env
@@ -273,7 +276,7 @@ npx playwright install chromium
 npm run test:web:e2e
 npm run test:eval:faux
 npm run test:perf # 当前 Faux 性能预算与实测结果见 docs/release-acceptance.md
-npm run test:soak:faux # 默认短时验证；长时 soak 由 CI 或专用环境执行
+npm run test:soak:faux # 默认四小时正常 GC；失败保留隔离数据库和采样证据
 npm run test:real:smoke # 需 UMA_REAL_API=1，并显式提供 UMA_REAL_* 配置
 npm run test:real:eval
 npm run test:real:perf

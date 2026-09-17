@@ -8,6 +8,8 @@ import type {
   EvaluationTrend,
   OperationsReport,
 } from "@uma-agent/protocol";
+import { redactAudit } from "./database-utils.js";
+import { prepareStatement } from "./sql-statements.js";
 
 type Row = Record<string, unknown>;
 
@@ -31,25 +33,6 @@ function percentile(values: number[], p: number): number {
   return ordered[Math.min(ordered.length - 1, Math.ceil((p / 100) * ordered.length) - 1)] ?? 0;
 }
 
-function redactAudit(value: unknown): unknown {
-  if (typeof value === "string") {
-    return value
-      .replace(/(Bearer\s+)[^\s]+/gi, "$1[REDACTED]")
-      .replace(/(api[_-]?key|password|secret|token)(\s*[:=]\s*)[^\s,}]+/gi, "$1$2[REDACTED]");
-  }
-  if (Array.isArray(value)) return value.map(redactAudit);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) =>
-        /(authorization|cookie|api[_-]?key|password|secret|token)/i.test(key)
-          ? [key, "[REDACTED]"]
-          : [key, redactAudit(item)],
-      ),
-    );
-  }
-  return value;
-}
-
 /** Owns immutable audit/evaluation persistence while UmaDatabase retains the connection and transaction boundary. */
 export class AuditEvaluationRepository {
   constructor(
@@ -69,34 +52,32 @@ export class AuditEvaluationRepository {
     error?: string;
   }): AuditRecord {
     const id = randomUUID();
-    this.db
-      .prepare(
-        "INSERT INTO audit_events(id,run_id,kind,name,input_json,output_json,status,duration_ms,usage_json,error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .run(
-        id,
-        input.runId,
-        input.kind,
-        input.name,
-        input.input === undefined ? null : JSON.stringify(redactAudit(input.input)),
-        input.output === undefined ? null : JSON.stringify(redactAudit(input.output)),
-        input.status,
-        input.durationMs ?? null,
-        input.usage === undefined ? null : JSON.stringify(input.usage),
-        input.error ?? null,
-        Date.now(),
-      );
+    prepareStatement(
+      this.db,
+      "INSERT INTO audit_events(id,run_id,kind,name,input_json,output_json,status,duration_ms,usage_json,error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+    ).run(
+      id,
+      input.runId,
+      input.kind,
+      input.name,
+      input.input === undefined ? null : JSON.stringify(redactAudit(input.input)),
+      input.output === undefined ? null : JSON.stringify(redactAudit(input.output)),
+      input.status,
+      input.durationMs ?? null,
+      input.usage === undefined ? null : JSON.stringify(redactAudit(input.usage)),
+      input.error === undefined ? null : String(redactAudit(input.error)),
+      Date.now(),
+    );
     return this.getAudit(id);
   }
 
   startModelCall(input: { runId: string; provider: string; model: string; role: string }): string {
     const id = randomUUID();
     const now = Date.now();
-    this.db
-      .prepare(
-        "INSERT INTO model_calls(id,run_id,provider,model,role,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-      )
-      .run(id, input.runId, input.provider, input.model, input.role, "started", now, now);
+    prepareStatement(
+      this.db,
+      "INSERT INTO model_calls(id,run_id,provider,model,role,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+    ).run(id, input.runId, input.provider, input.model, input.role, "started", now, now);
     return id;
   }
 
@@ -109,29 +90,29 @@ export class AuditEvaluationRepository {
       error?: string;
     },
   ): void {
-    const result = this.db
-      .prepare(
-        "UPDATE model_calls SET status=?,duration_ms=?,usage_json=?,error=?,updated_at=? WHERE id=? AND status='started'",
-      )
-      .run(
-        input.status,
-        input.durationMs ?? null,
-        input.usage === undefined ? null : JSON.stringify(redactAudit(input.usage)),
-        input.error ?? null,
-        Date.now(),
-        id,
-      );
+    const result = prepareStatement(
+      this.db,
+      "UPDATE model_calls SET status=?,duration_ms=?,usage_json=?,error=?,updated_at=? WHERE id=? AND status='started'",
+    ).run(
+      input.status,
+      input.durationMs ?? null,
+      input.usage === undefined ? null : JSON.stringify(redactAudit(input.usage)),
+      input.error === undefined ? null : String(redactAudit(input.error)),
+      Date.now(),
+      id,
+    );
     if (result.changes === 0) throw new Error(`Model call is not active: ${id}`);
   }
 
   listAudit(runId: string): AuditRecord[] {
-    return rows(this.db.prepare("SELECT * FROM audit_events WHERE run_id=? ORDER BY created_at"), runId).map(
-      (value) => this.toAudit(value),
-    );
+    return rows(
+      prepareStatement(this.db, "SELECT * FROM audit_events WHERE run_id=? ORDER BY created_at"),
+      runId,
+    ).map((value) => this.toAudit(value));
   }
 
   private getAudit(id: string): AuditRecord {
-    const value = row(this.db.prepare("SELECT * FROM audit_events WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM audit_events WHERE id=?"), id);
     if (!value) throw new Error(`Audit record not found: ${id}`);
     return this.toAudit(value);
   }
@@ -158,23 +139,23 @@ export class AuditEvaluationRepository {
     const id = randomUUID();
     const createdAt = Date.now();
     this.transaction(() => {
-      this.db
-        .prepare(
-          "INSERT INTO evaluation_reports(id,mode,suite_version,status,total,passed,failed,skipped,duration_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-        )
-        .run(
-          id,
-          input.mode,
-          input.suiteVersion,
-          input.status,
-          input.totals.total,
-          input.totals.passed,
-          input.totals.failed,
-          input.totals.skipped,
-          input.durationMs,
-          createdAt,
-        );
-      const insert = this.db.prepare(
+      prepareStatement(
+        this.db,
+        "INSERT INTO evaluation_reports(id,mode,suite_version,status,total,passed,failed,skipped,duration_ms,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+      ).run(
+        id,
+        input.mode,
+        input.suiteVersion,
+        input.status,
+        input.totals.total,
+        input.totals.passed,
+        input.totals.failed,
+        input.totals.skipped,
+        input.durationMs,
+        createdAt,
+      );
+      const insert = prepareStatement(
+        this.db,
         "INSERT INTO evaluation_cases(id,report_id,position,name,category,passed,duration_ms,run_id,status,error) VALUES(?,?,?,?,?,?,?,?,?,?)",
       );
       input.cases.forEach((item, position) => {
@@ -196,10 +177,10 @@ export class AuditEvaluationRepository {
   }
 
   getEvaluationReport(id: string): EvaluationReport {
-    const value = row(this.db.prepare("SELECT * FROM evaluation_reports WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM evaluation_reports WHERE id=?"), id);
     if (!value) throw new Error(`Evaluation report not found: ${id}`);
     const cases = rows(
-      this.db.prepare("SELECT * FROM evaluation_cases WHERE report_id=? ORDER BY position"),
+      prepareStatement(this.db, "SELECT * FROM evaluation_cases WHERE report_id=? ORDER BY position"),
       id,
     ).map((item) => ({
       name: text(item.name),
@@ -231,14 +212,15 @@ export class AuditEvaluationRepository {
 
   listEvaluationReports(limit = 100): EvaluationReport[] {
     return rows(
-      this.db.prepare("SELECT id FROM evaluation_reports ORDER BY created_at DESC LIMIT ?"),
+      prepareStatement(this.db, "SELECT id FROM evaluation_reports ORDER BY created_at DESC LIMIT ?"),
       Math.max(1, Math.min(500, limit)),
     ).map((value) => this.getEvaluationReport(text(value.id)));
   }
 
   evaluationTrends(from: number, to: number, groupBy: "day" | "suite" | "mode"): EvaluationTrend[] {
     const reports = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT * FROM evaluation_reports WHERE created_at BETWEEN ? AND ? ORDER BY created_at",
       ),
       from,
@@ -281,7 +263,8 @@ export class AuditEvaluationRepository {
 
   operationsReport(from: number, to: number): OperationsReport {
     const runRows = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT status,COUNT(*) AS count FROM runs WHERE created_at BETWEEN ? AND ? GROUP BY status",
       ),
       from,
@@ -290,7 +273,8 @@ export class AuditEvaluationRepository {
     const runCount = (status: string) =>
       integer(runRows.find((value) => text(value.status) === status)?.count);
     const modelRows = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT status,duration_ms,usage_json FROM model_calls WHERE created_at BETWEEN ? AND ?",
       ),
       from,
@@ -302,14 +286,16 @@ export class AuditEvaluationRepository {
       return sum + integer(usage.totalTokens ?? usage.total);
     }, 0);
     const tools = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT COUNT(*) AS calls,SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS failed FROM audit_events WHERE kind='tool' AND created_at BETWEEN ? AND ?",
       ),
       from,
       to,
     );
     const approvals = row(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT COUNT(*) AS requested,SUM(CASE WHEN status IN ('denied','expired') THEN 1 ELSE 0 END) AS denied FROM approvals WHERE created_at BETWEEN ? AND ?",
       ),
       from,
@@ -337,7 +323,8 @@ export class AuditEvaluationRepository {
       approvals: { requested: integer(approvals?.requested), denied: integer(approvals?.denied) },
       recoveries: integer(
         row(
-          this.db.prepare(
+          prepareStatement(
+            this.db,
             "SELECT COUNT(*) AS count FROM audit_events WHERE kind='run' AND name='resume' AND created_at BETWEEN ? AND ?",
           ),
           from,
@@ -350,7 +337,8 @@ export class AuditEvaluationRepository {
   diagnosticsReport(from: number, to: number): DiagnosticsReport {
     const summary = this.operationsReport(from, to);
     const slowModels = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT provider,model,COUNT(*) AS calls,AVG(COALESCE(duration_ms,0)) AS average_duration FROM model_calls WHERE created_at BETWEEN ? AND ? GROUP BY provider,model ORDER BY average_duration DESC LIMIT 20",
       ),
       from,
@@ -362,7 +350,8 @@ export class AuditEvaluationRepository {
       averageDurationMs: Number(value.average_duration ?? 0),
     }));
     const toolFailures = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT name,COUNT(*) AS failures,MAX(error) AS latest_error FROM audit_events WHERE kind='tool' AND status IN ('error','failed') AND created_at BETWEEN ? AND ? GROUP BY name ORDER BY failures DESC LIMIT 20",
       ),
       from,
@@ -373,7 +362,8 @@ export class AuditEvaluationRepository {
       ...(value.latest_error ? { latestError: text(value.latest_error) } : {}),
     }));
     const approvalBottlenecks = rows(
-      this.db.prepare(
+      prepareStatement(
+        this.db,
         "SELECT tool_name,COUNT(*) AS requested,SUM(CASE WHEN status IN ('denied','expired') THEN 1 ELSE 0 END) AS denied FROM approvals WHERE created_at BETWEEN ? AND ? GROUP BY tool_name ORDER BY requested DESC LIMIT 20",
       ),
       from,

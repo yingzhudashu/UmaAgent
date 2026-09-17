@@ -1,4 +1,5 @@
 import type { OptimizationProposal } from "@uma-agent/protocol";
+import { useOperation } from "../components/OperationFeedback.js";
 import { displayStatus } from "../statusLabels.js";
 
 export function OptimizationArea({
@@ -9,12 +10,19 @@ export function OptimizationArea({
 }: {
   proposals: OptimizationProposal[];
   disabled: boolean;
-  generate: () => void;
-  decide: (id: string, status: "accepted" | "rejected") => void;
+  generate: () => unknown;
+  decide: (id: string, status: "accepted" | "rejected") => unknown;
 }) {
+  const operation = useOperation();
   return (
     <div className="operation-list">
-      <button type="button" disabled={disabled} onClick={generate}>
+      {operation.feedback}
+      <p>接受提案只加入人工待办，不会自动修改配置或代码。</p>
+      <button
+        type="button"
+        disabled={disabled || operation.busy}
+        onClick={() => void operation.execute(generate)}
+      >
         生成只读提案
       </button>
       {proposals.map((item) => (
@@ -30,14 +38,20 @@ export function OptimizationArea({
           ))}
           {item.status === "pending" && (
             <div className="approval-actions">
-              <button type="button" disabled={disabled} onClick={() => decide(item.id, "rejected")}>
+              <button
+                type="button"
+                disabled={disabled || operation.busy}
+                onClick={() =>
+                  operation.confirm("拒绝此提案？", item.title, () => decide(item.id, "rejected"))
+                }
+              >
                 拒绝
               </button>
               <button
                 type="button"
                 className="primary"
-                disabled={disabled}
-                onClick={() => decide(item.id, "accepted")}
+                disabled={disabled || operation.busy}
+                onClick={() => void operation.execute(() => decide(item.id, "accepted"))}
               >
                 接受为人工待办
               </button>

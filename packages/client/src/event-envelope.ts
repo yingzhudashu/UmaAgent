@@ -20,6 +20,8 @@ export function eventEnvelope(value: unknown): value is AgentEventEnvelope {
     typeof payload?.messageId === "string" &&
     typeof payload.append === "string" &&
     payload.append.length > 0 &&
+    Number.isSafeInteger(payload.offset) &&
+    Number(payload.offset) >= 0 &&
     typeof payload.updatedAt === "number"
   );
 }

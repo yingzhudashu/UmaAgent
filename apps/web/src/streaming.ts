@@ -23,8 +23,12 @@ export function applyStreamingEvent(
     return {
       ...current,
       transcript: current.transcript.map((item) =>
-        item.id === payload.messageId
-          ? { ...item, content: `${item.content}${payload.append}`, updatedAt: Date.now() }
+        item.id === payload.messageId && item.status === "streaming" && payload.offset <= item.content.length
+          ? {
+              ...item,
+              content: item.content + payload.append.slice(item.content.length - payload.offset),
+              updatedAt: payload.updatedAt,
+            }
           : item,
       ),
     };
@@ -117,7 +121,11 @@ export function mergeSessionSnapshot(
     const previous = transcript.get(item.id);
     transcript.set(
       item.id,
-      previous?.status === "streaming" && previous.content.length > item.content.length ? previous : item,
+      previous?.status === "streaming" &&
+        item.status === "streaming" &&
+        previous.content.length > item.content.length
+        ? previous
+        : item,
     );
   }
   const recentRuns = new Map(current.recentRuns.map((run) => [run.id, run]));

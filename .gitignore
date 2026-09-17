@@ -29,3 +29,23 @@ config.user.json
 /.test-*/
 /backups/
 /deploy/uma.config.production.json
+
+/artifacts/
+
+/android/.gradle/
+/android/app/build/
+/android/build/
+/android/app/src/main/assets/message/
+*.log
+
+# 私人部署、签名与真实验收配置只保存在本地。
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+.env.*
+!.env.example
+*.local.json
+*.local.properties
+/android-release.properties

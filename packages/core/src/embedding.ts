@@ -23,12 +23,14 @@ export class EmbeddingService {
       retryAttempts: 2,
     };
     this.apiKey = process.env[this.config.apiKeyEnv]?.trim();
+    if (this.config.enabled && !this.apiKey)
+      throw new Error(`Embedding is enabled but ${this.config.apiKeyEnv} is not configured`);
   }
 
   private readonly config: EmbeddingConfig;
 
   get enabled(): boolean {
-    return this.config.enabled && Boolean(this.apiKey);
+    return this.config.enabled;
   }
 
   get model(): string {
@@ -61,18 +63,14 @@ export class EmbeddingService {
   async embedBatch(texts: string[]): Promise<Array<number[] | undefined>> {
     if (!this.enabled) return texts.map(() => undefined);
     const result: Array<number[] | undefined> = [];
-    try {
-      for (let offset = 0; offset < texts.length; offset += this.config.batchSize) {
-        const batch = texts.slice(offset, offset + this.config.batchSize);
-        const values = await this.fetch(batch);
-        batch.forEach((text, index) => {
-          const vector = values[index];
-          if (vector) this.remember(`${this.config.model}:${this.hash(text)}`, vector);
-          result.push(vector);
-        });
-      }
-    } catch {
-      return texts.map(() => undefined);
+    for (let offset = 0; offset < texts.length; offset += this.config.batchSize) {
+      const batch = texts.slice(offset, offset + this.config.batchSize);
+      const values = await this.fetch(batch);
+      batch.forEach((text, index) => {
+        const vector = values[index];
+        if (vector) this.remember(`${this.config.model}:${this.hash(text)}`, vector);
+        result.push(vector);
+      });
     }
     return result;
   }
@@ -85,13 +83,14 @@ export class EmbeddingService {
   }
 
   private async fetch(input: string[]): Promise<number[][]> {
-    if (!this.apiKey) return [];
+    if (!this.apiKey) throw new Error("Embedding credentials are unavailable");
     await this.acquire();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
     try {
       let lastError: unknown;
       for (let attempt = 0; attempt <= this.config.retryAttempts; attempt += 1) {
+        let retryable = true;
         try {
           const response = await fetch(`${this.config.baseUrl}/embeddings`, {
             method: "POST",
@@ -100,17 +99,31 @@ export class EmbeddingService {
             signal: controller.signal,
           });
           if (!response.ok) {
-            if (![408, 425, 429, 500, 502, 503, 504].includes(response.status))
-              throw new Error(`Embedding provider returned HTTP ${response.status}`);
-            throw new Error(`Transient embedding provider HTTP ${response.status}`);
+            retryable = [408, 425, 429, 500, 502, 503, 504].includes(response.status);
+            await response.body?.cancel();
+            throw new Error(`Embedding provider returned HTTP ${response.status}`);
           }
+          // 认证、请求和响应合同错误不会因重试改善；网络异常及明确瞬态状态才重试。
+          retryable = false;
           const body = (await response.json()) as EmbeddingResponse;
-          return (body.data ?? [])
-            .sort((left, right) => (left.index ?? 0) - (right.index ?? 0))
-            .map((item) => item.embedding ?? []);
+          const items = body.data?.slice().sort((left, right) => (left.index ?? -1) - (right.index ?? -1));
+          if (
+            items?.length !== input.length ||
+            items.some(
+              (item, index) =>
+                item.index !== index ||
+                !Array.isArray(item.embedding) ||
+                item.embedding.length === 0 ||
+                item.embedding.some((value) => typeof value !== "number" || !Number.isFinite(value)),
+            )
+          )
+            throw new Error("Embedding provider returned incomplete or invalid vectors");
+          if (items.some((item) => item.embedding?.length !== items[0]?.embedding?.length))
+            throw new Error("Embedding provider returned inconsistent vector dimensions");
+          return items.map((item) => item.embedding as number[]);
         } catch (error) {
           lastError = error;
-          if (controller.signal.aborted || attempt >= this.config.retryAttempts) break;
+          if (!retryable || controller.signal.aborted || attempt >= this.config.retryAttempts) break;
           await new Promise<void>((resolve) => setTimeout(resolve, Math.min(1_000 * 2 ** attempt, 5_000)));
         }
       }
@@ -126,12 +139,8 @@ export class EmbeddingService {
       this.activeRequests += 1;
       return Promise.resolve();
     }
-    return new Promise((resolve) =>
-      this.waiters.push(() => {
-        this.activeRequests += 1;
-        resolve();
-      }),
-    );
+    // release 将已有许可直接交给队首，等待者不能再次增加占用数。
+    return new Promise((resolve) => this.waiters.push(resolve));
   }
 
   private release(): void {

@@ -10,6 +10,8 @@ describe("RuntimeShortcutService", () => {
         listUserSessions: () => [session],
         getSession: () => session,
         sessionOwner: () => "user-1",
+        getUser: () => ({ role: "admin" }),
+        taskOwner: () => "user-1",
         operationsReport: () => ({ runs: 1 }),
       },
       health: () => ({ started: true, databaseReady: true, activeRuns: 0 }),
@@ -29,6 +31,23 @@ describe("RuntimeShortcutService", () => {
       listKnowledgeSearch: () => [{ id: "doc-1" }],
     };
     const service = new RuntimeShortcutService(deps as never);
+    const ordinary = new RuntimeShortcutService({
+      ...deps,
+      database: { ...deps.database, getUser: () => ({ role: "user" }), taskOwner: () => "another-user" },
+    } as never);
+    for (const command of [
+      "/config",
+      "/reload-config",
+      "/reload-skills",
+      "/stats",
+      "/test list",
+      "/self-opt proposals",
+    ])
+      await expect(ordinary.execute(session.id, command, "user-1")).rejects.toThrow(
+        "Administrator access required",
+      );
+    for (const command of ["/btw result task-1", "/btw cancel task-1", "/btw clear task-1"])
+      await expect(ordinary.execute(session.id, command, "user-1")).rejects.toThrow("Resource not found");
     const commands = [
       "/help",
       "/reload-skills",

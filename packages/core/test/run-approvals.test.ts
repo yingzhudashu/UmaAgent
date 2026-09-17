@@ -37,6 +37,38 @@ function setup(database: UmaDatabase) {
 }
 
 describe("run approvals", () => {
+  it("defaults new accounts to automatic execution and audits a shell without pending approval", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-automatic-"));
+    temporary.push(root);
+    const database = testDatabase(root);
+    try {
+      const user = database.createUser();
+      expect(database.getExecutionSettings(user.id)).toEqual({ autoApprove: true });
+      const { session, run } = setup(database);
+      database.setExecutionSettings("test-user", true);
+      const approvals = new RunApprovals(database, new EventHub(database), 1000);
+      await expect(
+        approvals.request({
+          sessionId: session.id,
+          runId: run.id,
+          toolCallId: "automatic-shell",
+          toolName: "shell",
+          args: { command: "echo ok" },
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toBe(true);
+      expect(database.getSnapshot(session.id).pendingApprovals).toEqual([]);
+      expect(
+        database.db.prepare("SELECT status FROM audit_events WHERE run_id=? AND kind='approval'").get(run.id),
+      ).toMatchObject({ status: "approved" });
+      database.setExecutionSettings("test-user", false);
+      expect(database.getExecutionSettings(user.id).autoApprove).toBe(true);
+      expect(() => database.getExecutionSettings("absent")).toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
   it("resolves a pending request once and returns the durable final decision on retry", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-approvals-"));
     temporary.push(root);

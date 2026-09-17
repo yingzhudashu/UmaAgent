@@ -7,10 +7,18 @@ CREATE TABLE users (
   status TEXT NOT NULL CHECK (status IN ('active','disabled')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  last_login_at INTEGER
+  last_login_at INTEGER,
+  auto_approve INTEGER NOT NULL DEFAULT 1 CHECK(auto_approve IN (0,1))
 );
 CREATE INDEX users_status_created ON users(status, created_at);
 INSERT INTO users(id,role,status,created_at,updated_at) VALUES('system','admin','active',0,0);
+
+CREATE TABLE account_execution_audit (
+  id INTEGER PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  auto_approve INTEGER NOT NULL CHECK(auto_approve IN (0,1)),
+  created_at INTEGER NOT NULL
+);
 
 CREATE TABLE auth_tokens (
   id TEXT PRIMARY KEY,
@@ -553,4 +561,4 @@ CREATE TABLE channel_deliveries (
 );
 CREATE INDEX channel_deliveries_session_status ON channel_deliveries(session_id,status,updated_at DESC);
 
-PRAGMA user_version = 24;
+PRAGMA user_version = 25;

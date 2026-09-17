@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -24,6 +26,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -34,11 +38,19 @@ import androidx.compose.ui.unit.dp
 internal fun StagingAccessScreen(state: UmaUiState, model: UmaViewModel) {
     var password by rememberSaveable { mutableStateOf("") }
     Column(
-        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
+        Modifier.fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("UmaAgent 测试版", style = MaterialTheme.typography.headlineMedium)
-        Text("输入测试环境访问口令后继续。该口令只保存在此设备的 Android Keystore 中。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "输入测试环境访问口令后继续。该口令只保存在此设备的 Android Keystore 中。",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
@@ -52,7 +64,9 @@ internal fun StagingAccessScreen(state: UmaUiState, model: UmaViewModel) {
             { model.configureStagingAccess(password) },
             Modifier.fillMaxWidth(),
             enabled = password.isNotBlank() && !state.loading,
-        ) { Text("连接测试环境") }
+        ) {
+            Text("连接测试环境")
+        }
         if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         ErrorBanner(state.error)
     }
@@ -65,9 +79,16 @@ internal fun AuthScreen(state: UmaUiState, model: UmaViewModel) {
     var authMode by rememberSaveable { mutableStateOf("login") }
     var label by rememberSaveable { mutableStateOf("android") }
     var copied by rememberSaveable(state.registrationToken) { mutableStateOf(false) }
+    var saved by rememberSaveable(state.registrationToken) { mutableStateOf(false) }
+    var copyError by rememberSaveable(state.registrationToken) { mutableStateOf("") }
 
     Column(
-        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
+        Modifier.fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("UmaAgent", style = MaterialTheme.typography.headlineMedium)
@@ -89,7 +110,9 @@ internal fun AuthScreen(state: UmaUiState, model: UmaViewModel) {
                     { model.register(label) },
                     Modifier.fillMaxWidth(),
                     enabled = !state.loading,
-                ) { Text("注册") }
+                ) {
+                    Text("注册")
+                }
             } else {
                 Text("注册成功，请立即保存此访问令牌", color = MaterialTheme.colorScheme.primary)
                 OutlinedTextField(
@@ -100,26 +123,46 @@ internal fun AuthScreen(state: UmaUiState, model: UmaViewModel) {
                     minLines = 3,
                     label = { Text("访问令牌") },
                 )
+                // 整行只有一个无障碍勾选目标，大字号时允许说明自然换行。
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        .toggleable(value = saved, role = Role.Checkbox) { saved = it },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    androidx.compose.material3.Checkbox(checked = saved, onCheckedChange = null)
+                    Text("我已手动保存令牌", Modifier.weight(1f))
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         {
-                            clipboard.setText(AnnotatedString(state.registrationToken))
-                            copied = true
+                            runCatching { clipboard.setText(AnnotatedString(state.registrationToken)) }
+                                .onSuccess { copied = true; copyError = "" }
+                                .onFailure { copied = false; copyError = "复制失败，请手动选择文本复制" }
                         },
                         Modifier.weight(1f),
-                    ) { Text(if (copied) "已复制" else "复制令牌") }
+                    ) {
+                        Text(if (copied) "已复制" else "复制令牌")
+                    }
                     Button(
                         { model.login(state.registrationToken) },
                         Modifier.weight(1f),
-                        enabled = !state.loading,
-                    ) { Text("继续进入") }
+                        enabled = !state.loading && (copied || saved),
+                    ) {
+                        Text("继续进入")
+                    }
                 }
+                ErrorBanner(copyError)
             }
             OutlinedButton(
-                { authMode = "login"; model.clearRegistration() },
+                {
+                    authMode = "login"
+                    model.clearRegistration()
+                },
                 Modifier.fillMaxWidth(),
                 enabled = !state.loading,
-            ) { Text("已有令牌，返回登录") }
+            ) {
+                Text("已有令牌，返回登录")
+            }
         } else {
             OutlinedTextField(
                 token,
@@ -133,12 +176,19 @@ internal fun AuthScreen(state: UmaUiState, model: UmaViewModel) {
                 { model.login(token) },
                 Modifier.fillMaxWidth(),
                 enabled = token.isNotBlank() && !state.loading,
-            ) { Text("登录") }
+            ) {
+                Text("登录")
+            }
             OutlinedButton(
-                { authMode = "register"; model.clearRegistration() },
+                {
+                    authMode = "register"
+                    model.clearRegistration()
+                },
                 Modifier.fillMaxWidth(),
                 enabled = !state.loading,
-            ) { Text("创建新账户") }
+            ) {
+                Text("创建新账户")
+            }
         }
         if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         ErrorBanner(state.error)

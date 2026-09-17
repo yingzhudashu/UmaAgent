@@ -7,3 +7,8 @@ const source = resolve(root, "packages/telemetry/src/schema.sql");
 const target = resolve(root, "packages/telemetry/dist/schema.sql");
 await mkdir(dirname(target), { recursive: true });
 await copyFile(source, target);
+
+await copyFile(
+  resolve(root, "packages/telemetry/src/sqlite-writer.mjs"),
+  resolve(root, "packages/telemetry/dist/sqlite-writer.mjs"),
+);

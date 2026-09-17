@@ -1,6 +1,8 @@
 import type { KnowledgeSearchHit, KnowledgeSource, SkillPackage } from "@uma-agent/protocol";
 import { FolderPlus, RefreshCw, Search, ShieldCheck, Trash2, Upload } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
+import { useOperation } from "../components/OperationFeedback.js";
+import { useUnsavedForm } from "../components/UnsavedChanges.js";
 import { displayStatus } from "../statusLabels.js";
 
 export function ResourceArea({
@@ -23,30 +25,38 @@ export function ResourceArea({
   mcp: Array<{ name: string; connected: boolean }>;
   knowledge: KnowledgeSource[];
   disabled: boolean;
-  refreshSkills: () => void;
-  installSkill: (reference: string) => void;
-  setSkillStatus: (id: string, action: "enable" | "disable" | "reject") => void;
-  addKnowledgePath: (name: string, path: string) => void;
-  uploadKnowledge: (file: File) => void;
-  deleteKnowledge: (id: string) => void;
-  reindexKnowledge: (id: string) => void;
+  refreshSkills: () => unknown;
+  installSkill: (reference: string) => unknown;
+  setSkillStatus: (id: string, action: "enable" | "disable" | "reject") => unknown;
+  addKnowledgePath: (name: string, path: string) => unknown;
+  uploadKnowledge: (file: File) => unknown;
+  deleteKnowledge: (id: string) => unknown;
+  reindexKnowledge: (id: string) => unknown;
   searchKnowledge: (query: string, sourceId?: string) => Promise<KnowledgeSearchHit[]>;
 }) {
+  const operation = useOperation();
+  const uploadInput = useRef<HTMLInputElement>(null);
   const [showPathForm, setShowPathForm] = useState(false);
   const [path, setPath] = useState("");
   const [name, setName] = useState("");
   const [skillPath, setSkillPath] = useState("");
+  const leave = useUnsavedForm(path !== "" || name !== "", () => {
+    setPath("");
+    setName("");
+  });
+  useUnsavedForm(skillPath !== "", () => setSkillPath(""));
   const [knowledgeQuery, setKnowledgeQuery] = useState("");
   const [knowledgeHits, setKnowledgeHits] = useState<KnowledgeSearchHit[]>([]);
-  const submitPath = (event: FormEvent) => {
+  const submitPath = async (event: FormEvent) => {
     event.preventDefault();
-    addKnowledgePath(name.trim(), path.trim());
+    if (!(await operation.execute(() => addKnowledgePath(name.trim(), path.trim())))) return;
     setShowPathForm(false);
     setName("");
     setPath("");
   };
   return (
     <>
+      {operation.feedback}
       <section className="settings-section settings-section--operation">
         <div className="settings-section-heading">
           <div>
@@ -73,8 +83,8 @@ export function ResourceArea({
                     className="settings-icon-button"
                     title="重建索引"
                     aria-label="重建索引"
-                    disabled={disabled}
-                    onClick={() => reindexKnowledge(item.id)}
+                    disabled={operation.busy || disabled}
+                    onClick={() => void operation.execute(() => reindexKnowledge(item.id))}
                   >
                     <RefreshCw size={14} aria-hidden="true" />
                   </button>
@@ -83,8 +93,14 @@ export function ResourceArea({
                     className="settings-icon-button"
                     title="删除知识源"
                     aria-label="删除知识源"
-                    disabled={disabled}
-                    onClick={() => deleteKnowledge(item.id)}
+                    disabled={operation.busy || disabled}
+                    onClick={() =>
+                      operation.confirm(
+                        "删除知识源？",
+                        `删除“${item.name}”的索引记录，不删除原始文件。`,
+                        () => deleteKnowledge(item.id),
+                      )
+                    }
                   >
                     <Trash2 size={14} aria-hidden="true" />
                   </button>
@@ -94,42 +110,69 @@ export function ResourceArea({
           </div>
         )}
         <div className="settings-inline-actions">
+          {admin && (
+            <button
+              type="button"
+              className="settings-inline-command"
+              disabled={operation.busy || disabled}
+              onClick={() => setShowPathForm(true)}
+            >
+              <FolderPlus size={14} aria-hidden="true" /> 添加目录
+            </button>
+          )}
           <button
             type="button"
             className="settings-inline-command"
-            disabled={disabled}
-            onClick={() => setShowPathForm(true)}
+            disabled={operation.busy || disabled}
+            onClick={() => uploadInput.current?.click()}
           >
-            <FolderPlus size={14} aria-hidden="true" /> 添加目录
-          </button>
-          <label className="settings-inline-command" title="上传知识文件">
             <Upload size={14} aria-hidden="true" /> 上传知识文件
-            <input
-              type="file"
-              hidden
-              disabled={disabled}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) uploadKnowledge(file);
-              }}
-            />
-          </label>
+          </button>
+          <input
+            ref={uploadInput}
+            type="file"
+            hidden
+            disabled={operation.busy || disabled}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) void operation.execute(() => uploadKnowledge(file));
+            }}
+          />
         </div>
         {showPathForm && (
           <form className="settings-form settings-form--compact" onSubmit={submitPath}>
             <label>
               名称
-              <input required value={name} onChange={(event) => setName(event.target.value)} />
+              <input
+                required
+                disabled={operation.busy || disabled}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
             </label>
             <label>
               服务器工作区路径
-              <input required value={path} onChange={(event) => setPath(event.target.value)} />
+              <input
+                required
+                disabled={operation.busy || disabled}
+                value={path}
+                onChange={(event) => setPath(event.target.value)}
+              />
             </label>
             <div className="settings-form-actions">
-              <button type="button" onClick={() => setShowPathForm(false)}>
+              <button
+                type="button"
+                disabled={operation.busy}
+                onClick={() => leave(() => setShowPathForm(false))}
+              >
                 取消
               </button>
-              <button type="submit" className="primary settings-primary" disabled={disabled}>
+              <button
+                type="submit"
+                className="primary settings-primary"
+                disabled={operation.busy || disabled}
+              >
                 导入
               </button>
             </div>
@@ -137,9 +180,9 @@ export function ResourceArea({
         )}
         <form
           className="settings-search"
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            void searchKnowledge(knowledgeQuery.trim()).then(setKnowledgeHits);
+            void operation.execute(() => searchKnowledge(knowledgeQuery.trim()).then(setKnowledgeHits));
           }}
         >
           <Search size={14} aria-hidden="true" />
@@ -178,8 +221,8 @@ export function ResourceArea({
               className="settings-icon-button"
               title="刷新技能"
               aria-label="刷新技能"
-              disabled={disabled}
-              onClick={refreshSkills}
+              disabled={operation.busy || disabled}
+              onClick={() => void operation.execute(refreshSkills)}
             >
               <RefreshCw size={14} aria-hidden="true" />
             </button>
@@ -190,23 +233,27 @@ export function ResourceArea({
             </summary>
             <form
               className="settings-form settings-form--compact"
-              onSubmit={(event) => {
+              onSubmit={async (event) => {
                 event.preventDefault();
                 if (!skillPath.trim()) return;
-                installSkill(skillPath.trim());
+                if (!(await operation.execute(() => installSkill(skillPath.trim())))) return;
                 setSkillPath("");
               }}
             >
               <label>
                 本地技能目录
-                <input value={skillPath} onChange={(event) => setSkillPath(event.target.value)} />
+                <input
+                  disabled={operation.busy || disabled}
+                  value={skillPath}
+                  onChange={(event) => setSkillPath(event.target.value)}
+                />
               </label>
               <div className="settings-form-actions">
                 <span className="settings-help">扫描后可在此处启用或拒绝技能。</span>
                 <button
                   type="submit"
                   className="primary settings-primary"
-                  disabled={disabled || !skillPath.trim()}
+                  disabled={operation.busy || disabled || !skillPath.trim()}
                 >
                   暂存并扫描
                 </button>
@@ -238,8 +285,12 @@ export function ResourceArea({
                       <button
                         type="button"
                         className="settings-inline-command"
-                        disabled={disabled}
-                        onClick={() => setSkillStatus(pkg.id, "disable")}
+                        disabled={operation.busy || disabled}
+                        onClick={() =>
+                          operation.confirm("确认修改技能状态？", pkg.name, () =>
+                            setSkillStatus(pkg.id, "disable"),
+                          )
+                        }
                       >
                         停用
                       </button>
@@ -247,8 +298,12 @@ export function ResourceArea({
                       <button
                         type="button"
                         className="settings-inline-command"
-                        disabled={disabled}
-                        onClick={() => setSkillStatus(pkg.id, "enable")}
+                        disabled={operation.busy || disabled}
+                        onClick={() =>
+                          operation.confirm("确认修改技能状态？", pkg.name, () =>
+                            setSkillStatus(pkg.id, "enable"),
+                          )
+                        }
                       >
                         <ShieldCheck size={14} aria-hidden="true" /> 启用
                       </button>
@@ -259,8 +314,12 @@ export function ResourceArea({
                         className="settings-icon-button"
                         title="拒绝技能"
                         aria-label="拒绝技能"
-                        disabled={disabled}
-                        onClick={() => setSkillStatus(pkg.id, "reject")}
+                        disabled={operation.busy || disabled}
+                        onClick={() =>
+                          operation.confirm("确认修改技能状态？", pkg.name, () =>
+                            setSkillStatus(pkg.id, "reject"),
+                          )
+                        }
                       >
                         <Trash2 size={14} aria-hidden="true" />
                       </button>

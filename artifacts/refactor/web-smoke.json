@@ -1,0 +1,53 @@
+{
+  "project": "UmaAgent",
+  "scenes": [
+    {
+      "label": "会话",
+      "width": 1440,
+      "overflow": false
+    },
+    {
+      "label": "后台任务",
+      "width": 1440,
+      "overflow": false
+    },
+    {
+      "label": "调度",
+      "width": 1440,
+      "overflow": false
+    },
+    {
+      "label": "资源",
+      "width": 1440,
+      "overflow": false
+    },
+    {
+      "label": "记忆",
+      "width": 1440,
+      "overflow": false
+    },
+    {
+      "label": "质量",
+      "width": 1440,
+      "overflow": false
+    },
+    {
+      "label": "设置",
+      "width": 1440,
+      "overflow": false
+    },
+    {
+      "label": "咸鱼工作台",
+      "width": 1440,
+      "overflow": false
+    }
+  ],
+  "viewports": [
+    1440,
+    1024,
+    390,
+    320
+  ],
+  "retainedFailedDraft": true,
+  "consoleErrors": []
+}

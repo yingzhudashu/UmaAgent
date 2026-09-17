@@ -61,7 +61,8 @@ export class TraceService extends SharedTraceService {
     });
     this.queuedWaits.delete(runId);
   }
-  listTrace(query: TraceQuery, scopeToRun = false): TraceQueryPage {
+  async listTrace(query: TraceQuery, scopeToRun = false): Promise<TraceQueryPage> {
+    await this.store.flush();
     const page = this.store.listSpans({
       ...query,
       ...(scopeToRun ? { scopeToRun: true } : {}),

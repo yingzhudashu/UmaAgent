@@ -78,11 +78,15 @@ export class PermissionPolicy {
       return {
         allowed: true,
         requiresApproval: true,
-        reason: "Shell execution always requires approval",
+        reason: "Shell permission is governed by the account execution policy",
       };
     }
     if (kind === "write") {
-      return { allowed: true, requiresApproval: true, reason: "Workspace changes require approval" };
+      return {
+        allowed: true,
+        requiresApproval: true,
+        reason: "Workspace changes use the account execution policy",
+      };
     }
     if (kind === "image_generate") {
       return {

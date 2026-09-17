@@ -37,7 +37,8 @@ for (const file of files) {
     violations.push(`${name}: cross-package deep import`);
   if (!isTest && /\bconsole\.(?:log|warn|error|debug)\s*\(/.test(content) && !/(^|\/)main\.ts$/.test(name))
     violations.push(`${name}: use structured logger instead of console.*`);
-  if (/\/api\/v(?:7|8|9)(?:\/|\b)/.test(content)) violations.push(`${name}: stale API version reference`);
+  if (!isTest && /["'`]\/api\/v(?:[0-9]|1[0-5])(?:\/|\b)/.test(content))
+    violations.push(`${name}: stale API version reference`);
 }
 
 if (violations.length > 0) {

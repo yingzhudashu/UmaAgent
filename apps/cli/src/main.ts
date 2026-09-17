@@ -873,6 +873,15 @@ async function doctorCommand(): Promise<void> {
   if (!result.ok) process.exitCode = 1;
 }
 async function main(): Promise<void> {
+  if (command === "execution-settings") {
+    const setting = process.argv[3];
+    if (setting && setting !== "on" && setting !== "off") throw new Error("Use execution-settings [on|off]");
+    const result = setting
+      ? await client.updateExecutionSettings(setting === "on")
+      : await client.getExecutionSettings();
+    process.stdout.write(`免审批：${result.autoApprove ? "开启" : "关闭"}\n`);
+    return;
+  }
   if (command === "chat") return chat();
   if (command === "run") await runCommand();
   else if (command === "session" || command === "sessions") await sessionCommand();

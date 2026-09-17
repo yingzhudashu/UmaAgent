@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type {
   SpanAttributes,
   SpanOptions,
@@ -10,6 +10,7 @@ import type {
   TelemetrySpan,
 } from "@earendil-works/pi-telemetry";
 import { context, trace as otelTrace, type Span, TraceFlags, type Tracer } from "@opentelemetry/api";
+import { SqlWriter } from "./sql-writer.js";
 
 export type TelemetryStatus = "active" | "ok" | "error" | "cancelled";
 export type TraceParent = {
@@ -91,11 +92,12 @@ const REDACTED = "[REDACTED]";
 const sensitive =
   /(authorization|cookie|api[_-]?key|password|secret|token|prompt|completion|body|arguments|parameters|payload)/i;
 const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
+// 错误文本中的结构化敏感值可能嵌套、换行或被截断；从集合起点删至末尾，不能用浅层正则假装解析 JSON。
 const errorSecretPatterns = [
   /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
   /(\bcookie\s*:\s*)[^;\r\n]+/gi,
-  /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|request[_-]?body|body)\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*?\}|\[[\s\S]*?\}|[^\s,;&}]+)/gi,
-  /(["']?(?:authorization|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|body)["']?\s*:\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*?\}|\[[\s\S]*?\}|[^\s,;&}]+)/gi,
+  /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|request[_-]?body|body)\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*|\[(?!REDACTED(?:_URL)?\])[\s\S]*|[^\s,;&}]+)/gi,
+  /(["']?(?:authorization|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|body)["']?\s*:\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*|\[(?!REDACTED(?:_URL)?\])[\s\S]*|[^\s,;&}]+)/gi,
   /([?&](?:api[_-]?key|access[_-]?token|password|secret|token)=)[^&#\s]*/gi,
   /\b(?:sk-[A-Za-z0-9][A-Za-z0-9_-]{9,}|ghp_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
   /\buma_pat_[A-Za-z0-9_-]+\b/g,
@@ -157,6 +159,8 @@ function safeAttributes(attributes: SpanAttributes | undefined): Record<string, 
 
 export class TelemetryStore {
   readonly db: DatabaseSync;
+  private readonly queries = new Map<string, StatementSync>();
+  private readonly writer: SqlWriter;
   private otelProvider?: { shutdown: () => Promise<void> };
   private otelTracer?: Tracer;
   private otelInitialization?: Promise<void>;
@@ -173,47 +177,66 @@ export class TelemetryStore {
   constructor(
     readonly stateDir: string,
     readonly service: string,
-    private readonly onFinished?: (record: TelemetrySpanRecord) => void,
   ) {
     mkdirSync(stateDir, { recursive: true });
     this.db = new DatabaseSync(join(stateDir, "telemetry.db"));
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=350;");
     this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
     const resourceColumns = new Set(
-      (this.db.prepare("PRAGMA table_info(resource_samples)").all() as Array<{ name?: unknown }>).map((row) =>
-        String(row.name ?? ""),
+      (this.prepareQuery("PRAGMA table_info(resource_samples)").all() as Array<{ name?: unknown }>).map(
+        (row) => String(row.name ?? ""),
       ),
     );
     if (!["wal_bytes", "sample_duration_ms", "cpu_percent"].every((column) => resourceColumns.has(column))) {
       this.db.close();
       throw new Error("Unsupported telemetry schema; delete telemetry.db and start with the current schema.");
     }
-    this.insertSpanStatement = this.db.prepare(
+    this.writer = SqlWriter.acquire(join(stateDir, "telemetry.db"));
+    this.insertSpanStatement = this.prepareWrite(
       "INSERT INTO spans(span_id,trace_id,parent_span_id,service,run_id,session_id,name,kind,status,started_at,attributes_json,error_type,error_message) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
     );
-    this.updateSpanStatement = this.db.prepare(
+    this.updateSpanStatement = this.prepareWrite(
       "UPDATE spans SET status=?,ended_at=?,duration_ms=?,attributes_json=?,error_type=?,error_message=? WHERE span_id=? AND status='active'",
     );
-    this.insertEventStatement = this.db.prepare(
+    this.insertEventStatement = this.prepareWrite(
       "INSERT OR REPLACE INTO span_events(span_id,event_no,name,occurred_at,attributes_json) VALUES(?,?,?,?,?)",
     );
-    this.linkRunStatement = this.db.prepare(
+    this.linkRunStatement = this.prepareWrite(
       "INSERT OR IGNORE INTO run_trace_links(run_id,trace_id,linked_at) VALUES(?,?,?)",
     );
-    this.insertResourceStatement = this.db.prepare(
+    this.insertResourceStatement = this.prepareWrite(
       "INSERT INTO resource_samples(id,service,captured_at,cpu_user_micros,cpu_system_micros,sample_duration_ms,cpu_percent,rss_bytes,heap_used_bytes,heap_total_bytes,external_bytes,array_buffers_bytes,event_loop_delay_ms,wal_bytes,active_runs,queued_runs) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     );
-    this.db
-      .prepare(
-        "UPDATE spans SET status='error',ended_at=?,duration_ms=MAX(0,? - started_at),error_type='IncompleteSpan',error_message='Service restarted before span completed' WHERE service=? AND status='active'",
-      )
-      .run(Date.now(), Date.now(), service);
+    this.prepareQuery(
+      "UPDATE spans SET status='error',ended_at=?,duration_ms=MAX(0,? - started_at),error_type='IncompleteSpan',error_message='Service restarted before span completed' WHERE service=? AND status='active'",
+    ).run(Date.now(), Date.now(), service);
     const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
     if (endpoint)
       this.otelInitialization = this.initializeOtel(endpoint, service).catch(() => {
         this.otlpExportFailures += 1;
       });
   }
+  /** 查询参数不改变 SQL；复用原生句柄，动态过滤组合仍有明确上限。 */
+  private prepareQuery(sql: string): StatementSync {
+    const existing = this.queries.get(sql);
+    if (existing) return existing;
+    const statement = this.db.prepare(sql);
+    if (this.queries.size >= 64) this.queries.delete(this.queries.keys().next().value as string);
+    this.queries.set(sql, statement);
+    return statement;
+  }
+  private prepareWrite(sql: string) {
+    return {
+      run: (...args: Array<string | number | null>) => {
+        this.writer.enqueue(sql, args);
+      },
+    };
+  }
+  /** 读取前的持久化屏障，以及优雅关闭时的排空入口。 */
+  flush(): Promise<void> {
+    return this.writer.flush();
+  }
+
   private async initializeOtel(endpoint: string, service: string): Promise<void> {
     const [{ OTLPTraceExporter }, { BatchSpanProcessor, NodeTracerProvider }] = await Promise.all([
       import("@opentelemetry/exporter-trace-otlp-http"),
@@ -245,6 +268,8 @@ export class TelemetryStore {
     this.closePromise = (async () => {
       await this.otelInitialization;
       await this.otelProvider?.shutdown().catch(() => undefined);
+      await this.writer.release();
+      this.queries.clear();
       this.db.close();
     })();
     return this.closePromise;
@@ -324,53 +349,28 @@ export class TelemetryStore {
     }
     // 诊断写入与业务事务解耦：即使 SQLite 或 OTLP 暂时失败，也不能
     // 让已经完成的用户请求回滚或抛出新的业务异常。
-    let persisted = false;
-    try {
-      const update = () =>
-        this.updateSpanStatement.run(
-          record.status,
-          record.endedAt ?? null,
-          record.durationMs ?? null,
-          JSON.stringify(safeAttributes(record.attributes)),
-          record.errorType ?? null,
-          redactErrorMessage(record.errorMessage) ?? null,
+    this.writer.batch(() => {
+      this.updateSpanStatement.run(
+        record.status,
+        record.endedAt ?? null,
+        record.durationMs ?? null,
+        JSON.stringify(safeAttributes(record.attributes)),
+        record.errorType ?? null,
+        redactErrorMessage(record.errorMessage) ?? null,
+        record.spanId,
+      );
+      record.events.slice(0, 64).forEach((event, index) => {
+        this.insertEventStatement.run(
           record.spanId,
+          index,
+          event.name.slice(0, 120),
+          event.occurredAt,
+          JSON.stringify(safeAttributes(event.attributes)),
         );
-      // 没有事件时直接更新行，避免为每个普通 Span 额外开启事务；
-      // 有事件时用同一事务保证 Span 和事件不会出现半写入状态。
-      if (record.events.length === 0) {
-        persisted = Number(update().changes ?? 0) > 0;
-      } else {
-        this.db.exec("BEGIN IMMEDIATE");
-        persisted = Number(update().changes ?? 0) > 0;
-        if (persisted)
-          record.events.slice(0, 64).forEach((event, index) => {
-            this.insertEventStatement.run(
-              record.spanId,
-              index,
-              event.name.slice(0, 120),
-              event.occurredAt,
-              JSON.stringify(safeAttributes(event.attributes)),
-            );
-          });
-        this.db.exec("COMMIT");
-      }
-    } catch {
-      this.telemetryWriteFailures += 1;
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        /* ignore telemetry failure */
-      }
-    }
-    if (persisted) {
-      try {
-        this.onFinished?.(record);
-      } catch {
-        /* diagnostics must never change business behavior */
-      }
-    }
+      });
+    });
   }
+
   linkRun(runId: string, traceId: string): void {
     try {
       this.linkRunStatement.run(runId, traceId, Date.now());
@@ -405,11 +405,9 @@ export class TelemetryStore {
     }
   }
   listResources(from = 0, to = Date.now(), limit = 500): ResourceSample[] {
-    const values = this.db
-      .prepare(
-        "SELECT * FROM resource_samples WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at DESC LIMIT ?",
-      )
-      .all(from, to, Math.max(1, Math.min(500, limit))) as Array<Record<string, unknown>>;
+    const values = this.prepareQuery(
+      "SELECT * FROM resource_samples WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at DESC LIMIT ?",
+    ).all(from, to, Math.max(1, Math.min(500, limit))) as Array<Record<string, unknown>>;
     return values.map((value) => ({
       id: String(value.id),
       service: String(value.service),
@@ -480,21 +478,17 @@ export class TelemetryStore {
       clauses.push("instr(name,?) > 0");
       params.push(query.name);
     }
-    const values = this.db
-      .prepare(
-        `SELECT * FROM spans WHERE ${clauses.join(" AND ")} ORDER BY started_at,span_id LIMIT ? OFFSET ?`,
-      )
-      .all(...params, limit + 1, offset) as Array<Record<string, unknown>>;
+    const values = this.prepareQuery(
+      `SELECT * FROM spans WHERE ${clauses.join(" AND ")} ORDER BY started_at,span_id LIMIT ? OFFSET ?`,
+    ).all(...params, limit + 1, offset) as Array<Record<string, unknown>>;
     const selected = values.slice(0, limit);
     const eventsBySpan = new Map<string, TelemetryEvent[]>();
     if (selected.length) {
       const spanIds = selected.map((value) => String(value.span_id));
-      const eventRows = this.db
-        .prepare(
-          `SELECT span_id,name,occurred_at,attributes_json FROM span_events
+      const eventRows = this.prepareQuery(
+        `SELECT span_id,name,occurred_at,attributes_json FROM span_events
            WHERE span_id IN (${spanIds.map(() => "?").join(",")}) ORDER BY span_id,event_no`,
-        )
-        .all(...spanIds) as Array<Record<string, unknown>>;
+      ).all(...spanIds) as Array<Record<string, unknown>>;
       for (const event of eventRows) {
         const id = String(event.span_id);
         const current = eventsBySpan.get(id) ?? [];
@@ -540,41 +534,36 @@ export class TelemetryStore {
     };
   }
   summarize(from: number, to: number): TelemetrySummary {
-    const summary = this.db
-      .prepare(
-        "SELECT COUNT(*) AS spans,SUM(CASE WHEN error_type='IncompleteSpan' THEN 1 ELSE 0 END) AS incomplete FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ?",
-      )
-      .get(from, to) as Record<string, unknown>;
+    const summary = this.prepareQuery(
+      "SELECT COUNT(*) AS spans,SUM(CASE WHEN error_type='IncompleteSpan' THEN 1 ELSE 0 END) AS incomplete FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ?",
+    ).get(from, to) as Record<string, unknown>;
     const spans = Number(summary.spans ?? 0);
     const active = Number(
       (
-        this.db
-          .prepare("SELECT COUNT(*) AS count FROM spans WHERE status='active' AND started_at <= ?")
-          .get(to) as Record<string, unknown>
+        this.prepareQuery(
+          "SELECT COUNT(*) AS count FROM spans WHERE status='active' AND started_at <= ?",
+        ).get(to) as Record<string, unknown>
       )?.count ?? 0,
     );
     const errors = Number(
       (
-        this.db
-          .prepare("SELECT COUNT(*) AS count FROM spans WHERE status='error' AND started_at BETWEEN ? AND ?")
-          .get(from, to) as Record<string, unknown>
+        this.prepareQuery(
+          "SELECT COUNT(*) AS count FROM spans WHERE status='error' AND started_at BETWEEN ? AND ?",
+        ).get(from, to) as Record<string, unknown>
       )?.count ?? 0,
     );
     const services = (
-      this.db
-        .prepare(
-          "SELECT service,COUNT(*) AS spans,SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS errors FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ? GROUP BY service ORDER BY service",
-        )
-        .all(from, to) as Array<Record<string, unknown>>
+      this.prepareQuery(
+        "SELECT service,COUNT(*) AS spans,SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) AS errors FROM spans WHERE status <> 'active' AND started_at BETWEEN ? AND ? GROUP BY service ORDER BY service",
+      ).all(from, to) as Array<Record<string, unknown>>
     ).map((row) => ({
       service: String(row.service),
       spans: Number(row.spans ?? 0),
       errors: Number(row.errors ?? 0),
     }));
     const stageLatencyMs: Record<string, { p50: number; p95: number; p99: number }> = {};
-    const latencyRows = this.db
-      .prepare(
-        `WITH base AS (
+    const latencyRows = this.prepareQuery(
+      `WITH base AS (
            SELECT kind,span_id,COALESCE(duration_ms,0) AS duration
            FROM spans
            WHERE status <> 'active' AND started_at BETWEEN ? AND ?
@@ -601,8 +590,7 @@ export class TelemetryStore {
          SELECT kind,p50,p95,p99 FROM kind_metrics
          UNION ALL
          SELECT NULL AS kind,p50,p95,p99 FROM overall_metrics`,
-      )
-      .all(from, to) as Array<Record<string, unknown>>;
+    ).all(from, to) as Array<Record<string, unknown>>;
     for (const row of latencyRows) {
       if (row.kind === null) continue;
       stageLatencyMs[String(row.kind)] = {
@@ -617,7 +605,7 @@ export class TelemetryStore {
       incomplete: Number(summary.incomplete ?? 0),
       active,
       errorRate: spans ? errors / spans : 0,
-      writeFailures: this.telemetryWriteFailures,
+      writeFailures: this.telemetryWriteFailures + this.writer.failures,
       otlpExportFailures: this.otlpExportFailures,
       services,
       stageLatencyMs,
@@ -630,11 +618,10 @@ export class TelemetryStore {
   }
   maintain(now = Date.now()): void {
     try {
-      this.db.exec("BEGIN IMMEDIATE");
       const cutoff = now - 90 * 86_400_000;
-      // 让 SQLite 在库内完成分组，避免维护任务把数月 Span 全量加载进 Node 堆。
-      this.db
-        .prepare(
+      this.writer.batch(() => {
+        // 让 SQLite 在库内完成分组，避免维护任务把数月 Span 全量加载进 Node 堆。
+        this.prepareWrite(
           `INSERT INTO span_aggregates(bucket_start,bucket_ms,service,name,status,count,total_duration_ms,min_duration_ms,max_duration_ms)
            SELECT CAST(started_at / 3600000 AS INTEGER) * 3600000,3600000,service,name,status,
                   COUNT(*),SUM(MAX(0,duration_ms)),MIN(MAX(0,duration_ms)),MAX(MAX(0,duration_ms))
@@ -645,20 +632,20 @@ export class TelemetryStore {
              total_duration_ms=total_duration_ms+excluded.total_duration_ms,
              min_duration_ms=MIN(min_duration_ms,excluded.min_duration_ms),
              max_duration_ms=MAX(max_duration_ms,excluded.max_duration_ms)`,
-        )
-        .run(cutoff);
-      this.db
-        .prepare(
+        ).run(cutoff);
+        this.prepareWrite(
           "DELETE FROM span_events WHERE span_id IN (SELECT span_id FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?)",
-        )
-        .run(cutoff);
-      this.db.prepare("DELETE FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?").run(cutoff);
-      this.db.prepare("DELETE FROM resource_samples WHERE captured_at < ?").run(now - 30 * 86_400_000);
-      this.db.prepare("DELETE FROM span_aggregates WHERE bucket_start < ?").run(now - 365 * 86_400_000);
-      this.db.exec("COMMIT");
+        ).run(cutoff);
+        this.prepareWrite("DELETE FROM spans WHERE ended_at IS NOT NULL AND ended_at < ?").run(cutoff);
+        this.prepareWrite(
+          "DELETE FROM run_trace_links WHERE linked_at < ? AND NOT EXISTS (SELECT 1 FROM spans WHERE spans.trace_id=run_trace_links.trace_id)",
+        ).run(cutoff);
+        this.prepareWrite("DELETE FROM resource_samples WHERE captured_at < ?").run(now - 30 * 86_400_000);
+        this.prepareWrite("DELETE FROM span_aggregates WHERE bucket_start < ?").run(now - 365 * 86_400_000);
+      });
     } catch {
       try {
-        this.db.exec("ROLLBACK");
+        this.telemetryWriteFailures++;
       } catch {
         /* ignore telemetry maintenance failure */
       }

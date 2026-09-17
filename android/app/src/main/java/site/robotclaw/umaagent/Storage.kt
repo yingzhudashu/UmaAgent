@@ -14,7 +14,10 @@ import javax.crypto.spec.GCMParameterSpec
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-private val storageJson = Json { ignoreUnknownKeys = true; isLenient = true }
+private val storageJson = Json {
+    ignoreUnknownKeys = true
+    isLenient = true
+}
 
 class PatStore(context: Context) {
     private val file = AtomicFile(File(context.filesDir, "pat.bin"))
@@ -34,19 +37,25 @@ class PatStore(context: Context) {
 
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(alias, null) as? SecretKey)?.let { return it }
+        (store.getKey(alias, null) as? SecretKey)?.let {
+            return it
+        }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         generator.init(
-            KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            KeyGenParameterSpec.Builder(
+                    alias,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                )
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .build(),
+                .build()
         )
         return generator.generateKey()
     }
 
     fun save(value: String) {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
+        val cipher =
+            Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         writeAtomically(cipher.iv + cipher.doFinal(value.toByteArray(Charsets.UTF_8)))
     }
 
@@ -80,20 +89,26 @@ class StagingAuthStore(context: Context) {
 
     private fun key(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(alias, null) as? SecretKey)?.let { return it }
+        (store.getKey(alias, null) as? SecretKey)?.let {
+            return it
+        }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         generator.init(
-            KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            KeyGenParameterSpec.Builder(
+                    alias,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                )
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .build(),
+                .build()
         )
         return generator.generateKey()
     }
 
     fun save(password: String) {
         require(password.isNotBlank()) { "测试环境口令不能为空" }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
+        val cipher =
+            Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         var output: FileOutputStream? = null
         try {
             output = file.startWrite()
@@ -113,7 +128,9 @@ class StagingAuthStore(context: Context) {
             if (bytes.size <= 12) return null
             Cipher.getInstance("AES/GCM/NoPadding").run {
                 init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
-                String(doFinal(bytes.copyOfRange(12, bytes.size)), Charsets.UTF_8).takeIf { it.isNotBlank() }
+                String(doFinal(bytes.copyOfRange(12, bytes.size)), Charsets.UTF_8).takeIf {
+                    it.isNotBlank()
+                }
             }
         } catch (_: Exception) {
             file.delete()
@@ -128,29 +145,35 @@ class StagingAuthStore(context: Context) {
     }
 }
 
+internal const val SNAPSHOT_CACHE_VERSION = 3
+
 @Serializable
 data class CacheEnvelope(
     val version: Int,
     val sessions: List<Session>,
     val snapshots: Map<String, String>,
     val sequences: Map<String, Long> = emptyMap(),
+    val selectedSessionId: String? = null,
 )
 
 class SnapshotCache(context: Context) {
     private val file = AtomicFile(File(context.filesDir, "cache.json"))
 
-    fun read(): CacheEnvelope? = try {
-        if (!file.baseFile.exists()) null
-        else if (file.baseFile.length() > MAX_CACHE_FILE_BYTES) error("离线缓存过大")
-        else storageJson.decodeFromString<CacheEnvelope>(
-            file.readFully().toString(Charsets.UTF_8),
-        ).let {
-            if (it.version == 2) it else null.also { file.delete() }
+    fun read(): CacheEnvelope? =
+        try {
+            if (!file.baseFile.exists()) null
+            else if (file.baseFile.length() > MAX_CACHE_FILE_BYTES) error("离线缓存过大")
+            else
+                storageJson
+                    .decodeFromString<CacheEnvelope>(file.readFully().toString(Charsets.UTF_8))
+                    .let {
+                        if (it.version == SNAPSHOT_CACHE_VERSION) it
+                        else null.also { file.delete() }
+                    }
+        } catch (_: Exception) {
+            file.delete()
+            null
         }
-    } catch (_: Exception) {
-        file.delete()
-        null
-    }
 
     fun write(value: CacheEnvelope) {
         val encoded = storageJson.encodeToString(value).toByteArray(Charsets.UTF_8)

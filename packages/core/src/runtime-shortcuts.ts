@@ -48,6 +48,20 @@ export class RuntimeShortcutService {
     const session = this.deps.database.getSession(sessionId);
     if (this.deps.database.sessionOwner(sessionId) !== ownerId)
       throw new Error("Session does not belong to the authenticated user");
+    // 快捷命令与对应 REST 入口共享权限边界，不能成为跨账号或管理员操作的旁路。
+    const adminCommands = [
+      "/config",
+      "/reload-config",
+      "/reload-skills",
+      "/stats",
+      "/test list",
+      "/self-opt proposals",
+    ];
+    if (adminCommands.includes(normalized) && this.deps.database.getUser(ownerId)?.role !== "admin")
+      throw new Error("Administrator access required");
+    const taskCommand = /^\/btw (?:result|cancel|clear) (.+)$/i.exec(command.trim());
+    if (taskCommand && this.deps.database.taskOwner(taskCommand[1] ?? "") !== ownerId)
+      throw new Error("Resource not found");
     const lines = (values: string[]) => values.join("\n") || "无记录";
     if (normalized === "/help")
       return {

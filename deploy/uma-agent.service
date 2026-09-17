@@ -1,7 +1,7 @@
 [Unit]
 Description=UmaAgent Core Server
 After=network-online.target uma-browser-worker.service
-Wants=network-online.target
+Wants=network-online.target uma-browser-worker.service
 
 [Service]
 Type=simple
@@ -11,8 +11,8 @@ WorkingDirectory=/opt/uma-agent/current
 Environment=NODE_ENV=production
 Environment=UMA_TELEMETRY_DIR=/var/lib/uma-agent/telemetry
 EnvironmentFile=/etc/uma-agent/uma.env
-ExecStartPre=/usr/bin/bash /opt/uma-agent/current/deploy/verify-native-release.sh /opt/uma-agent/current /opt/uma-agent/dependencies/node_modules
-ExecStart=/opt/node-v22.23.2-linux-x64/bin/node /opt/uma-agent/current/apps/server/dist/main.js --config=/etc/uma-agent/uma.config.json
+ExecStartPre=/usr/bin/bash /opt/uma-agent/current/deploy/verify-native-release.sh /opt/uma-agent/current /opt/uma-agent/current/node_modules
+ExecStart=/opt/node-v22.23.2-linux-x64/bin/node --max-semi-space-size=4 /opt/uma-agent/current/apps/server/dist/main.js --config=/etc/uma-agent/uma.config.json
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

@@ -59,9 +59,9 @@ describe("multi-user authentication", () => {
     expect(listedToken).toBeDefined();
     expect(listedToken).not.toHaveProperty("expiresAt");
     database.db.prepare("UPDATE auth_tokens SET expires_at=1 WHERE id=?").run(first.id);
-    expect(auth.principalFromRequest(firstRequest)).toBeDefined();
+    expect(auth.principalFromRequest({ ...firstRequest })).toBeUndefined();
     expect(database.revokeAuthToken(first.userId, first.id)).toBe(true);
-    expect(auth.principalFromRequest(firstRequest)).toBeUndefined();
+    expect(auth.principalFromRequest({ ...firstRequest })).toBeUndefined();
     process.env.UMA_OAUTH_REDIRECTS = "uma-mobile|com.example.uma:/oauth/callback";
     const verifier = "client-verifier-value";
     const challenge = (await import("node:crypto")).createHash("sha256").update(verifier).digest("base64url");

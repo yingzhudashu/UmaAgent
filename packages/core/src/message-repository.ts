@@ -12,6 +12,7 @@ import {
   text,
   toAttachment,
 } from "./database-utils.js";
+import { prepareStatement } from "./sql-statements.js";
 import type { StoredAgentMessage } from "./types.js";
 
 /** Read-only transcript queries. It deliberately does not own transactions. */
@@ -19,13 +20,13 @@ export class MessageRepository {
   constructor(private readonly db: DatabaseSync) {}
 
   getMessage(id: string): TranscriptItem {
-    const value = row(this.db.prepare("SELECT * FROM messages WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT * FROM messages WHERE id=?"), id);
     if (!value) throw new Error(`Message not found: ${id}`);
     return this.toTranscriptItem(value);
   }
 
   findMessageOwner(id: string): { sessionId: string; runId?: string } | undefined {
-    const value = row(this.db.prepare("SELECT session_id,run_id FROM messages WHERE id=?"), id);
+    const value = row(prepareStatement(this.db, "SELECT session_id,run_id FROM messages WHERE id=?"), id);
     if (!value) return undefined;
     return {
       sessionId: text(value.session_id),
@@ -33,78 +34,143 @@ export class MessageRepository {
     };
   }
 
-  listMessages(sessionId: string): TranscriptItem[] {
-    const ids = this.visibleRows(sessionId).map((value) => text(value.id));
-    return this.listByIds(ids);
+  listMessages(sessionId: string, runId?: string): TranscriptItem[] {
+    const values = this.visibleRows(sessionId, runId === undefined ? {} : { runId });
+    const attachments = this.loadAttachments([...new Set(values.flatMap(attachmentIdsFrom))]);
+    return values.map((value) => this.toTranscriptItem(value, attachments));
   }
 
   listHistory(sessionId: string, beforeSequence?: number, limit = 100): SessionHistoryPage {
     const bounded = Math.max(1, Math.min(500, limit));
-    const all = this.visibleRows(sessionId);
-    const filtered =
-      beforeSequence === undefined ? all : all.filter((value) => integer(value.sequence) < beforeSequence);
-    const hasMore = filtered.length > bounded;
-    const page = filtered.slice(Math.max(0, filtered.length - bounded));
-    const items = this.listByIds(page.map((value) => text(value.id)));
+    const page = this.visibleRows(sessionId, {
+      ...(beforeSequence === undefined ? {} : { beforeSequence }),
+      limit: bounded + 1,
+      newestFirst: true,
+    });
+    const hasMore = page.length > bounded;
+    const selected = page.slice(0, bounded).reverse();
+    const attachments = this.loadAttachments([...new Set(selected.flatMap(attachmentIdsFrom))]);
     return {
       sessionId,
-      items,
-      oldestSequence: page.length ? integer(page[0]?.sequence) : 0,
+      items: selected.map((value) => this.toTranscriptItem(value, attachments)),
+      oldestSequence: selected.length ? integer(selected[0]?.sequence) : 0,
       hasMore,
     };
   }
 
-  /**
-   * Projects the persisted messages onto the active conversation branch. v21
-   * stores branch ancestry through parent_message_id and branch head; no
-   * second compatibility representation is needed.
-   */
-  private visibleRows(sessionId: string): Row[] {
-    const all = rows(
-      this.db.prepare("SELECT * FROM messages WHERE session_id=? ORDER BY sequence"),
-      sessionId,
+  /** 活动分支只读取轻量标识；正文和 payload 仅在确实需要的窗口中加载。 */
+  visibleKeys(sessionId: string): Row[] {
+    return this.visibleRows(sessionId, {}, "id,run_id,sequence");
+  }
+
+  /** 日/会话摘要仅需要末尾公开正文和范围边界，无需反复构造全部 Transcript 与附件。 */
+  rollupContext(sessionId: string) {
+    const keys = this.visibleRows(sessionId, {}, "sequence,created_at");
+    const latest = keys.at(-1);
+    if (!latest) return undefined;
+    const day = new Date(integer(latest.created_at)).toISOString().slice(0, 10);
+    const dayStart = Date.parse(`${day}T00:00:00.000Z`);
+    const dayKeys = keys.filter(
+      (value) => integer(value.created_at) >= dayStart && integer(value.created_at) < dayStart + 86_400_000,
     );
-    if (all.length === 0) return [];
+    const summarize = (values: Row[]) =>
+      values
+        .reverse()
+        .map((value) => `${text(value.role)}: ${text(value.content)}`)
+        .join("\n")
+        .slice(0, 8_000);
+    return {
+      day,
+      firstSequence: integer(keys[0]?.sequence),
+      lastSequence: integer(latest.sequence),
+      dayFirstSequence: integer(dayKeys[0]?.sequence),
+      dayLastSequence: integer(dayKeys.at(-1)?.sequence),
+      dailyText: summarize(
+        this.visibleRows(
+          sessionId,
+          {
+            publicOnly: true,
+            createdFrom: dayStart,
+            createdBefore: dayStart + 86_400_000,
+            newestFirst: true,
+            limit: 100,
+          },
+          "role,content",
+        ),
+      ),
+      sessionText: summarize(
+        this.visibleRows(sessionId, { publicOnly: true, newestFirst: true, limit: 50 }, "role,content"),
+      ),
+    };
+  }
+
+  private visibleRows(
+    sessionId: string,
+    options: {
+      beforeSequence?: number;
+      afterSequence?: number;
+      limit?: number;
+      newestFirst?: boolean;
+      agentOnly?: boolean;
+      runId?: string;
+      publicOnly?: boolean;
+      createdFrom?: number;
+      createdBefore?: number;
+    } = {},
+    columns = "*",
+  ): Row[] {
     const branch = row(
-      this.db.prepare(
-        "SELECT b.name,b.head_message_id,b.created_at AS branch_created_at,s.created_at AS session_created_at FROM sessions s LEFT JOIN conversation_branches b ON b.id=s.active_branch_id WHERE s.id=?",
+      prepareStatement(
+        this.db,
+        "SELECT b.name,b.head_message_id FROM sessions s LEFT JOIN conversation_branches b ON b.id=s.active_branch_id WHERE s.id=?",
       ),
       sessionId,
     );
-    const headId = branch?.head_message_id ? text(branch.head_message_id) : undefined;
-    if (!headId) return all;
-    const head = all.find((value) => text(value.id) === headId);
-    if (!head) return all;
-    if (text(branch?.name ?? "") === "主分支") return all;
-
-    // 分支投影只保留活动 head 的祖先链，以及这些用户消息对应 Run 的
-    // 助手/工具消息。这样编辑点本身不会丢失，旧分支的回复也不会回灌。
-    const byId = new Map(all.map((value) => [text(value.id), value]));
-    const ancestry = new Set<string>();
-    let cursor: Row | undefined = head;
-    while (cursor) {
-      const id = text(cursor.id);
-      if (ancestry.has(id)) break;
-      ancestry.add(id);
-      cursor = cursor.parent_message_id ? byId.get(text(cursor.parent_message_id)) : undefined;
+    const branched = branch?.head_message_id && text(branch.name) !== "主分支";
+    // UNION 去重保证异常祖先环不会无限递归；每一步都约束 session_id。
+    const ancestry = branched
+      ? `WITH RECURSIVE ancestry(id,parent_message_id,run_id) AS (
+      SELECT id,parent_message_id,run_id FROM messages WHERE id=? AND session_id=?
+      UNION SELECT p.id,p.parent_message_id,p.run_id FROM messages p JOIN ancestry a ON p.id=a.parent_message_id WHERE p.session_id=?
+    ) `
+      : "";
+    const conditions = ["session_id=?"];
+    const args: Array<string | number> = branched
+      ? [text(branch.head_message_id), sessionId, sessionId, sessionId]
+      : [sessionId];
+    if (branched)
+      conditions.push(`(id IN (SELECT id FROM ancestry) OR run_id IN (SELECT run_id FROM ancestry)
+      OR run_id IN (SELECT id FROM runs WHERE target_message_id IN (SELECT id FROM ancestry) AND kind IN ('review','improve')))`);
+    if (options.beforeSequence !== undefined) {
+      conditions.push("sequence < ?");
+      args.push(options.beforeSequence);
     }
-    const activeRunIds = new Set(
-      all.filter((value) => ancestry.has(text(value.id)) && value.run_id).map((value) => text(value.run_id)),
-    );
-    const qualityRunIds = new Set(
-      rows(
-        this.db.prepare(
-          "SELECT id FROM runs WHERE target_message_id IN (" +
-            [...ancestry].map(() => "?").join(",") +
-            ") AND kind IN ('review','improve')",
-        ),
-        ...ancestry,
-      ).map((value) => text(value.id)),
-    );
-    return all.filter(
-      (value) =>
-        ancestry.has(text(value.id)) ||
-        (value.run_id && (activeRunIds.has(text(value.run_id)) || qualityRunIds.has(text(value.run_id)))),
+    if (options.afterSequence !== undefined) {
+      conditions.push("sequence > ?");
+      args.push(options.afterSequence);
+    }
+    if (options.agentOnly) conditions.push("(status='complete' OR (role='tool' AND status='error'))");
+    if (options.runId !== undefined) {
+      conditions.push("run_id=?");
+      args.push(options.runId);
+    }
+    if (options.publicOnly) conditions.push("role!='tool'");
+    if (options.createdFrom !== undefined) {
+      conditions.push("created_at>=?");
+      args.push(options.createdFrom);
+    }
+    if (options.createdBefore !== undefined) {
+      conditions.push("created_at<?");
+      args.push(options.createdBefore);
+    }
+    const limit = options.limit === undefined ? "" : " LIMIT ?";
+    if (options.limit !== undefined) args.push(options.limit);
+    return rows(
+      prepareStatement(
+        this.db,
+        `${ancestry}SELECT ${columns} FROM messages WHERE ${conditions.join(" AND ")} ORDER BY sequence ${options.newestFirst ? "DESC" : "ASC"}${limit}`,
+      ),
+      ...args,
     );
   }
 
@@ -112,16 +178,7 @@ export class MessageRepository {
     sessionId: string,
     options: { beforeSequence?: number; afterSequence?: number } = {},
   ): StoredAgentMessage[] {
-    let values = this.visibleRows(sessionId).filter(
-      (value) =>
-        text(value.status) === "complete" || (text(value.role) === "tool" && text(value.status) === "error"),
-    );
-    const afterSequence = options.afterSequence;
-    const beforeSequence = options.beforeSequence;
-    if (afterSequence !== undefined)
-      values = values.filter((value) => integer(value.sequence) > afterSequence);
-    if (beforeSequence !== undefined)
-      values = values.filter((value) => integer(value.sequence) < beforeSequence);
+    const values = this.visibleRows(sessionId, { ...options, agentOnly: true });
     const attachmentIds = [...new Set(values.flatMap(attachmentIdsFrom))];
     const attachments = this.loadAttachments(attachmentIds);
     return values.flatMap((value) => {
@@ -138,7 +195,10 @@ export class MessageRepository {
   listByIds(ids: string[]): TranscriptItem[] {
     if (ids.length === 0) return [];
     const placeholders = ids.map(() => "?").join(",");
-    const messageRows = rows(this.db.prepare(`SELECT * FROM messages WHERE id IN (${placeholders})`), ...ids);
+    const messageRows = rows(
+      prepareStatement(this.db, `SELECT * FROM messages WHERE id IN (${placeholders})`),
+      ...ids,
+    );
     const attachmentIds = [...new Set(messageRows.flatMap(attachmentIdsFrom))];
     const attachments = this.loadAttachments(attachmentIds);
     const byId = new Map(messageRows.map((value) => [text(value.id), value]));
@@ -177,7 +237,7 @@ export class MessageRepository {
     if (ids.length === 0) return result;
     const placeholders = ids.map(() => "?").join(",");
     for (const value of rows(
-      this.db.prepare(`SELECT * FROM attachments WHERE id IN (${placeholders})`),
+      prepareStatement(this.db, `SELECT * FROM attachments WHERE id IN (${placeholders})`),
       ...ids,
     )) {
       const attachment = toAttachment(value);
