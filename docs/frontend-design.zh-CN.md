@@ -36,7 +36,7 @@ Android为独立验收重点，页面与操作详见 docs/android-design.zh-CN.m
 |web.qualityLoading|质量按当前标签查询和刷新；运行诊断支持24小时/7天/30天，区间以同一个结束时刻生成，报告显示实际起止时间。|
 |web.registration|注册令牌复制成功或勾选手动保存后才允许继续；复制失败保留文本。|
 |web.commands|命令只调用Core executeShortcut，不预读管理页面数据；无搜索结果不能执行旧选中项，提交锁阻止双击重复请求；原生dialog处理焦点限制、Escape和返回焦点。 Ctrl+K/Meta+K仅在UmaAgent焦点范围内生效；方向键切换可见命令，Enter执行，输入法组合不触发选择。|
-|web.actionMenus|辅助操作使用一层原生disclosure，Tab发现；上下方向键循环跳过禁用项，Home/End到首尾，Escape关闭并还原入口焦点。|
+|web.actionMenus|辅助操作使用一层原生disclosure，Tab发现；上下方向键循环跳过禁用项，Home/End到首尾，Escape关闭并还原入口焦点。顶栏及操作容器允许菜单溢出，裁切只作用于标题；手机更多入口靠右，避免弹层越过左边界。独立和嵌入发布入口均验证320/390/1280px下全部菜单项的视口命中、实际点击、外部关闭及键盘操作。|
 |android.shell|UmaShell|
 |android.singlePaneBelowDp|600|
 |android.railFromDp|600|

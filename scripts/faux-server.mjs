@@ -141,7 +141,7 @@ runtime.database.putAuthToken({
   expiresAt: Date.now() + 86_400_000,
 });
 // Dedicated ordinary accounts keep UI tests independent of registration quotas.
-for (const suffix of ["2", "3"]) {
+for (const suffix of ["2", "3", "4"]) {
   const user = runtime.database.createUser("user");
   const secret = `faux-user-${suffix}-token-012345678901234567890123`;
   runtime.database.putAuthToken({

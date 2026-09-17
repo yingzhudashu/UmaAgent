@@ -19,13 +19,14 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: "npm run dev:faux",
+    command: "npm run build:web:embed && npm run dev:faux",
     url: "http://127.0.0.1:33210/api/v16/health/ready",
     timeout: 120_000,
     reuseExistingServer: false,
     env: {
       ...process.env,
-      NODE_ENV: "test",
+      // 浏览器验收使用发布模式，避免库构建混入开发 JSX runtime。
+      NODE_ENV: "production",
       UMA_FAUX_PORT: "33210",
       UMA_FAUX_STATE: fauxState,
       UMA_FAUX_RESET_STATE: "1",

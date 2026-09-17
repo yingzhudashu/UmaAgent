@@ -2950,16 +2950,22 @@
 }
 .uma-embed .workspace > header {
   min-width: 0;
-  overflow: hidden;
+  /* 下拉操作超出顶栏；只在标题自身裁切文字，不能裁切整个菜单。 */
+  overflow: visible;
 }
 .uma-embed .header-actions {
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
+  overflow: visible;
   flex: 0 1 auto;
 }
 .uma-embed .header-actions .icon {
   flex: 0 0 36px;
+}
+.uma-embed .header-actions > .action-menu {
+  /* 窄屏模型控件收起时仍靠右，否则右对齐弹层会越过视口左边缘。 */
+  margin-inline-start: auto;
+  flex-shrink: 0;
 }
 .uma-embed .transcript {
   min-width: 0;
