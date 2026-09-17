@@ -37,7 +37,7 @@ Web完成消息菜单、唯一模型入口、设置分组、共享正文和复�
 |强杀后离线恢复|android-process-recovery-final116/通过|当前主包final116，停Core、强杀App、离线重启，正文与草稿截图已复核|
 |Android完整矩阵|final116六组布局/功能断言通过，六组显示延迟失败|同一3GiB模拟器，当前交付APK；不能称Android专项通过|
 |固定性能|perf-final86三轮CPU失败|其他固定指标通过；停止旧候选soak、模拟器空闲后仍失败|
-|四小时正常GC soak|final83中断；soak4h-final116.log重新运行|08:03启动，完成前不算通过；356文件哈希核验无差异|
+|四小时正常GC soak|final116约85分钟因WAL超预算失败|938消息，最大WAL3506184B>3355443B，RSS116396032B；356文件哈希一致|
 |真实模型smoke|real-smoke-final106.log通过，9.622秒、6 Span|当前后端；Token计数5454，受理6.77ms|
 |真实模型评测|real-eval-final107.log：3/3通过|当前后端，固定样本|
 |真实模型20请求|real-perf-final108.log：20/20，受理p95 12.18ms、RSS118882304B、WAL3073584B|当前后端；旧final6供应商过载失败保留|
@@ -160,7 +160,7 @@ android-contrast-final114.json按源调色板计算18组正文/背景配色，�
 
 ## 未完成与交付边界
 
-1. CPU与Android显示延迟失败，当前四小时测试未完成。final83在10428735ms、1883消息后进程退出，无最终报告，峰值RSS165498880B/WAL3238384B；原因尚无证据确认，不计通过。final116于08:03使用独立目录重新开始四小时测试。旧候选soak4h-release-candidate.log完成14404872ms、2566消息、峰值RSS154746880B/WAL3238384B，但不覆盖之后修复。当前候选哈希为backend-final83-sha256.json。发布操作期间继续保留独立长测；自动修改交付文档的收尾进程已停止，结果必须依据实际报告人工核验后更新，未完成不计通过。
+1. CPU与Android显示延迟失败；final116四小时测试在约85分钟因WAL超预算提前失败。final83在10428735ms、1883消息后进程退出，无最终报告，峰值RSS165498880B/WAL3238384B；原因尚无证据确认，不计通过。final116于08:03独立启动，运行5080792ms、938消息后，合计WAL3506184B超过3355443B，未完成四小时；峰值RSS116396032B。旧候选soak4h-release-candidate.log完成14404872ms、2566消息、峰值RSS154746880B/WAL3238384B，但不覆盖之后修复。当前候选哈希为backend-final83-sha256.json。失败数据库和逐分钟样本已保留；356个后端文件哈希复核无变化，该失败覆盖本次部署的业务实现。正常GC模式和原预算均未更改。
 2. 旧真实20请求批次存在供应商过载，关联标识保存在本地隔离验收日志。保留整轮失败；当前后端修复后的独立final108已20/20通过，不用新结果删除旧记录。
 3. 真机、Docker、真实Embedding以及 Linux 完整性能矩阵未验收；全页面G03/G14正常/失败/双击/返回组合、外接键盘、读屏完整焦点及对比度未逐项完成。
 4. 大型业务门面和通用管理详情仍有架构债务。源码清单、编译与设计检查不能证明全部代码逐行符合最佳实践。
@@ -188,4 +188,4 @@ android-contrast-final114.json按源调色板计算18组正文/背景配色，�
 - Android 正式包 1.4.0（14），大小12999741字节，SHA-256为 `bbade0e4f63a494f6a0a5a334203e89f88b3b3f26ed5d8b8dfc88b02e28471e3`。正式构建、42项JVM及Lint通过，新旧证书相同。模拟器从线上旧版覆盖安装成功，冷启动、版本与公网更新检查通过；真机尚未验证。此前 debug 设备矩阵仍按原失败结果保留。
 - 私人地址、网关、签名属性、SSH 参数和服务器配置均保存在本机受限配置或加密备份中，不进入 Git、公开报告和构建源码包。原始提交历史在本地保存，推送使用脱敏后的最终源码状态。
 
-发布证据位于忽略目录 `artifacts/acceptance/`，含 `production-release130.log`、`public-smoke-release124.log`、签名与备份验证。正式 APK 位于 `artifacts/delivery/android-release119/`。服务器只读功能检查和 Windows 性能测试是不同环境，结果不得混写。四小时长测仍独立运行，完成前不计通过。
+发布证据位于忽略目录 `artifacts/acceptance/`，含 `production-release130.log`、`public-smoke-release124.log`、签名与备份验证。正式 APK 位于 `artifacts/delivery/android-release119/`。服务器只读功能检查和 Windows 性能测试是不同环境，结果不得混写。四小时长测已因WAL超预算失败，结果见上述门禁；本次授权部署仍不代表稳定性验收通过。
