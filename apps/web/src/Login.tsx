@@ -1,6 +1,7 @@
 import type { UmaClient } from "@uma-agent/client";
 import { Copy, LogIn } from "lucide-react";
 import { type FormEvent, useRef, useState } from "react";
+import umaIcon from "./assets/uma-icon.svg";
 
 export function Login({
   client,
@@ -58,7 +59,7 @@ export function Login({
     <Shell className="login-shell">
       <form className="login" onSubmit={submit}>
         <div className="brand-mark">
-          <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" width="34" height="34" />
+          <img src={umaIcon} alt="" width="34" height="34" />
         </div>
         <h1>UmaAgent</h1>
         <p>{mode === "register" ? "创建一个隔离的 UmaAgent 账户" : "连接到你的 Agent Core"}</p>
