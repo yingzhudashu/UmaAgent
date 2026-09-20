@@ -24,6 +24,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -61,6 +63,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -268,7 +271,7 @@ internal fun ChatScreen(
     BoxWithConstraints(modifier.imePadding()) {
         // 横屏键盘展开时优先保留输入；模式并入输入行，导航仍由 Shell 提供。
         val compactHeight = maxHeight < 240.dp
-        Column(Modifier.padding(horizontal = 16.dp, vertical = if (compactHeight) 0.dp else 8.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = if (compactHeight) 0.dp else 4.dp)) {
             if (selectedSession == null) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Column(
@@ -532,19 +535,17 @@ internal fun ChatScreen(
                         ),
                         label = if (state.interactionMode == "plan") "Plan" else "Agent",
                     )
-                OutlinedTextField(
-                    message,
-                    {
+                CompactMessageField(
+                    value = message,
+                    onValueChange = {
                         if (it.length <= 20_000) {
                             message = it
                             model.saveDraftText(state.selectedSessionId, it)
                         }
                     },
-                    Modifier.weight(1f).testTag("conversation-input"),
-                    placeholder = { Text("消息") },
-                    minLines = 1,
-                    maxLines = if (compactHeight) 2 else 4,
+                    maxLines = if (compactHeight) 2 else 6,
                     enabled = !state.loading && !state.unconfirmedSend,
+                    modifier = Modifier.weight(1f),
                 )
                 if (activeRun != null && message.isBlank() && state.pendingAttachmentIds.isEmpty())
                     FilledIconButton(
@@ -574,6 +575,46 @@ internal fun ChatScreen(
             }
         }
     }
+}
+
+@Composable
+private fun CompactMessageField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    maxLines: Int,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.heightIn(min = 48.dp, max = 120.dp).testTag("conversation-input"),
+        enabled = enabled,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 20.sp),
+        minLines = 1,
+        maxLines = maxLines,
+        decorationBox = { innerTextField ->
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            ) {
+                Box(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (value.isBlank())
+                        Text(
+                            "消息",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp, lineHeight = 20.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    innerTextField()
+                }
+            }
+        },
+    )
 }
 
 @Composable

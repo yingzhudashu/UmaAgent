@@ -75,9 +75,16 @@ fun UmaAgentTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composab
         colorScheme = if (darkTheme) DarkColors else LightColors,
         typography =
             Typography(
+                headlineSmall = TextStyle(fontSize = 24.sp, lineHeight = 30.sp),
+                titleLarge = TextStyle(fontSize = 20.sp, lineHeight = 26.sp),
+                titleMedium = TextStyle(fontSize = 16.sp, lineHeight = 22.sp),
+                titleSmall = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
                 bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
-                bodyMedium = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
-                bodySmall = TextStyle(fontSize = 14.sp, lineHeight = 21.sp),
+                bodyMedium = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
+                bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 18.sp),
+                labelLarge = TextStyle(fontSize = 14.sp, lineHeight = 20.sp),
+                labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 16.sp),
+                labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 16.sp),
             ),
         shapes =
             Shapes(

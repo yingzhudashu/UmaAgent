@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -40,11 +42,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -201,47 +202,15 @@ internal fun AuthenticatedScreen(state: UmaUiState, model: UmaViewModel) {
             },
             bottomBar = {
                 if (!wide && !keyboardOpen && !secondary) {
-                    NavigationBar(
-                        Modifier.navigationBarsPadding(),
-                        windowInsets = WindowInsets(0, 0, 0, 0),
-                    ) {
-                        primarySections.forEach { item ->
-                            NavigationBarItem(
-                                modifier = Modifier.testTag("navigation-${item.name.lowercase()}"),
-                                selected = item == section,
-                                onClick = { navigate(item) },
-                                icon = { iconFor(item) },
-                                label = { Text(item.label) },
-                            )
-                        }
-                        NavigationBarItem(
-                            modifier = Modifier.testTag("navigation-more"),
-                            selected = section in moreSections,
-                            onClick = { moreOpen = true },
-                            icon = {
-                                Box {
-                                    Icon(Icons.Default.MoreHoriz, contentDescription = "更多页面")
-                                    // 菜单锚定到实际按钮，避免额外的空 Row 子项挤占导航栏宽度。
-                                    DropdownMenu(
-                                        expanded = moreOpen,
-                                        onDismissRequest = { moreOpen = false },
-                                    ) {
-                                        moreSections.forEach { item ->
-                                            DropdownMenuItem(
-                                                text = { Text(item.label) },
-                                                leadingIcon = { iconFor(item) },
-                                                onClick = {
-                                                    moreOpen = false
-                                                    navigate(item)
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
-                            },
-                            label = { Text("更多") },
-                        )
-                    }
+                    CompactNavigationBar(
+                        primarySections = primarySections,
+                        moreSections = moreSections,
+                        selected = section,
+                        iconFor = iconFor,
+                        onNavigate = ::navigate,
+                        moreOpen = moreOpen,
+                        onMoreOpenChange = { moreOpen = it },
+                    )
                 }
             },
         ) { padding ->
@@ -415,5 +384,91 @@ internal fun AuthenticatedScreen(state: UmaUiState, model: UmaViewModel) {
     // 平板首页同时显示会话表单，无修改时由系统处理根返回，有修改先确认再将任务退到后台。
     BackHandler(section == startSection && leave.forms.values.any { it.first() }) {
         leave.request { activity?.moveTaskToBack(true) }
+    }
+}
+
+@Composable
+private fun CompactNavigationBar(
+    primarySections: List<MobileSection>,
+    moreSections: List<MobileSection>,
+    selected: MobileSection,
+    iconFor: @Composable (MobileSection) -> Unit,
+    onNavigate: (MobileSection) -> Unit,
+    moreOpen: Boolean,
+    onMoreOpenChange: (Boolean) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().height(64.dp).navigationBarsPadding(),
+        tonalElevation = 2.dp,
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            primarySections.forEach { item ->
+                CompactNavigationItem(
+                    item = item,
+                    selected = item == selected,
+                    iconFor = iconFor,
+                    onClick = { onNavigate(item) },
+                    testTag = "navigation-${item.name.lowercase()}",
+                )
+            }
+            Box {
+                CompactNavigationItem(
+                    item = null,
+                    selected = selected in moreSections,
+                    iconFor = iconFor,
+                    onClick = { onMoreOpenChange(true) },
+                    testTag = "navigation-more",
+                )
+                DropdownMenu(expanded = moreOpen, onDismissRequest = { onMoreOpenChange(false) }) {
+                    moreSections.forEach { item ->
+                        DropdownMenuItem(
+                            text = { Text(item.label, style = MaterialTheme.typography.bodyMedium) },
+                            leadingIcon = { iconFor(item) },
+                            onClick = { onMoreOpenChange(false); onNavigate(item) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactNavigationItem(
+    item: MobileSection?,
+    selected: Boolean,
+    iconFor: @Composable (MobileSection) -> Unit,
+    onClick: () -> Unit,
+    testTag: String,
+) {
+    androidx.compose.material3.Surface(
+        onClick = onClick,
+        modifier = Modifier.width(72.dp).height(64.dp).testTag(testTag),
+        color =
+            if (selected) MaterialTheme.colorScheme.secondaryContainer
+            else androidx.compose.ui.graphics.Color.Transparent,
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Column(
+            Modifier.fillMaxSize().padding(vertical = 4.dp),
+            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+        ) {
+            Box(Modifier.height(28.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                if (item == null) Icon(Icons.Default.MoreHoriz, contentDescription = "更多页面")
+                else iconFor(item)
+            }
+            Text(
+                item?.label ?: "更多",
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
