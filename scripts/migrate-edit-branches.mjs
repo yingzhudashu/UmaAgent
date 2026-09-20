@@ -36,6 +36,9 @@ try {
     const findReplacement = db.prepare(
       "SELECT parent_message_id,sequence FROM messages WHERE id=? AND session_id=? AND role='user'",
     );
+    const findDirectSource = db.prepare(
+      "SELECT id FROM messages WHERE id=? AND session_id=? AND role='user'",
+    );
     const findSource = db.prepare(`SELECT m.id FROM messages m WHERE m.session_id=? AND m.role='user' AND m.sequence<?
       AND ((m.parent_message_id IS NULL AND ? IS NULL) OR m.parent_message_id=?) ORDER BY m.sequence DESC LIMIT 1`);
     const insertFork = db.prepare("INSERT INTO conversation_branch_forks(branch_id,source_message_id) VALUES(?,?)");
@@ -43,7 +46,11 @@ try {
       const replacement = findReplacement.get(branch.head_message_id, branch.session_id);
       if (!replacement) throw new Error(`Cannot determine replacement message for branch ${branch.id}`);
       const parent = replacement.parent_message_id ?? null;
-      const source = findSource.get(branch.session_id, replacement.sequence, parent, parent);
+      // Older edit flows linked the replacement directly to the message being
+      // replaced. If that link is absent (for example, a root edit), recover
+      // the source as the latest earlier user message sharing the same parent.
+      const source = (parent && findDirectSource.get(parent, branch.session_id))
+        ?? findSource.get(branch.session_id, replacement.sequence, parent, parent);
       if (!source) throw new Error(`Cannot determine source message for branch ${branch.id}`);
       insertFork.run(branch.id, source.id);
     }
