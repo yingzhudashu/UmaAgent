@@ -1197,6 +1197,11 @@ export class UmaRuntime {
           now,
         );
       this.database.db
+        .prepare(
+          "INSERT INTO conversation_branch_forks(branch_id,source_message_id) VALUES(?,?)",
+        )
+        .run(branchId, original.id);
+      this.database.db
         .prepare("UPDATE sessions SET active_branch_id=?,updated_at=? WHERE id=?")
         .run(branchId, now, sessionId);
       return this.sendMessage(

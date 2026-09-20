@@ -122,11 +122,12 @@ export class MessageRepository {
     const branch = row(
       prepareStatement(
         this.db,
-        "SELECT b.name,b.head_message_id FROM sessions s LEFT JOIN conversation_branches b ON b.id=s.active_branch_id WHERE s.id=?",
+        "SELECT b.id,b.name,b.head_message_id,f.source_message_id AS fork_source_message_id FROM sessions s LEFT JOIN conversation_branches b ON b.id=s.active_branch_id LEFT JOIN conversation_branch_forks f ON f.branch_id=b.id WHERE s.id=?",
       ),
       sessionId,
     );
     const branched = branch?.head_message_id && text(branch.name) !== "主分支";
+    const forkSourceMessageId = branch?.fork_source_message_id ? text(branch.fork_source_message_id) : undefined;
     // UNION 去重保证异常祖先环不会无限递归；每一步都约束 session_id。
     const ancestry = branched
       ? `WITH RECURSIVE ancestry(id,parent_message_id,run_id,sequence) AS (
@@ -136,12 +137,22 @@ export class MessageRepository {
       : "";
     const conditions = ["session_id=?"];
     const args: Array<string | number> = branched
-      ? [text(branch.head_message_id), sessionId, sessionId, sessionId]
+      ? [
+          text(branch.head_message_id),
+          sessionId,
+          sessionId,
+          sessionId,
+          ...(forkSourceMessageId ? [forkSourceMessageId, sessionId] : []),
+        ]
       : [sessionId];
-    if (branched)
-      conditions.push(`(sequence < (SELECT MIN(sequence) FROM ancestry)
+    if (branched) {
+      const prefix = forkSourceMessageId
+        ? "sequence < (SELECT sequence FROM messages WHERE id=? AND session_id=?)"
+        : "sequence < (SELECT MIN(sequence) FROM ancestry)";
+      conditions.push(`(${prefix}
       OR id IN (SELECT id FROM ancestry) OR run_id IN (SELECT run_id FROM ancestry)
       OR run_id IN (SELECT id FROM runs WHERE target_message_id IN (SELECT id FROM ancestry) AND kind IN ('review','improve')))`);
+    }
     if (options.beforeSequence !== undefined) {
       conditions.push("sequence < ?");
       args.push(options.beforeSequence);

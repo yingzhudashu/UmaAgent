@@ -162,6 +162,14 @@ CREATE TABLE conversation_branches (
 );
 CREATE INDEX conversation_branches_session ON conversation_branches(session_id, updated_at DESC);
 
+-- Persist the message replaced by an edit so branch visibility can keep the
+-- exact common prefix, including when the edited message is the session root.
+CREATE TABLE conversation_branch_forks (
+  branch_id TEXT PRIMARY KEY REFERENCES conversation_branches(id) ON DELETE CASCADE,
+  source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE
+);
+CREATE INDEX conversation_branch_forks_source ON conversation_branch_forks(source_message_id);
+
 CREATE TABLE tool_calls (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,

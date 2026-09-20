@@ -272,6 +272,48 @@ describe("UmaRuntime preflight", () => {
     await waitForRunTerminal(runtime, edited.id);
   });
 
+  it("editing the root message hides the entire replaced suffix", async () => {
+    const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("root edited answer")]);
+    const session = await runtime.createSession();
+    const createCompletedUser = (id: string, content: string, parentMessageId?: string) => {
+      const created = runtime.database.createRun(
+        session.id,
+        id,
+        runtime.models.snapshot(session.model),
+        session.thinkingLevel,
+        "agent",
+        "agent",
+      ).run;
+      runtime.database.updateRun(created.id, { status: "completed" });
+      runtime.database.insertMessage({
+        id,
+        sessionId: session.id,
+        runId: created.id,
+        role: "user",
+        status: "complete",
+        content,
+        ...(parentMessageId ? { parentMessageId } : {}),
+      });
+      runtime.database.createResponse({ sessionId: session.id, runId: created.id, messageId: id });
+    };
+    createCompletedUser("root", "old root");
+    createCompletedUser("child", "old child", "root");
+    const mainBranch = runtime.database.listBranches(session.id).find((branch) => branch.active);
+    runtime.database.db
+      .prepare("UPDATE conversation_branches SET head_message_id=?,updated_at=? WHERE id=?")
+      .run("child", Date.now(), mainBranch?.id);
+
+    const edited = runtime.editMessage(session.id, "root", "new root");
+    const activeUsers = runtime
+      .getSnapshot(session.id)
+      .transcript.filter((item) => item.role === "user")
+      .map((item) => item.content);
+    expect(activeUsers).toEqual(["new root"]);
+    expect(activeUsers).not.toContain("old root");
+    expect(activeUsers).not.toContain("old child");
+    await waitForRunTerminal(runtime, edited.id);
+  });
+
   it("edits a queued message in place without adding another run", async () => {
     const runtime = await runtimeWith([]);
     const session = await runtime.createSession();
