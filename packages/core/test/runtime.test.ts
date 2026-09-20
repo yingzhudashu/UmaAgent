@@ -314,6 +314,50 @@ describe("UmaRuntime preflight", () => {
     await waitForRunTerminal(runtime, edited.id);
   });
 
+  it("hides old messages from edit branches created before fork metadata", async () => {
+    const runtime = await runtimeWith([]);
+    const session = await runtime.createSession();
+    const addUser = (id: string, content: string, parentMessageId?: string) => {
+      const run = runtime.database.createRun(
+        session.id,
+        id,
+        runtime.models.snapshot(session.model),
+        session.thinkingLevel,
+        "agent",
+        "agent",
+      ).run;
+      runtime.database.updateRun(run.id, { status: "completed" });
+      runtime.database.insertMessage({
+        id,
+        sessionId: session.id,
+        runId: run.id,
+        role: "user",
+        status: "complete",
+        content,
+        ...(parentMessageId ? { parentMessageId } : {}),
+      });
+      runtime.database.createResponse({ sessionId: session.id, runId: run.id, messageId: id });
+    };
+    addUser("legacy-root", "old root");
+    addUser("legacy-child", "old child", "legacy-root");
+    const branchCreatedAt = Date.now() + 1;
+    runtime.database.db
+      .prepare("INSERT INTO conversation_branches(id,session_id,name,head_message_id,created_at,updated_at) VALUES(?,?,?,?,?,?)")
+      .run("legacy-edit", session.id, "编辑分支 旧版本", null, branchCreatedAt, branchCreatedAt);
+    runtime.database.db.prepare("UPDATE sessions SET active_branch_id=? WHERE id=?").run("legacy-edit", session.id);
+    addUser("legacy-replacement", "new root");
+    runtime.database.db
+      .prepare("UPDATE conversation_branches SET head_message_id=?,updated_at=? WHERE id=?")
+      .run("legacy-replacement", Date.now(), "legacy-edit");
+
+    const users = runtime
+      .getSnapshot(session.id)
+      .transcript.filter((item) => item.role === "user")
+      .map((item) => item.content);
+    expect(users).toEqual(["new root"]);
+  });
+
+
   it("edits a queued message in place without adding another run", async () => {
     const runtime = await runtimeWith([]);
     const session = await runtime.createSession();
