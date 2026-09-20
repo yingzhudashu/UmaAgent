@@ -129,9 +129,9 @@ export class MessageRepository {
     const branched = branch?.head_message_id && text(branch.name) !== "主分支";
     // UNION 去重保证异常祖先环不会无限递归；每一步都约束 session_id。
     const ancestry = branched
-      ? `WITH RECURSIVE ancestry(id,parent_message_id,run_id) AS (
-      SELECT id,parent_message_id,run_id FROM messages WHERE id=? AND session_id=?
-      UNION SELECT p.id,p.parent_message_id,p.run_id FROM messages p JOIN ancestry a ON p.id=a.parent_message_id WHERE p.session_id=?
+      ? `WITH RECURSIVE ancestry(id,parent_message_id,run_id,sequence) AS (
+      SELECT id,parent_message_id,run_id,sequence FROM messages WHERE id=? AND session_id=?
+      UNION SELECT p.id,p.parent_message_id,p.run_id,p.sequence FROM messages p JOIN ancestry a ON p.id=a.parent_message_id WHERE p.session_id=?
     ) `
       : "";
     const conditions = ["session_id=?"];
@@ -139,7 +139,8 @@ export class MessageRepository {
       ? [text(branch.head_message_id), sessionId, sessionId, sessionId]
       : [sessionId];
     if (branched)
-      conditions.push(`(id IN (SELECT id FROM ancestry) OR run_id IN (SELECT run_id FROM ancestry)
+      conditions.push(`(sequence < (SELECT MIN(sequence) FROM ancestry)
+      OR id IN (SELECT id FROM ancestry) OR run_id IN (SELECT run_id FROM ancestry)
       OR run_id IN (SELECT id FROM runs WHERE target_message_id IN (SELECT id FROM ancestry) AND kind IN ('review','improve')))`);
     if (options.beforeSequence !== undefined) {
       conditions.push("sequence < ?");

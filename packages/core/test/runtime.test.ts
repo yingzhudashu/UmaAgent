@@ -243,6 +243,9 @@ describe("UmaRuntime preflight", () => {
       runtime.database.createResponse({ sessionId: session.id, runId: created.id, messageId: id });
       return created;
     };
+    // Older imported sessions can contain root messages without parent links.
+    // They still belong to the visible history when a later message is edited.
+    createCompletedUser("message-before", "before");
     createCompletedUser("message-a", "A");
     createCompletedUser("message-b", "B", "message-a");
     createCompletedUser("message-c", "C", "message-b");
@@ -257,6 +260,7 @@ describe("UmaRuntime preflight", () => {
 
     expect(editedMessage.parentMessageId).toBe("message-a");
     expect(active.transcript.filter((item) => item.role === "user").map((item) => item.content)).toEqual([
+      "before",
       "A",
       "B2",
     ]);
