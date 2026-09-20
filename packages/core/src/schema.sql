@@ -569,4 +569,4 @@ CREATE TABLE channel_deliveries (
 );
 CREATE INDEX channel_deliveries_session_status ON channel_deliveries(session_id,status,updated_at DESC);
 
-PRAGMA user_version = 25;
+PRAGMA user_version = 26;

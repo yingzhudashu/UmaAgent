@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 仅供 schema 24→25 的一次性停服发布使用。普通同 schema 发布仍走 promote。
+# 仅供 schema 24→26 的一次性停服发布使用。普通同 schema 发布仍走 promote。
 # 不在运行时检测后隐式迁移，也不自动恢复数据库覆盖新版本可能产生的数据。
 release=${1:?usage: upgrade-native-release.sh RELEASE_DIR SHARED_NODE_MODULES}
 dependencies=${2:?usage: upgrade-native-release.sh RELEASE_DIR SHARED_NODE_MODULES}
@@ -41,7 +41,7 @@ recover() {
       if [[ ${#restart[@]} -gt 0 ]]; then systemctl start "${restart[@]}"; fi
     else
       systemctl stop "${services[@]}" || true
-      echo 'Schema 25 is retained. Services stopped; inspect the backup and repair before restarting.' >&2
+      echo 'Schema 26 is retained. Services stopped; inspect the backup and repair before restarting.' >&2
     fi
   fi
   exit "$status"
@@ -49,6 +49,7 @@ recover() {
 trap recover EXIT
 systemctl stop "${services[@]}"
 runuser -u umaagent -- "$node" "$release/scripts/upgrade-state.mjs" "$state/state.db"
+runuser -u umaagent -- "$node" "$release/scripts/migrate-edit-branches.mjs" "$state/state.db"
 bash "$release/deploy/promote-native-release.sh" "$release" "$dependencies"
 "$node" "$release/deploy/protected-user-fingerprint.mjs" "$state" "$secret" >"$guard/after.json"
 chmod 0600 "$guard/after.json"

@@ -82,7 +82,7 @@ rollback() {
   trap - EXIT
   # schema 升级不可通过切回旧代码撤销。新 schema 已落盘时保留维护态，
   # 停止写入，等待明确的数据恢复或前向修复，避免旧 Core 对新库反复启动。
-  if [[ -n "$previous" ]] && ! grep -qx 'schema=25' "$previous/RELEASE"; then
+  if [[ -n "$previous" ]] && ! grep -qx 'schema=26' "$previous/RELEASE"; then
     systemctl stop "${services[@]}" || true
     write_maintenance 1 || true
     echo "Schema changed; services stopped. Previous release and database backup retained for explicit recovery." >&2

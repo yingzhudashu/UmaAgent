@@ -122,16 +122,12 @@ export class MessageRepository {
     const branch = row(
       prepareStatement(
         this.db,
-        "SELECT b.id,b.name,b.head_message_id,b.created_at,f.source_message_id AS fork_source_message_id FROM sessions s LEFT JOIN conversation_branches b ON b.id=s.active_branch_id LEFT JOIN conversation_branch_forks f ON f.branch_id=b.id WHERE s.id=?",
+        "SELECT b.name,b.head_message_id,f.source_message_id AS fork_source_message_id FROM sessions s LEFT JOIN conversation_branches b ON b.id=s.active_branch_id LEFT JOIN conversation_branch_forks f ON f.branch_id=b.id WHERE s.id=?",
       ),
       sessionId,
     );
     const branched = branch?.head_message_id && text(branch.name) !== "主分支";
-    const forkSourceMessageId = branch?.fork_source_message_id
-      ? text(branch.fork_source_message_id)
-      : branched
-        ? this.deriveLegacyForkSource(sessionId, text(branch.head_message_id), integer(branch.created_at))
-        : undefined;
+    const forkSourceMessageId = branch?.fork_source_message_id ? text(branch.fork_source_message_id) : undefined;
     // UNION 去重保证异常祖先环不会无限递归；每一步都约束 session_id。
     const ancestry = branched
       ? `WITH RECURSIVE ancestry(id,parent_message_id,run_id,sequence) AS (
@@ -141,13 +137,7 @@ export class MessageRepository {
       : "";
     const conditions = ["session_id=?"];
     const args: Array<string | number> = branched
-      ? [
-          text(branch.head_message_id),
-          sessionId,
-          sessionId,
-          sessionId,
-          ...(forkSourceMessageId ? [forkSourceMessageId, sessionId] : []),
-        ]
+      ? [text(branch.head_message_id), sessionId, sessionId, sessionId, ...(forkSourceMessageId ? [forkSourceMessageId, sessionId] : [])]
       : [sessionId];
     if (branched) {
       const prefix = forkSourceMessageId
@@ -188,34 +178,6 @@ export class MessageRepository {
       ),
       ...args,
     );
-  }
-
-  private deriveLegacyForkSource(sessionId: string, headMessageId: string, branchCreatedAt: number): string | undefined {
-    const value = row(
-      prepareStatement(
-        this.db,
-        `WITH RECURSIVE ancestry(id,parent_message_id,role,sequence,created_at) AS (
-           SELECT id,parent_message_id,role,sequence,created_at FROM messages WHERE id=? AND session_id=?
-           UNION SELECT p.id,p.parent_message_id,p.role,p.sequence,p.created_at
-           FROM messages p JOIN ancestry a ON p.id=a.parent_message_id WHERE p.session_id=?
-         ), replacement AS (
-           SELECT parent_message_id FROM ancestry
-           WHERE role='user' AND created_at>=?
-           ORDER BY sequence LIMIT 1
-         )
-         SELECT m.id FROM messages m, replacement r
-         WHERE m.session_id=? AND m.role='user' AND m.created_at<?
-           AND ((m.parent_message_id IS NULL AND r.parent_message_id IS NULL) OR m.parent_message_id=r.parent_message_id)
-         ORDER BY m.sequence DESC LIMIT 1`,
-      ),
-      headMessageId,
-      sessionId,
-      sessionId,
-      branchCreatedAt,
-      sessionId,
-      branchCreatedAt,
-    );
-    return value?.id ? text(value.id) : undefined;
   }
 
   listAgentMessages(

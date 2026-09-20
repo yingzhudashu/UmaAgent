@@ -69,7 +69,7 @@ import { SessionRepository } from "./session-repository.js";
 import { prepareStatement } from "./sql-statements.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 25;
+const SCHEMA_VERSION = 26;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   readonly stateDir: string;
@@ -99,16 +99,6 @@ export class UmaDatabase {
         `Unsupported database schema ${version}; expected ${SCHEMA_VERSION}. Run the explicit offline upgrade tool after backing up the database.`,
       );
     }
-    // This table was added after schema version 25. Create it lazily so
-    // existing installations can persist edit fork points without a full
-    // offline schema upgrade.
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS conversation_branch_forks (
-        branch_id TEXT PRIMARY KEY REFERENCES conversation_branches(id) ON DELETE CASCADE,
-        source_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE
-      );
-      CREATE INDEX IF NOT EXISTS conversation_branch_forks_source ON conversation_branch_forks(source_message_id);
-    `);
     validateSchema(this.db);
     this.auditEvaluations = new AuditEvaluationRepository(this.db, (operation) =>
       this.withTransaction(operation),

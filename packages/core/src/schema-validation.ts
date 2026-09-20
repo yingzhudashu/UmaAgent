@@ -21,6 +21,7 @@ const REQUIRED_TABLES = [
   "channel_sessions",
   "channel_settings",
   "channel_deliveries",
+  "conversation_branch_forks",
 ] as const;
 
 export function validateSchema(db: DatabaseSync): void {
