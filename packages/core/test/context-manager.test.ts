@@ -81,17 +81,17 @@ describe("ContextManager", () => {
     expect(result.messages.at(-1)?.content).toBe("message 10");
   });
 
-  it("keeps the original context when summary generation declines or throws", async () => {
+  it("persists a bounded fallback when summary generation declines or throws", async () => {
     mocks.generateSummary.mockResolvedValueOnce({ ok: false, error: "declined" });
     const first = fixture();
     expect(
       (await first.manager.compact(session, entries, new AbortController().signal, true)).messages,
-    ).toHaveLength(10);
+    ).toHaveLength(3);
     mocks.generateSummary.mockRejectedValueOnce(new Error("provider unavailable"));
     const second = fixture();
     expect(
       (await second.manager.compact(session, entries, new AbortController().signal, true)).messages,
-    ).toHaveLength(10);
+    ).toHaveLength(3);
   });
 
   it("avoids a summary when nearly all messages must be retained", async () => {
