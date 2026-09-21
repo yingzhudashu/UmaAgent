@@ -861,7 +861,15 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
             rename={renameSession}
             remove={removeSession}
             refresh={() => void snapshot.refetch()}
-            compact={() => selected && void client.compactSession(selected).then(() => snapshot.refetch())}
+            compact={async () => {
+              if (!selected) return;
+              try {
+                await client.compactSession(selected);
+                await snapshot.refetch();
+              } catch (error) {
+                setGlobalError(error instanceof Error ? error.message : "压缩上下文失败，请稍后重试");
+              }
+            }}
           />
           <section
             ref={transcriptRef}

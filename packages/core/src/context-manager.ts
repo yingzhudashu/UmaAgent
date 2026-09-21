@@ -87,7 +87,9 @@ export class ContextManager {
       const entry = pending[cut];
       if (entry) retainedTokens += estimateContextTokens([entry.message]).tokens;
     }
-    if (cut < 2) return { messages: composeMessages(summary, pending), ...(summary ? { summary } : {}) };
+    // Manual compaction must make progress even when only one oversized entry
+    // remains. Automatic compaction keeps the conservative boundary below.
+    if (cut < 1) return { messages: composeMessages(summary, pending), ...(summary ? { summary } : {}) };
 
     const toSummarize = pending.slice(0, cut);
     try {
