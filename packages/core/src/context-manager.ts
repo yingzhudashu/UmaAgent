@@ -45,11 +45,22 @@ export function assertContextCapacity(
 }
 
 function composeMessages(summary: ContextSummary | undefined, pending: StoredAgentMessage[]): AgentMessage[] {
+  // Provider usage on an assistant message describes the pre-compaction
+  // request. Keeping it after inserting a summary makes the SDK estimator
+  // treat the compacted prefix as if it were still present and can report a
+  // false context overflow during an edit/rerun.
+  const compactedPending = summary
+    ? pending.map((entry) => {
+        if (entry.message.role !== "assistant") return entry.message;
+        const { usage: _usage, ...message } = entry.message as AgentMessage & { usage?: unknown };
+        return message as AgentMessage;
+      })
+    : pending.map((entry) => entry.message);
   return [
     ...(summary
       ? [createCompactionSummaryMessage(summary.content, 0, summary.updatedAt) as AgentMessage]
       : []),
-    ...pending.map((entry) => entry.message),
+    ...compactedPending,
   ];
 }
 

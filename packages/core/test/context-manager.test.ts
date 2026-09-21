@@ -57,6 +57,25 @@ describe("ContextManager", () => {
     expect(mocks.generateSummary).not.toHaveBeenCalled();
   });
 
+  it("does not let pre-compaction assistant usage trigger overflow after an edit rerun", async () => {
+    const existing = { throughSequence: 5, content: "previous", updatedAt: 5 };
+    const { manager } = fixture(existing);
+    const withUsage = entries.map((entry, index) =>
+      index === entries.length - 1
+        ? {
+            ...entry,
+            message: {
+              ...entry.message,
+              role: "assistant",
+              usage: { input: 250_000, output: 1_000, totalTokens: 251_000 },
+            } as AgentMessage,
+          }
+        : entry,
+    );
+    const result = await manager.compact(session, withUsage, new AbortController().signal);
+    expect((result.messages.at(-1) as AgentMessage & { usage?: unknown }).usage).toBeUndefined();
+  });
+
   it("does not compact fewer than six pending messages even when forced", async () => {
     const { manager } = fixture();
     const result = await manager.compact(
