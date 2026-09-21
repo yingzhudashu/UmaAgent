@@ -52,8 +52,18 @@ function composeMessages(summary: ContextSummary | undefined, pending: StoredAge
   const compactedPending = summary
     ? pending.map((entry) => {
         if (entry.message.role !== "assistant") return entry.message;
-        const { usage: _usage, ...message } = entry.message as AgentMessage & { usage?: unknown };
-        return message as AgentMessage;
+        const message = entry.message as AgentMessage & { usage?: Record<string, unknown> };
+        return {
+          ...message,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        } as AgentMessage;
       })
     : pending.map((entry) => entry.message);
   return [
@@ -78,9 +88,10 @@ function boundedMessage(message: AgentMessage, maxTokens: number): AgentMessage 
   if (estimateContextTokens([message]).tokens <= maxTokens) return message;
   const text = messageText(message);
   const maxChars = Math.max(512, maxTokens * 4);
-  const clipped = text.length <= maxChars
-    ? text
-    : `${text.slice(0, Math.floor(maxChars * 0.7))}\n[…内容已截断…]\n${text.slice(-Math.floor(maxChars * 0.3))}`;
+  const clipped =
+    text.length <= maxChars
+      ? text
+      : `${text.slice(0, Math.floor(maxChars * 0.7))}\n[…内容已截断…]\n${text.slice(-Math.floor(maxChars * 0.3))}`;
   return {
     ...(message as object),
     content: `[压缩输入中的超大消息，已保留首尾内容]\n${clipped}`,
@@ -90,7 +101,9 @@ function boundedMessage(message: AgentMessage, maxTokens: number): AgentMessage 
 function fallbackSummary(entries: AgentMessage[], previous?: string): string {
   const lines = entries.map((message) => `[${message.role}] ${messageText(message)}`);
   const text = [previous ? `已有摘要：${previous}` : "已有摘要：无", ...lines].join("\n");
-  return text.length <= 24_000 ? text : `${text.slice(0, 20_000)}\n[…历史已压缩，以上为保留内容…]\n${text.slice(-4_000)}`;
+  return text.length <= 24_000
+    ? text
+    : `${text.slice(0, 20_000)}\n[…历史已压缩，以上为保留内容…]\n${text.slice(-4_000)}`;
 }
 
 export class ContextManager {
@@ -154,7 +167,10 @@ export class ContextManager {
       for (const currentBatch of batches) {
         const input = currentBatch.map((entry) => ({
           ...entry,
-          message: boundedMessage(entry.message, Math.max(1_000, Math.floor(maxBatchTokens / Math.max(1, currentBatch.length)))),
+          message: boundedMessage(
+            entry.message,
+            Math.max(1_000, Math.floor(maxBatchTokens / Math.max(1, currentBatch.length))),
+          ),
         }));
         const generated = await generateSummary(
           input.map((entry) => entry.message),
@@ -166,16 +182,28 @@ export class ContextManager {
           generatedContent?.slice(-24_000),
           session.thinkingLevel,
         );
-        generatedContent = generated.ok ? generated.value : fallbackSummary(input.map((entry) => entry.message), generatedContent);
+        generatedContent = generated.ok
+          ? generated.value
+          : fallbackSummary(
+              input.map((entry) => entry.message),
+              generatedContent,
+            );
         lastSuccessful = currentBatch.at(-1);
       }
     } catch {
-      generatedContent = fallbackSummary(toSummarize.map((entry) => entry.message), generatedContent);
+      generatedContent = fallbackSummary(
+        toSummarize.map((entry) => entry.message),
+        generatedContent,
+      );
       lastSuccessful = toSummarize.at(-1);
     }
     if (generatedContent && lastSuccessful) {
       // The database keeps the newest boundary when two runs compact concurrently.
-      const persisted = this.database.putContextSummary(session.id, lastSuccessful.sequence, generatedContent);
+      const persisted = this.database.putContextSummary(
+        session.id,
+        lastSuccessful.sequence,
+        generatedContent,
+      );
       summary = persisted;
       pending = entries.filter((entry) => entry.sequence > persisted.throughSequence);
     }

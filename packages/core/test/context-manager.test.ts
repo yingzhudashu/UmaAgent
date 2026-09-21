@@ -73,7 +73,11 @@ describe("ContextManager", () => {
         : entry,
     );
     const result = await manager.compact(session, withUsage, new AbortController().signal);
-    expect((result.messages.at(-1) as AgentMessage & { usage?: unknown }).usage).toBeUndefined();
+    expect(
+      (result.messages.at(-1) as AgentMessage & { usage?: { totalTokens?: number } }).usage,
+    ).toMatchObject({
+      totalTokens: 0,
+    });
   });
 
   it("does not compact fewer than six pending messages even when forced", async () => {
