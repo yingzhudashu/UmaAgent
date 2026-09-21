@@ -1,6 +1,6 @@
 # UmaAgent 代码审查
 
-当前契约为 Protocol v16、HTTP `/api/v16`、业务 schema 25。自动检查只验证其覆盖的规则，不代表全部代码已经逐行证明正确。当前验收结论统一见 [发布验收](release-acceptance.md)。
+当前契约为 Protocol v16、HTTP `/api/v16`、业务 schema 27。自动检查只验证其覆盖的规则，不代表全部代码已经逐行证明正确。当前验收结论统一见 [发布验收](release-acceptance.md)。
 
 ## 审查范围
 

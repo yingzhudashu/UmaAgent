@@ -201,6 +201,9 @@ export const RunSchema = Strict({
   messageId: Id,
   targetMessageId: Type.Optional(Id),
   resultMessageId: Type.Optional(Id),
+  branchRevision: Type.Integer({ minimum: 1 }),
+  supersededByRunId: Type.Optional(Id),
+  terminalReason: Type.Optional(Type.String()),
   queuePosition: Type.Optional(Type.Integer({ minimum: 1 })),
   interactionMode: InteractionModeSchema,
   kind: RunKindSchema,
@@ -256,6 +259,8 @@ export const SessionSchema = Strict({
   thinkingLevel: ThinkingLevelSchema,
   queueMode: QueueModeSchema,
   activeBranchId: Type.Optional(Id),
+  branchRevision: Type.Integer({ minimum: 1 }),
+  queueRevision: Type.Integer({ minimum: 1 }),
   createdAt: Timestamp,
   updatedAt: Timestamp,
 });
@@ -379,6 +384,7 @@ export const SessionSnapshotSchema = Strict({
       run: RunSchema,
       message: TranscriptItemSchema,
       position: Type.Integer({ minimum: 1 }),
+      queueRevision: Type.Optional(Type.Integer({ minimum: 1 })),
     }),
   ),
 });
@@ -899,6 +905,7 @@ export type EditMessageRequest = Static<typeof EditMessageRequestSchema>;
 
 export const QueueReorderRequestSchema = Strict({
   runIds: Type.Array(Id, { minItems: 0, maxItems: 100 }),
+  queueRevision: Type.Integer({ minimum: 1 }),
 });
 export type QueueReorderRequest = Static<typeof QueueReorderRequestSchema>;
 export type ImproveMessageRequest = Static<typeof ImproveMessageRequestSchema>;

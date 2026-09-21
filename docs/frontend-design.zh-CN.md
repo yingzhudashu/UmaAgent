@@ -4,6 +4,8 @@
 
 > 文档修订日期：2026-09-17。本文是目标设计合同，不代表当前代码已实现全部目标行为。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。
 
+会话编辑、重跑、审查、改进、队列和抢占的具体状态关系以[会话、编辑重跑与执行队列整改规范](conversation-execution-recovery-design.zh-CN.md)为准。客户端只投影服务端活动分支；迟到回执必须按账号、会话、分支版本和对象 ID 丢弃。
+
 [图文阅读版与界面索引](frontend-design/index.html) · [结构化界面规格](frontend-design/spec.json) · [审查与验收记录](release-acceptance.md)
 
 ## 1. 权威顺序与实施范围
@@ -20,7 +22,7 @@ Android为独立验收重点，页面与操作详见 docs/android-design.zh-CN.m
 
 |范围|实施规则|
 |---|---|
-|protocol|Protocol v16 / HTTP /api/v16 / SQLite schema 25|
+|protocol|Protocol v16 / HTTP /api/v16 / SQLite schema 27|
 |serverChanges|账号级免审批默认开启；统一执行策略、增量同步与 trace，详见后端设计。|
 |web.styleEntry|styles.css then design-system.css|
 |web.shell|220px navigation + main workspace|

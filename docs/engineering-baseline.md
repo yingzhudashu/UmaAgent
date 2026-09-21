@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本为 Core 1.3.0、Android 1.4.0、Protocol v16、SQLite schema 25。服务只接受当前格式；schema 24 通过 scripts/upgrade-state.mjs 显式离线备份并转换，不保留运行时兼容。
+当前版本为 Core 1.3.0、Android 1.4.1、Protocol v16、SQLite schema 27。服务只接受当前格式；schema 26 通过 scripts/migrate-state-26-27.mjs 显式离线备份并转换，不保留运行时兼容。
 
 ## 已落地的边界
 

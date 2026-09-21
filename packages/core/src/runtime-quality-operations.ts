@@ -44,13 +44,16 @@ export class RuntimeQualityOperations {
     let target = database.getMessage(targetMessageId);
     if (target.role !== "assistant") throw new Error("Quality operations require an assistant message");
     if (kind === "improve" && options.reset) {
-      while (target.parentMessageId) target = database.getMessage(target.parentMessageId);
+      while (target.parentMessageId && target.runId && database.getRun(target.runId).kind === "improve")
+        target = database.getMessage(target.parentMessageId);
     }
     const active = database.findActiveQualityRun(target.id, kind);
     if (active) return active;
     const owner = database.findMessageOwner(target.id);
     if (!owner) throw new Error("Message owner is unavailable");
     const session = database.getSession(owner.sessionId);
+    if (!database.listMessages(session.id).some((item) => item.id === target.id))
+      throw new Error("Quality operations require a message on the active conversation path");
     const commandMessageId = randomUUID();
     const model = this.dependencies.getReasoningModel();
     const run = events.transaction(() => {
@@ -61,7 +64,11 @@ export class RuntimeQualityOperations {
         session.thinkingLevel,
         kind,
         "agent",
-        { targetMessageId: target.id, queuePosition: database.listQueuedRuns(session.id).length + 1 },
+        {
+          targetMessageId: target.id,
+          queuePosition: database.listQueuedRuns(session.id).length + 1,
+          branchRevision: session.branchRevision,
+        },
       ).run;
       events.emit(session.id, created.id, "run.updated", created);
       return created;
@@ -116,13 +123,18 @@ export class RuntimeQualityOperations {
       return;
     }
     const controller = new AbortController();
-    controllers.set(session.id, controller);
+    controllers.set(runId, controller);
     try {
-      const messages = database.listMessages(session.id);
-      const targetIndex = messages.findIndex((item) => item.id === target.id);
-      const question = [...messages.slice(0, targetIndex)]
-        .reverse()
-        .find((item) => item.role === "user")?.content;
+      let question: string | undefined;
+      let parentMessageId = target.parentMessageId;
+      while (parentMessageId) {
+        const parent = database.getMessage(parentMessageId);
+        if (parent.role === "user") {
+          question = parent.content;
+          break;
+        }
+        parentMessageId = parent.parentMessageId;
+      }
       if (!question) throw new Error("The target answer has no preceding user message");
       const targetContext = await this.dependencies
         .getContextManager()
@@ -263,7 +275,7 @@ export class RuntimeQualityOperations {
       try {
         rootTrace.finish();
       } finally {
-        controllers.delete(session.id);
+        if (controllers.get(runId) === controller) controllers.delete(runId);
         release();
       }
     }

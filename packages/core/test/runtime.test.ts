@@ -246,7 +246,7 @@ describe("UmaRuntime preflight", () => {
     // Older imported sessions can contain root messages without parent links.
     // They still belong to the visible history when a later message is edited.
     createCompletedUser("message-before", "before");
-    createCompletedUser("message-a", "A");
+    createCompletedUser("message-a", "A", "message-before");
     createCompletedUser("message-b", "B", "message-a");
     createCompletedUser("message-c", "C", "message-b");
     const mainBranch = runtime.database.listBranches(session.id).find((branch) => branch.active);
@@ -313,8 +313,6 @@ describe("UmaRuntime preflight", () => {
     expect(activeUsers).not.toContain("old child");
     await waitForRunTerminal(runtime, edited.id);
   });
-
-
 
   it("edits a queued message in place without adding another run", async () => {
     const runtime = await runtimeWith([]);
@@ -1381,7 +1379,12 @@ describe("UmaRuntime preflight", () => {
       role: "assistant",
       status: "complete",
       content: "Original answer",
+      parentMessageId: "quality-question",
     });
+    const qualityBranch = runtime.database.listBranches(session.id).find((branch) => branch.active);
+    runtime.database.db
+      .prepare("UPDATE conversation_branches SET head_message_id=?,updated_at=? WHERE id=?")
+      .run("quality-answer", Date.now(), qualityBranch?.id);
     runtime.database.updateRun(source.id, { status: "completed" });
     const review = runtime.reviewMessage("quality-answer", "Check completeness");
     expect((await waitForRunTerminal(runtime, review.id)).status).toBe("completed");
@@ -1400,25 +1403,30 @@ describe("UmaRuntime preflight", () => {
       expect.objectContaining({ kind: "review", runId: review.id, status: "completed" }),
     ]);
     const improve = runtime.improveMessage("quality-answer");
-    expect((await waitForRunTerminal(runtime, improve.id)).status).toBe("completed");
+    const improvedRun = await waitForRunTerminal(runtime, improve.id);
+    expect(improvedRun.status).toBe("completed");
     expect((await runtime.listTrace({ runId: improve.id })).spans).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "improve", kind: "run", status: "ok", runId: improve.id }),
         expect.objectContaining({ name: "model.improve", kind: "model", status: "ok", runId: improve.id }),
       ]),
     );
-    const revision = runtime
-      .getSnapshot(session.id)
-      .transcript.find((item) => item.runId === improve.id && item.role === "assistant");
+    const revision = improvedRun.resultMessageId
+      ? runtime.database.getMessage(improvedRun.resultMessageId)
+      : undefined;
     expect(revision).toMatchObject({
       content: "Answer with the missing detail",
       parentMessageId: "quality-answer",
     });
+    expect(runtime.getSnapshot(session.id).transcript.map((item) => item.id)).not.toContain(revision?.id);
     expect(runtime.database.getMessage("quality-answer").content).toBe("Original answer");
     expect(runtime.listMessageQuality("quality-answer").map((item) => item.kind)).toEqual([
       "review",
       "improve",
     ]);
+    expect(runtime.listMessageQuality("quality-answer").at(-1)?.resultContent).toBe(
+      "Answer with the missing detail",
+    );
     expect(runtime.listSessionMessageQuality(session.id)).toMatchObject({
       "quality-answer": [
         expect.objectContaining({ kind: "review", runId: review.id }),
@@ -1427,15 +1435,18 @@ describe("UmaRuntime preflight", () => {
     });
     expect(() => runtime.reviewMessage("quality-question")).toThrow("assistant message");
     const reset = runtime.improveMessage(revision?.id as string, { reset: true });
-    expect((await waitForRunTerminal(runtime, reset.id)).status).toBe("completed");
-    expect(
-      runtime
-        .getSnapshot(session.id)
-        .transcript.find((item) => item.runId === reset.id && item.role === "assistant"),
-    ).toMatchObject({
+    const resetRun = await waitForRunTerminal(runtime, reset.id);
+    expect(resetRun.status, resetRun.error).toBe("completed");
+    const resetRunResult = resetRun.resultMessageId
+      ? runtime.database.getMessage(resetRun.resultMessageId)
+      : undefined;
+    expect(resetRunResult).toMatchObject({
       content: "Reset improvement from original",
       parentMessageId: "quality-answer",
     });
+    expect(runtime.getSnapshot(session.id).transcript.map((item) => item.id)).not.toContain(
+      resetRunResult?.id,
+    );
     const noFeedbackReview = runtime.reviewMessage("quality-answer");
     expect((await waitForRunTerminal(runtime, noFeedbackReview.id)).status).toBe("completed");
   });

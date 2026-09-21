@@ -29,6 +29,28 @@ async function fixture() {
   return { root, path };
 }
 const upgrade = (path: string) => exec(process.execPath, [resolve("scripts/upgrade-state.mjs"), path]);
+const upgrade2627 = (path: string) =>
+  exec(process.execPath, [resolve("scripts/migrate-state-26-27.mjs"), path]);
+
+async function schema26Fixture() {
+  const root = await mkdtemp(join(tmpdir(), "uma-schema26-"));
+  roots.push(root);
+  const path = join(root, "state.db");
+  const schema = (await readFile(resolve("packages/core/src/schema.sql"), "utf8"))
+    .replace(
+      /\s*branch_revision INTEGER NOT NULL DEFAULT 1,\r?\n\s*queue_revision INTEGER NOT NULL DEFAULT 1,/,
+      "",
+    )
+    .replace(
+      /\s*branch_revision INTEGER NOT NULL DEFAULT 1,\r?\n\s*superseded_by_run_id TEXT REFERENCES runs\(id\) ON DELETE SET NULL,\r?\n\s*terminal_reason TEXT,/,
+      "",
+    )
+    .replace("PRAGMA user_version = 27;", "PRAGMA user_version = 26;");
+  const db = new DatabaseSync(path);
+  db.exec(schema);
+  db.close();
+  return { root, path };
+}
 
 it("upgrades once, preserves accounts and verifies a restorable schema24 backup", async () => {
   const { root, path } = await fixture();
@@ -79,4 +101,23 @@ it("refuses a live service lock and rolls back all DDL when the conversion fails
   } finally {
     db.close();
   }
+});
+
+it("migrates schema26 queue and branch revisions with a verified backup", async () => {
+  const { root, path } = await schema26Fixture();
+  const result = JSON.parse((await upgrade2627(path)).stdout);
+  const db = new DatabaseSync(path);
+  try {
+    expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(27);
+    expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+    expect(db.prepare("SELECT branch_revision,queue_revision FROM sessions").all()).toEqual([]);
+    expect(db.prepare("SELECT branch_revision,terminal_reason FROM runs").all()).toEqual([]);
+  } finally {
+    db.close();
+  }
+  const backup = new DatabaseSync(result.backup, { readOnly: true });
+  expect(backup.prepare("PRAGMA user_version").get()?.user_version).toBe(26);
+  backup.close();
+  await expect(upgrade2627(path)).rejects.toThrow("Only schema 26");
+  expect((await readdir(root)).filter((name) => name.endsWith(".backup"))).toHaveLength(1);
 });

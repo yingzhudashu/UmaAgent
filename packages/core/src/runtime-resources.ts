@@ -255,6 +255,7 @@ export class RuntimeResourceService {
         runId: run.id,
         status: run.status,
         ...(run.resultMessageId ? { resultMessageId: run.resultMessageId } : {}),
+        ...(run.resultContent !== undefined ? { resultContent: run.resultContent } : {}),
         ...(run.error ? { error: run.error } : {}),
         createdAt: run.createdAt,
         updatedAt: run.updatedAt,

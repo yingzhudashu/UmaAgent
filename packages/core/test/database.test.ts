@@ -68,6 +68,32 @@ describe("UmaDatabase", () => {
       db.close();
     }
   });
+  it("rejects stale queue reorder writes by revision", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-queue-revision-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    try {
+      const session = db.createSession({
+        title: "queue",
+        workspace: root,
+        model: modelSnapshot.ref,
+        thinkingLevel: "off",
+      });
+      const first = db.createRun(session.id, "queue-1", modelSnapshot, "off", "agent", "agent", {
+        queuePosition: 1,
+      }).run;
+      const second = db.createRun(session.id, "queue-2", modelSnapshot, "off", "agent", "agent", {
+        queuePosition: 2,
+      }).run;
+      const revision = db.getQueueRevision(session.id);
+      db.reorderQueuedRuns(session.id, [second.id, first.id], revision);
+      expect(() => db.reorderQueuedRuns(session.id, [first.id, second.id], revision)).toThrow(
+        "Queue revision conflict",
+      );
+    } finally {
+      db.close();
+    }
+  });
   it("coalesces token usage timestamps without caching expiry or revocation", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-auth-"));
     temporary.push(root);
@@ -145,11 +171,11 @@ describe("UmaDatabase", () => {
     },
   );
 
-  it("initializes the current schema directly at version 26", async () => {
+  it("initializes the current schema directly at version 27", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-schema-18-"));
     temporary.push(root);
     const db = testDatabase(root);
-    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(26);
+    expect(Number(db.db.prepare("PRAGMA user_version").get().user_version)).toBe(27);
     const tables = new Set(
       (
         db.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>

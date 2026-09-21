@@ -1,6 +1,6 @@
 # UmaAgent 架构与质量约束
 
-当前 Core 1.3.0，Android 1.4.0（14），Protocol v16，HTTP `/api/v16`，业务 schema 25。接口与数据库只支持当前版本；schema 24 通过显式离线工具升级，服务启动不执行迁移。
+当前 Core 1.3.0，Android 1.4.1（15），Protocol v16，HTTP `/api/v16`，业务 schema 27。接口与数据库只支持当前版本；schema 26 通过显式离线工具升级，服务启动不执行迁移。
 
 ## 职责与事实源
 

@@ -8,6 +8,7 @@ export interface MessageQualityHistory {
   runId: string;
   status: Run["status"];
   resultMessageId?: string;
+  resultContent?: string;
   error?: string;
   createdAt: number;
   updatedAt: number;

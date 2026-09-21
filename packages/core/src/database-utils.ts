@@ -89,6 +89,8 @@ export function toSession(value: Row): Session {
     thinkingLevel: text(value.thinking_level) as ThinkingLevel,
     queueMode: text(value.queue_mode || "queue") as Session["queueMode"],
     ...(value.active_branch_id ? { activeBranchId: text(value.active_branch_id) } : {}),
+    branchRevision: integer(value.branch_revision || 1),
+    queueRevision: integer(value.queue_revision || 1),
     createdAt: integer(value.created_at),
     updatedAt: integer(value.updated_at),
   };

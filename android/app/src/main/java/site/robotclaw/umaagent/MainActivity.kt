@@ -780,7 +780,15 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         val client = api ?: return
         state.value = state.value.copy(loading = true, error = "")
         viewModelScope.launch {
-            runRequestCatching { client.reorderQueue(sessionId, normalized) }
+            runRequestCatching {
+                client.reorderQueue(
+                    sessionId,
+                    normalized,
+                    state.value.queue.firstOrNull()?.queueRevision
+                        ?: state.value.sessions.firstOrNull { it.id == sessionId }?.queueRevision
+                        ?: 1,
+                )
+            }
                 .onSuccess { queue ->
                     if (api !== client || state.value.selectedSessionId != sessionId)
                         return@onSuccess

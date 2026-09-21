@@ -107,6 +107,7 @@ export class UmaRuntime {
   readonly optimizationExecution: RuntimeOptimizationExecutionService;
   private readonly resources: RuntimeResourceService;
   private readonly shortcuts: RuntimeShortcutService;
+  /** Controllers are keyed by runId; a session can have a quality run and an agent run in flight. */
   private readonly controllers = new Map<string, AbortController>();
   private readonly preemptedRuns = new Set<string>();
   private readonly approvals: RunApprovals;
@@ -249,7 +250,6 @@ export class UmaRuntime {
       (runId) => this.database.addAudit({ runId, kind: "run", name: "restart_recovery", status: "started" }),
     );
   }
-
   async stop(): Promise<void> {
     this.stopPromise ??= this.stopInternal();
     return this.stopPromise;
@@ -269,7 +269,6 @@ export class UmaRuntime {
     this.stateLock.release();
     this.started = false;
   }
-
   health(): RuntimeHealth {
     return {
       activeRuns: this.orchestrator.activeCount(),
@@ -277,7 +276,6 @@ export class UmaRuntime {
       databaseReady: this.database.isReady(),
     };
   }
-
   async reloadConfig(next: UmaConfig): Promise<ReloadResult> {
     const applied: string[] = [];
     const restartRequired: string[] = [];
@@ -415,7 +413,6 @@ export class UmaRuntime {
   listEvaluationReports(limit?: number) {
     return this.resources.listEvaluationReports(limit);
   }
-
   listEvaluationTrends(from: number, to: number, groupBy: "day" | "suite" | "mode"): EvaluationTrend[] {
     return this.resources.listEvaluationTrends(from, to, groupBy);
   }
@@ -508,7 +505,6 @@ export class UmaRuntime {
     );
     return resumed;
   }
-
   confirmPlan(runId: string): Run {
     const run = this.database.getRun(runId);
     if (run.status !== "awaiting_confirmation") throw new Error("Run is not awaiting plan confirmation");
@@ -578,7 +574,6 @@ export class UmaRuntime {
     }
     return this.executePreparedAction(run, action);
   }
-
   async compactSession(sessionId: string): Promise<{ throughSequence: number; content: string }> {
     const session = this.database.getSession(sessionId);
     const result = await this.contextManager.compact(
@@ -769,7 +764,6 @@ export class UmaRuntime {
   getAgentProfile(userId = "system"): AgentProfile {
     return this.resources.getAgentProfile(userId);
   }
-
   updateAgentProfile(content: string, userId = "system"): AgentProfile {
     return this.resources.updateAgentProfile(content, userId);
   }
@@ -779,7 +773,6 @@ export class UmaRuntime {
   listActivity(sessionId: string, limit?: number): Array<Record<string, unknown>> {
     return this.resources.listActivity(sessionId, limit);
   }
-
   listOptimizationProposals(): OptimizationProposal[] {
     return this.resources.listOptimizationProposals();
   }
@@ -789,7 +782,6 @@ export class UmaRuntime {
   decideOptimizationProposal(id: string, status: "accepted" | "rejected"): OptimizationProposal {
     return this.resources.decideOptimizationProposal(id, status);
   }
-
   executeShortcut(
     sessionId: string,
     command: string,
@@ -798,11 +790,9 @@ export class UmaRuntime {
   ) {
     return this.shortcuts.execute(sessionId, command, ownerId, reloadConfig);
   }
-
   listQualityAssessments(runId: string): QualityAssessment[] {
     return this.resources.listQualityAssessments(runId);
   }
-
   listMessageQuality(messageId: string) {
     return this.resources.listMessageQuality(messageId);
   }
@@ -1009,7 +999,8 @@ export class UmaRuntime {
   }
 
   deleteSession(id: string): void {
-    if (this.controllers.has(id)) throw new Error("Cannot delete a session with an active run");
+    if ([...this.controllers.keys()].some((runId) => this.database.getRun(runId).sessionId === id))
+      throw new Error("Cannot delete a session with an active run");
     this.database.deleteSession(id);
   }
 
@@ -1044,10 +1035,15 @@ export class UmaRuntime {
       throw new Error("Clarification limit exceeded; send a new message to start another run");
     }
     const continuation = awaiting && (awaiting.clarificationCount ?? 0) < 3 ? awaiting : undefined;
+    const supersededRunIds: string[] = [];
     if (!continuation && session.queueMode === "preemptive") {
       const active = this.database
         .listRuns(sessionId)
-        .find((candidate) => ["preflight", "running", "verifying"].includes(candidate.status));
+        .find((candidate) =>
+          ["preflight", "awaiting_input", "awaiting_confirmation", "running", "verifying"].includes(
+            candidate.status,
+          ),
+        );
       if (active) {
         this.events.transaction(() => {
           const pending = this.database.interruptRunActions(
@@ -1057,13 +1053,16 @@ export class UmaRuntime {
           for (const action of pending) this.events.emit(sessionId, active.id, "run.action_prepared", action);
         });
         this.preemptedRuns.add(active.id);
+        supersededRunIds.push(active.id);
       }
-      this.controllers.get(sessionId)?.abort();
+      if (active) this.controllers.get(active.id)?.abort();
       for (const queued of this.database.listQueuedRuns(sessionId)) {
+        supersededRunIds.push(queued.id);
         this.events.transaction(() => {
           const cancelled = this.database.updateRun(queued.id, {
             status: "cancelled",
             error: "Superseded by a newer message",
+            terminalReason: "superseded",
           });
           this.events.emit(sessionId, queued.id, "run.updated", cancelled);
         });
@@ -1081,7 +1080,10 @@ export class UmaRuntime {
             session.thinkingLevel,
             "agent",
             input.mode,
-            { queuePosition: this.database.listQueuedRuns(sessionId).length + 1 },
+            {
+              queuePosition: this.database.listQueuedRuns(sessionId).length + 1,
+              branchRevision: session.branchRevision,
+            },
           );
       if (!result.created) return result;
       const activeBranchId = this.database.getSession(sessionId).activeBranchId;
@@ -1106,6 +1108,7 @@ export class UmaRuntime {
         this.database.db
           .prepare("UPDATE conversation_branches SET head_message_id=?,updated_at=? WHERE id=?")
           .run(input.messageId, Date.now(), activeBranchId);
+      this.database.bumpBranchRevision(sessionId);
       const response = continuation
         ? this.database.responseForRun(result.run.id)
         : this.database.createResponse({
@@ -1135,6 +1138,13 @@ export class UmaRuntime {
         this.database.getMessage(input.messageId),
       );
       if (response) this.events.emit(sessionId, result.run.id, "response.started", response);
+      for (const supersededId of supersededRunIds) {
+        const superseded = this.database.updateRun(supersededId, {
+          supersededByRunId: result.run.id,
+          terminalReason: "superseded",
+        });
+        this.events.emit(sessionId, supersededId, "run.updated", superseded);
+      }
       return result;
     });
     if (!created) return run;
@@ -1170,6 +1180,8 @@ export class UmaRuntime {
     if (!owner || owner.sessionId !== sessionId) throw new Error("Message does not belong to session");
     if (original.role !== "user") throw new Error("Only user messages can be edited");
     if (original.status !== "complete") throw new Error("Only completed messages can be edited");
+    if (!this.database.listMessages(sessionId).some((item) => item.id === messageId))
+      throw new Error("Only messages on the active conversation path can be edited");
     const originalRun = original.runId ? this.database.getRun(original.runId) : undefined;
     if (originalRun?.status === "queued") {
       this.events.transaction(() => {
@@ -1197,13 +1209,12 @@ export class UmaRuntime {
           now,
         );
       this.database.db
-        .prepare(
-          "INSERT INTO conversation_branch_forks(branch_id,source_message_id) VALUES(?,?)",
-        )
+        .prepare("INSERT INTO conversation_branch_forks(branch_id,source_message_id) VALUES(?,?)")
         .run(branchId, original.id);
       this.database.db
         .prepare("UPDATE sessions SET active_branch_id=?,updated_at=? WHERE id=?")
         .run(branchId, now, sessionId);
+      this.database.bumpBranchRevision(sessionId);
       return this.sendMessage(
         sessionId,
         {
@@ -1218,18 +1229,20 @@ export class UmaRuntime {
   }
 
   listQueue(sessionId: string) {
+    const queueRevision = this.database.getQueueRevision(sessionId);
     return this.database.listQueuedRuns(sessionId).flatMap((run, index) => {
       try {
-        return [{ run, message: this.database.getMessage(run.messageId), position: index + 1 }];
+        return [
+          { run, message: this.database.getMessage(run.messageId), position: index + 1, queueRevision },
+        ];
       } catch {
         return [];
       }
     });
   }
-
-  reorderQueue(sessionId: string, runIds: string[]) {
+  reorderQueue(sessionId: string, runIds: string[], queueRevision: number) {
     return this.events.transaction(() => {
-      const runs = this.database.reorderQueuedRuns(sessionId, runIds);
+      const runs = this.database.reorderQueuedRuns(sessionId, runIds, queueRevision);
       this.orchestrator.reorder(sessionId, runIds);
       this.events.emit(sessionId, undefined, "queue.updated", runs);
       return this.listQueue(sessionId);
@@ -1262,7 +1275,10 @@ export class UmaRuntime {
   }
 
   cancel(sessionId: string): void {
-    const controller = this.controllers.get(sessionId);
+    const controller = [...this.controllers.entries()].find(([runId]) => {
+      const run = this.database.getRun(runId);
+      return run.sessionId === sessionId && ["agent", "command"].includes(run.kind);
+    })?.[1];
     if (!controller) throw new Error("Session has no active run");
     controller.abort();
   }
@@ -1288,7 +1304,7 @@ export class UmaRuntime {
         return cancelled;
       });
     }
-    const controller = this.controllers.get(run.sessionId);
+    const controller = this.controllers.get(runId);
     if (controller) {
       controller.abort();
       return this.database.getRun(runId);
@@ -1416,7 +1432,7 @@ export class UmaRuntime {
         return;
       }
       controller = new AbortController();
-      this.controllers.set(sessionAtQueueTime.id, controller);
+      this.controllers.set(runId, controller);
       const storedSession = this.database.getSession(sessionAtQueueTime.id);
       const frozenRun = this.database.getRun(runId);
       const session: Session = {
@@ -1717,7 +1733,7 @@ export class UmaRuntime {
         rootTrace.finish();
       } finally {
         this.activeTraces.delete(runId);
-        this.controllers.delete(sessionAtQueueTime.id);
+        if (this.controllers.get(runId) === controller) this.controllers.delete(runId);
         release?.();
       }
     }

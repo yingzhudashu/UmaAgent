@@ -439,7 +439,7 @@ export async function createServer(
       if (!Value.Check(QueueReorderRequestSchema, request.body))
         throw new Error("Invalid queue reorder request");
       requireSessionOwner(request, request.params.id);
-      return runtime.reorderQueue(request.params.id, request.body.runIds);
+      return runtime.reorderQueue(request.params.id, request.body.runIds, request.body.queueRevision);
     },
   );
   app.get<{ Params: { id: string } }>("/api/v16/sessions/:id/queue", async (request) =>

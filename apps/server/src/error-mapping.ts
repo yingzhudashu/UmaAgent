@@ -12,7 +12,7 @@ export function mapServerError(
   );
   const notFound = /not found/i.test(error.message);
   const conflict =
-    /(already|not pending|not cancellable|active run|only interrupted|requiring confirmation)/i.test(
+    /(already|not pending|not cancellable|active run|only interrupted|requiring confirmation|queue revision conflict|queue changed)/i.test(
       error.message,
     );
   const providerContract = /provider contract/i.test(error.message);
@@ -22,7 +22,7 @@ export function mapServerError(
   const xianyuAdminRequired = /xianyu administrator access required/i.test(error.message);
   const forbidden = /administrator access|required permission|forbidden/i.test(error.message);
   const validation =
-    /(invalid|required|must |unsupported|outside|escapes|exceeds|unavailable|does not support|belongs to another session)/i.test(
+    /(invalid|required|must |unsupported|outside|escapes|exceeds|unavailable|does not support|belongs to another session|active conversation path)/i.test(
       error.message,
     );
   const code = schemaMismatch

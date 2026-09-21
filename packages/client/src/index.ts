@@ -614,10 +614,11 @@ export class UmaClient {
   reorderQueue(
     sessionId: string,
     runIds: string[],
+    queueRevision: number,
   ): Promise<import("@uma-agent/protocol").SessionSnapshot["queue"]> {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/queue/reorder`, {
       method: "POST",
-      body: JSON.stringify({ runIds }),
+      body: JSON.stringify({ runIds, queueRevision }),
     });
   }
   prioritizeRun(runId: string): Promise<import("@uma-agent/protocol").Run> {

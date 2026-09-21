@@ -33,7 +33,8 @@ export async function loadQualityHistory(
       .reverse()
       .find((item) => ["completed", "failed", "cancelled", "interrupted"].includes(item.status));
     if (!latest) continue;
-    const result = transcript.find((item) => item.id === latest.resultMessageId)?.content;
+    const result =
+      latest.resultContent ?? transcript.find((item) => item.id === latest.resultMessageId)?.content;
     restored[message.id] = {
       kind: latest.kind,
       status: latest.status === "completed" ? "completed" : "failed",

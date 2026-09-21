@@ -126,26 +126,38 @@ export class MessageRepository {
       ),
       sessionId,
     );
-    const branched = branch?.head_message_id && text(branch.name) !== "主分支";
-    const forkSourceMessageId = branch?.fork_source_message_id ? text(branch.fork_source_message_id) : undefined;
+    const branched = Boolean(branch?.head_message_id);
+    const forkSourceMessageId = branch?.fork_source_message_id
+      ? text(branch.fork_source_message_id)
+      : undefined;
     // UNION 去重保证异常祖先环不会无限递归；每一步都约束 session_id。
     const ancestry = branched
-      ? `WITH RECURSIVE ancestry(id,parent_message_id,run_id,sequence) AS (
+      ? `WITH RECURSIVE active_path(id,parent_message_id,run_id,sequence) AS (
       SELECT id,parent_message_id,run_id,sequence FROM messages WHERE id=? AND session_id=?
-      UNION SELECT p.id,p.parent_message_id,p.run_id,p.sequence FROM messages p JOIN ancestry a ON p.id=a.parent_message_id WHERE p.session_id=?
+      UNION SELECT p.id,p.parent_message_id,p.run_id,p.sequence FROM messages p JOIN active_path a ON p.id=a.parent_message_id WHERE p.session_id=?
+    ), prefix_path(id,parent_message_id,run_id,sequence) AS (
+      SELECT m.id,m.parent_message_id,m.run_id,m.sequence
+      FROM messages m
+      WHERE m.id=(SELECT parent_message_id FROM messages WHERE id=? AND session_id=?)
+      UNION SELECT p.id,p.parent_message_id,p.run_id,p.sequence FROM messages p JOIN prefix_path a ON p.id=a.parent_message_id WHERE p.session_id=?
     ) `
       : "";
     const conditions = ["session_id=?"];
     const args: Array<string | number> = branched
-      ? [text(branch.head_message_id), sessionId, sessionId, sessionId, ...(forkSourceMessageId ? [forkSourceMessageId, sessionId] : [])]
+      ? [
+          text(branch?.head_message_id),
+          sessionId,
+          sessionId,
+          forkSourceMessageId ?? "",
+          sessionId,
+          sessionId,
+          sessionId,
+        ]
       : [sessionId];
     if (branched) {
-      const prefix = forkSourceMessageId
-        ? "sequence < (SELECT sequence FROM messages WHERE id=? AND session_id=?)"
-        : "sequence < (SELECT MIN(sequence) FROM ancestry)";
-      conditions.push(`(${prefix}
-      OR id IN (SELECT id FROM ancestry) OR run_id IN (SELECT run_id FROM ancestry)
-      OR run_id IN (SELECT id FROM runs WHERE target_message_id IN (SELECT id FROM ancestry) AND kind IN ('review','improve')))`);
+      conditions.push(`(
+      id IN (SELECT id FROM active_path) OR run_id IN (SELECT run_id FROM active_path)
+      OR id IN (SELECT id FROM prefix_path) OR run_id IN (SELECT run_id FROM prefix_path))`);
     }
     if (options.beforeSequence !== undefined) {
       conditions.push("sequence < ?");

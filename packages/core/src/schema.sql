@@ -45,6 +45,8 @@ CREATE TABLE sessions (
   thinking_level TEXT NOT NULL,
   queue_mode TEXT NOT NULL DEFAULT 'queue' CHECK (queue_mode IN ('queue','preemptive')),
   active_branch_id TEXT,
+  branch_revision INTEGER NOT NULL DEFAULT 1,
+  queue_revision INTEGER NOT NULL DEFAULT 1,
   next_sequence INTEGER NOT NULL DEFAULT 1,
   next_event_sequence INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
@@ -57,6 +59,9 @@ CREATE TABLE runs (
   message_id TEXT NOT NULL UNIQUE,
   target_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
   result_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  branch_revision INTEGER NOT NULL DEFAULT 1,
+  superseded_by_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+  terminal_reason TEXT,
   queue_position INTEGER,
   interaction_mode TEXT NOT NULL CHECK (interaction_mode IN ('plan','agent')),
   kind TEXT NOT NULL DEFAULT 'agent' CHECK (kind IN ('agent','review','improve','command')),
@@ -569,4 +574,4 @@ CREATE TABLE channel_deliveries (
 );
 CREATE INDEX channel_deliveries_session_status ON channel_deliveries(session_id,status,updated_at DESC);
 
-PRAGMA user_version = 26;
+PRAGMA user_version = 27;

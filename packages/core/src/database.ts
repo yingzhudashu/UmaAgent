@@ -61,7 +61,10 @@ import {
   toScheduledTaskRun,
 } from "./database-utils.js";
 import { ExecutionPolicyRepository } from "./execution-policy-repository.js";
+import { serializeUpdatedMessagePayload } from "./message-payload.js";
 import { MessageRepository } from "./message-repository.js";
+import { QualityHistoryRepository } from "./quality-history-repository.js";
+import { QueueStateRepository } from "./queue-state.js";
 import { ResponseRepository } from "./response-repository.js";
 import { findRestartRecoverableRuns, SERVER_RESTART_ERROR } from "./run-recovery.js";
 import { validateSchema } from "./schema-validation.js";
@@ -69,7 +72,7 @@ import { SessionRepository } from "./session-repository.js";
 import { prepareStatement } from "./sql-statements.js";
 import type { ContextSummary, StoredAgentMessage } from "./types.js";
 
-const SCHEMA_VERSION = 26;
+const SCHEMA_VERSION = 27;
 export class UmaDatabase {
   readonly db: DatabaseSync;
   readonly stateDir: string;
@@ -78,6 +81,8 @@ export class UmaDatabase {
   private readonly responses: ResponseRepository;
   private readonly messages: MessageRepository;
   private readonly sessions: SessionRepository;
+  private readonly queueState: QueueStateRepository;
+  private readonly qualityHistory: QualityHistoryRepository;
   private transactionDepth = 0;
 
   constructor(stateDir: string) {
@@ -88,6 +93,8 @@ export class UmaDatabase {
     this.responses = new ResponseRepository(this.db);
     this.messages = new MessageRepository(this.db);
     this.sessions = new SessionRepository(this.db);
+    this.queueState = new QueueStateRepository(this.db);
+    this.qualityHistory = new QualityHistoryRepository(this.db);
     // 两个库各预留约 1.4 MiB 的 WAL；为单次事务越过 checkpoint 阈值留下余量。
     this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA wal_autocheckpoint = 350;");
     const version = integer(row(prepareStatement(this.db, "PRAGMA user_version"))?.user_version);
@@ -807,17 +814,14 @@ export class UmaDatabase {
   ): TranscriptItem {
     const current = row(prepareStatement(this.db, "SELECT * FROM messages WHERE id=?"), id);
     if (!current) throw new Error(`Message not found: ${id}`);
+    const payload = serializeUpdatedMessagePayload(current, patch);
     prepareStatement(
       this.db,
       "UPDATE messages SET content=?, status=?, payload_json=?, updated_at=? WHERE id=?",
     ).run(
       patch.content ?? text(current.content),
       patch.status ?? text(current.status),
-      patch.payload
-        ? JSON.stringify(patch.payload)
-        : current.payload_json
-          ? text(current.payload_json)
-          : null,
+      payload,
       Date.now(),
       id,
     );
@@ -888,7 +892,7 @@ export class UmaDatabase {
     thinkingLevel: Run["thinkingLevel"],
     kind: Run["kind"],
     interactionMode: Run["interactionMode"],
-    options: { targetMessageId?: string; queuePosition?: number } = {},
+    options: { targetMessageId?: string; queuePosition?: number; branchRevision?: number } = {},
   ): { run: Run; created: boolean } {
     const existing = row(
       prepareStatement(this.db, "SELECT id,session_id FROM runs WHERE message_id=?"),
@@ -903,7 +907,7 @@ export class UmaDatabase {
     const now = Date.now();
     prepareStatement(
       this.db,
-      "INSERT INTO runs(id,session_id,message_id,target_message_id,interaction_mode,kind,status,phase,model_snapshot_json,thinking_level,queue_position,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO runs(id,session_id,message_id,target_message_id,interaction_mode,kind,status,phase,model_snapshot_json,thinking_level,queue_position,branch_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     ).run(
       id,
       sessionId,
@@ -916,9 +920,11 @@ export class UmaDatabase {
       JSON.stringify(model),
       thinkingLevel,
       options.queuePosition ?? null,
+      options.branchRevision ?? this.getSession(sessionId).branchRevision,
       now,
       now,
     );
+    if (options.queuePosition !== undefined) this.queueState.bumpQueueRevision(sessionId);
     return { run: this.getRun(id), created: true };
   }
 
@@ -940,8 +946,11 @@ export class UmaDatabase {
       targetMessageId?: string | null;
       resultMessageId?: string | null;
       queuePosition?: number | null;
+      supersededByRunId?: string | null;
+      terminalReason?: string | null;
     },
   ): Run {
+    const before = this.getRun(id);
     // 未提供的字段由 SQLite 原位保留，避免每次状态推进读取并解析完整模型、计划与恢复信息。
     // 可清空字段另传 presence 标记，严格区分 undefined（保留）与 null（清空）。
     const result = prepareStatement(
@@ -954,7 +963,9 @@ export class UmaDatabase {
       error=CASE WHEN ? THEN ? ELSE error END,clarification_count=COALESCE(?,clarification_count),
       target_message_id=CASE WHEN ? THEN ? ELSE target_message_id END,
       result_message_id=CASE WHEN ? THEN ? ELSE result_message_id END,
-      queue_position=CASE WHEN ? THEN ? ELSE queue_position END,updated_at=? WHERE id=?`,
+      queue_position=CASE WHEN ? THEN ? ELSE queue_position END,
+      superseded_by_run_id=CASE WHEN ? THEN ? ELSE superseded_by_run_id END,
+      terminal_reason=CASE WHEN ? THEN ? ELSE terminal_reason END,updated_at=? WHERE id=?`,
     ).run(
       patch.status ?? null,
       patch.phase ?? null,
@@ -975,11 +986,24 @@ export class UmaDatabase {
       patch.resultMessageId ?? null,
       Number(patch.queuePosition !== undefined),
       patch.queuePosition ?? null,
+      Number(patch.supersededByRunId !== undefined),
+      patch.supersededByRunId ?? null,
+      Number(patch.terminalReason !== undefined),
+      patch.terminalReason ?? null,
       Date.now(),
       id,
     );
     if (!result.changes) throw new Error(`Run not found: ${id}`);
+    if (patch.queuePosition !== undefined || patch.status === "queued" || before.status === "queued") {
+      this.queueState.bumpQueueRevision(before.sessionId);
+    }
     return this.getRun(id);
+  }
+  getQueueRevision(sessionId: string): number {
+    return this.queueState.getQueueRevision(sessionId);
+  }
+  bumpBranchRevision(sessionId: string): number {
+    return this.queueState.bumpBranchRevision(sessionId);
   }
 
   setRunKind(id: string, kind: Run["kind"]): Run {
@@ -1029,6 +1053,9 @@ export class UmaDatabase {
       messageId: text(value.message_id),
       ...(value.target_message_id ? { targetMessageId: text(value.target_message_id) } : {}),
       ...(value.result_message_id ? { resultMessageId: text(value.result_message_id) } : {}),
+      branchRevision: integer(value.branch_revision || 1),
+      ...(value.superseded_by_run_id ? { supersededByRunId: text(value.superseded_by_run_id) } : {}),
+      ...(value.terminal_reason ? { terminalReason: text(value.terminal_reason) } : {}),
       ...(value.queue_position !== null && value.queue_position !== undefined
         ? { queuePosition: integer(value.queue_position) }
         : {}),
@@ -1362,32 +1389,20 @@ export class UmaDatabase {
     );
     return value ? this.getRun(text(value.id)) : undefined;
   }
-
-  reorderQueuedRuns(sessionId: string, runIds: string[]): Run[] {
-    const current = this.listQueuedRuns(sessionId);
-    const expected = current.map((run) => run.id);
-    if (expected.length !== runIds.length || expected.some((id) => !runIds.includes(id)))
-      throw new Error("Queue changed; reload the session snapshot");
-    const update = prepareStatement(
-      this.db,
-      "UPDATE runs SET queue_position=?,updated_at=? WHERE id=? AND session_id=? AND status='queued'",
+  reorderQueuedRuns(sessionId: string, runIds: string[], expectedRevision: number): Run[] {
+    return this.queueState.reorderQueuedRuns(sessionId, runIds, expectedRevision, () =>
+      this.listQueuedRuns(sessionId),
     );
-    runIds.forEach((id, index) => {
-      update.run(index + 1, Date.now(), id, sessionId);
-    });
-    return this.listQueuedRuns(sessionId);
   }
 
   prioritizeQueuedRun(runId: string): Run {
     const run = this.getRun(runId);
     if (run.status !== "queued") throw new Error("Only queued runs can be prioritized");
-    const queued = this.listQueuedRuns(run.sessionId).filter((item) => item.id !== runId);
-    const update = prepareStatement(this.db, "UPDATE runs SET queue_position=?,updated_at=? WHERE id=?");
-    update.run(1, Date.now(), runId);
-    queued.forEach((item, index) => {
-      update.run(index + 2, Date.now(), item.id);
-    });
-    return this.getRun(runId);
+    return this.queueState.prioritizeQueuedRun(
+      run,
+      () => this.listQueuedRuns(run.sessionId),
+      (id) => this.getRun(id),
+    );
   }
 
   listPendingApprovals(sessionId: string): Approval[] {
@@ -1430,7 +1445,16 @@ export class UmaDatabase {
       branches: this.listBranches(sessionId),
       queue: this.listQueuedRuns(sessionId).flatMap((run, index) => {
         const value = row(prepareStatement(this.db, "SELECT id FROM messages WHERE id=?"), run.messageId);
-        return value ? [{ run, message: this.getMessage(run.messageId), position: index + 1 }] : [];
+        return value
+          ? [
+              {
+                run,
+                message: this.getMessage(run.messageId),
+                position: index + 1,
+                queueRevision: this.getQueueRevision(sessionId),
+              },
+            ]
+          : [];
       }),
     };
   }
@@ -2462,31 +2486,8 @@ export class UmaDatabase {
       messageId,
     ).flatMap((value) => this.listQualityAssessments(text(value.run_id)));
   }
-
-  listQualityRunsForMessage(messageId: string): Array<{
-    id: string;
-    kind: "review" | "improve";
-    status: Run["status"];
-    resultMessageId?: string;
-    error?: string;
-    createdAt: number;
-    updatedAt: number;
-  }> {
-    return rows(
-      prepareStatement(
-        this.db,
-        "SELECT id,kind,status,result_message_id,error,created_at,updated_at FROM runs WHERE target_message_id=? AND kind IN ('review','improve') ORDER BY created_at,id",
-      ),
-      messageId,
-    ).map((value) => ({
-      id: text(value.id),
-      kind: text(value.kind) as "review" | "improve",
-      status: text(value.status) as Run["status"],
-      ...(value.result_message_id ? { resultMessageId: text(value.result_message_id) } : {}),
-      ...(value.error ? { error: text(value.error) } : {}),
-      createdAt: integer(value.created_at),
-      updatedAt: integer(value.updated_at),
-    }));
+  listQualityRunsForMessage(messageId: string) {
+    return this.qualityHistory.listForMessage(messageId);
   }
 
   listActivity(sessionId: string, limit = 200): Array<Record<string, unknown>> {

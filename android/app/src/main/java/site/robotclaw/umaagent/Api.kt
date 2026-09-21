@@ -38,6 +38,8 @@ data class Session(
     val assistantName: String = "UmaAgent",
     val assistantAvatarAttachmentId: String? = null,
     val queueMode: String = "queue",
+    val branchRevision: Long = 1,
+    val queueRevision: Long = 1,
     val model: ModelReference = ModelReference(),
 )
 
@@ -634,7 +636,7 @@ class UmaApi(
     suspend fun queue(sessionId: String): JsonElement =
         getJson("/sessions/${encode(sessionId)}/queue")
 
-    suspend fun reorderQueue(sessionId: String, runIds: List<String>): JsonElement =
+    suspend fun reorderQueue(sessionId: String, runIds: List<String>, queueRevision: Long = 1): JsonElement =
         postJson(
             "/sessions/${encode(sessionId)}/queue/reorder",
             kotlinx.serialization.json.buildJsonObject {
@@ -644,6 +646,7 @@ class UmaApi(
                         runIds.forEach { add(JsonPrimitive(it)) }
                     },
                 )
+                put("queueRevision", queueRevision)
             },
         )
 

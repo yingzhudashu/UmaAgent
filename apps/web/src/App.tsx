@@ -1007,7 +1007,11 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
               disabled={offline}
               reorder={async (runIds) => {
                 if (!selected) return;
-                await client.reorderQueue(selected, runIds);
+                await client.reorderQueue(
+                  selected,
+                  runIds,
+                  queue.data?.[0]?.queueRevision ?? snapshot.data?.session.queueRevision ?? 1,
+                );
                 await queue.refetch();
               }}
               prioritize={async (runId) => {

@@ -101,7 +101,7 @@ export class RuntimeCommandOperations {
         return;
       }
       controller = new AbortController();
-      deps.controllers.set(session.id, controller);
+      deps.controllers.set(runId, controller);
       const toolCallId = randomUUID();
       deps.transitionRun(session.id, runId, { status: "running", phase: "execute", error: null });
       const action = deps.events.transaction(() => {
@@ -204,7 +204,7 @@ export class RuntimeCommandOperations {
     } finally {
       rootTrace.finish();
       deps.activeTraces.delete(runId);
-      deps.controllers.delete(session.id);
+      if (deps.controllers.get(runId) === controller) deps.controllers.delete(runId);
       release?.();
     }
   }
