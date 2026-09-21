@@ -272,6 +272,79 @@ describe("UmaRuntime preflight", () => {
     await waitForRunTerminal(runtime, edited.id);
   });
 
+  it("completes an unchanged edit rerun after compaction with stale cached token usage", async () => {
+    const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("rerun answer")]);
+    const session = await runtime.createSession();
+    const oldRun = runtime.database.createRun(
+      session.id,
+      "earlier-request",
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+      "agent",
+      "agent",
+    ).run;
+    runtime.database.updateRun(oldRun.id, { status: "completed" });
+    const earlier = runtime.database.insertMessage({
+      id: oldRun.messageId,
+      sessionId: session.id,
+      runId: oldRun.id,
+      role: "user",
+      status: "complete",
+      content: "earlier request",
+    });
+    const answer = fauxAssistantMessage("retained answer");
+    answer.usage = {
+      input: 764,
+      output: 2150,
+      cacheRead: 431232,
+      cacheWrite: 0,
+      totalTokens: 434146,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const retained = runtime.database.insertMessage({
+      sessionId: session.id,
+      runId: oldRun.id,
+      role: "assistant",
+      status: "complete",
+      content: "retained answer",
+      payload: answer,
+    });
+    runtime.database.putContextSummary(session.id, earlier.sequence, "Earlier history summary");
+    const failed = runtime.database.createRun(
+      session.id,
+      "failed-request",
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+      "agent",
+      "agent",
+    ).run;
+    runtime.database.updateRun(failed.id, { status: "failed" });
+    runtime.database.insertMessage({
+      id: failed.messageId,
+      sessionId: session.id,
+      runId: failed.id,
+      role: "user",
+      status: "complete",
+      content: "unchanged question",
+      parentMessageId: earlier.id,
+    });
+    const branch = runtime.database.listBranches(session.id).find((item) => item.active);
+    runtime.database.db
+      .prepare("UPDATE conversation_branches SET head_message_id=? WHERE id=?")
+      .run(failed.messageId, branch?.id);
+    const edited = runtime.editMessage(session.id, failed.messageId, "unchanged question");
+    const terminal = await waitForRunTerminal(runtime, edited.id);
+    expect(terminal.status, terminal.error).toBe("completed");
+    expect(runtime.getSnapshot(session.id).transcript.at(-1)?.content).toBe("rerun answer");
+    expect(runtime.database.listMessages(session.id).some((item) => item.id === failed.messageId)).toBe(
+      false,
+    );
+    const persisted = runtime.database.db
+      .prepare("SELECT payload_json FROM messages WHERE id=?")
+      .get(retained.id);
+    expect(JSON.parse(String(persisted?.payload_json)).usage.totalTokens).toBe(434146);
+  });
+
   it("editing the root message hides the entire replaced suffix", async () => {
     const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("root edited answer")]);
     const session = await runtime.createSession();
