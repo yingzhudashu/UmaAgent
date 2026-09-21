@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前 Core 版本为 `1.3.0`，Android 客户端版本为 `1.4.0`（versionCode `14`），协议版本为 `16`，SQLite schema 为 `25`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前 Core 版本为 `1.3.0`，Android 客户端版本为 `1.4.2`（versionCode `16`），协议版本为 `16`，SQLite schema 为 `27`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -129,7 +129,7 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 - 非回环 HTTP MCP 应设置 `authTokenEnv`，Core 从该环境变量注入 Bearer Token
 - `runtime.maxParallelSessions`：跨会话并发上限；单会话默认 FIFO，也可在 Session 上设为安全抢占模式
 
-数据库只接受当前 `PRAGMA user_version`。版本不匹配会拒绝启动。schema 24 数据库先停机，再运行 `node scripts/upgrade-state.mjs <state.db>`；工具自动备份并校验完整性。运行时无兼容层，其他旧格式不支持。
+数据库只接受当前 `PRAGMA user_version`。版本不匹配会拒绝启动。schema 26 数据库先停机，再运行 `node scripts/migrate-state-26-27.mjs <state.db>`；工具自动备份并校验完整性。运行时无兼容层，其他旧格式不支持。
 
 ## API 摘要
 

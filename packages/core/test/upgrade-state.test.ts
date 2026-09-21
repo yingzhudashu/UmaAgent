@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { lock } from "proper-lockfile";
 import { afterEach, expect, it } from "vitest";
+import { MessageRepository } from "../src/message-repository.js";
 
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -120,4 +121,42 @@ it("migrates schema26 queue and branch revisions with a verified backup", async 
   backup.close();
   await expect(upgrade2627(path)).rejects.toThrow("Only schema 26");
   expect((await readdir(root)).filter((name) => name.endsWith(".backup"))).toHaveLength(1);
+});
+
+it("migrates explicit legacy replacement edges while preserving the common prefix and old branch", async () => {
+  const { path } = await schema26Fixture();
+  const source = new DatabaseSync(path);
+  source.exec(`INSERT INTO sessions(id,user_id,title,model_provider,model_id,thinking_level,created_at,updated_at)
+    VALUES('s','system','test','test','test','off',1,1);
+    INSERT INTO messages(id,session_id,sequence,role,status,content,parent_message_id,created_at,updated_at) VALUES
+      ('prefix','s',1,'user','complete','prefix',NULL,1,1),
+      ('old','s',2,'user','complete','old','prefix',2,2),
+      ('replacement','s',3,'user','complete','replacement','old',3,3),
+      ('followup','s',4,'user','complete','followup','replacement',4,4);
+    INSERT INTO conversation_branches(id,session_id,name,head_message_id,created_at,updated_at)
+      VALUES('edit','s','edit','followup',3,4);
+    INSERT INTO conversation_branch_forks VALUES('edit','old');
+    UPDATE sessions SET active_branch_id='edit';`);
+  source.close();
+  const result = JSON.parse((await upgrade2627(path)).stdout);
+  expect(result.repairedEdges).toBe(1);
+  const db = new DatabaseSync(path);
+  try {
+    expect(new MessageRepository(db).listMessages("s").map((item) => item.id)).toEqual([
+      "prefix",
+      "replacement",
+      "followup",
+    ]);
+    expect(db.prepare("SELECT parent_message_id FROM messages WHERE id='old'").get()?.parent_message_id).toBe(
+      "prefix",
+    );
+    expect(db.prepare("SELECT count(*) AS n FROM messages").get()?.n).toBe(4);
+  } finally {
+    db.close();
+  }
+  const copy = new DatabaseSync(result.backup, { readOnly: true });
+  expect(
+    copy.prepare("SELECT parent_message_id FROM messages WHERE id='replacement'").get()?.parent_message_id,
+  ).toBe("old");
+  copy.close();
 });
