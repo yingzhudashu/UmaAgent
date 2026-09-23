@@ -33,6 +33,26 @@ interface RuntimeQualityDependencies {
 export class RuntimeQualityOperations {
   constructor(private readonly dependencies: RuntimeQualityDependencies) {}
 
+  /** Re-register a durable queued review/improve run after a process restart. */
+  resumeQueued(run: Run): void {
+    if (run.status !== "queued" || !["review", "improve"].includes(run.kind))
+      throw new Error("Run is not a queued quality operation");
+    if (!run.targetMessageId) throw new Error("Queued quality run has no target message");
+    const session = this.dependencies.database.getSession(run.sessionId);
+    const target = this.dependencies.database.getMessage(run.targetMessageId);
+    const queuedTrace = this.dependencies.trace.startQueued(
+      run.id,
+      session.id,
+      run.kind,
+      { "run.kind": run.kind },
+    );
+    this.dependencies.orchestrator.enqueue(
+      session.id,
+      () => queuedTrace.run((root) => this.execute(session, run.id, target, run.kind as "review" | "improve", {}, undefined, root)),
+      run.id,
+    );
+  }
+
   start(
     kind: "review" | "improve",
     targetMessageId: string,

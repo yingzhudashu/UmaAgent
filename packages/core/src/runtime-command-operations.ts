@@ -32,6 +32,23 @@ interface CommandDependencies {
 export class RuntimeCommandOperations {
   constructor(private readonly dependencies: CommandDependencies) {}
 
+  /** Re-register a durable queued command after a process restart. */
+  resumeQueued(run: Run): void {
+    if (run.status !== "queued" || run.kind !== "command") throw new Error("Run is not a queued command");
+    const deps = this.dependencies;
+    const session = deps.database.getSession(run.sessionId);
+    const message = deps.database.getMessage(run.messageId);
+    const command = message.content.trim().replace(/^!/, "").trim();
+    if (!command) throw new Error("Queued command message is empty");
+    const queuedTrace = deps.trace.startQueued(run.id, session.id, "command", { "run.kind": "command" });
+    deps.activeTraces.set(run.id, queuedTrace.root);
+    deps.orchestrator.enqueue(
+      session.id,
+      () => queuedTrace.run(() => this.execute(session, run.id, command)),
+      run.id,
+    );
+  }
+
   start(
     sessionId: string,
     command: string,

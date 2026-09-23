@@ -113,14 +113,14 @@ export class UmaDatabase {
     const interrupted = rows(
       prepareStatement(
         this.db,
-        "SELECT id,session_id FROM runs WHERE status IN ('queued','preflight','running','verifying')",
+        "SELECT id,session_id FROM runs WHERE status IN ('preflight','running','verifying')",
       ),
     );
     this.withTransaction(() => {
       const now = Date.now();
       prepareStatement(
         this.db,
-        "UPDATE runs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('queued','preflight','running','verifying')",
+        "UPDATE runs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('preflight','running','verifying')",
       ).run(SERVER_RESTART_ERROR, now);
       prepareStatement(
         this.db,
@@ -1334,6 +1334,15 @@ export class UmaDatabase {
     return rows(
       prepareStatement(this.db, "SELECT id FROM runs WHERE session_id=? ORDER BY created_at"),
       sessionId,
+    ).map((value) => this.getRun(text(value.id)));
+  }
+  listRunsForStatus(status: Run["status"]): Run[] {
+    return rows(
+      prepareStatement(
+        this.db,
+        "SELECT id FROM runs WHERE status=? ORDER BY session_id, COALESCE(queue_position, 2147483647), created_at, id",
+      ),
+      status,
     ).map((value) => this.getRun(text(value.id)));
   }
   listRestartRecoverableRuns(): Run[] {

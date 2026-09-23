@@ -261,6 +261,7 @@ describe("UmaDatabase", () => {
       thinkingLevel: "off",
     });
     const run = db.createRun(session.id, "active-message", modelSnapshot, "off", "agent", "agent").run;
+    const queued = db.createRun(session.id, "queued-message", modelSnapshot, "off", "agent", "agent", { queuePosition: 1 }).run;
     db.updateRun(run.id, { status: "running" });
     db.createCheckpoint({
       runId: run.id,
@@ -304,6 +305,7 @@ describe("UmaDatabase", () => {
     db.close();
     const reopened = testDatabase(root);
     expect(reopened.getRun(run.id).status).toBe("interrupted");
+    expect(reopened.getRun(queued.id).status).toBe("queued");
     expect(reopened.getRunAction(runningAction.id).status).toBe("uncertain");
     expect(reopened.getRunAction(runningRead.id).status).toBe("prepared");
     expect(reopened.getRunAction(preparedAction.id).status).toBe("prepared");
