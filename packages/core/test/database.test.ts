@@ -321,6 +321,19 @@ describe("UmaDatabase", () => {
     reopened.close();
   });
 
+  it("ignores prepared side effects belonging to terminal runs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-side-effect-gate-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    const session = db.createSession({ title: "gate", workspace: root, model: { provider: "test", id: "model" }, thinkingLevel: "off" });
+    const completed = db.createRun(session.id, "completed-message", modelSnapshot, "off", "agent", "agent").run;
+    const action = db.createRunAction({ runId: completed.id, toolCallId: "shell-terminal", toolName: "shell", toolClass: "shell", idempotencyKey: "shell-terminal", input: { command: "echo done" } });
+    db.updateRunAction(action.id, { status: "prepared" });
+    db.updateRun(completed.id, { status: "completed" });
+    expect(db.hasPendingSideEffects(session.id)).toBe(false);
+    db.close();
+  });
+
   it("lists only safe interactive runs for automatic restart recovery", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-recoverable-runs-"));
     temporary.push(root);

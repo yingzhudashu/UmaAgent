@@ -1323,7 +1323,7 @@ export class UmaDatabase {
       row(
         prepareStatement(
           this.db,
-          "SELECT 1 AS pending FROM run_actions a JOIN runs r ON r.id=a.run_id WHERE r.session_id=? AND a.status IN ('prepared','running','uncertain') AND a.tool_class NOT IN ('read','attachment_read') LIMIT 1",
+        "SELECT 1 AS pending FROM run_actions a JOIN runs r ON r.id=a.run_id WHERE r.session_id=? AND r.status IN ('queued','preflight','awaiting_input','awaiting_confirmation','running','verifying','interrupted') AND a.status IN ('prepared','running','uncertain') AND a.tool_class NOT IN ('read','attachment_read') LIMIT 1",
         ),
         sessionId,
       ),
