@@ -242,6 +242,7 @@ export class UmaRuntime {
     this.started = true;
     this.scheduler.start();
     this.resourceMonitor.start();
+    this.recoverQueuedRuns();
     void recoverRestartedRuns(
       this.database.listRestartRecoverableRuns(),
       (runId) => this.resumeRun(runId),
@@ -249,6 +250,48 @@ export class UmaRuntime {
       () => !this.stopping,
       (runId) => this.database.addAudit({ runId, kind: "run", name: "restart_recovery", status: "started" }),
     );
+  }
+  /** Rebuild the in-memory queue from durable queued runs left by a prior process. */
+  private recoverQueuedRuns(): void {
+    const sessions = new Map<string, Run[]>();
+    for (const run of this.database.listRunsForStatus("queued")) {
+      const runs = sessions.get(run.sessionId) ?? [];
+      runs.push(run);
+      sessions.set(run.sessionId, runs);
+    }
+    for (const [sessionId, runs] of sessions) {
+      if (this.database.findAwaitingRun(sessionId)) this.orchestrator.pause(sessionId);
+      for (const run of runs) {
+        try {
+          if (run.kind === "agent") {
+            const session = this.database.getSession(run.sessionId);
+            const message = this.database.getMessage(run.messageId);
+            const queuedTrace = this.trace.startQueued(run.id, session.id, "run", { "run.kind": "agent" });
+            this.activeTraces.set(run.id, queuedTrace.root);
+            this.orchestrator.enqueue(
+              session.id,
+              () => queuedTrace.run(() => this.executeRun(session, run.id, {
+                messageId: message.id,
+                text: message.content,
+                mode: run.interactionMode,
+                ...(message.attachments.length ? { attachmentIds: message.attachments.map((item) => item.id) } : {}),
+              })),
+              run.id,
+            );
+          } else if (run.kind === "command") this.commandOperations.resumeQueued(run);
+          else if (run.kind === "review" || run.kind === "improve") this.qualityOperations.resumeQueued(run);
+          else throw new Error(`Unsupported queued run kind: ${run.kind}`);
+        } catch (error) {
+          this.events.transaction(() => {
+            const failed = this.database.updateRun(run.id, {
+              status: "failed",
+              error: `Queued run recovery failed: ${error instanceof Error ? error.message : String(error)}`,
+            });
+            this.events.emit(run.sessionId, run.id, "run.updated", failed);
+          });
+        }
+      }
+    }
   }
   async stop(): Promise<void> {
     this.stopPromise ??= this.stopInternal();
