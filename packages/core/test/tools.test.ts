@@ -74,7 +74,7 @@ async function fixture() {
     scheduleManage,
     memoryWrite: memoryWrite as never,
   });
-  return { root, tools, database, knowledge, skills, search, scheduleManage, memoryWrite, attachments };
+  return { root, session, tools, database, knowledge, skills, search, scheduleManage, memoryWrite, attachments };
 }
 
 describe("builtin tools", () => {
@@ -131,6 +131,28 @@ describe("builtin tools", () => {
     expect(text(await execute(value.tools, "schedule_manage", { operation: "list" }))).toContain(
       '"ok": true',
     );
+  });
+
+  it("returns a real download link when creating a workspace attachment", async () => {
+    const value = await fixture();
+    const file = join(value.root, "script.ps1");
+    await writeFile(file, "Write-Output ok", "utf8");
+    const workspacePolicy = new WorkspacePolicy([value.root]);
+    await workspacePolicy.initialize();
+    const tools = createBuiltinTools({
+      session: value.session,
+      database: value.database as never,
+      knowledge: value.knowledge as never,
+      skills: value.skills as never,
+      workspacePolicy,
+      toolTimeoutMs: 5_000,
+      search: value.search as never,
+      scheduleManage: value.scheduleManage,
+      memoryWrite: value.memoryWrite as never,
+      attachmentCreateFromWorkspace: async () => ({ id: "attachment-1", name: "script.ps1" }),
+    });
+    const output = text(await execute(tools, "attachment_create_from_workspace", { path: "script.ps1" }));
+    expect(output).toBe("Attachment created: [script.ps1](uma-attachment://attachment-1)");
   });
 
   it("exposes Xianyu tools only to channel sessions and routes live status queries", async () => {

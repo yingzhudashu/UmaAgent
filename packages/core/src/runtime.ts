@@ -1380,11 +1380,13 @@ export class UmaRuntime {
     name: string;
     mimeType: string;
     data: Uint8Array;
+    allowWorkspaceScript?: boolean;
   }): Promise<Attachment> {
     if (input.data.byteLength > this.config.server.maxUploadBytes)
       throw new Error("Upload exceeds configured size limit");
     const extension = input.name.split(".").pop()?.toLowerCase();
-    if (["exe", "dll", "so", "dylib", "bat", "cmd", "ps1", "sh", "com"].includes(extension ?? ""))
+    const workspaceScript = input.allowWorkspaceScript && ["ps1", "py", "js", "ts", "sh", "bat", "cmd"].includes(extension ?? "");
+    if (["exe", "dll", "so", "dylib", "bat", "cmd", "ps1", "sh", "com"].includes(extension ?? "") && !workspaceScript)
       throw new Error("Executable attachments are not allowed");
     if (input.responseId) {
       const response = this.database.getResponse(input.responseId);
@@ -1699,6 +1701,7 @@ export class UmaRuntime {
         await this.extractMemories(session, runId, controller.signal);
       }
       this.events.transaction(() => {
+        this.appendAttachmentLinksToResult(session.id, runId);
         this.appendAssumptionsToResult(session.id, runId);
         const completed = this.database.updateRun(runId, { status: "completed", error: null });
         this.database.addAudit({
@@ -1952,6 +1955,7 @@ ${context.dailyText}`,
             name: basename(path),
             mimeType,
             data,
+            allowWorkspaceScript: true,
           });
         },
         imageGenerate: async (prompt, signal) => {
@@ -2442,6 +2446,25 @@ ${context.dailyText}`,
       const message = this.database.updateMessage(final.id, { content });
       this.events.emit(sessionId, runId, "message.completed", message);
     });
+  }
+
+  /** Ensure files created by tools remain discoverable even when the model omitted the link. */
+  private appendAttachmentLinksToResult(sessionId: string, runId: string): void {
+    const response = this.database.responseForRun(runId);
+    if (!response || response.attachments.length === 0) return;
+    const final = [...this.database.listMessages(sessionId, runId)]
+      .reverse()
+      .find((item) => item.runId === runId && item.role === "assistant" && item.status === "complete");
+    if (!final) return;
+    const missing = response.attachments.filter(
+      (attachment) => !final.content.includes(`uma-attachment://${attachment.id}`),
+    );
+    if (!missing.length) return;
+    const links = missing.map((attachment) => `- [${attachment.name}](uma-attachment://${attachment.id})`).join("\n");
+    const message = this.database.updateMessage(final.id, {
+      content: `${final.content}\n\n附件下载：\n${links}`,
+    });
+    this.events.emit(sessionId, runId, "message.completed", message);
   }
 
   private bindAgentEvents(
