@@ -851,13 +851,14 @@ export function createBuiltinTools(input: {
             name: "attachment_create_from_workspace",
             label: "Create attachment from workspace",
             description:
-              "Copy one file from the current workspace into this session as an attachment after path validation.",
+              "Copy one file from the current workspace into this session as an attachment after path validation. The result includes the exact uma-attachment download link; include that link in the final answer.",
             parameters: Type.Object({ path: Type.String() }),
             executionMode: "sequential",
             async execute(_id, params) {
               const path = await workspacePolicy.resolvePath(workspace, params.path);
               const attachment = await attachmentCreateFromWorkspace(path);
-              return result(JSON.stringify(attachment), attachment);
+              const link = `[${attachment.name}](uma-attachment://${attachment.id})`;
+              return result(`Attachment created: ${link}`, { ...attachment, link });
             },
           }),
         ]
