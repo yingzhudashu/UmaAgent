@@ -106,6 +106,73 @@ describe("ModelCallService", () => {
     });
   });
 
+  it("recovers a complete response when the gateway omits the stream finish marker", async () => {
+    const { service, completeSimple, database } = fixture();
+    completeSimple.mockResolvedValueOnce({
+      ...fauxAssistantMessage('{"taskClass":"simple"}'),
+      stopReason: "error",
+      errorMessage: "Stream ended without finish_reason",
+    });
+
+    const response = await service.complete({
+      runId: "run",
+      sessionId: "session-a",
+      role: "fast",
+      purpose: "classify",
+      systemPrompt: "Return JSON",
+      messages: [{ role: "user", content: "request", timestamp: 1 }],
+      signal: new AbortController().signal,
+    });
+
+    expect(response.stopReason).toBe("stop");
+    expect(response.errorMessage).toBeUndefined();
+    expect(completeSimple).toHaveBeenCalledTimes(1);
+    expect(database.finishModelCall).toHaveBeenCalledWith(
+      "call-1",
+      expect.objectContaining({ status: "completed" }),
+    );
+  });
+
+  it("retries an empty stream finish failure and preserves a real failure", async () => {
+    const { service, completeSimple, database } = fixture();
+    completeSimple
+      .mockResolvedValueOnce({
+        ...fauxAssistantMessage(""),
+        content: [],
+        stopReason: "error",
+        errorMessage: "Stream ended without finish_reason",
+      })
+      .mockResolvedValueOnce({
+        ...fauxAssistantMessage("still unavailable"),
+        content: [],
+        stopReason: "error",
+        errorMessage: "Stream ended without finish_reason",
+      })
+      .mockResolvedValueOnce({
+        ...fauxAssistantMessage(""),
+        content: [],
+        stopReason: "error",
+        errorMessage: "Stream ended without finish_reason",
+      });
+
+    const response = await service.complete({
+      runId: "run",
+      sessionId: "session-a",
+      role: "fast",
+      purpose: "classify",
+      systemPrompt: "Return JSON",
+      messages: [{ role: "user", content: "request", timestamp: 1 }],
+      signal: new AbortController().signal,
+    });
+
+    expect(response.stopReason).toBe("error");
+    expect(completeSimple).toHaveBeenCalledTimes(3);
+    expect(database.finishModelCall).toHaveBeenCalledWith(
+      "call-1",
+      expect.objectContaining({ status: "failed", error: "Stream ended without finish_reason" }),
+    );
+  });
+
   it("forwards compact JSON control-call options to OpenAI-compatible providers", async () => {
     const { service, completeSimple, models } = fixture();
     models.forRole.mockReturnValueOnce({ ...model, api: "openai-completions" });

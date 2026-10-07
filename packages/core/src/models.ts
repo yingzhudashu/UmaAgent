@@ -18,6 +18,10 @@ function toModel(config: UmaModelConfig): Model<UmaModelConfig["api"]> {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: config.contextWindow,
     maxTokens: config.maxTokens,
+    // Explicitly disable hidden provider reasoning for small control calls.
+    // Without this map, some gateways spend a 64-token classification budget
+    // entirely on reasoning and close the stream without an answer.
+    thinkingLevelMap: { off: "none" },
     // The configured OpenAI-compatible gateway rejects the SDK's default
     // `OpenAI/JS ...` user agent. Keep the request identifiable without
     // exposing the SDK implementation detail upstream.

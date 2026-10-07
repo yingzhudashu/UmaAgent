@@ -68,7 +68,14 @@ export class KnowledgeService {
   }
 
   async searchSemantic(query: string, limit = 5, ownerId?: string): Promise<KnowledgeSearchHit[]> {
-    const vector = await this.embedding?.embed(query);
+    let vector: number[] | undefined;
+    try {
+      vector = await this.embedding?.embed(query);
+    } catch {
+      // Embedding availability must not take the whole agent run down; keyword
+      // search remains useful while the external embedding service is repaired.
+      return this.search(query, limit, undefined, ownerId);
+    }
     if (!vector) return this.search(query, limit, undefined, ownerId);
     const semantic = this.database.searchKnowledgeSemantic(
       vector,

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeService } from "../src/knowledge.js";
 import { testDatabase } from "./test-database.js";
 
@@ -70,5 +70,22 @@ describe("KnowledgeService", () => {
     await writeFile(outside, "secret");
     await expect(knowledge.index("outside", outside)).rejects.toThrow("outside configured");
     database.close();
+  });
+
+  it("falls back to keyword search when the embedding provider is unavailable", async () => {
+    const { workspace, state, database } = await fixture();
+    await writeFile(join(workspace, "fallback.md"), "embedding outage keyword");
+    const embedding = { embed: vi.fn().mockRejectedValue(new Error("HTTP 401")), model: "test" };
+    const knowledge = new KnowledgeService(database, [workspace], state, embedding as never);
+    await knowledge.index("fallback", join(workspace, "fallback.md"));
+
+    try {
+      await expect(knowledge.searchSemantic("embedding outage")).resolves.toEqual([
+        expect.objectContaining({ filePath: join(workspace, "fallback.md") }),
+      ]);
+      expect(embedding.embed).toHaveBeenCalledOnce();
+    } finally {
+      database.close();
+    }
   });
 });

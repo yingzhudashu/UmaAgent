@@ -60,6 +60,7 @@ describe("ModelRegistry snapshots", () => {
       contextWindow: 100_000,
       maxTokens: 4_096,
       reasoning: true,
+      thinkingLevelMap: { off: "none" },
       input: ["text"],
       headers: { "user-agent": "UmaAgent/1.0", accept: "application/json" },
     });

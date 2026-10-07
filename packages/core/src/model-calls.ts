@@ -1,8 +1,14 @@
 import { type AgentMessage, convertToLlm } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, ThinkingLevel } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { assertContextCapacity } from "./context-manager.js";
 import type { UmaDatabase } from "./database.js";
-import { transientModelOptions } from "./model-retry.js";
+import {
+  isMissingFinishReasonError,
+  missingFinishReasonRetry,
+  recoverMissingFinishReason,
+  transientModelOptions,
+  waitForModelRetry,
+} from "./model-retry.js";
 import type { ModelRegistry } from "./models.js";
 import { injectRuntimeFault } from "./runtime-support.js";
 import type { TraceContext } from "./trace.js";
@@ -15,7 +21,7 @@ export interface ModelCompletionInput {
   systemPrompt: string;
   messages: AgentMessage[];
   signal: AbortSignal;
-  thinkingLevel?: ThinkingLevel;
+  thinkingLevel?: ModelThinkingLevel;
   contextSummarySequence?: number;
   trace?: TraceContext;
   jsonMode?: boolean;
@@ -58,22 +64,39 @@ export class ModelCallService {
       injectRuntimeFault("model.started");
       // pi-ai owns the single retry loop. Keeping retries out of this service prevents
       // nested retry budgets while retaining Retry-After handling and abortable waits.
-      const response = await this.models.models.completeSimple(
-        model,
-        { systemPrompt: input.systemPrompt, messages },
-        {
-          ...transientModelOptions(
-            input.signal,
-            input.sessionId,
-            `${input.role}:${input.purpose}:${model.provider}:${model.id}`,
-          ),
-          ...(input.thinkingLevel ? { reasoning: input.thinkingLevel } : {}),
-          ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
-          ...(input.jsonMode && model.api === "openai-completions"
-            ? { samplingParams: { response_format: { type: "json_object" } } }
-            : {}),
-        },
-      );
+      let response: AssistantMessage;
+      for (let attempt = 0; ; attempt++) {
+        response = await this.models.models.completeSimple(
+          model,
+          { systemPrompt: input.systemPrompt, messages },
+          {
+            ...transientModelOptions(
+              input.signal,
+              input.sessionId,
+              `${input.role}:${input.purpose}:${model.provider}:${model.id}`,
+            ),
+            ...(input.thinkingLevel && input.thinkingLevel !== "off"
+              ? { reasoning: input.thinkingLevel }
+              : {}),
+            ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
+            ...(input.jsonMode && model.api === "openai-completions"
+              ? { samplingParams: { response_format: { type: "json_object" } } }
+              : {}),
+          },
+        );
+        const recovered = recoverMissingFinishReason(response);
+        if (recovered) {
+          response = recovered;
+          break;
+        }
+        if (
+          response.stopReason !== "error" ||
+          !isMissingFinishReasonError(response.errorMessage) ||
+          attempt >= missingFinishReasonRetry.maxRetries
+        )
+          break;
+        await waitForModelRetry(input.signal, missingFinishReasonRetry.baseDelayMs * 2 ** attempt);
+      }
       const failed = response.stopReason === "error" || response.stopReason === "aborted";
       finishing = true;
       this.database.finishModelCall(callId, {

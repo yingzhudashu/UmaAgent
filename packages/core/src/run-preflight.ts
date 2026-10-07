@@ -89,6 +89,9 @@ export class RunPreflight {
             signal,
             jsonMode: true,
             maxTokens: 64,
+            // Classification is a small control call. Reasoning models can spend
+            // the entire tiny output budget thinking and emit no answer at all.
+            thinkingLevel: "off",
             ...(context.summary ? { contextSummarySequence: context.summary.throughSequence } : {}),
             ...(trace ? { trace } : {}),
           });

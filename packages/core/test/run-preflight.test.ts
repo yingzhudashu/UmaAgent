@@ -121,7 +121,11 @@ describe("RunPreflight", () => {
         "run",
       ),
     ).resolves.toMatchObject({ taskClass: "simple", route: "direct" });
-    expect(complete.mock.calls[0]?.[0]).toMatchObject({ jsonMode: true, maxTokens: 64 });
+    expect(complete.mock.calls[0]?.[0]).toMatchObject({
+      jsonMode: true,
+      maxTokens: 64,
+      thinkingLevel: "off",
+    });
   });
 
   it("falls back when the provider reports an invalid classification contract", async () => {

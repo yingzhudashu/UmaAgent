@@ -47,7 +47,11 @@ import { ImageGenerationService } from "./image-generation.js";
 import { KnowledgeService } from "./knowledge.js";
 import { McpManager } from "./mcp.js";
 import { ModelCallService } from "./model-calls.js";
-import { modelCacheKey, transientModelRetry } from "./model-retry.js";
+import {
+  modelCacheKey,
+  retryMissingFinishReasonStream,
+  transientModelRetry,
+} from "./model-retry.js";
 import { ModelRegistry } from "./models.js";
 import { PermissionPolicy } from "./permissions.js";
 import { ResourceMonitor } from "./resource-monitor.js";
@@ -2300,13 +2304,17 @@ ${context.dailyText}`,
         messages: context.messages,
       },
       streamFn: (model, modelContext, options) =>
-        this.models.models.streamSimple(model, modelContext, {
-          ...options,
-          headers: { ...(options?.headers ?? {}), "user-agent": "UmaAgent/1.0", accept: "application/json" },
-          sessionId: modelCacheKey(session.id, `agent:${model.provider}:${model.id}`),
-          cacheRetention: "short",
-          ...transientModelRetry,
-        }),
+        retryMissingFinishReasonStream(
+          () =>
+            this.models.models.streamSimple(model, modelContext, {
+              ...options,
+              headers: { ...(options?.headers ?? {}), "user-agent": "UmaAgent/1.0", accept: "application/json" },
+              sessionId: modelCacheKey(session.id, `agent:${model.provider}:${model.id}`),
+              cacheRetention: "short",
+              ...transientModelRetry,
+            }),
+          options?.signal ?? signal,
+        ),
       toolExecution: "parallel",
       shouldStopAfterTurn: () => {
         stepTurns++;
