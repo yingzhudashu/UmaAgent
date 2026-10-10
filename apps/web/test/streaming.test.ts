@@ -155,4 +155,20 @@ describe("streaming snapshot projection", () => {
 
     expect(mergeSessionSnapshot(current, older)).toBe(current);
   });
+
+  it("replaces the transcript when an edit switches conversation branches", () => {
+    const current = snapshot();
+    current.session = { ...current.session, activeBranchId: "branch-old", branchRevision: 1 };
+    current.transcript.push({ ...transcriptItem("old answer"), id: "old-assistant", sequence: 2 });
+    const incoming = snapshot();
+    incoming.snapshotSequence = current.snapshotSequence;
+    incoming.session = { ...incoming.session, activeBranchId: "branch-new", branchRevision: 2 };
+    incoming.transcript = [{ ...incoming.transcript[0], id: "new-user", content: "edited" }];
+
+    const merged = mergeSessionSnapshot(current, incoming);
+
+    expect(merged).toBe(incoming);
+    expect(merged.transcript.map((item) => item.id)).toEqual(["new-user"]);
+    expect(merged.transcript.map((item) => item.id)).not.toContain("old-assistant");
+  });
 });

@@ -372,6 +372,12 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
   }, [authenticated, client]);
   const snapshotReady = Boolean(snapshot.data);
   useEffect(() => {
+    // Branch edits replace the visible conversation. Drop history loaded for the
+    // previous branch before its asynchronous cache read can reintroduce stale IDs.
+    setHistorical([]);
+    setHistoryHasMore(undefined);
+  }, [selected, activeBranchId]);
+  useEffect(() => {
     if (!selected || selected === "undefined" || !snapshotReady) return;
     let unsubscribe: (() => void) | undefined;
     let cancelled = false;

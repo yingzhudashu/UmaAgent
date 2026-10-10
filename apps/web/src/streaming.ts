@@ -116,6 +116,14 @@ export function mergeSessionSnapshot(
   incoming: SessionSnapshot,
 ): SessionSnapshot {
   if (!current || incoming.snapshotSequence < current.snapshotSequence) return current ?? incoming;
+  // A rerun/edit creates a new conversation branch. Never union transcript items
+  // across branch revisions: the old message IDs are intentionally absent from
+  // the new branch and must not remain editable in a stale client projection.
+  if (
+    current.session.activeBranchId !== incoming.session.activeBranchId ||
+    current.session.branchRevision !== incoming.session.branchRevision
+  )
+    return incoming;
   const transcript = new Map(current.transcript.map((item) => [item.id, item]));
   for (const item of incoming.transcript) {
     const previous = transcript.get(item.id);
