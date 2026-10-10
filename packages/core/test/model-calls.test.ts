@@ -89,6 +89,50 @@ describe("ModelCallService", () => {
     expect(modelCacheKey("session-a")).not.toContain("session-a");
   });
 
+  it("passes a bounded timeout to the provider", async () => {
+    const { service, completeSimple } = fixture();
+    await service.complete({
+      runId: "run",
+      sessionId: "session-a",
+      role: "fast",
+      purpose: "classify",
+      systemPrompt: "stable system",
+      messages: [{ role: "user", content: "request", timestamp: 1 }],
+      signal: new AbortController().signal,
+    });
+    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ timeoutMs: 120_000 });
+  });
+
+  it("turns a provider timeout into a terminal model error", async () => {
+    const { database, models } = fixture();
+    const completeSimple = vi.fn(
+      async (_model: unknown, _context: unknown, options: { signal: AbortSignal }) =>
+        new Promise<never>((_resolve, reject) => {
+          options.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+    );
+    const service = new ModelCallService(
+      database as never,
+      { ...models, models: { completeSimple } } as never,
+      5,
+    );
+    await expect(
+      service.complete({
+        runId: "run",
+        sessionId: "session-a",
+        role: "fast",
+        purpose: "classify",
+        systemPrompt: "system",
+        messages: [],
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("Model request timed out after 5ms");
+    expect(database.finishModelCall).toHaveBeenCalledWith(
+      "call-1",
+      expect.objectContaining({ status: "failed", error: "Model request timed out after 5ms" }),
+    );
+  });
+
   it("uses the shared SDK retry budget for contract repair calls", async () => {
     const { service, completeSimple } = fixture();
     await service.complete({

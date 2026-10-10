@@ -5,6 +5,7 @@ import type { UmaDatabase } from "./database.js";
 import {
   isMissingFinishReasonError,
   missingFinishReasonRetry,
+  modelRequestSignal,
   recoverMissingFinishReason,
   transientModelOptions,
   waitForModelRetry,
@@ -33,6 +34,7 @@ export class ModelCallService {
   constructor(
     private readonly database: UmaDatabase,
     private readonly models: ModelRegistry,
+    private readonly modelTimeoutMs = 120_000,
   ) {}
 
   async complete(input: ModelCompletionInput): Promise<AssistantMessage> {
@@ -52,6 +54,7 @@ export class ModelCallService {
         : {}),
     });
     const startedAt = Date.now();
+    const modelSignal = modelRequestSignal(input.signal, this.modelTimeoutMs);
     let callId: string | undefined;
     let finishing = false;
     try {
@@ -71,10 +74,12 @@ export class ModelCallService {
           { systemPrompt: input.systemPrompt, messages },
           {
             ...transientModelOptions(
-              input.signal,
+              modelSignal,
               input.sessionId,
               `${input.role}:${input.purpose}:${model.provider}:${model.id}`,
             ),
+            signal: modelSignal,
+            timeoutMs: this.modelTimeoutMs,
             ...(input.thinkingLevel && input.thinkingLevel !== "off"
               ? { reasoning: input.thinkingLevel }
               : {}),
@@ -95,8 +100,10 @@ export class ModelCallService {
           attempt >= missingFinishReasonRetry.maxRetries
         )
           break;
-        await waitForModelRetry(input.signal, missingFinishReasonRetry.baseDelayMs * 2 ** attempt);
+        await waitForModelRetry(modelSignal, missingFinishReasonRetry.baseDelayMs * 2 ** attempt);
       }
+      if (modelSignal.aborted && !input.signal.aborted)
+        throw new Error(`Model request timed out after ${this.modelTimeoutMs}ms`);
       const failed = response.stopReason === "error" || response.stopReason === "aborted";
       finishing = true;
       this.database.finishModelCall(callId, {
@@ -122,24 +129,28 @@ export class ModelCallService {
       injectRuntimeFault("model.completed");
       return response;
     } catch (error) {
+      const failure =
+        modelSignal.aborted && !input.signal.aborted
+          ? new Error(`Model request timed out after ${this.modelTimeoutMs}ms`)
+          : error;
       // Trace 必须先终结；业务库创建/结算失败也不能留下永久运行中的 Span。
       span?.finish({
         status: "error",
-        error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+        error: { name: failure instanceof Error ? failure.name : "Error", message: String(failure) },
       });
       if (callId && !finishing) {
         try {
           this.database.finishModelCall(callId, {
             status: "failed",
             durationMs: Date.now() - startedAt,
-            error: error instanceof Error ? error.message : String(error),
+            error: failure instanceof Error ? failure.message : String(failure),
           });
         } catch (accountingError) {
           // 结算只尝试一次，保留原始模型失败和数据库失败，禁止盲重试未知结果的写入。
-          throw new AggregateError([error, accountingError], "Model call and accounting both failed");
+          throw new AggregateError([failure, accountingError], "Model call and accounting both failed");
         }
       }
-      throw error;
+      throw failure;
     }
   }
 }

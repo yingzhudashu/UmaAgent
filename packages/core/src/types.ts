@@ -47,7 +47,13 @@ export interface UmaConfig {
   defaultThinkingLevel: ThinkingLevel;
   skillsDirs: string[];
   mcpServers: McpServerConfig[];
-  runtime: { maxParallelSessions: number; approvalTimeoutMs: number; toolTimeoutMs: number };
+  runtime: {
+    maxParallelSessions: number;
+    approvalTimeoutMs: number;
+    toolTimeoutMs: number;
+    /** Hard wall-clock limit for one provider request/stream turn. */
+    modelTimeoutMs?: number;
+  };
   roles: { default: ModelRef; reasoning: ModelRef; fast: ModelRef; vision: ModelRef };
   imageGeneration: ImageGenerationConfig;
   embedding: EmbeddingConfig;

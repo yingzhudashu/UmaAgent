@@ -560,6 +560,7 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
       setSelected((current) => (current === id ? undefined : current));
       void queryClient.invalidateQueries({ queryKey: ["sessions"] });
     },
+    onError: (error) => setGlobalError(requestErrorMessage(error)),
   });
   const recentRuns = snapshot.data?.recentRuns ?? [];
   const runningRun = [...recentRuns]

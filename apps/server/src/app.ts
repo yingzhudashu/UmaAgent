@@ -420,7 +420,7 @@ export async function createServer(
   });
   app.delete<{ Params: { id: string } }>("/api/v16/sessions/:id", async (request, reply) => {
     requireSessionOwner(request, request.params.id);
-    runtime.deleteSession(request.params.id);
+    await runtime.deleteSession(request.params.id);
     return reply.code(204).send();
   });
   app.post<{ Params: { id: string } }>("/api/v16/sessions/:id/messages", async (request, reply) => {

@@ -86,7 +86,12 @@ const config = {
   defaultThinkingLevel: "medium",
   skillsDirs: [],
   mcpServers: [],
-  runtime: { maxParallelSessions: 2, approvalTimeoutMs: 120_000, toolTimeoutMs: 60_000 },
+  runtime: {
+    maxParallelSessions: 2,
+    approvalTimeoutMs: 120_000,
+    toolTimeoutMs: 60_000,
+    modelTimeoutMs: 120_000,
+  },
   roles: Object.fromEntries(
     ["default", "reasoning", "fast", "vision"].map((role) => [role, { provider: providerId, id: modelKey }]),
   ),

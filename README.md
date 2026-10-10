@@ -128,6 +128,7 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 - `mcpServers`：`stdio` 需要 `command/args`，`http` 需要 Streamable HTTP `url`
 - 非回环 HTTP MCP 应设置 `authTokenEnv`，Core 从该环境变量注入 Bearer Token
 - `runtime.maxParallelSessions`：跨会话并发上限；单会话默认 FIFO，也可在 Session 上设为安全抢占模式
+- `runtime.modelTimeoutMs`：单次模型请求（含供应商重试和流式响应）的硬超时，默认 `120000` 毫秒，防止供应商无响应长期占满队列
 
 数据库只接受当前 `PRAGMA user_version`。版本不匹配会拒绝启动。schema 26 数据库先停机，再运行 `node scripts/migrate-state-26-27.mjs <state.db>`；工具自动备份并校验完整性。运行时无兼容层，其他旧格式不支持。
 

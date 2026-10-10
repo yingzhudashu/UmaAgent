@@ -12,7 +12,7 @@ export function mapServerError(
   );
   const notFound = /not found/i.test(error.message);
   const conflict =
-    /(already|not pending|not cancellable|active run|only interrupted|requiring confirmation|queue revision conflict|queue changed)/i.test(
+    /(already|not pending|not cancellable|active run|only interrupted|requiring confirmation|queue revision conflict|queue changed|did not stop in time)/i.test(
       error.message,
     );
   const providerContract = /provider contract/i.test(error.message);

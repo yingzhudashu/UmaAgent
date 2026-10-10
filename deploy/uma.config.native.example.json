@@ -76,6 +76,7 @@
   "runtime": {
     "maxParallelSessions": 2,
     "approvalTimeoutMs": 120000,
-    "toolTimeoutMs": 60000
+    "toolTimeoutMs": 60000,
+    "modelTimeoutMs": 120000
   }
 }

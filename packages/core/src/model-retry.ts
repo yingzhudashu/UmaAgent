@@ -54,6 +54,11 @@ export async function waitForModelRetry(signal: AbortSignal, delayMs: number): P
   });
 }
 
+/** Bound the complete provider operation, including SDK retries and backoff. */
+export function modelRequestSignal(signal: AbortSignal, timeoutMs: number): AbortSignal {
+  return AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+}
+
 function hasStreamOutput(event: AssistantMessageEvent): boolean {
   return (
     event.type === "text_delta" ||

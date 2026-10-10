@@ -49,6 +49,7 @@ import { McpManager } from "./mcp.js";
 import { ModelCallService } from "./model-calls.js";
 import {
   modelCacheKey,
+  modelRequestSignal,
   retryMissingFinishReasonStream,
   transientModelRetry,
 } from "./model-retry.js";
@@ -166,7 +167,7 @@ export class UmaRuntime {
       this.skills,
       this.permissions,
     );
-    this.modelCalls = new ModelCallService(this.database, this.models);
+    this.modelCalls = new ModelCallService(this.database, this.models, config.runtime.modelTimeoutMs);
     this.preflight = new RunPreflight(this.database, this.models, this.contextManager, this.modelCalls);
     this.quality = new RunQualityService(this.modelCalls);
     this.orchestrator = new RunOrchestrator(config.runtime.maxParallelSessions);
@@ -274,12 +275,17 @@ export class UmaRuntime {
             this.activeTraces.set(run.id, queuedTrace.root);
             this.orchestrator.enqueue(
               session.id,
-              () => queuedTrace.run(() => this.executeRun(session, run.id, {
-                messageId: message.id,
-                text: message.content,
-                mode: run.interactionMode,
-                ...(message.attachments.length ? { attachmentIds: message.attachments.map((item) => item.id) } : {}),
-              })),
+              () =>
+                queuedTrace.run(() =>
+                  this.executeRun(session, run.id, {
+                    messageId: message.id,
+                    text: message.content,
+                    mode: run.interactionMode,
+                    ...(message.attachments.length
+                      ? { attachmentIds: message.attachments.map((item) => item.id) }
+                      : {}),
+                  }),
+                ),
               run.id,
             );
           } else if (run.kind === "command") this.commandOperations.resumeQueued(run);
@@ -385,7 +391,7 @@ export class UmaRuntime {
         this.skills,
         this.permissions,
       );
-      this.modelCalls = new ModelCallService(this.database, this.models);
+      this.modelCalls = new ModelCallService(this.database, this.models, next.runtime.modelTimeoutMs);
       this.preflight = new RunPreflight(this.database, this.models, this.contextManager, this.modelCalls);
       this.quality = new RunQualityService(this.modelCalls);
       applied.push("models", "roles");
@@ -1045,9 +1051,32 @@ export class UmaRuntime {
     });
   }
 
-  deleteSession(id: string): void {
-    if ([...this.controllers.keys()].some((runId) => this.database.getRun(runId).sessionId === id))
-      throw new Error("Cannot delete a session with an active run");
+  async deleteSession(id: string): Promise<void> {
+    const activeRunIds = [...this.controllers.keys()].filter((runId) => {
+      try {
+        return this.database.getRun(runId).sessionId === id;
+      } catch {
+        return false;
+      }
+    });
+    for (const runId of activeRunIds) this.controllers.get(runId)?.abort();
+    for (const run of this.database.listQueuedRuns(id)) this.cancelRun(run.id);
+    if (activeRunIds.length) {
+      const timeoutMs =
+        (this.config.runtime.modelTimeoutMs ?? 120_000) + this.config.runtime.toolTimeoutMs + 5_000;
+      await Promise.all(
+        activeRunIds.map((runId) =>
+          waitForRunTerminal(
+            (candidate) => this.database.getRun(candidate),
+            this.subscribe.bind(this),
+            runId,
+            timeoutMs,
+          ),
+        ),
+      );
+      if (activeRunIds.some((runId) => this.controllers.has(runId)))
+        throw new Error("Session run did not stop in time");
+    }
     this.database.deleteSession(id);
   }
 
@@ -1389,8 +1418,12 @@ export class UmaRuntime {
     if (input.data.byteLength > this.config.server.maxUploadBytes)
       throw new Error("Upload exceeds configured size limit");
     const extension = input.name.split(".").pop()?.toLowerCase();
-    const workspaceScript = input.allowWorkspaceScript && ["ps1", "py", "js", "ts", "sh", "bat", "cmd"].includes(extension ?? "");
-    if (["exe", "dll", "so", "dylib", "bat", "cmd", "ps1", "sh", "com"].includes(extension ?? "") && !workspaceScript)
+    const workspaceScript =
+      input.allowWorkspaceScript && ["ps1", "py", "js", "ts", "sh", "bat", "cmd"].includes(extension ?? "");
+    if (
+      ["exe", "dll", "so", "dylib", "bat", "cmd", "ps1", "sh", "com"].includes(extension ?? "") &&
+      !workspaceScript
+    )
       throw new Error("Executable attachments are not allowed");
     if (input.responseId) {
       const response = this.database.getResponse(input.responseId);
@@ -2304,17 +2337,29 @@ ${context.dailyText}`,
         messages: context.messages,
       },
       streamFn: (model, modelContext, options) =>
-        retryMissingFinishReasonStream(
-          () =>
-            this.models.models.streamSimple(model, modelContext, {
-              ...options,
-              headers: { ...(options?.headers ?? {}), "user-agent": "UmaAgent/1.0", accept: "application/json" },
-              sessionId: modelCacheKey(session.id, `agent:${model.provider}:${model.id}`),
-              cacheRetention: "short",
-              ...transientModelRetry,
-            }),
-          options?.signal ?? signal,
-        ),
+        (() => {
+          const requestSignal = modelRequestSignal(
+            options?.signal ?? signal,
+            this.config.runtime.modelTimeoutMs ?? 120_000,
+          );
+          return retryMissingFinishReasonStream(
+            () =>
+              this.models.models.streamSimple(model, modelContext, {
+                ...options,
+                signal: requestSignal,
+                timeoutMs: this.config.runtime.modelTimeoutMs ?? 120_000,
+                headers: {
+                  ...(options?.headers ?? {}),
+                  "user-agent": "UmaAgent/1.0",
+                  accept: "application/json",
+                },
+                sessionId: modelCacheKey(session.id, `agent:${model.provider}:${model.id}`),
+                cacheRetention: "short",
+                ...transientModelRetry,
+              }),
+            options?.signal ?? signal,
+          );
+        })(),
       toolExecution: "parallel",
       shouldStopAfterTurn: () => {
         stepTurns++;
@@ -2468,7 +2513,9 @@ ${context.dailyText}`,
       (attachment) => !final.content.includes(`uma-attachment://${attachment.id}`),
     );
     if (!missing.length) return;
-    const links = missing.map((attachment) => `- [${attachment.name}](uma-attachment://${attachment.id})`).join("\n");
+    const links = missing
+      .map((attachment) => `- [${attachment.name}](uma-attachment://${attachment.id})`)
+      .join("\n");
     const message = this.database.updateMessage(final.id, {
       content: `${final.content}\n\n附件下载：\n${links}`,
     });
