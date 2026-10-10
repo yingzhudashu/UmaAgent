@@ -346,6 +346,56 @@ describe("UmaRuntime preflight", () => {
     expect(JSON.parse(String(persisted?.payload_json)).usage.totalTokens).toBe(434146);
   });
 
+  it("reuses the source preflight contract for an edit rerun", async () => {
+    const runtime = await runtimeWith([fauxAssistantMessage("rerun answer")]);
+    const session = await runtime.createSession();
+    const source = runtime.database.createRun(
+      session.id,
+      "source-message",
+      runtime.models.snapshot(session.model),
+      session.thinkingLevel,
+      "agent",
+      "agent",
+    ).run;
+    runtime.database.updateRun(source.id, {
+      status: "completed",
+      route: "direct",
+      taskClass: "complex",
+      goal: "complete the source task",
+      reasoningSummary: "source preflight",
+      successCriteria: ["done"],
+      assumptions: [],
+    });
+    runtime.database.insertMessage({
+      id: source.messageId,
+      sessionId: session.id,
+      runId: source.id,
+      role: "user",
+      status: "complete",
+      content: "source task",
+    });
+    const branch = runtime.database.listBranches(session.id).find((item) => item.active);
+    runtime.database.db
+      .prepare("UPDATE conversation_branches SET head_message_id=? WHERE id=?")
+      .run(source.messageId, branch?.id);
+
+    const rerun = runtime.editMessage(session.id, source.messageId, "source task");
+    const terminal = await waitForRunTerminal(runtime, rerun.id);
+    expect(terminal.status, terminal.error).toBe("completed");
+    const modelRoles = runtime.database.db
+      .prepare("SELECT role FROM model_calls WHERE run_id=? ORDER BY created_at")
+      .all(rerun.id)
+      .map((row) => (row as { role: string }).role);
+    expect(modelRoles).toContain("default");
+    expect(modelRoles.some((role) => role.includes("classify") || role.includes("preflight"))).toBe(false);
+    expect(runtime.database.getRun(rerun.id)).toMatchObject({
+      route: "direct",
+      taskClass: "complex",
+      goal: "complete the source task",
+      reasoningSummary: "source preflight",
+    });
+  });
+
   it("editing the root message hides the entire replaced suffix", async () => {
     const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("root edited answer")]);
     const session = await runtime.createSession();

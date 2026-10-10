@@ -1080,7 +1080,12 @@ export class UmaRuntime {
     this.database.deleteSession(id);
   }
 
-  sendMessage(sessionId: string, input: SendMessageRequest, traceParent?: TraceParent): Run {
+  sendMessage(
+    sessionId: string,
+    input: SendMessageRequest,
+    traceParent?: TraceParent,
+    reusedPreflight?: PreflightDecision,
+  ): Run {
     if (!this.started || this.stopping) throw new Error("UmaRuntime is not accepting new runs");
     const session = this.database.getSession(sessionId);
     const existing = this.database.findMessageOwner(input.messageId);
@@ -1235,7 +1240,11 @@ export class UmaRuntime {
       traceParent,
     );
     this.activeTraces.set(run.id, queuedTrace.root);
-    enqueue(sessionId, () => queuedTrace.run(() => this.executeRun(session, run.id, input)), run.id);
+    enqueue(
+      sessionId,
+      () => queuedTrace.run(() => this.executeRun(session, run.id, input, undefined, false, reusedPreflight)),
+      run.id,
+    );
     if (continuation) this.orchestrator.resume(sessionId);
     return run;
   }
@@ -1268,6 +1277,29 @@ export class UmaRuntime {
     }
     if (this.database.listQueuedRuns(sessionId).length > 0)
       throw new Error("Process queued messages before editing an earlier message");
+    // An edit rerun is a replay of the same request on a new branch. Reusing the
+    // source run's persisted contract avoids repeating an expensive reasoning
+    // preflight (which can exceed the normal provider timeout), while the agent
+    // still receives the edited message and rebuilt conversation context.
+    const reusedPreflight =
+      originalRun &&
+      text === original.content &&
+      originalRun.route !== undefined &&
+      originalRun.route !== "clarify" &&
+      originalRun.taskClass !== undefined &&
+      originalRun.goal !== undefined &&
+      originalRun.reasoningSummary !== undefined
+        ? {
+            route: originalRun.route,
+            taskClass: originalRun.taskClass,
+            goal: originalRun.goal,
+            reasoningSummary: originalRun.reasoningSummary,
+            successCriteria: originalRun.successCriteria,
+            assumptions: originalRun.assumptions,
+            questions: [],
+            steps: originalRun.plan.map((step) => step.title),
+          }
+        : undefined;
     return this.events.transaction(() => {
       const now = Date.now();
       const branchId = randomUUID();
@@ -1300,6 +1332,7 @@ export class UmaRuntime {
           ...(parentMessageId ? { parentMessageId } : {}),
         },
         traceParent,
+        reusedPreflight,
       );
     });
   }
@@ -1493,6 +1526,7 @@ export class UmaRuntime {
     input: SendMessageRequest,
     promptOverride?: string,
     resumeFromCheckpoint = false,
+    reusedPreflight?: PreflightDecision,
   ): Promise<void> {
     const rootTrace = this.activeTraces.get(runId) ?? this.trace.startRoot(runId, sessionAtQueueTime.id);
     this.activeTraces.set(runId, rootTrace);
@@ -1551,6 +1585,8 @@ export class UmaRuntime {
               questions: [],
               steps: currentRun.plan.map((step) => step.title),
             }
+          : reusedPreflight
+            ? reusedPreflight
           : await this.preflight.decide(session, input, controller.signal, runId, preflightTrace);
       // 路由、检查点和下一状态属于同一同步阶段，原子提交后再发布事件，避免逐状态 fsync。
       const preflightStatus = this.events.transaction(() => {
