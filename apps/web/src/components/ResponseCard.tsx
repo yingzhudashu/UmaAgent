@@ -97,6 +97,8 @@ export function ResponseCard({
   const hasSteps = timeline.length > 0;
   const hasPlan = planItems.length > 0 && run?.interactionMode === "plan";
   const terminal = (["completed", "failed", "cancelled"] as ResponseStatus[]).includes(response.status);
+  const qualityActive =
+    qualityOperation && ["submitting", "queued", "running"].includes(qualityOperation.status);
   const copy = async () => {
     try {
       if (!navigator.clipboard) throw new Error("Clipboard unavailable");
@@ -237,26 +239,22 @@ export function ResponseCard({
                 <button
                   type="button"
                   className="text-action"
-                  disabled={qualityOperation?.status === "running"}
+                  disabled={qualityActive}
                   title="只分析答案，不修改内容"
                   onClick={() => onReview(finalAssistant.id)}
                 >
-                  {qualityOperation?.status === "running" && qualityOperation.kind === "review"
-                    ? "审查中…"
-                    : "审查"}
+                  {qualityActive && qualityOperation.kind === "review" ? "审查中…" : "审查"}
                 </button>
               )}
               {finalAssistant && onImprove && (
                 <button
                   type="button"
                   className="text-action"
-                  disabled={qualityOperation?.status === "running"}
+                  disabled={qualityActive}
                   title="根据审查建议生成新答案"
                   onClick={() => onImprove(finalAssistant.id)}
                 >
-                  {qualityOperation?.status === "running" && qualityOperation.kind === "improve"
-                    ? "改进中…"
-                    : "改进"}
+                  {qualityActive && qualityOperation.kind === "improve" ? "改进中…" : "改进"}
                 </button>
               )}
             </ActionMenu>

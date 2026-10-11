@@ -20,6 +20,7 @@ export function bindAgentEvents(
   agent: Agent,
   sessionId: string,
   runId: string,
+  parentMessageId: string,
   turnCount: () => number = () => 0,
   loopGuard?: ToolLoopGuard,
 ): void {
@@ -34,7 +35,8 @@ export function bindAgentEvents(
   const rootTrace = context.activeTraces.get(runId);
   const responseId = context.database.responseForRun(runId)?.id;
   // Run 的模型快照在创建时固定；按模型事件反复读取并解码完整 Run 没有新信息。
-  const modelRef = context.database.getRun(runId).model.ref;
+  const run = context.database.getRun(runId);
+  const modelRef = run.model.ref;
   const flushAssistant = () => {
     if (!assistantItem || !pendingAssistant) return;
     const message = pendingAssistant;
@@ -77,6 +79,8 @@ export function bindAgentEvents(
           role: "assistant",
           status: "streaming",
           content: textFromMessage(event.message),
+          // 每个模型回复都直接指向本次用户消息，质量操作和上下文构建据此找到问题。
+          parentMessageId: parentMessageId || run.messageId,
         });
         streamedLength = item.content.length;
         context.events.emit(sessionId, runId, "message.started", item);

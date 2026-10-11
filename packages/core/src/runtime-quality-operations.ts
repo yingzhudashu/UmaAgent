@@ -146,7 +146,13 @@ export class RuntimeQualityOperations {
     controllers.set(runId, controller);
     try {
       let question: string | undefined;
-      let parentMessageId = target.parentMessageId;
+      // 早期消息可能没有父链；活动分支中最近的前序用户消息是该答案对应的问题。
+      let parentMessageId =
+        target.parentMessageId ??
+        database
+          .listMessages(session.id)
+          .filter((message) => message.role === "user" && message.sequence < target.sequence)
+          .at(-1)?.id;
       while (parentMessageId) {
         const parent = database.getMessage(parentMessageId);
         if (parent.role === "user") {

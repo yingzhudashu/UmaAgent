@@ -49,6 +49,7 @@ import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { UnsavedChanges, useLeaveConfirmation } from "./components/UnsavedChanges.js";
 import { Login } from "./Login.js";
 import { type QualityOperation, useQualityHistory } from "./quality-history.js";
+import { runQualityOperation } from "./quality-operations.js";
 import { requestErrorMessage } from "./request-error.js";
 import { buildConversationEntries } from "./responseTurns.js";
 import { applyDurableEvent, applyStreamingEvent, mergeSessionSnapshot } from "./streaming.js";
@@ -151,7 +152,7 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
     setQualityOperations((current) => {
       const next = { ...current };
       for (const [messageId, operation] of Object.entries(restored))
-        if (current[messageId]?.status !== "running") next[messageId] = operation;
+        if (!current[messageId] || current[messageId]?.runId === operation.runId) next[messageId] = operation;
       return next;
     });
   }, []);
@@ -676,45 +677,15 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
   };
   const startQuality = (messageId: string, kind: "review" | "improve") => {
     const current = qualityOperations[messageId];
-    if (current?.status === "running" || !selected) return;
+    if (current && ["submitting", "queued", "running"].includes(current.status)) return;
+    if (!selected) return;
     const sessionId = selected;
-    setQualityOperations((items) => ({ ...items, [messageId]: { kind, status: "running" } }));
-    const request = kind === "review" ? client.reviewMessage(messageId) : client.improveMessage(messageId);
-    void request
-      .then((started) => {
-        setQualityOperations((items) => ({
-          ...items,
-          [messageId]: { kind, status: "running", runId: started.runId },
-        }));
-        return client.waitForRun(started.runId).then(async (run) => {
-          const assessments = await client.listRunQuality(started.runId);
-          const latest = run.resultMessageId
-            ? (await client.getSession(sessionId)).transcript.find((item) => item.id === run.resultMessageId)
-                ?.content
-            : undefined;
-          setQualityOperations((items) => ({
-            ...items,
-            [messageId]: {
-              kind,
-              status: "completed",
-              runId: started.runId,
-              assessments,
-              ...(latest !== undefined ? { result: latest } : {}),
-            },
-          }));
-          await queryClient.invalidateQueries({ queryKey: ["snapshot", sessionId] });
-        });
-      })
-      .catch((error) => {
-        setQualityOperations((items) => ({
-          ...items,
-          [messageId]: {
-            kind,
-            status: "failed",
-            error: requestErrorMessage(error),
-          },
-        }));
-      });
+    void runQualityOperation(client, messageId, kind, (operation) => {
+      setQualityOperations((items) => ({ ...items, [messageId]: operation }));
+    }).then((result) => {
+      if (result?.run.status === "completed")
+        return queryClient.invalidateQueries({ queryKey: ["snapshot", sessionId] });
+    });
   };
   const signOut = () => {
     clearDrafts();

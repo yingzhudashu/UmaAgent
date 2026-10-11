@@ -1623,6 +1623,7 @@ export class UmaRuntime {
               role: "assistant",
               status: "complete",
               content,
+              parentMessageId: input.messageId,
               payload: {
                 role: "assistant",
                 content: [{ type: "text", text: content }],
@@ -2496,7 +2497,7 @@ ${context.dailyText}`,
         return undefined;
       },
     });
-    this.bindAgentEvents(agent, session.id, runId, () => budget.turns, loopGuard);
+    this.bindAgentEvents(agent, session.id, runId, input.messageId, () => budget.turns, loopGuard);
     const abort = () => agent.abort();
     signal.addEventListener("abort", abort, { once: true });
     try {
@@ -2556,6 +2557,7 @@ ${context.dailyText}`,
     agent: Agent,
     sessionId: string,
     runId: string,
+    parentMessageId: string,
     turnCount: () => number = () => 0,
     loopGuard?: ToolLoopGuard,
   ): void {
@@ -2569,6 +2571,7 @@ ${context.dailyText}`,
       agent,
       sessionId,
       runId,
+      parentMessageId,
       turnCount,
       loopGuard,
     );

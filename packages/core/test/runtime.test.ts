@@ -472,6 +472,7 @@ describe("UmaRuntime preflight", () => {
     const { run, snapshot } = await runOnce(runtime);
     expect(run.status, run.error).toBe("completed");
     expect(snapshot.transcript.at(-1)?.content).toBe("finished");
+    expect(snapshot.transcript.at(-1)?.parentMessageId).toBe(snapshot.transcript.at(-2)?.id);
   });
 
   it("uses the dedicated image generation service instead of the selected model credentials", async () => {
@@ -1550,7 +1551,6 @@ describe("UmaRuntime preflight", () => {
       role: "assistant",
       status: "complete",
       content: "Original answer",
-      parentMessageId: "quality-question",
     });
     const qualityBranch = runtime.database.listBranches(session.id).find((branch) => branch.active);
     runtime.database.db

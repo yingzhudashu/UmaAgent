@@ -112,6 +112,17 @@ const response = (context) => {
   }
   if (context.systemPrompt.includes("Verify whether the latest result"))
     return fauxAssistantMessage(JSON.stringify({ accepted: true, feedback: "" }));
+  if (context.systemPrompt.includes("Review the public answer in its conversation"))
+    return fauxAssistantMessage(
+      JSON.stringify({
+        passed: false,
+        issues: [{ type: "clarity", description: "Faux review issue" }],
+        suggestions: ["Make the answer clearer"],
+        improvedAnswer: "Faux reviewed answer",
+      }),
+    );
+  if (context.systemPrompt.includes("Improve the target public answer in its conversation"))
+    return fauxAssistantMessage(JSON.stringify({ improvedAnswer: "Faux improved answer" }));
   if (context.systemPrompt.includes("Extract durable user facts")) return fauxAssistantMessage("[]");
   if (requestText.includes("configured deterministic read tool")) {
     if (context.messages.some((message) => message.role === "toolResult"))

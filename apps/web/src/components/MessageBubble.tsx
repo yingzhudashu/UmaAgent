@@ -42,6 +42,8 @@ export function MessageBubble({
   const isTool = item.role === "tool";
   const toolSummary =
     item.status === "error" ? "执行失败" : item.status === "streaming" ? "执行中" : "已完成";
+  const qualityActive =
+    qualityOperation && ["submitting", "queued", "running"].includes(qualityOperation.status);
   const copy = async () => {
     try {
       if (!navigator.clipboard) throw new Error("Clipboard unavailable");
@@ -146,9 +148,10 @@ export function MessageBubble({
                     type="button"
                     className="text-action"
                     onClick={onReview}
+                    disabled={qualityActive}
                     title="只分析答案，不修改内容"
                   >
-                    审查
+                    {qualityActive && qualityOperation.kind === "review" ? "审查中…" : "审查"}
                   </button>
                 )}
                 {!isUser && !isTool && onImprove && (
@@ -156,9 +159,10 @@ export function MessageBubble({
                     type="button"
                     className="text-action"
                     onClick={onImprove}
+                    disabled={qualityActive}
                     title="根据审查建议生成新答案"
                   >
-                    改进
+                    {qualityActive && qualityOperation.kind === "improve" ? "改进中…" : "改进"}
                   </button>
                 )}
               </ActionMenu>

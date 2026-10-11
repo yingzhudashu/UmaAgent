@@ -2,7 +2,7 @@ import type { QualityAssessment } from "@uma-agent/protocol";
 
 export type QualityOperationView = {
   kind: "review" | "improve";
-  status: "running" | "completed" | "failed";
+  status: "submitting" | "queued" | "running" | "completed" | "failed";
   error?: string;
   assessments?: readonly QualityAssessment[];
   result?: string;
@@ -18,13 +18,17 @@ export function QualityPanel({
   if (!operation) return null;
   const latest = operation.assessments?.at(-1);
   return (
-    <section className="quality-panel" aria-live="polite">
+    <section className="quality-panel" aria-live="polite" aria-atomic="true">
       <strong>{operation.kind === "review" ? "审查：只分析当前答案" : "改进：根据建议生成新答案"}</strong>
       {operation.kind === "review" && <p className="quality-panel__hint">审查不会修改原答案。</p>}
       {operation.kind === "improve" && (
         <p className="quality-panel__hint">改进会保留原答案，并在其后生成一条新答案。</p>
       )}
-      {operation.status === "running" && <p>正在处理…</p>}
+      {operation.status === "submitting" && <output>正在提交任务…</output>}
+      {operation.status === "queued" && <output>已加入队列，前面的任务完成后开始处理。</output>}
+      {operation.status === "running" && (
+        <output>{operation.kind === "review" ? "正在审查答案…" : "正在根据建议生成答案…"}</output>
+      )}
       {operation.status === "failed" && (
         <>
           <p className="error-text">{operation.error ?? "操作失败"}</p>

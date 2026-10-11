@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 
 export type QualityOperation = {
   kind: "review" | "improve";
-  status: "running" | "completed" | "failed";
+  status: "submitting" | "queued" | "running" | "completed" | "failed";
   runId?: string;
   error?: string;
   assessments?: readonly QualityAssessment[];
