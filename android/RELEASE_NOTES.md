@@ -1,4 +1,4 @@
-# UmaAgent Android 1.4.2（16）
+# UmaAgent Android 1.4.3（16）
 
 ## 当前工作区体验
 
@@ -8,7 +8,7 @@
 
 ## 当前版本
 
-- 1.4.2：统一当前 Core/Protocol/schema 契约，完善队列版本回执、Trace 树展示和跨账号回执隔离。
+- 1.4.3：统一当前 Core/Protocol/schema 契约，完善队列版本回执、Trace 树展示和跨账号回执隔离。
 
 - 与 Core `1.3.0` / Protocol `16`、业务 schema `27` 同步；旧接口与旧本机缓存不再兼容。
 - 手机采用对话、会话、任务、更多四个入口；600dp 起使用侧栏，840dp 起提供会话双栏。
@@ -38,3 +38,4 @@
 ## 本地验收
 
 JVM 测试覆盖 JSON 请求体、协议、更新与取消传播；ShellLayoutTest 使用设备真实 Insets 验证深浅色布局和账号清理。实际执行结果以 [发布验收](../docs/release-acceptance.md) 为准。
+

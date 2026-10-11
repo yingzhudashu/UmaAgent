@@ -1,6 +1,6 @@
 # UmaAgent 当前候选验收
 
-验收对象：Core 1.3.0、Android 源码 1.4.2（versionCode 16；APK 尚未发布）、Protocol v16、HTTP `/api/v16`、业务 SQLite schema 27。本文只记录当前候选的可复核结果；历史日志、截图和隔离数据库仍保存在 `artifacts/acceptance/`，不替代当前结果。
+验收对象：Core 1.3.0、Android 源码 1.4.3（versionCode 16；APK 尚未发布）、Protocol v16、HTTP `/api/v16`、业务 SQLite schema 27。本文只记录当前候选的可复核结果；历史日志、截图和隔离数据库仍保存在 `artifacts/acceptance/`，不替代当前结果。
 
 ## 当前结论
 
@@ -34,7 +34,7 @@ Server release `20261012011000-d83395b` 已 promote 到 `/opt/uma-agent/current`
 
 Android 源码移除回复审查/改进入口并通过 `npm run check:android`。本次另执行 `:app:assembleRelease`，构建成功但只生成 `app-release-unsigned.apk`；Gradle `signingReport` 的 release 配置为 `Config: null`，`apksigner` 无法验证 unsigned 产物。当前机器没有配置正式签名环境变量，服务器发布目录也未发现正式 keystore；依据[Android APK 发布规则](deployment.md#61-发布前置条件)，不能用 Debug 签名或新证书替代正式签名。
 
-生产 `/srv/www/robotclaw/app/latest.json` 仍指向 1.4.1（versionCode 15，release `15-3be11fc`）；`releases.json` 的最高历史版本为 1.4.2（versionCode 16，release `16-cf44345`）。当前源码 1.4.2（versionCode 16）因此不能作为升级版本发布，补齐原正式 keystore 后必须提升到 versionCode 17 并递增 versionName，再比较签名指纹、验证清单和 APK 哈希后原子发布。已安装客户端更新前仍会显示旧按钮；Server 当前代码已移除相应路由，自动化测试确认该 API 返回 404。实体 Android 设备尚未连接，正式 APK 发布前还须完成真实覆盖安装、登录、进程重启、历史读取和消息发送验收。当前 Android 发布结论为**阻塞**，未将 unsigned APK 上传或切换到线上。
+生产 `/srv/www/robotclaw/app/latest.json` 仍指向 1.4.1（versionCode 15，release `15-3be11fc`）；`releases.json` 的最高历史版本为 1.4.3（versionCode 16，release `16-cf44345`）。当前源码 1.4.3（versionCode 16）因此不能作为升级版本发布，补齐原正式 keystore 后必须提升到 versionCode 17 并递增 versionName，再比较签名指纹、验证清单和 APK 哈希后原子发布。已安装客户端更新前仍会显示旧按钮；Server 当前代码已移除相应路由，自动化测试确认该 API 返回 404。实体 Android 设备尚未连接，正式 APK 发布前还须完成真实覆盖安装、登录、进程重启、历史读取和消息发送验收。当前 Android 发布结论为**阻塞**，未将 unsigned APK 上传或切换到线上。
 
 ## 当前契约
 
@@ -78,7 +78,7 @@ Android 源码移除回复审查/改进入口并通过 `npm run check:android`�
 
 ## Android 六配置矩阵
 
-证据目录为 `artifacts/acceptance/android-matrix-20261011-124744/`；API 36 模拟器、host GPU、Android 1.4.2 debug 包。六组功能与布局检查全部通过、截图无效项为 0，正文显示 p95 均低于 100ms，未出现超过 700ms 的冻结帧。
+证据目录为 `artifacts/acceptance/android-matrix-20261011-124744/`；API 36 模拟器、host GPU、Android 1.4.3 debug 包。六组功能与布局检查全部通过、截图无效项为 0，正文显示 p95 均低于 100ms，未出现超过 700ms 的冻结帧。
 
 | 配置 | 正文显示 p95 | 最大帧 | 结果 |
 | --- | ---: | ---: | --- |
@@ -133,3 +133,4 @@ npm run test:real:embedding
 ```
 
 设备矩阵入口为 `python scripts/android-device-matrix.py`。容器目标另执行 `docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config --quiet`。设计规格见[前端设计](frontend-design.zh-CN.md)，后端、部署、工程基线和代码审查中的版本与接口由 `npm run check:docs-contracts` 持续校验。
+

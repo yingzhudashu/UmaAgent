@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本为 Core 1.3.0、Android 1.4.2（versionCode 16）、Protocol v16、SQLite schema 27。服务只接受当前格式；版本不匹配直接拒绝启动，旧数据库保留在匹配版本的隔离恢复环境，不提供运行时兼容或迁移。
+当前版本为 Core 1.3.0、Android 1.4.3（versionCode 16）、Protocol v16、SQLite schema 27。服务只接受当前格式；版本不匹配直接拒绝启动，旧数据库保留在匹配版本的隔离恢复环境，不提供运行时兼容或迁移。
 
 ## 已落地的边界
 
@@ -50,3 +50,4 @@ Android 设备矩阵脚本为 scripts/android-device-matrix.py，使用独立 de
 真实 Provider smoke、eval、20 请求性能与最多五分钟或 50 Run 的短时 soak 独立运行；配置只从指定文件和环境变量读取。仍不发送闲鱼真实消息。当前支持范围为 Windows Native、Web/PWA 和 Android 模拟器；Linux Native、Docker、实体真机及无障碍专项在对应部署或发布面启用前执行，不阻塞当前范围的通过结论。
 
 本地结果集中记录在 [发布验收](release-acceptance.md)，其他文档不复制测试数量和性能结论。
+
