@@ -1,10 +1,10 @@
 # UmaAgent 当前候选验收
 
-验收对象：Core 1.3.0、Android 1.4.2（versionCode 16）、Protocol v16、HTTP `/api/v16`、业务 SQLite schema 27。本文只记录当前候选的可复核结果；历史日志、截图和隔离数据库仍保存在 `artifacts/acceptance/`，不替代当前结果。
+验收对象：Core 1.3.0、Android 源码 1.4.2（versionCode 16；APK 尚未发布）、Protocol v16、HTTP `/api/v16`、业务 SQLite schema 27。本文只记录当前候选的可复核结果；历史日志、截图和隔离数据库仍保存在 `artifacts/acceptance/`，不替代当前结果。
 
 ## 当前结论
 
-**通过（Server/Web 当前候选）；Android APK 发布阻塞。** Windows Native Core、Web/PWA、真实 Provider 主链路、真实 Embedding 隔离 smoke、数据隔离、Trace 和性能门禁均已通过。Android 新源码通过 Gradle JVM 测试与 instrumentation 编译；六配置设备矩阵是上一版 APK 的证据，不能替代本次设备验收或新 APK 发布。架构门禁已通过，六个登记的大文件作为受控维护债务持续监测。Docker、Linux、实体真机、真实渠道、大规模知识库索引吞吐和无障碍专项属于目标环境适配证据，列为非阻塞缺口；启用对应部署或发布面前必须补做。
+**通过（Server/Web 当前候选）；Android APK 发布阻塞。** Windows Native Core、Web/PWA、真实 Provider 主链路、真实 Embedding 隔离 smoke、数据隔离、Trace 和性能门禁均已通过。Android 新源码通过 Gradle JVM 测试与 instrumentation 编译；六配置设备矩阵是上一版 APK 的证据，不能替代本次设备验收或新 APK 发布。架构门禁已通过，六个登记的大文件持续受尺寸基线监测，其中五个当前超过 900 行，CLI `main.ts` 为 894 行。Docker、Linux、实体真机、真实渠道、大规模知识库索引吞吐和无障碍专项属于目标环境适配证据，列为非阻塞缺口；启用对应部署或发布面前必须补做。
 
 当前候选真实 Provider smoke、3 项评测、20 请求性能和短 soak 已通过，使用隔离配置、脚本创建的临时 state、workspace、账号和令牌。20 请求性能 p50/p95/p99 为 6.31/18.50/18.81ms，RSS 峰值 121,352,192B，WAL 峰值 2,270,184B；短 soak 6 次请求全部完成，耗时 263.21s，RSS 峰值 117,612,544B，WAL 峰值 2,245,464B。真实 Embedding 隔离 smoke 已通过：`node --env-file=.env scripts/real-embedding-smoke.mjs`（`UMA_REAL_API=1`，两条输入、1024 维、315ms）。未启动闲鱼 Adapter，也未发送闲鱼消息。
 
@@ -30,7 +30,11 @@
 
 Server release `20261012011000-d83395b` 已 promote 到 `/opt/uma-agent/current`。`deploy/promote-native-release.sh` 创建在线备份 `/srv/backups/uma-agent/state-20261011171654.db`，并通过 release 依赖/schema 检查、保护用户指纹前后对比和数据库完整性门禁。部署后 Core、Browser Worker、Xianyu Adapter 均为 active；`/api/v16/health/live` 与 `/api/v16/health/ready` 均返回 200，Protocol v16、schema 27。
 
-Android 源码移除回复审查/改进入口并通过 `npm run check:android`，但本次未发布 APK。正式 `signingReport` 的 release 配置为 `Config: null`；当前环境未注入线上 keystore。依据[Android APK 发布规则](deployment.md#61-发布前置条件)，不能用 Debug 或新证书替代正式签名。线上 `latest.json` 当前仍指向版本 1.4.1（versionCode 15），历史清单最高为 1.4.2（versionCode 16）；当前代码版本尚无可发布的已签名 APK，已安装 Android 客户端在更新前仍会显示旧按钮，而 Server 端对应 API 已移除并返回 404。需在受控密钥存储中配置原正式 keystore 后，递增 versionCode 并发布新 APK，才算 Android 端 rollout 完成。
+2026-10-12 最终复核确认 `/opt/uma-agent/current` 仍指向 `20261012011000-d83395b`；`uma-agent.service`、`uma-browser-worker.service`、`uma-xianyu-adapter.service` 均为 active，loopback live/ready 均返回 HTTP 200，响应版本为 Core 1.3.0、Protocol 16。无额外代码变更需要再次部署；本轮文档修订不改变已部署二进制。
+
+Android 源码移除回复审查/改进入口并通过 `npm run check:android`。本次另执行 `:app:assembleRelease`，构建成功但只生成 `app-release-unsigned.apk`；Gradle `signingReport` 的 release 配置为 `Config: null`，`apksigner` 无法验证 unsigned 产物。当前机器没有配置正式签名环境变量，服务器发布目录也未发现正式 keystore；依据[Android APK 发布规则](deployment.md#61-发布前置条件)，不能用 Debug 签名或新证书替代正式签名。
+
+生产 `/srv/www/robotclaw/app/latest.json` 仍指向 1.4.1（versionCode 15，release `15-3be11fc`）；`releases.json` 的最高历史版本为 1.4.2（versionCode 16，release `16-cf44345`）。当前源码 1.4.2（versionCode 16）因此不能作为升级版本发布，补齐原正式 keystore 后必须提升到 versionCode 17 并递增 versionName，再比较签名指纹、验证清单和 APK 哈希后原子发布。已安装客户端更新前仍会显示旧按钮；Server 当前代码已移除相应路由，自动化测试确认该 API 返回 404。实体 Android 设备尚未连接，正式 APK 发布前还须完成真实覆盖安装、登录、进程重启、历史读取和消息发送验收。当前 Android 发布结论为**阻塞**，未将 unsigned APK 上传或切换到线上。
 
 ## 当前契约
 
@@ -43,10 +47,10 @@ Android 源码移除回复审查/改进入口并通过 `npm run check:android`�
 
 | 门禁 | 结果 | 证据或命令 |
 | --- | --- | --- |
-| 架构检查 | 通过（受控债务） | `npm run check:architecture` 通过；六个登记文件超过 900 行但均受尺寸基线约束，新增或超基线文件会失败 |
+| 架构检查 | 通过（受控债务） | `npm run check:architecture` 通过；六个文件登记在尺寸基线，其中五个当前超过 900 行，CLI `main.ts` 为 894 行；超基线或未登记的大文件会失败 |
 | 文档契约检查 | 通过 | `npm run check:docs-contracts`；14 个 Markdown 文件、版本/schema/命令/本地链接一致 |
 | Biome 与 TypeScript | 通过 | `npm run check` |
-| 单元测试与覆盖率 | 通过 | 当前候选 `npm run test:coverage`；59 个文件、345 项，语句 81.86%、分支 73.58%、函数 76.54%、行 84.66% |
+| 单元测试与覆盖率 | 通过 | 当前候选 `npm run test:coverage`；59 个文件、346 项，语句 81.86%、分支 73.58%、函数 76.54%、行 84.66% |
 | 完整构建 | 通过 | 当前候选 `npm run build`；所有 workspace 编译、Web 生产包及 Workers 构建通过 |
 | 嵌入 Web 构建 | 通过 | 当前候选 `npm run build:web:embed`；CSS 113.88 KiB，入口 JS 536.39 KiB |
 | Faux 评测 | 通过 | 当前候选 `npm run test:eval:faux`；6/6 |
@@ -102,7 +106,7 @@ Android 源码移除回复审查/改进入口并通过 `npm run check:android`�
 2. Docker CLI 当前不可用；Native 部署链路已通过，Compose 仅在选择容器部署时执行展开、镜像构建和健康检查。
 3. 真实 Embedding 两条输入隔离 smoke 已通过；大规模知识库索引吞吐和长时供应商限流样本未执行。启用大规模知识库前执行独立容量测试。
 4. Linux 完整性能矩阵、外接键盘/读屏专项尚未执行；它们是 Linux 或无障碍目标发布前的适配检查。真实闲鱼消息仍禁止发送，渠道仅可用隔离账号和模拟数据验收。
-5. `database.ts`、`runtime.ts`、`App.tsx`、Server `app.ts`、Client `index.ts` 和 CLI `main.ts` 仍超过 900 行，作为已登记的受控维护债务保留；尺寸基线防止继续增长，后续拆分不作为本候选发布硬阻塞。
+5. `database.ts`、`runtime.ts`、`App.tsx`、Server `app.ts` 和 Client `index.ts` 超过 900 行；CLI `main.ts` 当前 894 行。六个文件都登记在尺寸基线中，后续职责拆分不作为本候选发布硬阻塞。
 
 ## 唯一验收入口
 

@@ -8,7 +8,7 @@
 - `UmaDatabase` 保留连接、schema 校验和事务入口；Session CRUD 与消息/附件只读投影分别由 `SessionRepository`、`MessageRepository` 承担。
 - Snapshot、History 和消息列表使用批量消息/附件查询；事件分页直接读取 Session cursor，不重新构建 Snapshot。
 - WebSocket 发送缓冲超过 4 MiB 时关闭连接并要求客户端按 Snapshot/cursor 恢复，避免无界内存增长。
-- 架构检查阻止旧 API 残留、跨包深层导入、非入口裸 `console.*`，并报告大文件债务。六个已登记大文件按尺寸基线受控，不能继续增长；未登记的大文件直接失败。具体债务与复测结果见[发布验收](release-acceptance.md)。
+- 架构检查阻止旧 API 残留、跨包深层导入、非入口裸 `console.*`，并报告大文件债务。六个登记文件受尺寸基线约束，超基线或未登记的大文件直接失败；当前五个超过 900 行，CLI `main.ts` 为 894 行。具体债务与复测结果见[发布验收](release-acceptance.md)。
 
 ## 性能预算
 
