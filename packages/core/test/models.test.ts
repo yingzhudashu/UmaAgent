@@ -74,6 +74,22 @@ describe("ModelRegistry snapshots", () => {
     expect(() => registry.snapshot({ provider: "openai", id: "missing" })).toThrow("Unknown model");
   });
 
+  it("omits unsupported off/minimal efforts for GPT-6.1 Sol", () => {
+    const input = config();
+    const [model] = input.models;
+    if (!model) throw new Error("fixture model is missing");
+    model.id = "gpt-6.1-sol";
+    input.defaultModel = { provider: "openai", id: model.id };
+    input.roles = {
+      default: input.defaultModel,
+      reasoning: input.defaultModel,
+      fast: input.defaultModel,
+      vision: input.defaultModel,
+    };
+    const registry = new ModelRegistry(input);
+    expect(registry.get(input.defaultModel).thinkingLevelMap).toEqual({ off: null, minimal: null });
+  });
+
   it("requires provider entries to share connection configuration", () => {
     const input = config();
     const [model] = input.models;

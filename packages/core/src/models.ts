@@ -7,6 +7,12 @@ import type { ModelRef, ModelSnapshot } from "@uma-agent/protocol";
 import type { UmaConfig, UmaModelConfig } from "./types.js";
 
 function toModel(config: UmaModelConfig): Model<UmaModelConfig["api"]> {
+  // 网关拒绝 gpt-6.1-sol 的 effort=none/minimal。控制调用省略 reasoning；
+  // 显式关闭或 minimal 时由 pi-ai 收敛到网关支持的最低等级 low。
+  const thinkingLevelMap =
+    config.provider === "openai" && config.id === "gpt-6.1-sol"
+      ? { off: null, minimal: null }
+      : { off: "none" };
   return {
     id: config.id,
     name: config.name,
@@ -21,7 +27,7 @@ function toModel(config: UmaModelConfig): Model<UmaModelConfig["api"]> {
     // Explicitly disable hidden provider reasoning for small control calls.
     // Without this map, some gateways spend a 64-token classification budget
     // entirely on reasoning and close the stream without an answer.
-    thinkingLevelMap: { off: "none" },
+    thinkingLevelMap,
     // The configured OpenAI-compatible gateway rejects the SDK's default
     // `OpenAI/JS ...` user agent. Keep the request identifiable without
     // exposing the SDK implementation detail upstream.
