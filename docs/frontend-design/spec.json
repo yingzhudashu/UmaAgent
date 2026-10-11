@@ -486,7 +486,7 @@
       "fields": [
         {
           "label": "模型",
-          "value": "gpt-6-astra",
+          "value": "gpt-6.1-sol",
           "rule": "内置项+自定义名称；provider保持当前值",
           "kind": "select"
         },

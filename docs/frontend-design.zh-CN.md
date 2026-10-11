@@ -705,7 +705,7 @@ Android底部“对话”进入当前会话UM-05，无会话时显示新会话�
 
 |控件（从上到下）|类型|图中示例|校验/显示合同|
 |---|---|---|---|
-|模型|select|gpt-6-astra|内置项+自定义名称；provider保持当前值|
+|模型|select|gpt-6.1-sol|内置项+自定义名称；provider保持当前值|
 |自定义模型名|input|my-model|1–200字符UI上限；不含空白控制字符；相同provider/id去重|
 |思考强度|select|high|仅协议枚举与模型能力交集|
 |消息策略|select|queue|queue排队 / preemptive抢占|
