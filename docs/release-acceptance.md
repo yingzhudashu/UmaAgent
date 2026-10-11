@@ -8,6 +8,12 @@
 
 当前候选真实 Provider smoke、3 项评测、20 请求性能和短 soak 已通过，使用隔离配置、脚本创建的临时 state、workspace、账号和令牌。20 请求性能 p50/p95/p99 为 6.31/18.50/18.81ms，RSS 峰值 121,352,192B，WAL 峰值 2,270,184B；短 soak 6 次请求全部完成，耗时 263.21s，RSS 峰值 117,612,544B，WAL 峰值 2,245,464B。真实 Embedding 隔离 smoke 已通过：`node --env-file=.env scripts/real-embedding-smoke.mjs`（`UMA_REAL_API=1`，两条输入、1024 维、315ms）。未启动闲鱼 Adapter，也未发送闲鱼消息。
 
+## 服务器部署结果
+
+2026-10-11 已使用提交 `3144b718f6d4` 完成生产 Native promote。release `20261011074257-3144b718f6d4` 通过依赖链接、Protocol v16/schema 27、包导入和保护用户指纹校验；脚本先创建在线备份，再原子切换 `/opt/uma-agent/current`。部署后 Core、Browser Worker 和 Xianyu Adapter 均为 active，`/api/v16/health/live` 与 `/api/v16/health/ready` 均返回 200，版本 1.3.0、Protocol 16。备份文件保留在服务器受保护目录，未进入仓库。
+
+同一构建曾在 staging 尝试启动；因 staging 历史数据库仍是旧 schema，新版本按契约拒绝启动，脚本自动恢复原 staging release。该回滚未影响生产，也未执行任何运行时迁移；staging 后续应先恢复匹配当前 schema 27 的隔离备份再复测。
+
 ## 当前契约
 
 - 版本事实源为根目录 `RELEASE`、根 `package.json` 和 Android `app/build.gradle.kts`。
