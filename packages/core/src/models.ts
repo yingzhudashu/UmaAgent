@@ -7,8 +7,8 @@ import type { ModelRef, ModelSnapshot } from "@uma-agent/protocol";
 import type { UmaConfig, UmaModelConfig } from "./types.js";
 
 function toModel(config: UmaModelConfig): Model<UmaModelConfig["api"]> {
-  // 网关拒绝 gpt-6.1-sol 的 effort=none/minimal。控制调用省略 reasoning；
-  // 显式关闭或 minimal 时由 pi-ai 收敛到网关支持的最低等级 low。
+  // 网关拒绝 gpt-6.1-sol 的 effort=none/minimal。关闭思考时省略 reasoning；
+  // minimal 由 pi-ai 收敛到网关支持的最低等级 low。
   const thinkingLevelMap =
     config.provider === "openai" && config.id === "gpt-6.1-sol"
       ? { off: null, minimal: null }
