@@ -123,7 +123,7 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 
 - `server.workspaceRoots`：服务器允许建立会话的真实目录根列表
 - `server.webOrigins`：允许访问 Core 的精确 Web Origin，不接受路径或通配符
-- `providers`、`models`、`roles`：Provider 凭据、模型 profile 和 default/reasoning/fast/vision 路由；所有角色必须显式配置
+- `providers`、`models`、`roles`：Provider 凭据、模型 profile 和 default/reasoning/fast/vision 路由；所有角色必须显式配置。当前发布模板四个角色默认均为 `openai/gpt-6.1-sol`，已有 session 的模型字段也应在切换时统一更新；历史 Run 快照保持不变
 - `skillsDirs`：递归扫描 `SKILL.md`；Core 内置 `builtin-web`、`builtin-stackexchange`、`skill-creator`、`skill-vetter`，外部 Skill 可使用 MiniAgent 风格的 `keywords`、`metadata.env/bins/os/always`、`scope`、`user_invocable` 和 `disable_model_invocation`
 - `mcpServers`：`stdio` 需要 `command/args`，`http` 需要 Streamable HTTP `url`
 - 非回环 HTTP MCP 应设置 `authTokenEnv`，Core 从该环境变量注入 Bearer Token

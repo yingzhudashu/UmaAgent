@@ -12,6 +12,8 @@
 
 2026-10-11 已使用提交 `3144b718f6d4` 完成生产 Native promote。release `20261011074257-3144b718f6d4` 通过依赖链接、Protocol v16/schema 27、包导入和保护用户指纹校验；脚本先创建在线备份，再原子切换 `/opt/uma-agent/current`。部署后 Core、Browser Worker 和 Xianyu Adapter 均为 active，`/api/v16/health/live` 与 `/api/v16/health/ready` 均返回 200，版本 1.3.0、Protocol 16。备份文件保留在服务器受保护目录，未进入仓库。
 
+2026-10-11 已将生产配置的 `default`、`reasoning`、`fast` 和 `vision` 角色统一切换为 `openai/gpt-6.1-sol`，并重启 Core 后通过 `/api/v16/health/ready`。停服前已创建在线数据库备份 `state-default-model-20261011111225.db`；随后在事务中将现有 6 个 session 更新为 `openai/gpt-6.1-sol`。更新后 schema 为 27，`integrity_check=ok`、外键检查为空，session 不匹配数为 0；users、sessions、messages、runs、attachments 行数保持为 6/6/1209/110/55，110 条历史 Run 的 `model_snapshot_json` 哈希保持不变。该变更只影响现有 session 的后续消息和新 Run，不改写历史运行快照、消息、附件或账号数据。
+
 同一构建曾在 staging 尝试启动；因 staging 历史数据库仍是旧 schema，新版本按契约拒绝启动，脚本自动恢复原 staging release。该回滚未影响生产，也未执行任何运行时迁移；staging 后续应先恢复匹配当前 schema 27 的隔离备份再复测。
 
 ## 当前契约

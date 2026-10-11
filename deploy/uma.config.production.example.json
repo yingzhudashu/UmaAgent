@@ -52,10 +52,10 @@
     }
   },
   "roles": {
-    "default": { "provider": "openai", "id": "gpt-5.6-sol" },
-    "reasoning": { "provider": "openai", "id": "gpt-5.6-sol" },
-    "fast": { "provider": "openai", "id": "gpt-5.6-sol" },
-    "vision": { "provider": "openai", "id": "gpt-5.6-sol" }
+    "default": { "provider": "openai", "id": "gpt-6.1-sol" },
+    "reasoning": { "provider": "openai", "id": "gpt-6.1-sol" },
+    "fast": { "provider": "openai", "id": "gpt-6.1-sol" },
+    "vision": { "provider": "openai", "id": "gpt-6.1-sol" }
   },
   "embedding": {
     "enabled": true,

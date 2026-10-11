@@ -39,14 +39,14 @@
       "api": "openai-completions",
       "contextWindow": 258000,
       "maxOutputTokens": 128000,
-      "capabilities": { "tools": true, "vision": false, "reasoning": true, "structuredOutput": true }
+      "capabilities": { "tools": true, "vision": true, "reasoning": true, "structuredOutput": true }
     }
   },
   "roles": {
-    "default": { "provider": "openai", "id": "gpt-5.6-sol" },
-    "reasoning": { "provider": "openai", "id": "gpt-5.6-sol" },
-    "fast": { "provider": "openai", "id": "gpt-5.6-sol" },
-    "vision": { "provider": "openai", "id": "gpt-5.6-sol" }
+    "default": { "provider": "openai", "id": "gpt-6.1-sol" },
+    "reasoning": { "provider": "openai", "id": "gpt-6.1-sol" },
+    "fast": { "provider": "openai", "id": "gpt-6.1-sol" },
+    "vision": { "provider": "openai", "id": "gpt-6.1-sol" }
   },
   "defaultThinkingLevel": "medium",
   "embedding": {
