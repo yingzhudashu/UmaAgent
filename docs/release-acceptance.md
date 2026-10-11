@@ -18,6 +18,8 @@
 
 同一构建曾在 staging 尝试启动；因 staging 历史数据库仍是旧 schema，新版本按契约拒绝启动，脚本自动恢复原 staging release。该回滚未影响生产，也未执行任何运行时迁移；staging 后续应先恢复匹配当前 schema 27 的隔离备份再复测。
 
+2026-10-11 修复了回复下方“审查/改进”操作：普通助手消息此前没有持久化指向对应用户消息的父链，质量 Run 因而找不到待审查问题并失败；新回复和澄清回复现在记录父消息，既有缺少父链的历史记录从活动分支最近的前序用户消息解析，无需数据迁移。Web 点击后立即显示提交/排队/执行状态，按 Run 终态显示错误；改进正文从质量历史读取，避免因结果消息不属于活动分支而空白。提交 `33415c4` 部署为 Native release `20261011135637-33415c4`，创建在线备份 `state-20261011140416.db`；Native promote、依赖和包导入检查、受保护用户指纹校验均通过，Core、Browser Worker、Xianyu Adapter 均 active，live/ready 均返回 200，schema 仍为 27。验收命令 `npm run check`、`npm run test:coverage`、`npm run build`、`npm run test:web:e2e` 均通过；Vitest 62 个文件/356 项，覆盖率语句 81.91%、分支 73.27%、函数 77.03%、行 84.67%，Web E2E 37/37。
+
 ## 当前契约
 
 - 版本事实源为根目录 `RELEASE`、根 `package.json` 和 Android `app/build.gradle.kts`。
@@ -32,12 +34,12 @@
 | 架构检查 | 通过（受控债务） | `npm run check:architecture` 通过；六个登记文件超过 900 行但均受尺寸基线约束，新增或超基线文件会失败 |
 | 文档契约检查 | 通过 | `npm run check:docs-contracts`；14 个 Markdown 文件、版本/schema/命令/本地链接一致 |
 | Biome 与 TypeScript | 通过 | `npm run check` |
-| 单元测试与覆盖率 | 通过 | `npm run test:coverage`；61 个文件、351 项，语句 81.90%、分支 73.24%、函数 77.02%、行 84.66% |
+| 单元测试与覆盖率 | 通过 | `npm run test:coverage`；62 个文件、356 项，语句 81.91%、分支 73.27%、函数 77.03%、行 84.67% |
 | 完整构建 | 通过 | `npm run build` |
 | 嵌入 Web 构建 | 通过 | `npm run build:web:embed`；CSS 114.33 KiB，入口 JS 540.84 KiB |
 | Faux 评测 | 通过 | `npm run test:eval:faux`；6/6 |
 | Faux 四小时 soak | 通过 | `artifacts/acceptance/soak-1791685462712/result.json`；约 4 小时、2615 条消息、游标 31416、RSS 峰值 158,969,856B、双库 WAL 峰值 2,661,584B |
-| Web 全量 E2E | 通过 | `npm run test:web:e2e`；36/36 |
+| Web 全量 E2E | 通过 | `npm run test:web:e2e`；37/37，包含审查/改进进度与结果回归 |
 | Android JVM/instrumentation 编译 | 通过 | `npm run check:android`；Gradle Debug 单测与 instrumentation Kotlin 编译 |
 | 前端设计产物 | 通过 | `python docs/frontend-design/render.py`、`python docs/frontend-design/validate.py`；32 页面、85 动作、154 图、0 问题 |
 
