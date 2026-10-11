@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-**通过（当前支持范围）。** Windows Native Core、Web/PWA、Android 模拟器六配置、真实 Provider 主链路、真实 Embedding 隔离 smoke、数据隔离、Trace 和性能门禁均已通过。架构门禁已通过，六个登记的大文件作为受控维护债务持续监测。Docker、Linux、实体真机、真实渠道、大规模知识库索引吞吐和无障碍专项属于目标环境适配证据，列为非阻塞缺口；启用对应部署或发布面前必须补做。
+**通过（Server/Web 当前候选）；Android APK 发布阻塞。** Windows Native Core、Web/PWA、真实 Provider 主链路、真实 Embedding 隔离 smoke、数据隔离、Trace 和性能门禁均已通过。Android 新源码通过 Gradle JVM 测试与 instrumentation 编译；六配置设备矩阵是上一版 APK 的证据，不能替代本次设备验收或新 APK 发布。架构门禁已通过，六个登记的大文件作为受控维护债务持续监测。Docker、Linux、实体真机、真实渠道、大规模知识库索引吞吐和无障碍专项属于目标环境适配证据，列为非阻塞缺口；启用对应部署或发布面前必须补做。
 
 当前候选真实 Provider smoke、3 项评测、20 请求性能和短 soak 已通过，使用隔离配置、脚本创建的临时 state、workspace、账号和令牌。20 请求性能 p50/p95/p99 为 6.31/18.50/18.81ms，RSS 峰值 121,352,192B，WAL 峰值 2,270,184B；短 soak 6 次请求全部完成，耗时 263.21s，RSS 峰值 117,612,544B，WAL 峰值 2,245,464B。真实 Embedding 隔离 smoke 已通过：`node --env-file=.env scripts/real-embedding-smoke.mjs`（`UMA_REAL_API=1`，两条输入、1024 维、315ms）。未启动闲鱼 Adapter，也未发送闲鱼消息。
 
@@ -25,6 +25,12 @@
 当前候选已从 Web、Android、CLI、Client SDK、Server API、Core Runtime 和 Protocol 中删除助手回复的审查/改进入口及执行链，并移除 UM-09 设计页、对应交互图和过期测试。系统管理员质量诊断、评测、记忆事实审核及 Skill 审查仍是独立能力，不在本次删除范围内。schema 维持 27，不做迁移；旧质量 Run 类型及质量记录表只保留为历史数据，不再提供新建入口。
 
 本次验证通过：`npm run check`、`npm run test:coverage`（59 文件/346 项）、`npm run build`、`npm run build:web:embed`、`npm run check:android`、`npm run test:eval:faux`（6/6）、`npm run test:perf`、`npm run test:web:e2e`（37/37）及 `python docs/frontend-design/validate.py`（31 页/82 动作/149 图/0 问题）。当前 20 请求性能结果为 API p95 5.84ms、事件分页 p95 1.58ms、RSS 112,246,784B、双库 WAL 2,224,864B、单核等效 CPU 平均/峰值 4.3437%、事件循环 p95 30.10ms，均低于现有门槛。Web E2E 断言助手回复不再出现审查、改进按钮；Server 测试断言旧 API 路径返回 404；Core 数据库测试确认历史 `review` Run 记录仍可读取。
+
+## 2026-10-12 生产部署与 Android 发布状态
+
+Server release `20261012011000-d83395b` 已 promote 到 `/opt/uma-agent/current`。`deploy/promote-native-release.sh` 创建在线备份 `/srv/backups/uma-agent/state-20261011171654.db`，并通过 release 依赖/schema 检查、保护用户指纹前后对比和数据库完整性门禁。部署后 Core、Browser Worker、Xianyu Adapter 均为 active；`/api/v16/health/live` 与 `/api/v16/health/ready` 均返回 200，Protocol v16、schema 27。
+
+Android 源码移除回复审查/改进入口并通过 `npm run check:android`，但本次未发布 APK。正式 `signingReport` 的 release 配置为 `Config: null`；当前环境未注入线上 keystore。依据[Android APK 发布规则](deployment.md#61-发布前置条件)，不能用 Debug 或新证书替代正式签名。线上 `latest.json` 当前仍指向版本 1.4.1（versionCode 15），历史清单最高为 1.4.2（versionCode 16）；当前代码版本尚无可发布的已签名 APK，已安装 Android 客户端在更新前仍会显示旧按钮，而 Server 端对应 API 已移除并返回 404。需在受控密钥存储中配置原正式 keystore 后，递增 versionCode 并发布新 APK，才算 Android 端 rollout 完成。
 
 ## 当前契约
 
