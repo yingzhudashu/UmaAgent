@@ -7,6 +7,52 @@ const mathCache = new Map<string, string>();
 const messageCache = new Map<string, string>();
 let cachedCharacters = 0;
 
+/**
+ * 只有在前一段语法已经闭合时，才允许把新的纯文本段落直接接到旧 HTML。
+ * 这条检查故意偏保守：遇到可能跨空行继续解析的 Markdown 结构就回退完整解析，
+ * 保证流式优化不会改变代码、公式、链接或强调语义。
+ */
+function stableMarkdownPrefix(content: string): boolean {
+  // DOMPurify 会补齐或改写 HTML 标签，原样拼接无法保证输出与完整清洗一致。
+  if (content.includes("<")) return false;
+  let fence: string | undefined;
+  for (const line of content.split("\n")) {
+    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!match) continue;
+    const marker = match[1] as string;
+    const trailing = match[2] as string;
+    if (!fence) {
+      // CommonMark 不允许反引号围栏的信息串再包含反引号。
+      if (marker[0] !== "`" || !trailing.includes("`")) fence = marker;
+    } else if (marker[0] === fence[0] && marker.length >= fence.length && trailing.trim().length === 0) {
+      fence = undefined;
+    }
+  }
+  if (fence) return false;
+  const withoutEscaped = content.replace(/\\[\\`*_{}[\]()#+.!$~>-]/g, "");
+  if ((withoutEscaped.match(/`/g)?.length ?? 0) % 2 !== 0) return false;
+  if ((withoutEscaped.match(/\$/g)?.length ?? 0) % 2 !== 0) return false;
+  if ((content.match(/\\\[/g)?.length ?? 0) !== (content.match(/\\\]/g)?.length ?? 0)) return false;
+  if ((content.match(/\\\(/g)?.length ?? 0) !== (content.match(/\\\)/g)?.length ?? 0)) return false;
+  if ((withoutEscaped.match(/\[/g)?.length ?? 0) !== (withoutEscaped.match(/\]/g)?.length ?? 0)) return false;
+  if ((withoutEscaped.match(/\*/g)?.length ?? 0) % 2 !== 0) return false;
+  if ((withoutEscaped.match(/_/g)?.length ?? 0) % 2 !== 0) return false;
+  return true;
+}
+
+function appendPlainParagraph(
+  content: string,
+  previousContent: string,
+  previousHtml: string,
+): string | undefined {
+  if (!previousContent || !previousHtml || !content.startsWith(previousContent)) return undefined;
+  const suffix = content.slice(previousContent.length);
+  const paragraph = /^\n\n([\p{L}\p{N}][\p{L}\p{N} _-]*)$/u.exec(suffix)?.[1];
+  if (!paragraph || !stableMarkdownPrefix(previousContent)) return undefined;
+  if (!/<\/(?:p|h[1-6]|ul|ol|blockquote|pre|table|button)>\s*$/u.test(previousHtml)) return undefined;
+  return `${previousHtml}<p>${paragraph}</p>\n`;
+}
+
 // 扩展交由 Markdown lexer 调度，代码块和转义内容不会被全局正则误替换。
 const parser = new Marked({
   gfm: true,
@@ -92,6 +138,18 @@ export function renderMessage(content: string): string {
     }
   }
   return rendered;
+}
+
+/** 每个正文宿主独立保存前缀；不满足严格条件时回到唯一的清洗解析入口。 */
+export function createMessageRenderer(): (content: string) => string {
+  let previousContent = "";
+  let previousHtml = "";
+  return (content: string) => {
+    const html = appendPlainParagraph(content, previousContent, previousHtml) ?? renderMessage(content);
+    previousContent = content;
+    previousHtml = html;
+    return html;
+  };
 }
 
 export { updateMessageElement } from "./dom.js";

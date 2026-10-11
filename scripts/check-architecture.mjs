@@ -5,6 +5,14 @@ const roots = ["packages", "apps"];
 const ignored = new Set(["dist", "dist-types", "coverage", "node_modules", "test-results", ".vite"]);
 const sourceExtensions = new Set([".ts", ".tsx", ".mjs"]);
 const baseline = JSON.parse(await readFile("scripts/architecture-baseline.json", "utf8"));
+const contractFiles = [
+  "README.md",
+  "docs/README.md",
+  "docs/backend-design.zh-CN.md",
+  "docs/architecture-quality.md",
+  "docs/engineering-baseline.md",
+  "android/RELEASE_NOTES.md",
+];
 const files = [];
 
 async function walk(directory) {
@@ -39,6 +47,14 @@ for (const file of files) {
     violations.push(`${name}: use structured logger instead of console.*`);
   if (!isTest && /["'`]\/api\/v(?:[0-9]|1[0-5])(?:\/|\b)/.test(content))
     violations.push(`${name}: stale API version reference`);
+}
+
+for (const file of contractFiles) {
+  const content = await readFile(file, "utf8");
+  if (/schema (?:24|25|26)\b|schema (?:=|：)(?:24|25|26)\b|SQLite schema (?:24|25|26)\b/u.test(content))
+    violations.push(`${file}: stale schema reference`);
+  if (/Android 1\.4\.[01]|1\.4\.[01].*versionCode|版本.*1\.4\.[01]/u.test(content))
+    violations.push(`${file}: stale Android version reference`);
 }
 
 if (violations.length > 0) {

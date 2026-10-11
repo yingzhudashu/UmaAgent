@@ -15,19 +15,6 @@ export function TracePanel({ client, runId }: { client: UmaClient; runId: string
   const spans = query.data?.pages.flatMap((page) => page.spans) ?? [];
   const traceId = query.data?.pages[0]?.traceId ?? "";
   const [copyStatus, setCopyStatus] = useState("");
-  const byId = new Map(spans.map((span) => [span.spanId, span]));
-  const depth = (parent: string | undefined): number => {
-    let count = 0;
-    const seen = new Set<string>();
-    while (parent && !seen.has(parent) && count < 8) {
-      seen.add(parent);
-      const span = byId.get(parent);
-      if (!span) break;
-      count++;
-      parent = span.parentSpanId;
-    }
-    return count;
-  };
   return (
     <details onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>链路与耗时</summary>
@@ -59,7 +46,7 @@ export function TracePanel({ client, runId }: { client: UmaClient; runId: string
           </p>
           <ol className="trace-stages">
             {spans.map((span) => (
-              <li key={span.spanId} style={{ marginInlineStart: `${depth(span.parentSpanId) * 12}px` }}>
+              <li key={span.spanId} style={{ marginInlineStart: `${(span.depth ?? 0) * 12}px` }}>
                 <strong>{span.name}</strong> · {span.durationMs.toFixed(1)} ms ·{" "}
                 {span.status === "ok" ? "完成" : span.status === "cancelled" ? "已取消" : "错误"}
                 {span.errorMessage && <output>{span.errorMessage}</output>}

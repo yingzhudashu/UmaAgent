@@ -5,7 +5,6 @@
     "packages/core/src/database.ts": 3001,
     "apps/server/src/app.ts": 1622,
     "apps/cli/src/main.ts": 975,
-    "packages/protocol/src/index.ts": 1183,
     "packages/client/src/index.ts": 993
   }
 }

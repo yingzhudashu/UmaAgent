@@ -2,9 +2,7 @@
 
 通用Agent对话、执行计划、后台任务和管理员渠道工作台的独立前端实施合同。
 
-> 文档修订日期：2026-09-17。本文是目标设计合同，不代表当前代码已实现全部目标行为。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。
-
-会话编辑、重跑、审查、改进、队列和抢占的具体状态关系以[会话、编辑重跑与执行队列整改规范](conversation-execution-recovery-design.zh-CN.md)为准。客户端只投影服务端活动分支；迟到回执必须按账号、会话、分支版本和对象 ID 丢弃。
+> 文档修订日期：2026-10-11。本文记录当前 Protocol v16、HTTP `/api/v16`、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 [发布验收](release-acceptance.md) 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。
 
 [图文阅读版与界面索引](frontend-design/index.html) · [结构化界面规格](frontend-design/spec.json) · [审查与验收记录](release-acceptance.md)
 
@@ -59,7 +57,7 @@ Android为独立验收重点，页面与操作详见 docs/android-design.zh-CN.m
 |android.sessionIdentity|会话快照及缺口补拉同步会话名称、模型与头像标识，不在逐token发布时解析身份；当前头像后台读取并校验账号、会话和附件ID，非当前会话只更新列表。|
 |android.queueReceipts|队列及会话写入回执校验账号和会话；切换后不覆盖新会话队列、加载、取消状态或编辑弹窗，不跳回旧会话；写入先同步锁定入口。名称及头像更新列表，删除清理对应草稿与缓存。 模型切换成功/失败回执也核对发起会话；删除当前会话清理发送、取消、附件及未确认状态。|
 |android.runStatus|准备、执行和校验阶段保留停止入口，使用v16 Run状态文案；业务澄清继续由用户输入。|
-|compatibility|服务仅接受当前协议；schema24→25仅通过显式离线工具一次性升级，不保留运行时兼容层。|
+|compatibility|服务仅接受当前协议；服务只接受 schema 27；旧 schema 不提供运行时兼容或迁移工具。|
 
 ## 3. 视觉、布局与组件规范
 

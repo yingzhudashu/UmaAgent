@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 
 const db = new DatabaseSync(workerData.path);
-db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA wal_autocheckpoint=350");
+db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA wal_autocheckpoint=256");
 const statements = new Map();
 function write(operations) {
   db.exec("BEGIN IMMEDIATE");

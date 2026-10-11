@@ -53,7 +53,7 @@ try {
   for (let attempt = 0; attempt < 200; attempt++) {
     if (child.exitCode !== null) throw new Error("Profiling server stopped during startup");
     try {
-      if ((await fetch(base + "/health/ready")).ok) break;
+      if ((await fetch(`${base}/health/ready`)).ok) break;
     } catch {
       /* 等待隔离服务。 */
     }

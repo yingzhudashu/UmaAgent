@@ -75,9 +75,9 @@ export class SqlWriter {
     if (!operations.length) return;
     this.queue.push(operations);
     this.queuedCount += operations.length;
-    if (this.queuedCount >= 128) this.dispatch();
+    if (this.queuedCount >= 256) this.dispatch();
     // 短窗口合并同一阶段的开始/结束与聚合更新；读取仍通过 flush 立即建立可见性屏障。
-    else if (!this.timer) this.timer = setTimeout(() => this.dispatch(), 25);
+    else if (!this.timer) this.timer = setTimeout(() => this.dispatch(), 100);
   }
   private dispatch(): void {
     if (this.timer) clearTimeout(this.timer);

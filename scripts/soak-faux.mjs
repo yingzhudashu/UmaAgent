@@ -176,7 +176,7 @@ try {
       if (new Set(occurrences).size !== occurrences.length)
         throw new Error("Duplicate schedule occurrence detected");
       const sample = { elapsedMs: Date.now() - startedAt, messages, maxRss, maxWalBytes, cursor };
-      await appendFile(join(evidenceDir, "samples.jsonl"), JSON.stringify(sample) + "\n");
+      await appendFile(join(evidenceDir, "samples.jsonl"), `${JSON.stringify(sample)}\n`);
       console.log(JSON.stringify(sample));
       if (maxRss > budgets.rssBytes) throw new Error(`Core RSS exceeded budget (${maxRss})`);
       if (maxRss > baselineRss * 1.6)

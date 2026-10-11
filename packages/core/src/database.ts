@@ -57,8 +57,6 @@ import {
   toPlanStep,
   toRunAction,
   toRunCheckpoint,
-  toScheduledTask,
-  toScheduledTaskRun,
 } from "./database-utils.js";
 import { ExecutionPolicyRepository } from "./execution-policy-repository.js";
 import { serializeUpdatedMessagePayload } from "./message-payload.js";
@@ -67,6 +65,7 @@ import { QualityHistoryRepository } from "./quality-history-repository.js";
 import { QueueStateRepository } from "./queue-state.js";
 import { ResponseRepository } from "./response-repository.js";
 import { findRestartRecoverableRuns, SERVER_RESTART_ERROR } from "./run-recovery.js";
+import { ScheduledTaskRepository } from "./scheduled-task-repository.js";
 import { validateSchema } from "./schema-validation.js";
 import { SessionRepository } from "./session-repository.js";
 import { prepareStatement } from "./sql-statements.js";
@@ -83,6 +82,7 @@ export class UmaDatabase {
   private readonly sessions: SessionRepository;
   private readonly queueState: QueueStateRepository;
   private readonly qualityHistory: QualityHistoryRepository;
+  private readonly scheduledTasks: ScheduledTaskRepository;
   private transactionDepth = 0;
 
   constructor(stateDir: string) {
@@ -95,15 +95,16 @@ export class UmaDatabase {
     this.sessions = new SessionRepository(this.db);
     this.queueState = new QueueStateRepository(this.db);
     this.qualityHistory = new QualityHistoryRepository(this.db);
-    // 两个库各预留约 1.4 MiB 的 WAL；为单次事务越过 checkpoint 阈值留下余量。
-    this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA wal_autocheckpoint = 350;");
+    this.scheduledTasks = new ScheduledTaskRepository(this.db);
+    // 每库约 1 MiB 触发自动 checkpoint，为单笔事务跨过阈值保留双库 WAL 余量。
+    this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA wal_autocheckpoint = 256;");
     const version = integer(row(prepareStatement(this.db, "PRAGMA user_version"))?.user_version);
     if (version === 0) {
       this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
     } else if (version !== SCHEMA_VERSION) {
       this.db.close();
       throw new Error(
-        `Unsupported database schema ${version}; expected ${SCHEMA_VERSION}. Run the explicit offline upgrade tool after backing up the database.`,
+        `Unsupported database schema ${version}; expected ${SCHEMA_VERSION}. Restore a backup created by this release or use the matching older release.`,
       );
     }
     validateSchema(this.db);
@@ -847,6 +848,10 @@ export class UmaDatabase {
     return this.messages.rollupContext(sessionId);
   }
 
+  turnRollup(sessionId: string, runId: string) {
+    return this.messages.turnRollup(sessionId, runId);
+  }
+
   listHistory(sessionId: string, beforeSequence?: number, limit = 100): SessionHistoryPage {
     this.getSession(sessionId);
     return this.messages.listHistory(sessionId, beforeSequence, limit);
@@ -857,6 +862,14 @@ export class UmaDatabase {
     options?: { beforeSequence?: number; afterSequence?: number },
   ): StoredAgentMessage[] {
     return this.messages.listAgentMessages(sessionId, options);
+  }
+
+  getMessageWithAgentContext(id: string): ReturnType<MessageRepository["getMessageWithAgentContext"]> {
+    return this.messages.getMessageWithAgentContext(id);
+  }
+
+  latestCompletedAssistant(sessionId: string, runId: string): TranscriptItem | undefined {
+    return this.messages.latestCompletedAssistant(sessionId, runId);
   }
 
   getMessage(id: string): TranscriptItem {
@@ -950,8 +963,10 @@ export class UmaDatabase {
       terminalReason?: string | null;
     },
   ): Run {
-    const before = this.getRun(id);
-    // 未提供的字段由 SQLite 原位保留，避免每次状态推进读取并解析完整模型、计划与恢复信息。
+    // 队列版本只依赖状态和会话 ID；状态推进前不要构造完整 Run，避免解析模型、计划和恢复字段。
+    const before = row(prepareStatement(this.db, "SELECT session_id,status FROM runs WHERE id=?"), id);
+    if (!before) throw new Error(`Run not found: ${id}`);
+    // 未提供的字段由 SQLite 原位保留，避免每次状态推进重写完整 JSON。
     // 可清空字段另传 presence 标记，严格区分 undefined（保留）与 null（清空）。
     const result = prepareStatement(
       this.db,
@@ -994,8 +1009,8 @@ export class UmaDatabase {
       id,
     );
     if (!result.changes) throw new Error(`Run not found: ${id}`);
-    if (patch.queuePosition !== undefined || patch.status === "queued" || before.status === "queued") {
-      this.queueState.bumpQueueRevision(before.sessionId);
+    if (patch.queuePosition !== undefined || patch.status === "queued" || text(before.status) === "queued") {
+      this.queueState.bumpQueueRevision(text(before.session_id));
     }
     return this.getRun(id);
   }
@@ -1080,6 +1095,15 @@ export class UmaDatabase {
       createdAt: integer(value.created_at),
       updatedAt: integer(value.updated_at),
     };
+  }
+
+  /** Hot status probe used by cancellation gates; it intentionally avoids
+   * decoding model, plan, checkpoint, and recovery JSON for a boolean check.
+   */
+  getRunStatus(id: string): { sessionId: string; status: RunStatus } {
+    const value = row(prepareStatement(this.db, "SELECT session_id,status FROM runs WHERE id=?"), id);
+    if (!value) throw new Error(`Run not found: ${id}`);
+    return { sessionId: text(value.session_id), status: text(value.status) as RunStatus };
   }
 
   private getRunResume(runId: string, status: RunStatus): Run["resume"] {
@@ -1323,7 +1347,7 @@ export class UmaDatabase {
       row(
         prepareStatement(
           this.db,
-        "SELECT 1 AS pending FROM run_actions a JOIN runs r ON r.id=a.run_id WHERE r.session_id=? AND r.status IN ('queued','preflight','awaiting_input','awaiting_confirmation','running','verifying','interrupted') AND a.status IN ('prepared','running','uncertain') AND a.tool_class NOT IN ('read','attachment_read') LIMIT 1",
+          "SELECT 1 AS pending FROM run_actions a JOIN runs r ON r.id=a.run_id WHERE r.session_id=? AND r.status IN ('queued','preflight','awaiting_input','awaiting_confirmation','running','verifying','interrupted') AND a.status IN ('prepared','running','uncertain') AND a.tool_class NOT IN ('read','attachment_read') LIMIT 1",
         ),
         sessionId,
       ),
@@ -2777,54 +2801,23 @@ export class UmaDatabase {
     enabled: boolean;
     nextRunAt?: number;
   }): ScheduledTask {
-    const id = randomUUID();
-    const now = Date.now();
-    prepareStatement(
-      this.db,
-      "INSERT INTO scheduled_tasks(id,owner_id,name,prompt,message_mode,schedule_json,enabled,next_run_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-    ).run(
-      id,
-      input.ownerId ?? "system",
-      input.name,
-      input.prompt,
-      input.messageMode,
-      JSON.stringify(input.schedule),
-      input.enabled ? 1 : 0,
-      input.nextRunAt ?? null,
-      now,
-      now,
-    );
-    return this.getScheduledTask(id);
+    return this.scheduledTasks.createTask(input);
   }
 
   getScheduledTask(id: string): ScheduledTask {
-    const value = row(prepareStatement(this.db, "SELECT * FROM scheduled_tasks WHERE id=?"), id);
-    if (!value) throw new Error(`Scheduled task not found: ${id}`);
-    return toScheduledTask(value);
+    return this.scheduledTasks.getTask(id);
   }
 
   listScheduledTasks(ownerId?: string): ScheduledTask[] {
-    return rows(
-      ownerId
-        ? prepareStatement(this.db, "SELECT * FROM scheduled_tasks WHERE owner_id=? ORDER BY created_at DESC")
-        : prepareStatement(this.db, "SELECT * FROM scheduled_tasks ORDER BY created_at DESC"),
-      ...(ownerId ? [ownerId] : []),
-    ).map(toScheduledTask);
+    return this.scheduledTasks.listTasks(ownerId);
   }
 
   scheduledTaskOwner(id: string): string | undefined {
-    const value = row(prepareStatement(this.db, "SELECT owner_id FROM scheduled_tasks WHERE id=?"), id);
-    return value ? text(value.owner_id) : undefined;
+    return this.scheduledTasks.owner(id);
   }
 
   listDueScheduledTasks(now: number): ScheduledTask[] {
-    return rows(
-      prepareStatement(
-        this.db,
-        "SELECT * FROM scheduled_tasks WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at<=? ORDER BY next_run_at",
-      ),
-      now,
-    ).map(toScheduledTask);
+    return this.scheduledTasks.listDue(now);
   }
 
   updateScheduledTask(
@@ -2839,36 +2832,11 @@ export class UmaDatabase {
       lastRunAt: number | null;
     }>,
   ): ScheduledTask {
-    const current = this.getScheduledTask(id);
-    const next = {
-      name: patch.name ?? current.name,
-      prompt: patch.prompt ?? current.prompt,
-      messageMode: "agent",
-      schedule: patch.schedule ?? current.schedule,
-      enabled: patch.enabled ?? current.enabled,
-      nextRunAt: patch.nextRunAt === undefined ? current.nextRunAt : (patch.nextRunAt ?? undefined),
-      lastRunAt: patch.lastRunAt === undefined ? current.lastRunAt : (patch.lastRunAt ?? undefined),
-    };
-    prepareStatement(
-      this.db,
-      "UPDATE scheduled_tasks SET name=?,prompt=?,message_mode=?,schedule_json=?,enabled=?,next_run_at=?,last_run_at=?,updated_at=? WHERE id=?",
-    ).run(
-      next.name,
-      next.prompt,
-      next.messageMode,
-      JSON.stringify(next.schedule),
-      next.enabled ? 1 : 0,
-      next.nextRunAt ?? null,
-      next.lastRunAt ?? null,
-      Date.now(),
-      id,
-    );
-    return this.getScheduledTask(id);
+    return this.scheduledTasks.updateTask(id, patch);
   }
 
   deleteScheduledTask(id: string): void {
-    const result = prepareStatement(this.db, "DELETE FROM scheduled_tasks WHERE id=?").run(id);
-    if (result.changes === 0) throw new Error(`Scheduled task not found: ${id}`);
+    this.scheduledTasks.deleteTask(id);
   }
 
   createScheduledTaskRun(input: {
@@ -2877,47 +2845,23 @@ export class UmaDatabase {
     occurrenceKey: string;
     trigger: ScheduledTaskRun["trigger"];
   }): ScheduledTaskRun {
-    if (this.hasActiveScheduledTaskRun(input.scheduledTaskId))
-      throw new Error("Scheduled task already has an active run");
-    const id = randomUUID();
-    prepareStatement(
-      this.db,
-      "INSERT INTO scheduled_task_runs(id,scheduled_task_id,occurrence_key,trigger,status,scheduled_for) VALUES(?,?,?,?,?,?)",
-    ).run(id, input.scheduledTaskId, input.occurrenceKey, input.trigger, "claimed", input.scheduledFor);
-    return this.getScheduledTaskRun(id);
+    return this.scheduledTasks.createRun(input);
   }
 
   getScheduledTaskRun(id: string): ScheduledTaskRun {
-    const value = row(prepareStatement(this.db, "SELECT * FROM scheduled_task_runs WHERE id=?"), id);
-    if (!value) throw new Error(`Scheduled task run not found: ${id}`);
-    return toScheduledTaskRun(value);
+    return this.scheduledTasks.getRun(id);
   }
 
   findScheduledTaskRunByRunId(runId: string): ScheduledTaskRun | undefined {
-    const value = row(prepareStatement(this.db, "SELECT * FROM scheduled_task_runs WHERE run_id=?"), runId);
-    return value ? toScheduledTaskRun(value) : undefined;
+    return this.scheduledTasks.findRunByRunId(runId);
   }
 
   listScheduledTaskRuns(scheduledTaskId: string): ScheduledTaskRun[] {
-    return rows(
-      prepareStatement(
-        this.db,
-        "SELECT * FROM scheduled_task_runs WHERE scheduled_task_id=? ORDER BY scheduled_for DESC",
-      ),
-      scheduledTaskId,
-    ).map(toScheduledTaskRun);
+    return this.scheduledTasks.listRuns(scheduledTaskId);
   }
 
   hasActiveScheduledTaskRun(scheduledTaskId: string): boolean {
-    return Boolean(
-      row(
-        prepareStatement(
-          this.db,
-          "SELECT 1 AS ok FROM scheduled_task_runs WHERE scheduled_task_id=? AND status IN ('claimed','running','awaiting_resume') LIMIT 1",
-        ),
-        scheduledTaskId,
-      ),
-    );
+    return this.scheduledTasks.hasActiveRun(scheduledTaskId);
   }
 
   updateScheduledTaskRun(
@@ -2932,27 +2876,7 @@ export class UmaDatabase {
       error: string | null;
     }>,
   ): ScheduledTaskRun {
-    const current = this.getScheduledTaskRun(id);
-    prepareStatement(
-      this.db,
-      "UPDATE scheduled_task_runs SET background_task_id=?,run_id=?,status=?,resume_json=?,started_at=?,completed_at=?,error=? WHERE id=?",
-    ).run(
-      patch.backgroundTaskId ?? current.backgroundTaskId ?? null,
-      patch.runId ?? current.runId ?? null,
-      patch.status ?? current.status,
-      patch.resume === undefined
-        ? current.resume
-          ? JSON.stringify(current.resume)
-          : null
-        : patch.resume
-          ? JSON.stringify(patch.resume)
-          : null,
-      patch.startedAt ?? current.startedAt ?? null,
-      patch.completedAt ?? current.completedAt ?? null,
-      patch.error === undefined ? (current.error ?? null) : patch.error,
-      id,
-    );
-    return this.getScheduledTaskRun(id);
+    return this.scheduledTasks.updateRun(id, patch);
   }
 
   createEvaluationReport(input: CreateEvaluationReport): EvaluationReport {
@@ -2980,30 +2904,10 @@ export class UmaDatabase {
   }
 
   recoverScheduledTaskRuns(): ScheduledTaskRun[] {
-    prepareStatement(
-      this.db,
-      "UPDATE background_tasks SET status='pending',error=NULL,updated_at=? WHERE status='interrupted' AND run_id IS NULL AND id IN (SELECT background_task_id FROM scheduled_task_runs WHERE status='running' AND run_id IS NULL)",
-    ).run(Date.now());
-    prepareStatement(
-      this.db,
-      "UPDATE scheduled_task_runs SET status='claimed',error=NULL WHERE status='running' AND run_id IS NULL",
-    ).run();
-    prepareStatement(
-      this.db,
-      "UPDATE scheduled_task_runs SET status='awaiting_resume',error='Background run requires explicit resume' WHERE status='running' AND run_id IS NOT NULL",
-    ).run();
-    return rows(
-      prepareStatement(
-        this.db,
-        "SELECT * FROM scheduled_task_runs WHERE status IN ('claimed','awaiting_resume') ORDER BY scheduled_for",
-      ),
-    ).map(toScheduledTaskRun);
+    return this.scheduledTasks.recoverRuns();
   }
 
   markActiveBackgroundTasksInterrupted(): void {
-    prepareStatement(
-      this.db,
-      "UPDATE background_tasks SET status='interrupted',error='Server restarted during execution',updated_at=? WHERE status IN ('pending','running')",
-    ).run(Date.now());
+    this.scheduledTasks.markActiveBackgroundTasksInterrupted();
   }
 }

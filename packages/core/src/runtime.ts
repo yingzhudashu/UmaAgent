@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { Agent, type AgentEvent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { Agent, type AgentTool, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   type AssistantMessage,
   contentText,
@@ -61,6 +61,7 @@ import { RunContextBuilder } from "./run-context.js";
 import { RunOrchestrator } from "./run-orchestrator.js";
 import { RunPreflight } from "./run-preflight.js";
 import { RunQualityService } from "./run-quality.js";
+import { bindAgentEvents } from "./runtime-agent-events.js";
 import { RuntimeCommandOperations } from "./runtime-command-operations.js";
 import { RuntimeOptimizationService } from "./runtime-optimization.js";
 import { RuntimeOptimizationExecutionService } from "./runtime-optimization-execution.js";
@@ -787,7 +788,10 @@ export class UmaRuntime {
   }
   async diagnosticsReport(from: number, to: number) {
     await this.trace.store.flush();
-    return { ...this.database.diagnosticsReport(from, to), trace: this.trace.store.summarize(from, to) };
+    return {
+      ...this.resources.diagnosticsReport(from, to),
+      trace: this.trace.store.summarize(from, to),
+    };
   }
   async listResourceSnapshots(from = 0, to?: number, limit = 500) {
     this.resourceMonitor.capture();
@@ -1378,7 +1382,7 @@ export class UmaRuntime {
 
   private async waitForSideEffectGate(sessionId: string, runId: string): Promise<void> {
     while (this.database.hasPendingSideEffects(sessionId)) {
-      if (this.stopping || this.database.getRun(runId).status === "cancelled") return;
+      if (this.stopping || this.database.getRunStatus(runId).status === "cancelled") return;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
@@ -1535,7 +1539,9 @@ export class UmaRuntime {
     try {
       await this.waitForSideEffectGate(sessionAtQueueTime.id, runId);
       release = await this.orchestrator.acquire();
-      if (this.database.getRun(runId).status === "cancelled") {
+      // 这一轮开始后 Run 模型快照固定，读取一次供状态判断和会话模型使用。
+      const frozenRun = this.database.getRun(runId);
+      if (frozenRun.status === "cancelled") {
         rootTrace.setStatus({ status: "cancelled" });
         return;
       }
@@ -1550,13 +1556,12 @@ export class UmaRuntime {
       controller = new AbortController();
       this.controllers.set(runId, controller);
       const storedSession = this.database.getSession(sessionAtQueueTime.id);
-      const frozenRun = this.database.getRun(runId);
       const session: Session = {
         ...storedSession,
         model: frozenRun.model.ref,
         thinkingLevel: frozenRun.thinkingLevel,
       };
-      this.events.transaction(() => {
+      const currentRun = this.events.transaction(() => {
         const preflightRun = this.database.updateRun(runId, {
           status: "preflight",
           phase: "preflight",
@@ -1570,8 +1575,8 @@ export class UmaRuntime {
           status: "started",
         });
         this.events.emit(session.id, runId, "run.updated", preflightRun);
+        return preflightRun;
       });
-      const currentRun = this.database.getRun(runId);
       const preflightTrace = rootTrace.child("preflight", "run");
       const decision =
         resumeFromCheckpoint && currentRun.route && currentRun.route !== "clarify"
@@ -1587,7 +1592,7 @@ export class UmaRuntime {
             }
           : reusedPreflight
             ? reusedPreflight
-          : await this.preflight.decide(session, input, controller.signal, runId, preflightTrace);
+            : await this.preflight.decide(session, input, controller.signal, runId, preflightTrace);
       // 路由、检查点和下一状态属于同一同步阶段，原子提交后再发布事件，避免逐状态 fsync。
       const preflightStatus = this.events.transaction(() => {
         this.events.transaction(() => {
@@ -1661,7 +1666,7 @@ export class UmaRuntime {
               contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
               safeToResume: true,
             });
-            this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+            this.events.emit(session.id, runId, "plan.updated", this.database.listPlan(runId));
           });
         }
         if (
@@ -1707,7 +1712,7 @@ export class UmaRuntime {
         if (preflightStatus === "clarify") this.orchestrator.pause(session.id);
         return;
       }
-      const budget = { turns: this.database.getRun(runId).turnCount };
+      const budget = { turns: currentRun.turnCount };
       if (decision.route === "plan") {
         for (const step of this.database.listPlan(runId)) {
           if (step.status === "completed") continue;
@@ -1722,7 +1727,7 @@ export class UmaRuntime {
               contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
               safeToResume: true,
             });
-            this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+            this.events.emit(session.id, runId, "plan.updated", this.database.listPlan(runId));
           });
           await this.runAgent(
             session,
@@ -1744,7 +1749,7 @@ export class UmaRuntime {
               contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
               safeToResume: true,
             });
-            this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+            this.events.emit(session.id, runId, "plan.updated", this.database.listPlan(runId));
           });
           if (budget.turns >= 400) throw new Error("Run turn limit exceeded (400)");
         }
@@ -1764,7 +1769,7 @@ export class UmaRuntime {
             contextSummarySequence: this.database.getContextSummary(session.id)?.throughSequence,
             safeToResume: true,
           });
-          this.events.emit(session.id, runId, "plan.updated", this.database.getRun(runId).plan);
+          this.events.emit(session.id, runId, "plan.updated", this.database.listPlan(runId));
         });
         injectRuntimeFault("verify.completed");
       }
@@ -1788,9 +1793,7 @@ export class UmaRuntime {
         const response = this.database.responseForRun(runId);
         if (response) {
           this.database.updateResponseAttachmentStatus(response.id, "sent");
-          const final = [...this.database.listMessages(session.id, runId)]
-            .reverse()
-            .find((item) => item.runId === runId && item.role === "assistant");
+          const final = this.database.latestCompletedAssistant(session.id, runId);
           const updated = this.database.updateResponse(response.id, {
             status: "completed",
             ...(final ? { content: final.content } : {}),
@@ -1859,19 +1862,14 @@ export class UmaRuntime {
   }
 
   private persistTurnRollup(sessionId: string, runId: string): void {
-    const items = this.database.listMessages(sessionId, runId);
-    if (!items.length) return;
-    const publicText = items
-      .filter((item) => item.role !== "tool")
-      .map((item) => `${item.role}: ${item.content}`)
-      .join("\n")
-      .slice(0, 4_000);
+    const turn = this.database.turnRollup(sessionId, runId);
+    if (!turn) return;
     this.database.addMemoryRollup({
       sessionId,
       kind: "turn",
-      fromSequence: items[0]?.sequence ?? 1,
-      toSequence: items.at(-1)?.sequence ?? 1,
-      summary: publicText,
+      fromSequence: turn.fromSequence,
+      toSequence: turn.toSequence,
+      summary: turn.summary,
     });
     const context = this.database.rollupContext(sessionId);
     if (!context) return;
@@ -2526,9 +2524,7 @@ ${context.dailyText}`,
     const run = this.database.getRun(runId);
     const assumptions = run.assumptions.filter((item) => !isSecretLike(item));
     if (!assumptions.length) return;
-    const final = [...this.database.listMessages(sessionId, runId)]
-      .reverse()
-      .find((item) => item.runId === runId && item.role === "assistant" && item.status === "complete");
+    const final = this.database.latestCompletedAssistant(sessionId, runId);
     if (!final || final.content.includes("执行假设：")) return;
     const content = `${final.content}\n\n执行假设：\n${assumptions.map((item) => `- ${item}`).join("\n")}`;
     this.events.transaction(() => {
@@ -2541,9 +2537,7 @@ ${context.dailyText}`,
   private appendAttachmentLinksToResult(sessionId: string, runId: string): void {
     const response = this.database.responseForRun(runId);
     if (!response || response.attachments.length === 0) return;
-    const final = [...this.database.listMessages(sessionId, runId)]
-      .reverse()
-      .find((item) => item.runId === runId && item.role === "assistant" && item.status === "complete");
+    const final = this.database.latestCompletedAssistant(sessionId, runId);
     if (!final) return;
     const missing = response.attachments.filter(
       (attachment) => !final.content.includes(`uma-attachment://${attachment.id}`),
@@ -2565,284 +2559,19 @@ ${context.dailyText}`,
     turnCount: () => number = () => 0,
     loopGuard?: ToolLoopGuard,
   ): void {
-    let assistantItem: TranscriptItem | undefined, pendingAssistant: AssistantMessage | undefined;
-    let flushTimer: NodeJS.Timeout | undefined;
-    let streamedLength = 0;
-    const toolMessages = new Map<string, string>();
-    const toolActions = new Map<string, string>();
-    let activeModelCall: { id: string; startedAt: number } | undefined;
-    let activeModelTrace: TraceContext | undefined;
-    const toolTraces = new Map<string, TraceContext>();
-    const rootTrace = this.activeTraces.get(runId);
-    const responseId = this.database.responseForRun(runId)?.id;
-    const flushAssistant = () => {
-      if (!assistantItem || !pendingAssistant) return;
-      const message = pendingAssistant;
-      const content = textFromMessage(message);
-      const append = content.slice(streamedLength);
-      const offset = streamedLength;
-      streamedLength = content.length;
-      pendingAssistant = undefined;
-      flushTimer = undefined;
-      if (!append) return;
-      this.events.emitTransientDelta(sessionId, runId, {
-        messageId: assistantItem.id,
-        ...(responseId ? { responseId } : {}),
-        append,
-        offset,
-        updatedAt: Date.now(),
-      });
-    };
-    agent.subscribe((event: AgentEvent) => {
-      if (event.type === "turn_start") {
-        const run = this.database.getRun(runId);
-        activeModelCall = {
-          id: this.database.startModelCall({
-            runId,
-            provider: run.model.ref.provider,
-            model: run.model.ref.id,
-            role: "default",
-          }),
-          startedAt: Date.now(),
-        };
-        activeModelTrace = rootTrace?.child("model", "model", {
-          provider: run.model.ref.provider,
-          model: run.model.ref.id,
-        });
-        injectRuntimeFault("model.started");
-      } else if (event.type === "message_start" && event.message.role === "assistant") {
-        assistantItem = this.events.transaction(() => {
-          const item = this.database.insertMessage({
-            sessionId,
-            runId,
-            role: "assistant",
-            status: "streaming",
-            content: textFromMessage(event.message),
-          });
-          streamedLength = item.content.length;
-          this.events.emit(sessionId, runId, "message.started", item);
-          if (responseId) {
-            const activity = this.database.addResponseActivity({
-              responseId,
-              kind: "status",
-              status: "thinking",
-              text: "正在生成回复",
-            });
-            this.events.emit(sessionId, runId, "response.activity", { responseId, activity });
-          }
-          return item;
-        });
-      } else if (event.type === "message_update" && event.message.role === "assistant" && assistantItem) {
-        pendingAssistant = event.message;
-        assistantItem = {
-          ...assistantItem,
-          content: textFromMessage(event.message),
-          updatedAt: Date.now(),
-        };
-        flushTimer ??= setTimeout(flushAssistant, 250);
-      } else if (event.type === "message_end" && event.message.role === "assistant" && assistantItem) {
-        const message = event.message;
-        if (flushTimer) clearTimeout(flushTimer);
-        flushTimer = undefined;
-        pendingAssistant = undefined;
-        const status =
-          message.stopReason === "error"
-            ? "error"
-            : message.stopReason === "aborted"
-              ? "cancelled"
-              : "complete";
-        const run = this.database.getRun(runId);
-        this.events.transaction(() => {
-          const item = this.database.updateMessage(assistantItem?.id as string, {
-            content: textFromMessage(message),
-            status,
-            payload: message,
-          });
-          if (activeModelCall)
-            this.database.finishModelCall(activeModelCall.id, {
-              status:
-                message.stopReason === "error" || message.stopReason === "aborted" ? "failed" : "completed",
-              durationMs: Date.now() - activeModelCall.startedAt,
-              usage: message.usage,
-              ...(message.errorMessage ? { error: message.errorMessage } : {}),
-            });
-          activeModelTrace?.finish({
-            status: message.stopReason === "error" || message.stopReason === "aborted" ? "error" : "ok",
-            ...(message.stopReason === "error" || message.stopReason === "aborted"
-              ? { error: { name: "ModelError", message: message.errorMessage ?? message.stopReason } }
-              : {}),
-          });
-          activeModelTrace = undefined;
-          this.database.addAudit({
-            runId,
-            kind: "model",
-            name: `${run.model.ref.provider}/${run.model.ref.id}`,
-            output: { text: item.content },
-            status: message.stopReason,
-            usage: message.usage,
-            ...(message.errorMessage ? { error: message.errorMessage } : {}),
-          });
-          this.database.createCheckpoint({
-            runId,
-            phase: "model",
-            turnCount: turnCount(),
-            lastMessageSequence: item.sequence,
-            contextSummarySequence: this.database.getContextSummary(sessionId)?.throughSequence,
-            safeToResume: true,
-          });
-          this.events.emit(sessionId, runId, "message.completed", item);
-        });
-        injectRuntimeFault("model.completed");
-        activeModelCall = undefined;
-        assistantItem = undefined;
-      } else if (event.type === "tool_execution_start") {
-        const toolTrace = rootTrace?.child("tool", "tool", { tool: event.toolName });
-        if (toolTrace) toolTraces.set(event.toolCallId, toolTrace);
-        const created = this.events.transaction(() => {
-          this.database.createToolCall({
-            id: event.toolCallId,
-            runId,
-            name: event.toolName,
-            args: event.args,
-          });
-          const action =
-            this.database.getRunActionByToolCall(runId, event.toolCallId) ??
-            this.database.createRunAction({
-              runId,
-              checkpointId: this.database.getLatestCheckpoint(runId)?.id,
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-              toolClass: this.permissions.classify(event.toolName),
-              idempotencyKey: `${runId}:${event.toolCallId}`,
-              input: event.args,
-            });
-          this.database.addAudit({
-            runId,
-            kind: "tool",
-            name: event.toolName,
-            input: event.args,
-            status: "started",
-          });
-          const item = this.database.insertMessage({
-            sessionId,
-            runId,
-            role: "tool",
-            status: "streaming",
-            name: event.toolName,
-            content: JSON.stringify(event.args, null, 2),
-          });
-          this.events.emit(sessionId, runId, "tool.started", {
-            item,
-            action,
-            toolCallId: event.toolCallId,
-            input: event.args,
-          });
-          if (responseId) {
-            const activity = this.database.addResponseActivity({
-              responseId,
-              kind: "tool",
-              toolName: event.toolName,
-              text: "正在调用工具",
-              status: "executing",
-            });
-            this.events.emit(sessionId, runId, "response.activity", { responseId, activity });
-          }
-          return { actionId: action.id, messageId: item.id };
-        });
-        toolActions.set(event.toolCallId, created.actionId);
-        toolMessages.set(event.toolCallId, created.messageId);
-      } else if (event.type === "tool_execution_end") {
-        loopGuard?.recordResult(`${runId}:${event.toolCallId}`, event.result);
-        const messageId = toolMessages.get(event.toolCallId);
-        if (messageId) {
-          const toolMessage: ToolResultMessage = {
-            role: "toolResult",
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            content:
-              event.result && typeof event.result === "object" && "content" in event.result
-                ? (event.result as ToolResultMessage).content
-                : [{ type: "text", text: JSON.stringify(event.result) }],
-            isError: event.isError,
-            timestamp: Date.now(),
-          };
-          this.events.transaction(() => {
-            this.database.completeToolCall(event.toolCallId, event.result, event.isError);
-            const actionId = toolActions.get(event.toolCallId);
-            if (actionId)
-              this.database.transitionRunAction(actionId, ["running"], {
-                status: event.isError ? "failed" : "completed",
-                result: event.result,
-              });
-            this.database.addAudit({
-              runId,
-              kind: "tool",
-              name: event.toolName,
-              output: event.result,
-              status: event.isError ? "error" : "completed",
-            });
-            const item = this.database.updateMessage(messageId, {
-              content: textFromMessage(toolMessage),
-              status: event.isError ? "error" : "complete",
-              payload: toolMessage,
-            });
-            this.database.createCheckpoint({
-              runId,
-              phase: "tool",
-              turnCount: turnCount(),
-              lastMessageSequence: item.sequence,
-              contextSummarySequence: this.database.getContextSummary(sessionId)?.throughSequence,
-              safeToResume: !event.isError,
-            });
-            this.events.emit(sessionId, runId, "tool.completed", {
-              item,
-              messageId: item.id,
-              toolCallId: event.toolCallId,
-              toolName: event.toolName,
-              isError: event.isError,
-              ...(event.isError ? { errorCategory: "tool_execution" } : {}),
-            });
-            if (responseId) {
-              const activity = this.database.addResponseActivity({
-                responseId,
-                kind: "tool",
-                toolName: event.toolName,
-                text: event.isError ? "工具执行失败" : "工具执行完成",
-                status: event.isError ? "failed" : "completed",
-              });
-              this.events.emit(sessionId, runId, "response.activity", { responseId, activity });
-            }
-            toolTraces.get(event.toolCallId)?.finish({ status: event.isError ? "error" : "ok" });
-            toolTraces.delete(event.toolCallId);
-          });
-          injectRuntimeFault("tool.completed");
-        }
-      } else if (event.type === "message_end" && event.message.role === "toolResult") {
-        const messageId = toolMessages.get(event.message.toolCallId);
-        if (messageId) this.database.updateMessage(messageId, { payload: event.message });
-      } else if (event.type === "agent_end" && activeModelCall) {
-        if (flushTimer) clearTimeout(flushTimer);
-        flushTimer = undefined;
-        pendingAssistant = undefined;
-        this.database.finishModelCall(activeModelCall.id, {
-          status: "failed",
-          durationMs: Date.now() - activeModelCall.startedAt,
-          error: "Agent ended before the model response completed",
-        });
-        if (assistantItem)
-          this.database.updateMessage(assistantItem.id, {
-            status: "error",
-            content: assistantItem.content,
-          });
-        activeModelCall = undefined;
-        activeModelTrace?.finish({
-          status: "error",
-          error: { name: "AgentError", message: "Agent ended before model response" },
-        });
-        activeModelTrace = undefined;
-        assistantItem = undefined;
-      }
-    });
+    bindAgentEvents(
+      {
+        database: this.database,
+        events: this.events,
+        permissions: this.permissions,
+        activeTraces: this.activeTraces,
+      },
+      agent,
+      sessionId,
+      runId,
+      turnCount,
+      loopGuard,
+    );
   }
 
   private async verifyAndCorrect(
@@ -2851,9 +2580,7 @@ ${context.dailyText}`,
     decision: PreflightDecision,
     signal: AbortSignal,
   ): Promise<void> {
-    const final = [...this.database.listMessages(session.id, runId)]
-      .reverse()
-      .find((item) => item.runId === runId && item.role === "assistant" && item.status === "complete");
+    const final = this.database.latestCompletedAssistant(session.id, runId);
     if (!final) throw new Error("Planned run produced no final response");
     const verificationContext = await this.contextManager.buildForMessage(
       session,

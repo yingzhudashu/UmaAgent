@@ -74,7 +74,18 @@ async function fixture() {
     scheduleManage,
     memoryWrite: memoryWrite as never,
   });
-  return { root, session, tools, database, knowledge, skills, search, scheduleManage, memoryWrite, attachments };
+  return {
+    root,
+    session,
+    tools,
+    database,
+    knowledge,
+    skills,
+    search,
+    scheduleManage,
+    memoryWrite,
+    attachments,
+  };
 }
 
 describe("builtin tools", () => {

@@ -4,10 +4,28 @@ import json, os, struct, subprocess, sys, time
 
 ROOT = Path(__file__).resolve().parent.parent
 ADB = Path(os.environ["LOCALAPPDATA"]) / "Android/Sdk/platform-tools/adb.exe"
-SERIAL = os.environ.get("UMA_ANDROID_DEVICE", "emulator-5556")
+
+if "--help" in sys.argv:
+    print("用法：UMA_ANDROID_DEVICE=<serial> python scripts/android-device-matrix.py [phone ...]")
+    print("未设置 UMA_ANDROID_DEVICE 时，要求 adb 恰好连接一台设备。")
+    raise SystemExit(0)
+
+def connected_devices():
+    if not ADB.exists():
+        raise SystemExit(f"adb 不存在：{ADB}")
+    output = subprocess.check_output([str(ADB), "devices"], text=True, encoding="utf-8", errors="replace")
+    return [line.split("\t", 1)[0] for line in output.splitlines() if "\tdevice" in line]
+
+SERIAL = os.environ.get("UMA_ANDROID_DEVICE", "").strip()
+if not SERIAL:
+    devices = connected_devices()
+    if len(devices) != 1:
+        raise SystemExit(f"请设置 UMA_ANDROID_DEVICE；当前可用设备数为 {len(devices)}：{devices}")
+    SERIAL = devices[0]
+
 OUT = ROOT / "artifacts/acceptance" / ("android-matrix-" + time.strftime("%Y%m%d-%H%M%S"))
 OUT.mkdir(parents=True, exist_ok=True)
-print(str(OUT), flush=True)
+print(f"设备 {SERIAL}；证据 {OUT}", flush=True)
 
 def adb(*args, binary=False):
     return subprocess.check_output([str(ADB), "-s", SERIAL, *args], text=not binary, encoding=None if binary else "utf-8", errors=None if binary else "replace")

@@ -40,15 +40,15 @@ export class RuntimeQualityOperations {
     if (!run.targetMessageId) throw new Error("Queued quality run has no target message");
     const session = this.dependencies.database.getSession(run.sessionId);
     const target = this.dependencies.database.getMessage(run.targetMessageId);
-    const queuedTrace = this.dependencies.trace.startQueued(
-      run.id,
-      session.id,
-      run.kind,
-      { "run.kind": run.kind },
-    );
+    const queuedTrace = this.dependencies.trace.startQueued(run.id, session.id, run.kind, {
+      "run.kind": run.kind,
+    });
     this.dependencies.orchestrator.enqueue(
       session.id,
-      () => queuedTrace.run((root) => this.execute(session, run.id, target, run.kind as "review" | "improve", {}, undefined, root)),
+      () =>
+        queuedTrace.run((root) =>
+          this.execute(session, run.id, target, run.kind as "review" | "improve", {}, undefined, root),
+        ),
       run.id,
     );
   }
@@ -134,7 +134,7 @@ export class RuntimeQualityOperations {
     const rootTrace =
       rootTraceOverride ?? trace.startRoot(runId, session.id, kind, { "run.kind": kind }, traceParent);
     const release = await orchestrator.acquire();
-    if (database.getRun(runId).status === "cancelled") {
+    if (database.getRunStatus(runId).status === "cancelled") {
       try {
         rootTrace.finish({ status: "cancelled" });
       } finally {

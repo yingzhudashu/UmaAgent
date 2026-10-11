@@ -24,6 +24,6 @@ for (const file of files) {
 }
 await writeFile(
   resolve(output, "embed-manifest.json"),
-  `${JSON.stringify({ version: "1.3.0", assets }, null, 2)}\n`,
+  `${JSON.stringify({ version: "1.3.0", protocol: 16, schema: 27, assets }, null, 2)}\n`,
   "utf8",
 );

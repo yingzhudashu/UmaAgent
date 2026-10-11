@@ -61,7 +61,7 @@ export function mapServerError(
               : 500;
   if (schemaMismatch)
     message =
-      "Server state does not match this release; back up state and run the supported offline upgrade.";
+      "Server state does not match this release; restore a backup created by this release or use the matching older release.";
   else if (databaseFailure)
     message = "The server could not persist this operation. Retry after checking server state.";
   return {

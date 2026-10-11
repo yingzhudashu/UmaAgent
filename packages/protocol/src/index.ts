@@ -1,10 +1,19 @@
 import Type, { type Static } from "typebox";
-import { type AgentEventEnvelope, AgentEventEnvelopeSchema } from "./event-contract.js";
+import { AgentEventEnvelopeSchema } from "./event-contract.js";
 import { Id, PROTOCOL_VERSION, Strict, Timestamp } from "./schema-helpers.js";
+import { SkillSummarySchema } from "./skill-contract.js";
 
+export * from "./channel-contract.js";
+export * from "./command-contract.js";
+export * from "./diagnostics-contract.js";
 export * from "./event-contract.js";
+export * from "./knowledge-contract.js";
+export * from "./memory-contract.js";
+export * from "./quality-contract.js";
 export * from "./resource-contract.js";
 export { PROTOCOL_VERSION } from "./schema-helpers.js";
+export * from "./skill-contract.js";
+export * from "./trace-contract.js";
 
 export const ModelRefSchema = Strict({ provider: Id, id: Id });
 export type ModelRef = Static<typeof ModelRefSchema>;
@@ -390,118 +399,6 @@ export const SessionSnapshotSchema = Strict({
 });
 export type SessionSnapshot = Static<typeof SessionSnapshotSchema>;
 
-export const SkillSummarySchema = Strict({
-  name: Id,
-  description: Type.String(),
-  enabled: Type.Boolean(),
-  diagnostics: Type.Array(Type.String()),
-  keywords: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { maxItems: 64 })),
-  scope: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
-  userInvocable: Type.Optional(Type.Boolean()),
-  modelInvocable: Type.Optional(Type.Boolean()),
-});
-export type SkillSummary = Static<typeof SkillSummarySchema>;
-
-export const SkillPackageSchema = Strict({
-  id: Id,
-  name: Id,
-  version: Type.String({ minLength: 1, maxLength: 100 }),
-  source: Strict({
-    type: Type.Union([Type.Literal("local"), Type.Literal("clawhub")]),
-    reference: Type.String({ minLength: 1 }),
-  }),
-  contentHash: Type.String({ minLength: 64, maxLength: 64 }),
-  status: Type.Union([
-    Type.Literal("staged"),
-    Type.Literal("enabled"),
-    Type.Literal("disabled"),
-    Type.Literal("rejected"),
-  ]),
-  risk: Type.Union([
-    Type.Literal("low"),
-    Type.Literal("medium"),
-    Type.Literal("high"),
-    Type.Literal("extreme"),
-  ]),
-  diagnostics: Type.Array(Type.String()),
-  installedAt: Timestamp,
-  updatedAt: Timestamp,
-});
-export type SkillPackage = Static<typeof SkillPackageSchema>;
-
-export const AgentProfileSchema = Strict({
-  content: Type.String({ maxLength: 50_000 }),
-  updatedAt: Timestamp,
-});
-export type AgentProfile = Static<typeof AgentProfileSchema>;
-
-export const QualityIssueSchema = Strict({
-  type: Type.Union([
-    Type.Literal("knowledge_error"),
-    Type.Literal("logic_error"),
-    Type.Literal("clarity"),
-    Type.Literal("omission"),
-  ]),
-  description: Type.String({ minLength: 1, maxLength: 2_000 }),
-});
-export type QualityIssue = Static<typeof QualityIssueSchema>;
-
-export const QualityAssessmentSchema = Strict({
-  id: Id,
-  runId: Id,
-  targetMessageId: Id,
-  passed: Type.Boolean(),
-  issues: Type.Array(QualityIssueSchema),
-  suggestions: Type.Array(Type.String()),
-  iteration: Type.Integer({ minimum: 1, maximum: 3 }),
-  createdAt: Timestamp,
-});
-export type QualityAssessment = Static<typeof QualityAssessmentSchema>;
-
-export const MemoryRollupSchema = Strict({
-  id: Id,
-  sessionId: Id,
-  kind: Type.Union([Type.Literal("turn"), Type.Literal("day"), Type.Literal("session")]),
-  fromSequence: Type.Integer({ minimum: 1 }),
-  toSequence: Type.Integer({ minimum: 1 }),
-  summary: Type.String(),
-  createdAt: Timestamp,
-});
-export type MemoryRollup = Static<typeof MemoryRollupSchema>;
-
-export const KnowledgeSourceSchema = Strict({
-  id: Id,
-  name: Type.String({ minLength: 1 }),
-  path: Type.String({ minLength: 1 }),
-  documentCount: Type.Integer({ minimum: 0 }),
-  status: Type.Union([
-    Type.Literal("queued"),
-    Type.Literal("parsing"),
-    Type.Literal("indexed"),
-    Type.Literal("failed"),
-  ]),
-  error: Type.Optional(Type.String()),
-  createdAt: Timestamp,
-  updatedAt: Timestamp,
-});
-export type KnowledgeSource = Static<typeof KnowledgeSourceSchema>;
-
-export const KnowledgeSearchHitSchema = Strict({
-  sourceId: Id,
-  sourceName: Type.String({ minLength: 1 }),
-  filePath: Type.String({ minLength: 1 }),
-  content: Type.String(),
-});
-export type KnowledgeSearchHit = Static<typeof KnowledgeSearchHitSchema>;
-
-export const SearchCitationSchema = Strict({
-  title: Type.String({ minLength: 1 }),
-  url: Type.String({ minLength: 1 }),
-  snippet: Type.String(),
-  source: Type.Union([Type.Literal("tavily"), Type.Literal("stackexchange")]),
-});
-export type SearchCitation = Static<typeof SearchCitationSchema>;
-
 export const ErrorCodeSchema = Type.Union([
   Type.Literal("auth_required"),
   Type.Literal("forbidden"),
@@ -668,81 +565,6 @@ export const ScheduledTaskRunSchema = Strict({
 });
 export type ScheduledTaskRun = Static<typeof ScheduledTaskRunSchema>;
 
-export const OperationsReportSchema = Strict({
-  from: Timestamp,
-  to: Timestamp,
-  runs: Strict({
-    total: Type.Integer({ minimum: 0 }),
-    completed: Type.Integer({ minimum: 0 }),
-    failed: Type.Integer({ minimum: 0 }),
-    cancelled: Type.Integer({ minimum: 0 }),
-    interrupted: Type.Integer({ minimum: 0 }),
-  }),
-  model: Strict({
-    calls: Type.Integer({ minimum: 0 }),
-    failed: Type.Integer({ minimum: 0 }),
-    totalTokens: Type.Integer({ minimum: 0 }),
-    averageDurationMs: Type.Number({ minimum: 0 }),
-  }),
-  tools: Strict({
-    calls: Type.Integer({ minimum: 0 }),
-    failed: Type.Integer({ minimum: 0 }),
-  }),
-  approvals: Strict({ requested: Type.Integer({ minimum: 0 }), denied: Type.Integer({ minimum: 0 }) }),
-  recoveries: Type.Integer({ minimum: 0 }),
-});
-export type OperationsReport = Static<typeof OperationsReportSchema>;
-
-export const DiagnosticsReportSchema = Strict({
-  from: Timestamp,
-  to: Timestamp,
-  summary: OperationsReportSchema,
-  slowModels: Type.Array(
-    Strict({
-      provider: Id,
-      model: Id,
-      calls: Type.Integer({ minimum: 0 }),
-      averageDurationMs: Type.Number({ minimum: 0 }),
-    }),
-  ),
-  toolFailures: Type.Array(
-    Strict({ tool: Id, failures: Type.Integer({ minimum: 0 }), latestError: Type.Optional(Type.String()) }),
-  ),
-  recoveryFrequency: Type.Number({ minimum: 0 }),
-  approvalBottlenecks: Type.Array(
-    Strict({ tool: Id, requested: Type.Integer({ minimum: 0 }), denied: Type.Integer({ minimum: 0 }) }),
-  ),
-  trace: Strict({
-    spans: Type.Integer({ minimum: 0 }),
-    incomplete: Type.Integer({ minimum: 0 }),
-    active: Type.Integer({ minimum: 0 }),
-    errorRate: Type.Number({ minimum: 0, maximum: 1 }),
-    writeFailures: Type.Integer({ minimum: 0 }),
-    otlpExportFailures: Type.Integer({ minimum: 0 }),
-    services: Type.Array(
-      Strict({
-        service: Type.String({ minLength: 1, maxLength: 100 }),
-        spans: Type.Integer({ minimum: 0 }),
-        errors: Type.Integer({ minimum: 0 }),
-      }),
-    ),
-    stageLatencyMs: Type.Record(
-      Type.String({ minLength: 1 }),
-      Strict({
-        p50: Type.Number({ minimum: 0 }),
-        p95: Type.Number({ minimum: 0 }),
-        p99: Type.Number({ minimum: 0 }),
-      }),
-    ),
-    latencyMs: Strict({
-      p50: Type.Number({ minimum: 0 }),
-      p95: Type.Number({ minimum: 0 }),
-      p99: Type.Number({ minimum: 0 }),
-    }),
-  }),
-});
-export type DiagnosticsReport = Static<typeof DiagnosticsReportSchema>;
-
 export const EvaluationCaseResultSchema = Strict({
   name: Type.String({ minLength: 1, maxLength: 500 }),
   category: Type.Union([
@@ -866,28 +688,6 @@ export const ResourceResyncRequiredSchema = Strict({
 });
 export type ResourceResyncRequired = Static<typeof ResourceResyncRequiredSchema>;
 
-export const MemoryFactSchema = Strict({
-  id: Id,
-  sessionId: Type.Optional(Id),
-  scope: Type.Union([Type.Literal("global"), Type.Literal("session")]),
-  key: Type.String({ minLength: 1, maxLength: 500 }),
-  value: Type.String({ minLength: 1 }),
-  category: Type.String({ minLength: 1, maxLength: 100 }),
-  confidence: Type.Number({ minimum: 0, maximum: 1 }),
-  evidence: Type.Optional(Type.String()),
-  sourceRunId: Type.Optional(Id),
-  status: Type.Union([
-    Type.Literal("active"),
-    Type.Literal("candidate"),
-    Type.Literal("superseded"),
-    Type.Literal("rejected"),
-  ]),
-  supersedes: Type.Optional(Id),
-  createdAt: Timestamp,
-  updatedAt: Timestamp,
-});
-export type MemoryFact = Static<typeof MemoryFactSchema>;
-
 export const ReviewMessageRequestSchema = Strict({
   feedback: Type.Optional(Type.String({ maxLength: 10_000 })),
 });
@@ -909,33 +709,6 @@ export const QueueReorderRequestSchema = Strict({
 });
 export type QueueReorderRequest = Static<typeof QueueReorderRequestSchema>;
 export type ImproveMessageRequest = Static<typeof ImproveMessageRequestSchema>;
-
-export const CommandRequestSchema = Strict({
-  command: Type.String({ minLength: 1, maxLength: 100_000 }),
-  messageId: Type.Optional(Id),
-});
-export type CommandRequest = Static<typeof CommandRequestSchema>;
-
-export const ShortcutRequestSchema = Strict({
-  command: Type.String({ minLength: 1, maxLength: 500 }),
-});
-export type ShortcutRequest = Static<typeof ShortcutRequestSchema>;
-
-export const ShortcutResponseSchema = Strict({
-  command: Type.String({ minLength: 1, maxLength: 500 }),
-  output: Type.String({ maxLength: 100_000 }),
-});
-export type ShortcutResponse = Static<typeof ShortcutResponseSchema>;
-
-/** Canonical read-only shortcut names shared by Web, CLI, and channel adapters. */
-export { AGENT_SHORTCUT_CATALOG, AGENT_SHORTCUT_COMMANDS, type AgentShortcutCommand } from "./commands.js";
-
-export const SkillInstallRequestSchema = Strict({
-  source: Type.Union([Type.Literal("local"), Type.Literal("clawhub")]),
-  reference: Type.String({ minLength: 1, maxLength: 2_000 }),
-  version: Type.Optional(Type.String({ maxLength: 100 })),
-});
-export type SkillInstallRequest = Static<typeof SkillInstallRequestSchema>;
 
 export const ReloadResultSchema = Strict({
   applied: Type.Array(Type.String()),
@@ -975,61 +748,6 @@ export const AuditRecordSchema = Strict({
   createdAt: Timestamp,
 });
 export type AuditRecord = Static<typeof AuditRecordSchema>;
-
-export const TraceSpanEventSchema = Strict({
-  name: Type.String({ minLength: 1, maxLength: 120 }),
-  occurredAt: Timestamp,
-  attributes: Type.Record(
-    Type.String({ maxLength: 80 }),
-    Type.Union([Type.String(), Type.Number(), Type.Boolean()]),
-  ),
-});
-export type TraceSpanEvent = Static<typeof TraceSpanEventSchema>;
-
-export const TraceSpanSchema = Strict({
-  traceId: Id,
-  spanId: Id,
-  parentSpanId: Type.Optional(Id),
-  runId: Type.Optional(Id),
-  sessionId: Type.Optional(Id),
-  service: Type.String({ minLength: 1, maxLength: 80 }),
-  name: Type.String({ minLength: 1, maxLength: 200 }),
-  kind: Type.String({ minLength: 1, maxLength: 40 }),
-  status: Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("cancelled")]),
-  startedAt: Timestamp,
-  durationMs: Type.Integer({ minimum: 0 }),
-  attributes: Type.Record(
-    Type.String({ maxLength: 80 }),
-    Type.Union([Type.String(), Type.Number(), Type.Boolean()]),
-  ),
-  errorType: Type.Optional(Type.String({ maxLength: 200 })),
-  errorMessage: Type.Optional(Type.String({ maxLength: 2_000 })),
-  events: Type.Array(TraceSpanEventSchema, { maxItems: 64 }),
-  endedAt: Timestamp,
-});
-export type TraceSpan = Static<typeof TraceSpanSchema>;
-
-export const TraceQuerySchema = Strict({
-  runId: Type.Optional(Id),
-  traceId: Type.Optional(Id),
-  from: Type.Optional(Timestamp),
-  to: Type.Optional(Timestamp),
-  status: Type.Optional(Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("cancelled")])),
-  name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
-  offset: Type.Optional(Type.Integer({ minimum: 0 })),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-});
-export type TraceQuery = Static<typeof TraceQuerySchema>;
-
-export const TraceQueryPageSchema = Strict({
-  traceId: Id,
-  runId: Type.Optional(Id),
-  sessionId: Type.Optional(Id),
-  spans: Type.Array(TraceSpanSchema),
-  hasMore: Type.Boolean(),
-  nextOffset: Type.Integer({ minimum: 0 }),
-});
-export type TraceQueryPage = Static<typeof TraceQueryPageSchema>;
 
 export const OptimizationApplicationSchema = Strict({
   id: Id,
@@ -1140,39 +858,3 @@ export const SessionHistoryPageSchema = Strict({
   hasMore: Type.Boolean(),
 });
 export type SessionHistoryPage = Static<typeof SessionHistoryPageSchema>;
-
-export interface AdapterHealth {
-  status: "ok" | "degraded" | "stopped";
-  connected: boolean;
-  lastInboundAt?: number;
-  lastError?: string;
-}
-
-export interface ExternalConversation {
-  adapter: string;
-  tenantId: string;
-  conversationId: string;
-  threadId?: string;
-  kind: "direct" | "group";
-}
-
-export interface ChannelInboundMessage {
-  conversation: ExternalConversation;
-  externalMessageId: string;
-  senderId?: string;
-  text: string;
-  attachmentIds?: string[];
-}
-
-export interface ChannelAdapter {
-  start(): Promise<void>;
-  stop(): Promise<void>;
-  health(): AdapterHealth;
-  mapConversation(input: ExternalConversation): Promise<string>;
-  handleInbound(input: ChannelInboundMessage): Promise<void>;
-  renderEvent(event: AgentEventEnvelope): Promise<void>;
-}
-
-/** 当前认证账号的执行策略，不接受客户端指定其他账号。 */
-export const ExecutionSettingsSchema = Strict({ autoApprove: Type.Boolean() });
-export type ExecutionSettings = Type.Static<typeof ExecutionSettingsSchema>;

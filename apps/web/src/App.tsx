@@ -135,6 +135,7 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent>();
   const [historical, setHistorical] = useState<TranscriptItem[]>([]);
   const [historyHasMore, setHistoryHasMore] = useState<boolean>();
+  const [historyOwnerKey, setHistoryOwnerKey] = useState("");
   const [eventState, setEventState] = useState<EventConnectionState>(() => client.eventState());
   const [lastSyncAt, setLastSyncAt] = useState<number>();
   const [syncCursor, setSyncCursor] = useState<number>();
@@ -272,6 +273,12 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
   });
   const selectedSession = sessions.data?.find((item) => item.id === selected);
   const activeBranchId = selectedSession?.activeBranchId;
+  const historyKey = `${selected ?? ""}:${activeBranchId ?? ""}`;
+  const historyKeyRef = useRef(historyKey);
+  historyKeyRef.current = historyKey;
+  // 历史缓存读取是异步的；渲染时按会话和分支归属过滤，避免切换瞬间显示旧分支消息。
+  const visibleHistorical = historyOwnerKey === historyKey ? historical : [];
+  const visibleHistoryHasMore = historyOwnerKey === historyKey ? historyHasMore : undefined;
   const snapshot = useQuery({
     queryKey: ["snapshot", selected, activeBranchId],
     queryFn: async () => {
@@ -372,12 +379,6 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
   }, [authenticated, client]);
   const snapshotReady = Boolean(snapshot.data);
   useEffect(() => {
-    // Branch edits replace the visible conversation. Drop history loaded for the
-    // previous branch before its asynchronous cache read can reintroduce stale IDs.
-    setHistorical([]);
-    setHistoryHasMore(undefined);
-  }, [selected, activeBranchId]);
-  useEffect(() => {
     if (!selected || selected === "undefined" || !snapshotReady) return;
     let unsubscribe: (() => void) | undefined;
     let cancelled = false;
@@ -387,6 +388,7 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
         if (cancelled) return;
         setHistorical(cached ?? []);
         setHistoryHasMore(undefined);
+        setHistoryOwnerKey(historyKey);
         unsubscribe = client.subscribeSessions(
           // 只有快照落入该分支的缓存后才订阅；提前消费事件会让无投影的增量静默丢失。
           [
@@ -454,14 +456,14 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [selected, activeBranchId, queryClient, client, snapshotReady, cacheFailed]);
+  }, [selected, activeBranchId, historyKey, queryClient, client, snapshotReady, cacheFailed]);
   const transcript = useMemo(() => {
-    const items = [...historical, ...(snapshot.data?.transcript ?? [])];
+    const items = [...visibleHistorical, ...(snapshot.data?.transcript ?? [])];
     const unique = [...new Map(items.map((item) => [item.id, item])).values()].sort(
       (a, b) => a.sequence - b.sequence,
     );
     return unique;
-  }, [historical, snapshot.data?.transcript]);
+  }, [visibleHistorical, snapshot.data?.transcript]);
   const conversationEntries = useMemo(
     () =>
       buildConversationEntries(transcript, snapshot.data?.responses ?? [], snapshot.data?.recentRuns ?? []),
@@ -892,7 +894,7 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
                 </button>
               </div>
             )}
-            {(historyHasMore ?? snapshot.data?.history.hasMoreBefore) && (
+            {(visibleHistoryHasMore ?? snapshot.data?.history.hasMoreBefore) && (
               <button
                 type="button"
                 className="run-action"
@@ -902,14 +904,20 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
                   const area = transcriptRef.current;
                   const previousHeight = area?.scrollHeight ?? 0;
                   const previousTop = area?.scrollTop ?? 0;
+                  const requestedHistoryKey = historyKey;
                   void client.getSessionHistory(selected, before, 100).then((page) => {
-                    if (selected !== selectedForScrollRef.current) return;
-                    const next = [...page.items, ...historical];
+                    if (
+                      selected !== selectedForScrollRef.current ||
+                      requestedHistoryKey !== historyKeyRef.current
+                    )
+                      return;
+                    const next = [...page.items, ...visibleHistorical];
                     const unique = [...new Map(next.map((item) => [item.id, item])).values()].sort(
                       (a, b) => a.sequence - b.sequence,
                     );
                     setHistorical(unique);
                     setHistoryHasMore(page.hasMore);
+                    setHistoryOwnerKey(requestedHistoryKey);
                     void cacheHistory(selected, unique, activeBranchId).catch(cacheFailed);
                     requestAnimationFrame(() => {
                       const current = transcriptRef.current;

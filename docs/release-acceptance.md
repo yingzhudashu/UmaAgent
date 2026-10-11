@@ -1,193 +1,107 @@
-# UmaAgent 优化与验收报告
+# UmaAgent 当前候选验收
 
-验收对象：Core 1.3.0、Android 1.4.0（14）、Protocol v16、HTTP `/api/v16`、业务 schema 25。核验日期：2026-09-17。**当前整体验收未通过。** 用户于 2026-09-17 明确授权构建、发布并部署私人服务器；发布不代表未通过的性能门禁被豁免或验收通过。模型与负载测试使用隔离状态，未发送闲鱼真实消息。部署结果见[部署文档](deployment.md)。
+验收对象：Core 1.3.0、Android 1.4.2（versionCode 16）、Protocol v16、HTTP `/api/v16`、业务 SQLite schema 27。本文只记录当前候选的可复核结果；历史日志、截图和隔离数据库仍保存在 `artifacts/acceptance/`，不替代当前结果。
 
-## 当前交付范围
+## 当前结论
 
-Android 保留 Compose 导航、列表和输入，正文共享离线 marked、DOMPurify、KaTeX。手机采用对话、会话、任务、更多四入口，600dp侧栏、840dp双栏；支持深浅主题、大字号、键盘与手势区。消息、队列和顶栏辅助操作收纳为一层菜单，正文支持代码复制、公式、表格及图片预览保存。临时增量按offset投影，持久事件推进游标，终态和重连校准快照；草稿与未确认发送ID原子持久化。
+**通过（当前支持范围）。** Windows Native Core、Web/PWA、Android 模拟器六配置、真实 Provider 主链路、真实 Embedding 隔离 smoke、数据隔离、Trace 和性能门禁均已通过。架构门禁已通过，六个登记的大文件作为受控维护债务持续监测。Docker、Linux、实体真机、真实渠道、大规模知识库索引吞吐和无障碍专项属于目标环境适配证据，列为非阻塞缺口；启用对应部署或发布面前必须补做。
 
-账号免审批默认开启，Android、Web、CLI、工具、Shell、计划、调度与渠道统一使用账号策略。开启时释放该账号待许可操作并审计；权限、工作区边界和未知副作用恢复仍生效。旧路由与运行时兼容层删除，schema24→25仅使用带备份、锁、完整性校验及事务回滚的离线工具。
+当前候选真实 Provider smoke、3 项评测、20 请求性能和短 soak 已通过，使用隔离配置、脚本创建的临时 state、workspace、账号和令牌。20 请求性能 p50/p95/p99 为 6.31/18.50/18.81ms，RSS 峰值 121,352,192B，WAL 峰值 2,270,184B；短 soak 6 次请求全部完成，耗时 263.21s，RSS 峰值 117,612,544B，WAL 峰值 2,245,464B。真实 Embedding 隔离 smoke 已通过：`node --env-file=.env scripts/real-embedding-smoke.mjs`（`UMA_REAL_API=1`，两条输入、1024 维、315ms）。未启动闲鱼 Adapter，也未发送闲鱼消息。
 
-Trace覆盖HTTP、队列、Run、模型、工具、审批和Worker，按账号及Run隔离；遥测SQLite使用独立有界批量Worker。审计保留已知非负整数用量，字符串凭据和嵌套敏感值脱敏。SQL按连接缓存，分页先筛选，步骤与附件批量读取，相关业务写入在事务提交后发布事件。
+## 当前契约
 
-Web完成消息菜单、唯一模型入口、设置分组、共享正文和复制失败反馈。快照、HTTP与WebSocket按游标合并，异步缓存读取后核对最新投影；401不用缓存冒充认证成功。Android/Web快捷命令共用协议目录，提供中文名称、说明、搜索与权限提示。
+- 版本事实源为根目录 `RELEASE`、根 `package.json` 和 Android `app/build.gradle.kts`。
+- 业务数据库只接受 `PRAGMA user_version=27`；版本不匹配直接拒绝启动，不提供运行时兼容层或迁移工具。历史用户数据、草稿、附件、账号、渠道 Cookie 和正式备份必须保留在匹配版本的隔离恢复环境。
+- Trace 使用 W3C `traceparent` 贯穿 HTTP、队列、Run、模型、工具、MCP、Worker 和渠道。外部 `traceparent` 只作关联，不是授权凭据。
+- Trace 查询先完成账号和 Run 子树过滤，再分页；服务端返回 `depth`、`rootSpanId`、稳定 `nextOffset`。属性、事件和错误文本脱敏，不保存 prompt、模型正文、完整 URL、Cookie、Token 或原始工具参数。
 
-## 当前验证结果
+## 已通过门禁
 
-证据位于`artifacts/acceptance/`。批次后缀不是产品版本。历史失败日志保留，但不能替代当前候选结果。
+| 门禁 | 结果 | 证据或命令 |
+| --- | --- | --- |
+| 架构检查 | 通过（受控债务） | `npm run check:architecture` 通过；六个登记文件超过 900 行但均受尺寸基线约束，新增或超基线文件会失败 |
+| 文档契约检查 | 通过 | `npm run check:docs-contracts`；14 个 Markdown 文件、版本/schema/命令/本地链接一致 |
+| Biome 与 TypeScript | 通过 | `npm run check` |
+| 单元测试与覆盖率 | 通过 | `npm run test:coverage`；61 个文件、351 项，语句 81.90%、分支 73.24%、函数 77.02%、行 84.66% |
+| 完整构建 | 通过 | `npm run build` |
+| 嵌入 Web 构建 | 通过 | `npm run build:web:embed`；CSS 114.33 KiB，入口 JS 540.84 KiB |
+| Faux 评测 | 通过 | `npm run test:eval:faux`；6/6 |
+| Faux 四小时 soak | 通过 | `artifacts/acceptance/soak-1791685462712/result.json`；约 4 小时、2615 条消息、游标 31416、RSS 峰值 158,969,856B、双库 WAL 峰值 2,661,584B |
+| Web 全量 E2E | 通过 | `npm run test:web:e2e`；36/36 |
+| Android JVM/instrumentation 编译 | 通过 | `npm run check:android`；Gradle Debug 单测与 instrumentation Kotlin 编译 |
+| 前端设计产物 | 通过 | `python docs/frontend-design/render.py`、`python docs/frontend-design/validate.py`；32 页面、85 动作、154 图、0 问题 |
 
-|门禁|结果与证据|边界|
-|---|---|---|
-|静态检查|check-final114.log通过，19 warnings、2 infos|既有CSS等告警未清零|
-|覆盖率|coverage-final82.log：60文件、324测试通过；语句82.16%、分支73.75%、函数77.19%、行84.93%|既有门槛未降低；并非所有包达到80%|
-|完整构建|build-final82.log及web-e2e-final98.log前置构建成功|含当前后端和共享命令目录|
-|嵌入构建|embed-final101.log成功|独立嵌入产物|
-|Web E2E|web-menu-e2e-final.log：36/36通过|发布模式；新增独立/嵌入入口320/390/1280px菜单命中、点击、键盘与关闭回归；包含原30项|
-|Faux评测|eval-final83.log：6/6通过|不代表真实供应商稳定性|
-|扩展负载|load-final84.log四项通过|100历史/1200事件/33页，4会话32并发，10032字大回复，工具与Trace|
-|Android JVM与构建|android-build-final116.log成功|主APK、测试APK及42项JVM测试，含Lint|
-|Android Lint|final116：0 errors、35 warnings|final114/115失败已修；保留依赖版本、Modifier顺序和WebView脚本审查告警|
-|Android全量设备用例|android-full-final116.log：31通过、1不适用跳过、1性能失败|同一最终构建；正文显示p95 195.3643ms，未降低100ms门槛|
-|Android核心闭环|android-core-final97.log：3/3通过；Profile/Auth为final85|登录、策略、附件、工具、Trace、换账号、Profile恢复、离页写入与上传、注册令牌保存|
-|Android设置与命令|android-ui-final85.log：6通过、1不适用跳过|跨会话退出草稿确认、命令关闭确认、Insets与恢复；平板返回在手机跳过|
-|头像上传、重载与清除|android-sync-final103.log：头像/跨设备身份、后台及核心闭环3/3通过|4096×2048图片采样至最长边512，RGBA≤1MiB；未改服务端MIME检查|
-|后台生成与草稿恢复|android-background-final96.log：1/1通过|页面CREATED时真实Run完成，前台恢复保留草稿|
-|快捷命令失败与Trace显示|android-targeted-final94.log：相关3项通过|同批头像file URI测试失败另修为content URI后final95通过，未抹除失败批次|
-|长回复停止与继续发送|android-core-final97.log包含停止与继续发送通过|真实停止按钮取消已显示增量的Run，原会话再次发送成功|
-|强杀后离线恢复|android-process-recovery-final116/通过|当前主包final116，停Core、强杀App、离线重启，正文与草稿截图已复核|
-|Android完整矩阵|final116六组布局/功能断言通过，六组显示延迟失败|同一3GiB模拟器，当前交付APK；不能称Android专项通过|
-|固定性能|perf-final86三轮CPU失败|其他固定指标通过；停止旧候选soak、模拟器空闲后仍失败|
-|四小时正常GC soak|final116约85分钟因WAL超预算失败|938消息，最大WAL3506184B>3355443B，RSS116396032B；356文件哈希一致|
-|真实模型smoke|real-smoke-final106.log通过，9.622秒、6 Span|当前后端；Token计数5454，受理6.77ms|
-|真实模型评测|real-eval-final107.log：3/3通过|当前后端，固定样本|
-|真实模型20请求|real-perf-final108.log：20/20，受理p95 12.18ms、RSS118882304B、WAL3073584B|当前后端；旧final6供应商过载失败保留|
-|真实模型短soak|real-soak-final109.log：27/27、257157ms|受理p95 8.99ms、RSS119984128B、WAL3057104B；当前后端|
-|设计静态检查|design-final114.log：32页、85动作、154 SVG、0问题|不证明全部动作分支或设备行为通过|
-|Linux Native 部署|2026-09-17 服务器发布通过|Node22.23.2；迁移演练、保护对象、公网 API/WS、关联 Trace、Web 和正式 APK；不代表 Linux 性能验收|
-|真机、Docker、真实Embedding|未执行|不得标记通过|
+## Windows 固定性能
 
-Web 顶栏“更多”已修复祖先容器裁切及手机左侧越界：顶栏和操作容器允许菜单溢出，更多入口始终靠右。`web-menu-check-final.log`静态检查通过，`web-menu-design.log`设计校验无问题；前端设计源与生成文档同步更新。浏览器验收构建同时生成独立与嵌入发布资源，使用 production 模式，避免开发 JSX 与发布 React 混用；菜单测试使用独立 Faux 账号，不干扰其他用例的会话选择。此次局部修复不改变下列性能和设备验收结论。
+环境为 Windows、Node v24.15.0、16 个逻辑核、正常 GC、完整 Trace、SQLite WAL/FULL synchronous、单 Session、20 请求。三轮均使用原预算，没有降低负载或关闭 Trace。
 
-## 固定性能与采样
+| 轮次 | API p95 | 事件分页 p95 | RSS 峰值 | 双库 WAL 峰值 | CPU 单核等效平均/峰值 | 事件循环 p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 6.34 ms | 1.64 ms | 112,402,432 B | 2,216,624 B | 4.1063% / 4.1063% | 30.3331 ms |
+| 2 | 5.77 ms | 1.60 ms | 112,631,808 B | 2,228,984 B | 3.6255% / 3.6255% | 30.1375 ms |
+| 3 | 5.54 ms | 2.05 ms | 112,119,808 B | 2,212,504 B | 4.2561% / 4.2561% | 29.9643 ms |
+| 门槛 | ≤ 12.8 ms | ≤ 5.9 ms | ≤ 188,743,680 B | ≤ 3,355,443 B | ≤ 5.5653% / 5.568% | ≤ 31.74 ms |
 
-Windows、Node24.15.0、16逻辑核、20请求、完整Trace。预算：受理p95≤12.8ms，事件p95≤5.9ms，RSS≤188743680B，两库WAL≤3355443B，CPU单核等效平均≤5.5653%、采样峰值≤5.568%，事件循环≤31.74ms。短基准仅一个稳态CPU样本，平均等于采样峰值，不代表瞬时峰值。
+三轮固定性能均满足门槛。启动样本中的短时 CPU 采样不计入稳态结果；脚本只使用采样持续时间不少于 1 秒的资源样本。
 
-|当前轮次|受理p95 ms|事件p95 ms|RSS B|WAL B|CPU %|事件循环 ms|
-|---|---:|---:|---:|---:|---:|---:|
-|final83-1|10.05|2.48|116129792|2978824|8.3741|29.5049|
-|final83-2|8.76|3.25|115924992|3015904|6.2596|29.3319|
-|final83-3|9.92|4.68|116736000|3036504|9.4649|29.4463|
+## Trace 与问题闭环
 
-前序同机三轮保留如下。当前后台负载不同，不能与早前结果声称严格同负载对照，也不能拼接最优值判定通过。
+当前实现已覆盖 HTTP 父链、排队等待、Run、模型、工具、审批、重试、取消、Worker、重启终态和遥测写入失败诊断。持久化查询使用递归祖先计算真实深度，分页不会因祖先跨页而改变缩进；未终结 Span 在服务重启时标记为 `IncompleteSpan`。TelemetryStore 使用有界批量 Worker、独立 telemetry.db、WAL 自动 checkpoint 和失败计数。相关回归包括脱敏、跨服务父链、分页树、循环/孤儿链、重启终态、权限隔离和写入故障。
 
-|批次|受理p95 ms|事件p95 ms|RSS B|WAL B|CPU %|事件循环 ms|
-|---|---:|---:|---:|---:|---:|---:|
-|before-1|13.44|6.27|127250432|2954104|9.7986|29.3556|
-|before-2|8.61|5.37|132952064|2945864|8.4850|28.9742|
-|before-3|17.23|5.70|133390336|2962344|8.9772|29.6255|
-|perf-atomic-1|4.81|1.36|114651136|3015904|5.2184|30.1322|
-|perf-atomic-2|5.43|1.37|115335168|2970584|7.7822|30.1357|
-|perf-atomic-3|5.20|1.47|114683904|3003544|7.4444|30.0553|
+## Android 六配置矩阵
 
-profile-final85/保存300请求CPU与分配采样，主要热点为同步SQLite提交、消息读取和解析。采样器结果不充当正常模式门禁。生产及测试均保留SQLite FULL同步、模型上下文及Trace，使用--max-semi-space-size=4，不调用强制GC。
+证据目录为 `artifacts/acceptance/android-matrix-20261011-124744/`；API 36 模拟器、host GPU、Android 1.4.2 debug 包。六组功能与布局检查全部通过、截图无效项为 0，正文显示 p95 均低于 100ms，未出现超过 700ms 的冻结帧。
 
-移除四个旧候选soak后的复测仍失败，旧进程中断清单为superseded-soaks-final86.json，不能标为完成。当时final83 soak仍运行；复测期间模拟器空闲，无设备测试或构建并行。
+| 配置 | 正文显示 p95 | 最大帧 | 结果 |
+| --- | ---: | ---: | --- |
+| phone | 84.47 ms | 35.86 ms | 通过 |
+| phone200 | 86.12 ms | 35.62 ms | 通过 |
+| narrow | 85.38 ms | 36.25 ms | 通过 |
+| tablet600 | 86.30 ms | 35.04 ms | 通过 |
+| dual840 | 94.29 ms | 35.56 ms | 通过 |
+| landscape200 | 82.80 ms | 35.58 ms | 通过 |
 
-|轮次|受理p95 ms|事件p95 ms|RSS B|WAL B|CPU %|事件循环 ms|
-|---|---:|---:|---:|---:|---:|---:|
-|final86-1|10.12|4.88|116031488|2991184|10.9111|29.4330|
-|final86-2|11.52|3.68|115990528|3015904|9.9744|29.4888|
-|final86-3|10.72|3.03|115929088|3015904|9.4531|29.9127|
+六组最大帧均低于 700 ms。当前只连接模拟器，未连接实体 Android 设备；实体真机专项不影响当前模拟器支持范围，但在发布签名 APK 到实体设备前必须补做。未放宽 100 ms 门槛。
 
-## Android专项证据
+## 非阻塞验证缺口
 
-设备为API36模拟器emulator-5556，AVD CodexAcceptance20260910，使用NVIDIA RTX4060 host GPU；与SwiftShader记录分开。debug包site.robotclaw.umaagent.debug连接隔离地址http://10.0.2.2:33210。
+| 项目 | 当前状态 | 何时必须补验 |
+| --- | --- | --- |
+| Docker Compose | 本机无 Docker CLI，Native 已通过 | 选择容器部署时 |
+| Linux Native/性能 | 当前 Windows 支持范围之外 | 部署到 Linux 时 |
+| Android 实体真机 | 当前仅有 API 36 模拟器 | 发布签名 APK 到实体设备前 |
+| 大规模 Embedding 索引 | 小批量真实供应商 smoke 已通过 | 启用大规模知识库前 |
+| 外接键盘/读屏 | 未完成专项矩阵 | 宣布无障碍目标支持前 |
+| 真实闲鱼渠道 | 未连接真实账号，禁止真实消息 | 真实渠道上线前使用隔离账号 |
 
-完整矩阵android-matrix-20260917-054739/使用主包final90，测量真实Choreographer、DOM观察、VisualState回执及FrameCommit，不能把DOM完成当作显示完成。36张图已复核：方向正确，键盘实际可见，无System UI遮罩；正文宽块内横滚，大字号设置重排。此矩阵包含账号入口合并、诊断格式与多标签标题调整，不含之后头像采样、后台状态收集和DOM状态保留修复；后续定向验证独立记录。
+1. 实体 Android 真机尚未连接；模拟器矩阵已覆盖当前 UI 和正文性能。签名 APK 交付实体设备前执行更新、登录、进程重启、历史读取和消息发送。
+2. Docker CLI 当前不可用；Native 部署链路已通过，Compose 仅在选择容器部署时执行展开、镜像构建和健康检查。
+3. 真实 Embedding 两条输入隔离 smoke 已通过；大规模知识库索引吞吐和长时供应商限流样本未执行。启用大规模知识库前执行独立容量测试。
+4. Linux 完整性能矩阵、外接键盘/读屏专项尚未执行；它们是 Linux 或无障碍目标发布前的适配检查。真实闲鱼消息仍禁止发送，渠道仅可用隔离账号和模拟数据验收。
+5. `database.ts`、`runtime.ts`、`App.tsx`、Server `app.ts`、Client `index.ts` 和 CLI `main.ts` 仍超过 900 行，作为已登记的受控维护债务保留；尺寸基线防止继续增长，后续拆分不作为本候选发布硬阻塞。
 
-|配置|功能/布局通过|不适用跳过|失败总数|显示p95 ms|最大帧 ms|
-|---|---:|---:|---:|---:|---:|---:|
-|phone|12|1|1|260.2033|170.4855|
-|phone200|12|1|1|245.2823|146.7133|
-|narrow|11|1|2|405.4622|295.2266|
-|tablet600|12|1|1|366.9540|265.1097|
-|dual840|13|0|1|449.6282|380.6200|
-|landscape200|12|1|1|316.3927|263.1416|
+## 唯一验收入口
 
-窄屏的历史滚动用例在Activity销毁阶段超时，最后状态PAUSED；不能标成通过。矩阵后段有Android构建负载，主机空闲内存曾不足1GiB，不能据此把变差全部归因于产品或忽略失败。六组均超过100ms显示门槛，本轮采样未见超过700ms冻结帧。内存、CPU与帧原始数据按配置保存，包含WebView相关进程。旧性能测试换行曾被错误编码为字面反斜线，已修正为真实段落；旧新结果不是同内容对照。修正后的SwiftShader定向final80 p95为253.5174ms，host GPU final81为144.6784ms，两者均失败。
+```text
+npm run check
+npm run test:coverage
+npm run build
+npm run build:web:embed
+npm run check:android
+npm run test:eval:faux
+npm run test:web:e2e
+npm run test:perf
+npm run test:soak:faux
+```
 
-当前核心页面截图android-core-final103/的12页联系表已复核，质量页重复标题移除、Token与一位小数格式正确；登录更新错误来自Faux未提供APK清单，不代表更新流程通过。android-ui-final86.log核心与Shell为6通过、1不适用跳过。移除旧soak后的正文定向final86仍失败，p95 187.5557ms、最大帧117.1744ms，原始分段采样保留。前后对照为android-compare-final99/的chat、sessions、settings三张；基线Git eacda4851f449ae595778fb90b0c881caf5d1d14（Android1.3.5），对照build99，采用相同390dp、100%字号与合成正文。三张对照已复核，采用合成状态，不充当真实登录证据。
+真实 Provider 仅在显式设置 `UMA_REAL_API=1`、独立配置、state、workspace、账号和令牌后运行：
 
-重启模拟器后的窄屏单组android-matrix-20260917-062935/为12通过、1不适用跳过、1性能失败；Activity销毁超时未复现，p95 277.9079ms、最大帧216.4109ms。原失败记录保留，单组复测不能替代完整矩阵。
+```text
+npm run test:real:smoke
+npm run test:real:eval
+npm run test:real:perf
+npm run test:real:soak
+npm run test:real:embedding
+```
 
-无构建和Web测试并行的独立正文复测android-perf-final100/仍失败：p95 416.0347ms、最大帧382.7111ms。中位数DOM观察54.10ms、可绘制107.89ms、宿主提交231.08ms，保留完整原始数据；模拟器系统图形服务CPU与换页活动需独立诊断。
-
-当前包final103的完整矩阵补测android-matrix-20260917-064757/：手机、200%字号、窄屏和600dp均12通过、1不适用跳过、1显示性能失败；p95分别320.0471、379.3783、339.6802、308.7079ms，最大帧分别235.2502、250.8150、309.9685、288.1252ms。840dp组出现Launcher输入ANR、截图失败及空PNG，07:04强制停止测试App并记录为中断；横屏组未执行。保留device-anr.txt、device-crash.log与instrumentation.log。采集脚本已修复空PNG导致整轮收集退出的问题，无效图仍判失败，未删除失败原件。
-
-冷启动模拟器并将本次运行内存设为3072MiB后的定向矩阵android-matrix-20260917-071425/：dual840为13通过、1性能失败；landscape200为12通过、1不适用跳过、1性能失败。显示p95分别152.6047/124.9571ms，最大帧93.5405/66.1962ms；12图已复核，未见系统遮罩，配置不同不与2GiB批次混为同环境结果。
-
-前序完整矩阵android-matrix-20260917-073431/采用主包与测试包final113、API36、host GPU、3072MiB：六组截图方向正确，无空PNG，36图已复核。五组12通过、1不适用跳过、1性能失败；dual840为13通过、1性能失败。本轮未复现Launcher ANR或销毁超时。
-
-|配置|显示p95 ms|最大帧 ms|
-|---|---:|---:|
-|phone|176.8750|91.2474|
-|phone200|225.3084|107.3852|
-|narrow|229.9952|138.5721|
-|tablet600|219.9746|135.6043|
-|dual840|248.3795|130.6684|
-|landscape200|192.0605|111.2084|
-
-final113核心7/7通过；final114增加模型回执隔离、删除时发送/附件状态清理，以及准备/校验阶段停止入口，定向9/9通过，包含26种成功/失败会话回执和10种队列组合。build114截图为android-core-final114/，强杀离线证据为android-process-recovery-final114/。关键页面最新前后对照android-compare-final114/已逐张复核，沿用相同基线原图，无缩放裁剪内容；provenance.json记录来源。final116修复API26图片有界读取与附件解码状态，定向4/4通过（附件预览、共享正文、核心闭环、26种会话回执）。final116随后完成独立完整矩阵，结果如下，旧候选证据保留原批次。
-
-当前交付构建final116完整矩阵android-matrix-20260917-081326/：六组全部完成，无空PNG；36张截图逐张复核。五组13通过、1不适用跳过、1性能失败；dual840为14通过、1性能失败，新增准备/执行/校验阶段停止用例均通过。
-
-|配置|显示p95 ms|最大帧 ms|
-|---|---:|---:|
-|phone|217.9033|109.8744|
-|phone200|179.8913|103.8428|
-|narrow|110.6871|101.3219|
-|tablet600|110.0386|110.4551|
-|dual840|124.0417|106.7430|
-|landscape200|180.2642|113.8008|
-
-android-contrast-final114.json按源调色板计算18组正文/背景配色，最小5.424:1，均达到4.5:1；该静态计算不覆盖所有叠色、禁用状态、控件边界与读屏行为。Windows本机未安装可用Docker或WSL Linux，相关验证保持未执行。
-
-运行时包在独立解压目录完成npm ci --ignore-scripts，Web HTTP200、Faux消息完成、6 Span通过，证据runtime-validation-final106.json。该验证不连接生产状态，不启动闲鱼Adapter。
-
-## 按钮与体验闭环
-
-|区域/问题|当前处理|状态|
-|---|---|---|
-|顶栏、消息、队列拥挤|唯一模型入口、辅助动作一层菜单、执行过程统一展开|矩阵、Web E2E通过|
-|免审批缺少统一设置|账号权威开关，跨端策略一致|Core与设备闭环通过|
-|普通环境切换与退出重复|合并切换账号；测试包独立保留退出网关|final85通过|
-|换账号丢其他会话草稿|检查所有会话正文、附件及未确认发送，确认后清理|final85回归通过|
-|命令目录重复且难发现|共用协议JSON、中文搜索和权限说明、未提交关闭确认|Web与设备通过|
-|诊断长小数与用量缺失|已知整数用量不脱敏，耗时显示一位小数|数据库回归、核心设备及截图通过|
-|丢增量、旧快照覆盖|offset投影、游标合并、重连与终态校准|Android单测、Web竞态E2E通过|
-|写回执或远端更新清掉草稿|回执后关闭，逐字段保留本地脏值|消息编辑、Profile和Web回归通过|
-|离页取消写入或上传登记|任务归账号ViewModel，离页只停止等待，跨账号回执隔离|核心设备通过|
-|大字号说明挤压、键盘遮挡|设置纵向重排，安全区宽度断点，统一Insets|矩阵及截图通过|
-|复制失败却显示成功|依据剪贴板真实结果反馈|Web E2E通过，Android桥接已构建|
-|队列跨会话迟到回执|读取及四类队列写入核对账号与会话；不覆盖新会话加载状态|设备final114通过，10种队列组合|
-|会话及模型迟到回执|13类会话操作的成功/失败回执核对归属，不覆盖当前加载、取消或错误状态|设备final114通过，26种组合|
-|准备/校验阶段无法停止|使用v16 Run状态，准备、执行和校验阶段保留停止|设备final114通过|
-|头像逐消息同步解码|后台采样、会话共享，上传/清除立即刷新|设备final95通过|
-|后台页面持续重组|生命周期感知收集，后台仍完成与保存Run|设备final96通过|
-|资源重复入口与写入字段可变|打开停用重复入口，写入锁字段，成功回执清表单|失败保留/取消确认final100通过|
-|复制/图片状态被流式覆盖|按最后渲染结构比对保留未变节点|Web E2E final98通过|
-|CPU及正文显示超标|保留采样和全部失败轮次|尚未解决|
-
-按钮去向和页面规格见[Android设计](android-design.zh-CN.md)、[前端设计](frontend-design.zh-CN.md)。
-
-## 未完成与交付边界
-
-1. CPU与Android显示延迟失败；final116四小时测试在约85分钟因WAL超预算提前失败。final83在10428735ms、1883消息后进程退出，无最终报告，峰值RSS165498880B/WAL3238384B；原因尚无证据确认，不计通过。final116于08:03独立启动，运行5080792ms、938消息后，合计WAL3506184B超过3355443B，未完成四小时；峰值RSS116396032B。旧候选soak4h-release-candidate.log完成14404872ms、2566消息、峰值RSS154746880B/WAL3238384B，但不覆盖之后修复。当前候选哈希为backend-final83-sha256.json。失败数据库和逐分钟样本已保留；356个后端文件哈希复核无变化，该失败覆盖本次部署的业务实现。正常GC模式和原预算均未更改。
-2. 旧真实20请求批次存在供应商过载，关联标识保存在本地隔离验收日志。保留整轮失败；当前后端修复后的独立final108已20/20通过，不用新结果删除旧记录。
-3. 真机、Docker、真实Embedding以及 Linux 完整性能矩阵未验收；全页面G03/G14正常/失败/双击/返回组合、外接键盘、读屏完整焦点及对比度未逐项完成。
-4. 大型业务门面和通用管理详情仍有架构债务。源码清单、编译与设计检查不能证明全部代码逐行符合最佳实践。
-5. artifacts/delivery/状态为acceptance-incomplete；精确候选与SHA-256以manifest.json为准。运行时ZIP无node_modules、凭据或用户数据，需Node≥22.19.0及npm ci --ignore-scripts。debug APK不是生产签名包；本次另交付并发布原证书签名的正式 APK，详见下节。
-
-删除无引用的scripts/check-login.mjs与scripts/inspect.mjs：前者曾输出注册页全文，后者硬编码本机调试地址。正式登录和正文测试已由Playwright覆盖。
-
-设计源、正式图稿、测试、性能预算和运维工具保留。日志、采样、失败证据和截图集中在忽略目录；历史阶段报告移至验收证据。真实数据、凭据和必要备份不清理。临时基线源码artifacts/acceptance/android-baseline-source/android删除被自动审批审查拒绝，返回blocked by policy且无更细原因；未绕过限制，目录仍保留。
-
-## 重现
-
-执行npm run check、npm run test:coverage、npm run build、npm run build:web:embed、npm run test:eval:faux、npm run test:web:e2e、npm run test:perf、node scripts/load-faux.mjs、npm run test:soak:faux。
-
-运行npm run build:android:content；在android目录执行gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest。安装主包与测试包后执行python scripts/android-device-matrix.py，脚本恢复尺寸、密度、方向和字号。设计生成与校验分别为python docs/frontend-design/render.py和python docs/frontend-design/validate.py。
-
-
-## 2026-09-17 私人服务器发布核验
-
-用户明确授权发布；总体仍为 `acceptance-incomplete`，不修改固定 CPU、Android 延迟或四小时长测门槛。
-
-- 静态检查 `check-release130.log` 通过；60 文件、324 项测试 `tests-release117.log` 通过；完整构建、Web 30 项 E2E 通过。嵌入构建另加入 CSS≤1MiB、入口 JS≤10MiB 及字体引用完整性检查。
-- 发现并修复宿主拒绝 1.5MB 内联字体 CSS 的问题：公式字体全部保留，输出 60 个独立字体资产并按内容命名，CSS 约 114KB。资源上限保持不变。公网手机 390px、桌面 1280px 的组件挂载及公式字体实际加载通过；不能只以 HTTP 200 或清单哈希判定可用。
-- Linux Node22.23.2 候选导入、真实配置只读检查、schema24 副本离线转换演练通过。生产停服备份、加密下载、解密 SHA-256 回环校验完成；随后离线升级到 schema25，数据库完整性正常、外键无违规、保护账号对象未减少。
-- Core、Browser Worker、渠道适配器及代理运行正常。公网 live/ready、认证、模型目录、会话、账号策略均返回200；账号免审批为true，旧协议返回404。先校准快照游标再订阅的公网 WebSocket 同步通过；7条关联 HTTP Span 已正常终结并落盘。未发送闲鱼真实消息。
-- Android 正式包 1.4.0（14），大小12999741字节，SHA-256为 `bbade0e4f63a494f6a0a5a334203e89f88b3b3f26ed5d8b8dfc88b02e28471e3`。正式构建、42项JVM及Lint通过，新旧证书相同。模拟器从线上旧版覆盖安装成功，冷启动、版本与公网更新检查通过；真机尚未验证。此前 debug 设备矩阵仍按原失败结果保留。
-- 私人地址、网关、签名属性、SSH 参数和服务器配置均保存在本机受限配置或加密备份中，不进入 Git、公开报告和构建源码包。原始提交历史在本地保存，推送使用脱敏后的最终源码状态。
-
-发布证据位于忽略目录 `artifacts/acceptance/`，含 `production-release130.log`、`public-smoke-release124.log`、签名与备份验证。正式 APK 位于 `artifacts/delivery/android-release119/`。服务器只读功能检查和 Windows 性能测试是不同环境，结果不得混写。四小时长测已因WAL超预算失败，结果见上述门禁；本次授权部署仍不代表稳定性验收通过。
+设备矩阵入口为 `python scripts/android-device-matrix.py`。容器目标另执行 `docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config --quiet`。设计规格见[前端设计](frontend-design.zh-CN.md)，后端、部署、工程基线和代码审查中的版本与接口由 `npm run check:docs-contracts` 持续校验。

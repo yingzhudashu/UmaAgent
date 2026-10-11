@@ -113,7 +113,7 @@ export class RuntimeCommandOperations {
     try {
       await deps.waitForSideEffectGate(session.id, runId);
       release = await deps.orchestrator.acquire();
-      if (deps.database.getRun(runId).status === "cancelled") {
+      if (deps.database.getRunStatus(runId).status === "cancelled") {
         rootTrace.setStatus({ status: "cancelled" });
         return;
       }

@@ -53,6 +53,17 @@ export function DiagnosticsArea({ report }: { report: DiagnosticsReport | undefi
         <p>
           写入失败 {report.trace.writeFailures} · OTLP 导出失败 {report.trace.otlpExportFailures}
         </p>
+        <p>
+          队列等待 {report.trace.queueWait.count} 次 · p95 {report.trace.queueWait.p95.toFixed(1)} ms · 重试{" "}
+          {report.trace.retries} 次 · 孤儿父链 {report.trace.orphanParentChains}
+        </p>
+        <p>
+          资源样本 {report.trace.resources.samples} · CPU 平均{" "}
+          {report.trace.resources.cpuAverageCorePercent.toFixed(2)}% / 峰值{" "}
+          {report.trace.resources.cpuPeakCorePercent.toFixed(2)}% · RSS 峰值{" "}
+          {Math.round(report.trace.resources.rssPeakBytes / 1024 / 1024)} MiB · WAL 峰值{" "}
+          {Math.round(report.trace.resources.walPeakBytes / 1024)} KiB
+        </p>
         <details>
           <summary>服务明细</summary>
           {report.trace.services.map((item) => (

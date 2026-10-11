@@ -1,161 +1,24 @@
-import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import type {
-  SpanAttributes,
-  SpanOptions,
-  SpanStatus,
-  TelemetryContext,
-  TelemetrySpan,
-} from "@earendil-works/pi-telemetry";
 import { context, trace as otelTrace, type Span, TraceFlags, type Tracer } from "@opentelemetry/api";
 import { SqlWriter } from "./sql-writer.js";
+import {
+  percentile,
+  type ResourceSample,
+  spanTree,
+  type TelemetryEvent,
+  type TelemetrySpanPage,
+  type TelemetrySpanQuery,
+  type TelemetrySpanRecord,
+  type TelemetryStatus,
+  type TelemetrySummary,
+} from "./telemetry-contract.js";
+import { redactErrorMessage, safeAttributes } from "./telemetry-utils.js";
 
-export type TelemetryStatus = "active" | "ok" | "error" | "cancelled";
-export type TraceParent = {
-  traceId: string;
-  spanId: string;
-  traceFlags: number;
-};
-export type TelemetryEvent = {
-  name: string;
-  occurredAt: number;
-  attributes: Record<string, string | number | boolean>;
-};
-export type TelemetrySpanRecord = {
-  spanId: string;
-  traceId: string;
-  parentSpanId?: string;
-  service: string;
-  runId?: string;
-  sessionId?: string;
-  name: string;
-  kind: string;
-  status: TelemetryStatus;
-  startedAt: number;
-  endedAt?: number;
-  durationMs?: number;
-  attributes: Record<string, string | number | boolean>;
-  errorType?: string;
-  errorMessage?: string;
-  events: TelemetryEvent[];
-};
-export type TelemetrySpanQuery = {
-  runId?: string;
-  traceId?: string;
-  from?: number;
-  to?: number;
-  status?: Exclude<TelemetryStatus, "active">;
-  name?: string;
-  offset?: number;
-  limit?: number;
-  /** 服务端普通用户查询时，仅展开指定 Run 的 Span 子树。 */
-  scopeToRun?: boolean;
-};
-export type TelemetrySpanPage = {
-  spans: TelemetrySpanRecord[];
-  hasMore: boolean;
-  nextOffset: number;
-};
-export type TelemetrySummary = {
-  spans: number;
-  incomplete: number;
-  active: number;
-  errorRate: number;
-  writeFailures: number;
-  otlpExportFailures: number;
-  services: Array<{ service: string; spans: number; errors: number }>;
-  stageLatencyMs: Record<string, { p50: number; p95: number; p99: number }>;
-  latencyMs: { p50: number; p95: number; p99: number };
-};
-export type ResourceSample = {
-  id: string;
-  service?: string;
-  capturedAt: number;
-  cpuUserMicros: number;
-  cpuSystemMicros: number;
-  sampleDurationMs: number;
-  cpuPercent: number;
-  rssBytes: number;
-  heapUsedBytes: number;
-  heapTotalBytes: number;
-  externalBytes: number;
-  arrayBuffersBytes: number;
-  eventLoopDelayMs: number;
-  walBytes: number;
-  activeRuns: number;
-  queuedRuns: number;
-};
-
-const REDACTED = "[REDACTED]";
-const sensitive =
-  /(authorization|cookie|api[_-]?key|password|secret|token|prompt|completion|body|arguments|parameters|payload)/i;
-const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
-// 错误文本中的结构化敏感值可能嵌套、换行或被截断；从集合起点删至末尾，不能用浅层正则假装解析 JSON。
-const errorSecretPatterns = [
-  /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
-  /(\bcookie\s*:\s*)[^;\r\n]+/gi,
-  /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|request[_-]?body|body)\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*|\[(?!REDACTED(?:_URL)?\])[\s\S]*|[^\s,;&}]+)/gi,
-  /(["']?(?:authorization|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|body)["']?\s*:\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*|\[(?!REDACTED(?:_URL)?\])[\s\S]*|[^\s,;&}]+)/gi,
-  /([?&](?:api[_-]?key|access[_-]?token|password|secret|token)=)[^&#\s]*/gi,
-  /\b(?:sk-[A-Za-z0-9][A-Za-z0-9_-]{9,}|ghp_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
-  /\buma_pat_[A-Za-z0-9_-]+\b/g,
-];
-
-export function redactErrorMessage(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  // URL 的路径、查询和用户信息都可能包含凭据或用户内容，不依赖参数名猜测。
-  let redacted = value.replace(/https?:\/\/[^\s<>"']+/gi, "[REDACTED_URL]");
-  for (const pattern of errorSecretPatterns)
-    redacted = redacted.replace(pattern, (...matches: unknown[]) => {
-      const prefix = typeof matches[1] === "string" ? matches[1] : "";
-      return `${prefix}${REDACTED}`;
-    });
-  return redacted.slice(0, 2_000);
-}
-
-export function parseTraceparent(value: string | undefined): TraceParent | undefined {
-  if (!value) return undefined;
-  const match = TRACEPARENT.exec(value.trim());
-  if (!match || /^0+$/.test(match[1] as string) || /^0+$/.test(match[2] as string)) return undefined;
-  return {
-    traceId: (match[1] as string).toLowerCase(),
-    spanId: (match[2] as string).toLowerCase(),
-    traceFlags: Number.parseInt(match[3] as string, 16),
-  };
-}
-
-export function formatTraceparent(parent: TraceParent): string {
-  const normalized = parseTraceparent(
-    `00-${parent.traceId}-${parent.spanId}-${parent.traceFlags.toString(16).padStart(2, "0")}`,
-  );
-  if (!normalized) throw new Error("Invalid W3C trace context");
-  return `00-${normalized.traceId}-${normalized.spanId}-${normalized.traceFlags.toString(16).padStart(2, "0")}`;
-}
-
-function traceId(): string {
-  return randomBytes(16).toString("hex");
-}
-
-function spanId(): string {
-  return randomBytes(8).toString("hex");
-}
-
-export function telemetryDirectory(defaultDirectory: string): string {
-  return process.env.UMA_TELEMETRY_DIR?.trim() || defaultDirectory;
-}
-function safeAttributes(attributes: SpanAttributes | undefined): Record<string, string | number | boolean> {
-  const result: Record<string, string | number | boolean> = {};
-  for (const [key, value] of Object.entries(attributes ?? {}).slice(0, 32)) {
-    if (!/^[a-zA-Z0-9_.-]{1,80}$/.test(key) || value === undefined) continue;
-    if (sensitive.test(key)) result[key] = REDACTED;
-    else if (typeof value === "string") result[key] = (redactErrorMessage(value) ?? "").slice(0, 200);
-    else if (typeof value === "number" && Number.isFinite(value)) result[key] = value;
-    else if (typeof value === "boolean") result[key] = value;
-  }
-  return result;
-}
+export * from "./telemetry-contract.js";
+export * from "./telemetry-utils.js";
 
 export class TelemetryStore {
   readonly db: DatabaseSync;
@@ -180,7 +43,7 @@ export class TelemetryStore {
   ) {
     mkdirSync(stateDir, { recursive: true });
     this.db = new DatabaseSync(join(stateDir, "telemetry.db"));
-    this.db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=350;");
+    this.db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON; PRAGMA wal_autocheckpoint=256;");
     this.db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
     const resourceColumns = new Set(
       (this.prepareQuery("PRAGMA table_info(resource_samples)").all() as Array<{ name?: unknown }>).map(
@@ -282,6 +145,8 @@ export class TelemetryStore {
     };
   }
   start(record: Omit<TelemetrySpanRecord, "status" | "events">): void {
+    // 一个 Span 的属性可能同时写入 OTLP 与 SQLite；先脱敏一次，避免每个后端重复遍历正则。
+    const attributes = safeAttributes(record.attributes);
     if (this.otelTracer) {
       let parentContext = context.active();
       const localParent = record.parentSpanId ? this.otelSpans.get(record.parentSpanId) : undefined;
@@ -303,7 +168,7 @@ export class TelemetryStore {
         record.name,
         {
           attributes: {
-            ...safeAttributes(record.attributes),
+            ...attributes,
             "uma.trace_id": record.traceId,
             "uma.span_id": record.spanId,
           },
@@ -324,7 +189,7 @@ export class TelemetryStore {
         record.kind,
         "active",
         record.startedAt,
-        JSON.stringify(safeAttributes(record.attributes)),
+        JSON.stringify(attributes),
         null,
         null,
       );
@@ -334,14 +199,20 @@ export class TelemetryStore {
     }
   }
   finish(record: TelemetrySpanRecord): void {
+    const attributes = safeAttributes(record.attributes);
+    const events = record.events.slice(0, 64).map((event) => ({
+      ...event,
+      name: event.name.slice(0, 120),
+      attributes: safeAttributes(event.attributes),
+    }));
+    const errorMessage = redactErrorMessage(record.errorMessage) ?? null;
     const otelSpan = this.otelSpans.get(record.spanId);
     if (otelSpan) {
-      for (const event of record.events.slice(0, 64))
-        otelSpan.addEvent(event.name, safeAttributes(event.attributes));
+      for (const event of events) otelSpan.addEvent(event.name, event.attributes);
       if (record.status === "error")
         otelSpan.recordException({
           name: record.errorType ?? "Error",
-          message: redactErrorMessage(record.errorMessage) ?? "Telemetry span failed",
+          message: errorMessage ?? "Telemetry span failed",
         });
       otelSpan.setStatus({ code: record.status === "error" ? 2 : 1 });
       otelSpan.end(record.endedAt);
@@ -354,18 +225,18 @@ export class TelemetryStore {
         record.status,
         record.endedAt ?? null,
         record.durationMs ?? null,
-        JSON.stringify(safeAttributes(record.attributes)),
+        JSON.stringify(attributes),
         record.errorType ?? null,
-        redactErrorMessage(record.errorMessage) ?? null,
+        errorMessage,
         record.spanId,
       );
-      record.events.slice(0, 64).forEach((event, index) => {
+      events.forEach((event, index) => {
         this.insertEventStatement.run(
           record.spanId,
           index,
-          event.name.slice(0, 120),
+          event.name,
           event.occurredAt,
-          JSON.stringify(safeAttributes(event.attributes)),
+          JSON.stringify(event.attributes),
         );
       });
     });
@@ -482,6 +353,23 @@ export class TelemetryStore {
       `SELECT * FROM spans WHERE ${clauses.join(" AND ")} ORDER BY started_at,span_id LIMIT ? OFFSET ?`,
     ).all(...params, limit + 1, offset) as Array<Record<string, unknown>>;
     const selected = values.slice(0, limit);
+    const selectedIds = selected.map((span) => String(span.span_id));
+    const treeRows = selected.length
+      ? (this.prepareQuery(
+          `WITH RECURSIVE ancestors(origin_span_id,trace_id,span_id,parent_span_id,depth,path) AS (
+             SELECT span_id,trace_id,span_id,parent_span_id,0,'|' || span_id || '|'
+             FROM spans WHERE span_id IN (${selectedIds.map(() => "?").join(",")})
+             UNION ALL
+             SELECT child.origin_span_id,child.trace_id,parent.span_id,parent.parent_span_id,
+                    child.depth+1,child.path || parent.span_id || '|'
+             FROM ancestors child JOIN spans parent
+               ON parent.span_id=child.parent_span_id AND parent.trace_id=child.trace_id
+             WHERE child.parent_span_id IS NOT NULL
+               AND instr(child.path,'|' || parent.span_id || '|')=0
+           ) SELECT origin_span_id,span_id,parent_span_id,depth FROM ancestors`,
+        ).all(...selectedIds) as Array<Record<string, unknown>>)
+      : [];
+    const tree = spanTree(treeRows, selected[0] ? String(selected[0].span_id) : undefined);
     const eventsBySpan = new Map<string, TelemetryEvent[]>();
     if (selected.length) {
       const spanIds = selected.map((value) => String(value.span_id));
@@ -531,6 +419,7 @@ export class TelemetryStore {
       })),
       hasMore: values.length > limit,
       nextOffset: offset + selected.length,
+      ...tree,
     };
   }
   summarize(from: number, to: number): TelemetrySummary {
@@ -600,6 +489,47 @@ export class TelemetryStore {
       };
     }
     const overallLatency = latencyRows.find((row) => row.kind === null);
+    const queueWaitCount = Number(
+      (
+        this.prepareQuery(
+          "SELECT COUNT(*) AS count FROM spans WHERE kind='queue' AND status <> 'active' AND started_at BETWEEN ? AND ?",
+        ).get(from, to) as Record<string, unknown>
+      )?.count ?? 0,
+    );
+    const retryCount = Number(
+      (
+        this.prepareQuery(
+          "SELECT COUNT(*) AS count FROM span_events e JOIN spans s ON s.span_id=e.span_id WHERE s.started_at BETWEEN ? AND ? AND instr(lower(e.name),'retry') > 0",
+        ).get(from, to) as Record<string, unknown>
+      )?.count ?? 0,
+    );
+    const orphanParentChains = Number(
+      (
+        this.prepareQuery(
+          "SELECT COUNT(*) AS count FROM spans child WHERE child.parent_span_id IS NOT NULL AND child.started_at BETWEEN ? AND ? AND NOT EXISTS (SELECT 1 FROM spans parent WHERE parent.span_id=child.parent_span_id AND parent.trace_id=child.trace_id)",
+        ).get(from, to) as Record<string, unknown>
+      )?.count ?? 0,
+    );
+    const errorTypes = (
+      this.prepareQuery(
+        "SELECT error_type,COUNT(*) AS count FROM spans WHERE status='error' AND started_at BETWEEN ? AND ? GROUP BY error_type ORDER BY count DESC,error_type LIMIT 50",
+      ).all(from, to) as Array<Record<string, unknown>>
+    ).map((row) => ({
+      type: String(row.error_type ?? "Error").slice(0, 200),
+      count: Number(row.count ?? 0),
+    }));
+    const resourceRows = this.prepareQuery(
+      "SELECT cpu_percent,sample_duration_ms,rss_bytes,wal_bytes,event_loop_delay_ms FROM resource_samples WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at",
+    ).all(from, to) as Array<Record<string, unknown>>;
+    const resourceDuration = resourceRows.reduce((sum, row) => sum + Number(row.sample_duration_ms ?? 0), 0);
+    const cpuAverage = resourceDuration
+      ? resourceRows.reduce(
+          (sum, row) => sum + Number(row.cpu_percent ?? 0) * Number(row.sample_duration_ms ?? 0),
+          0,
+        ) / resourceDuration
+      : 0;
+    const coreCount = availableParallelism();
+    const queueLatency = stageLatencyMs.queue ?? { p50: 0, p95: 0, p99: 0 };
     return {
       spans,
       incomplete: Number(summary.incomplete ?? 0),
@@ -607,6 +537,22 @@ export class TelemetryStore {
       errorRate: spans ? errors / spans : 0,
       writeFailures: this.telemetryWriteFailures + this.writer.failures,
       otlpExportFailures: this.otlpExportFailures,
+      orphanParentChains,
+      retries: retryCount,
+      errorTypes,
+      queueWait: { count: queueWaitCount, ...queueLatency },
+      resources: {
+        samples: resourceRows.length,
+        cpuAverageCorePercent: cpuAverage * coreCount,
+        cpuPeakCorePercent:
+          Math.max(0, ...resourceRows.map((row) => Number(row.cpu_percent ?? 0))) * coreCount,
+        rssPeakBytes: Math.max(0, ...resourceRows.map((row) => Number(row.rss_bytes ?? 0))),
+        walPeakBytes: Math.max(0, ...resourceRows.map((row) => Number(row.wal_bytes ?? 0))),
+        eventLoopDelayP95Ms: percentile(
+          resourceRows.map((row) => Number(row.event_loop_delay_ms ?? 0)),
+          95,
+        ),
+      },
       services,
       stageLatencyMs,
       latencyMs: {
@@ -653,162 +599,4 @@ export class TelemetryStore {
   }
 }
 
-export class TraceSpanContext implements TelemetryContext {
-  private readonly startedAt = process.hrtime.bigint();
-  private attributes: Record<string, string | number | boolean>;
-  private readonly events: TelemetryEvent[] = [];
-  private status: TelemetryStatus = "ok";
-  private errorType: string | undefined;
-  private errorMessage: string | undefined;
-  private ended = false;
-  private readonly children = new Set<TraceSpanContext>();
-  constructor(
-    private readonly store: TelemetryStore,
-    readonly traceId: string,
-    readonly spanId: string,
-    private readonly parentSpanId: string | undefined,
-    private readonly runId: string | undefined,
-    private readonly sessionId: string | undefined,
-    private readonly name: string,
-    private readonly kind: string,
-    private readonly service: string,
-    attributes?: SpanAttributes,
-    private readonly parentContext?: TraceSpanContext,
-  ) {
-    this.attributes = safeAttributes(attributes);
-    this.store.start({
-      spanId,
-      traceId,
-      ...(parentSpanId ? { parentSpanId } : {}),
-      service,
-      ...(runId ? { runId } : {}),
-      ...(sessionId ? { sessionId } : {}),
-      name,
-      kind,
-      startedAt: Date.now(),
-      attributes: this.attributes,
-    });
-  }
-  startSpan<T>(options: SpanOptions, callback: (span: TelemetrySpan) => T | Promise<T>): Promise<T> {
-    const child = this.child(options.name, "internal", options.attributes);
-    let result: T | Promise<T>;
-    try {
-      result = callback(child);
-    } catch (error) {
-      child.finish({
-        status: "error",
-        error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
-      });
-      return Promise.reject(error);
-    }
-    return Promise.resolve(result).then(
-      (value) => {
-        child.finish({ status: "ok" });
-        return value;
-      },
-      (error: unknown) => {
-        child.finish({
-          status: "error",
-          error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
-        });
-        throw error;
-      },
-    );
-  }
-  child(name: string, kind: string, attributes?: SpanAttributes): TraceSpanContext {
-    if (this.ended) throw new Error(`Trace span is already ended: ${this.spanId}`);
-    const child = new TraceSpanContext(
-      this.store,
-      this.traceId,
-      spanId(),
-      this.spanId,
-      this.runId,
-      this.sessionId,
-      name,
-      kind,
-      this.service,
-      attributes,
-      this,
-    );
-    this.children.add(child);
-    return child;
-  }
-  addEvent(name: string, attributes?: SpanAttributes): void {
-    if (!this.ended && this.events.length < 64)
-      this.events.push({ name, occurredAt: Date.now(), attributes: safeAttributes(attributes) });
-  }
-  setAttributes(attributes: SpanAttributes): void {
-    if (!this.ended) this.attributes = { ...this.attributes, ...safeAttributes(attributes) };
-  }
-  setStatus(status: SpanStatus | { status: "cancelled" }): void {
-    if (this.ended) return;
-    this.status = status.status === "cancelled" ? "cancelled" : status.status === "error" ? "error" : "ok";
-    this.errorType = status.status === "error" ? status.error?.name : undefined;
-    this.errorMessage = status.status === "error" ? status.error?.message : undefined;
-  }
-  finish(status?: SpanStatus | { status: "cancelled" }): void {
-    if (this.ended) return;
-    // 父 Span 提前结束时，未结束的子 Span 必须显式标记为不完整，
-    // 否则 Trace 会永久保留 active 节点，误导延迟和错误率统计。
-    for (const child of this.children)
-      if (!child.ended)
-        child.finish({
-          status: "error",
-          error: { name: "IncompleteSpan", message: "Parent span ended before child span" },
-        });
-    if (status) this.setStatus(status);
-    this.ended = true;
-    const endedAt = Date.now();
-    const durationMs = Math.max(0, Math.round(Number(process.hrtime.bigint() - this.startedAt) / 1_000_000));
-    this.store.finish({
-      spanId: this.spanId,
-      traceId: this.traceId,
-      ...(this.parentSpanId ? { parentSpanId: this.parentSpanId } : {}),
-      service: this.service,
-      ...(this.runId ? { runId: this.runId } : {}),
-      ...(this.sessionId ? { sessionId: this.sessionId } : {}),
-      name: this.name,
-      kind: this.kind,
-      status: this.status,
-      startedAt: endedAt - durationMs,
-      endedAt,
-      durationMs,
-      attributes: this.attributes,
-      events: this.events,
-      ...(this.errorType ? { errorType: this.errorType } : {}),
-      ...(this.errorMessage ? { errorMessage: this.errorMessage } : {}),
-    });
-    this.parentContext?.children.delete(this);
-  }
-}
-
-export class TraceService {
-  constructor(
-    protected readonly store: TelemetryStore,
-    protected readonly service: string,
-  ) {}
-  startRoot(
-    runId?: string,
-    sessionId?: string,
-    name = "run",
-    attributes?: SpanAttributes,
-    parent?: TraceParent,
-    kind = "run",
-  ): TraceSpanContext {
-    const rootTraceId = parent?.traceId ?? traceId();
-    const span = new TraceSpanContext(
-      this.store,
-      rootTraceId,
-      spanId(),
-      parent?.spanId,
-      runId,
-      sessionId,
-      name,
-      kind,
-      this.service,
-      { ...attributes, "trace.flags": parent?.traceFlags ?? 1 },
-    );
-    if (runId) this.store.linkRun(runId, rootTraceId);
-    return span;
-  }
-}
+export { TraceService, TraceSpanContext } from "./trace-context.js";

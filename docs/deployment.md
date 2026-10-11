@@ -289,9 +289,9 @@ docker run --rm \
   alpine sh -c 'find /target -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + && tar xzf /backup/uma-state.tgz -C /target'
 ```
 
-数据库当前使用 schema 27，只接受当前格式。schema 26 升级必须先停止 Core，再执行 `node scripts/migrate-state-26-27.mjs /绝对路径/state.db`。工具取得与 Core 相同的锁，检查原库及外键，生成带时间戳的 schema 26 备份并检查备份，然后在事务中增加分支、队列和运行替代关系字段并更新版本；失败回滚，重跑已升级库会拒绝。升级后验证 user_version=27、integrity_check=ok 与 foreign_key_check 为空，再启动当前版本。保留必要备份；回退必须停止写入并恢复匹配版本的完整备份，禁止把 27 库交给旧服务。其他旧格式不提供转换，不能靠删除真实数据解决版本差异。不要删除 Adapter Cookie。
+数据库当前使用 schema 27，只接受当前格式。当前服务只接受 user_version=27；版本不匹配时拒绝启动，不执行迁移。恢复历史数据时必须停止服务，使用生成备份时的匹配版本，并完成 integrity_check=ok 与 foreign_key_check 为空的校验。保留必要备份；回退必须停止写入并恢复匹配版本的完整备份，禁止把 27 库交给旧服务。其他旧格式不提供转换，不能靠删除真实数据解决版本差异。不要删除 Adapter Cookie。
 
-离线26→27升级保留现有账户、令牌、会话和运行记录；禁止用初始化空库代替升级。旧 release 无法读取新 schema；回到旧版本只能在隔离路径恢复匹配的完整备份，不能仅切换代码指针后继续读新数据库。当前 schema 内的常规发布继续使用下述对象保护门禁。
+历史账户、令牌、会话、附件和运行记录由停机备份保留；当前 release 不读取旧 schema，也不提供迁移。回到旧版本只能在隔离路径恢复匹配的完整备份，不能仅切换代码指针后继续读新数据库。当前 schema 内的常规发布继续使用下述对象保护门禁。
 
 ## 10. Trace、资源报告与真实 API 验证
 
@@ -360,6 +360,8 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 
 ## 12. 部署验收清单
 
+以下清单按部署目标执行：Native Windows/Web 与 Android 模拟器是当前支持范围；Docker、Linux 和实体 Android 真机条目仅在选择对应目标时变为发布前置条件。未选择的目标不应被误报为已验证，也不阻塞当前支持范围的候选结论。
+
 - [ ] `.env`、生产配置和备份未被 Git 跟踪，也未进入 Docker build context。
 - [ ] Native service 和固定 Node 路径验证通过；选择容器时另验 `docker compose config --quiet`、镜像构建和全部容器健康检查。
 - [ ] liveness、readiness、Bearer API、Web 登录和远程 CLI doctor 通过。
@@ -368,7 +370,7 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 - [ ] 第二个 Core 无法获取同一状态目录锁。
 - [ ] 防火墙仅公开 80/443，Worker/MCP 端口不可从公网访问。
 - [ ] 完成一次停机备份，并在隔离目录或隔离卷中演练恢复。
-- [ ] 确认当前应用版本、Protocol v16 和 schema 27；schema 26 已按离线工具备份/转换，数据库完整性检查通过，并保留可回滚 release。
+- [ ] 确认当前应用版本、Protocol v16 和 schema 27；历史数据库已按匹配版本备份并完成完整性检查，并保留可回滚 release。
 - [ ] Android APK 使用线上同一正式签名证书，`latest.json` 的版本、路径、大小和 SHA-256 与 APK 一致。
 - [ ] Android 真机完成更新、PAT 登录、进程重启、会话读取和消息发送；Debug APK 未被发布到生产。
 
@@ -377,11 +379,11 @@ docker inspect --format '{{json .State.Health}}' umaagent-uma-1
 
 仓库中的域名全部为通用示例；实际服务 Origin、模型网关、SSH 目标和签名材料保存在运维机器的用户目录，不提交 Git。Android 使用 Gradle 属性 `umaBaseUrl` / `umaStagingBaseUrl` 或环境变量 `UMA_ANDROID_BASE_URL` / `UMA_ANDROID_STAGING_BASE_URL` 注入 HTTPS Origin，更新清单为同 Origin 下的 `/app/latest.json`。`site.robotclaw.umaagent` 是稳定的应用标识，不是服务器地址；修改会破坏覆盖升级，因此保留。正式发布必须注入实际地址并使用既有证书。
 
-schema 26→27 首次发布先完成停机备份、加密下载和解密哈希验证，再运行 `deploy/upgrade-native-release.sh RELEASE_DIR SHARED_NODE_MODULES`。该入口校验候选、记录保护账号对象指纹、停服、执行独立迁移及受保护发布。迁移失败且库仍为 26 时恢复原服务；库已为 27 后的任何发布失败都会停止服务并保留数据，禁止自动切回 schema 26 的旧 Core。数据库恢复是单独的维护操作，需要保留失败现场并核对恢复点，不能覆盖新写入。
+首次发布先完成停机备份、加密下载和解密哈希验证，再运行受保护的 Promote 流程。该入口校验候选、记录保护账号对象指纹并执行受保护发布。失败时保留现场并停止服务；禁止把当前数据库交给旧 schema 的 Core。数据库恢复是单独的维护操作，需要保留失败现场并核对恢复点，不能覆盖新写入。
 
 反向代理必须同步使用 `/api/v16/`（含事件 WebSocket），删除旧版本路径。先验证候选和备份，再切换服务及代理，执行 `nginx -t` 后 reload；保留站点其他代理规则、证书和资产不变。Android 更新清单的最低支持版本为 14，与本次删除旧协议一致。
 
-2026-09-17 用户明确授权部署私人服务器。发布仍受本报告列明的已知性能限制约束；完成发布不等于整体性能验收通过。本次已完成 Native 发布、schema25 升级、v16 代理、Web 嵌入和原证书签名 Android 发布；公网与保护对象核验通过，详见发布验收报告。敏感主机名、地址、保护账号和凭据不进入报告。
+部署完成不等于整体性能验收通过；版本、代理、签名、保护对象和公网核验必须以当前发布验收报告中的实际证据为准。敏感主机名、地址、保护账号和凭据不进入报告。
 
 依赖在独立的版本目录准备，release 的 `node_modules` 链接固定指向该目录。安装时校验指定依赖，服务启动时校验当前 release 自己的依赖链接，避免更新全局共享指针影响旧版本回退。不得在已发布的 release 目录在线安装或修改依赖。
 

@@ -148,7 +148,11 @@ async function login(page: Page, token = ordinaryToken): Promise<void> {
 async function openNavigation(page: Page) {
   await expect(page.locator(".app-shell")).toBeVisible();
   if ((page.viewportSize()?.width ?? 1280) < 840 && !(await page.locator(".sidebar").isVisible()))
-    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await page
+      .locator(
+        '.workspace:not([hidden]) > header button[title="打开导航"], .destination-workspace:not([hidden]) .destination-header button[aria-label="打开导航"]',
+      )
+      .click();
   await expect(page.locator(".sidebar")).toBeVisible();
 }
 
@@ -547,7 +551,15 @@ test("loads settings data only when its area is opened", async ({ page }) => {
 
 test("conversation and settings retain their layout across widths and themes", async ({ page }) => {
   await login(page);
+  const created = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/v16/sessions" && response.request().method() === "POST",
+  );
   await page.getByRole("button", { name: "新会话", exact: true }).click();
+  const session = await (await created).json();
+  // 新会话创建期间输入框会切换到目标会话草稿；等服务端回执和选中态就绪后再填内容。
+  await expect(page.locator(".workspace h1")).toHaveText(session.title);
+  await expect(page.locator(".session-list button.active")).toContainText(session.title);
   const input = page.getByPlaceholder("向 UmaAgent 发送消息");
   await expect(input).toBeEnabled();
   await input.fill(
@@ -573,9 +585,11 @@ test("conversation and settings retain their layout across widths and themes", a
       await destination(page, "会话");
       await expect(page.locator(".response-card .markdown").first()).toBeVisible();
       const geometry = await page.locator("[data-design-shell]").evaluate((root) => {
-        const row = root.querySelector<HTMLElement>(".message-row")!;
-        const avatar = row.querySelector<HTMLElement>(".message-avatar")!;
-        const composer = root.querySelector<HTMLElement>(".composer")!;
+        const row = root.querySelector<HTMLElement>(".message-row");
+        const avatar = row?.querySelector<HTMLElement>(".message-avatar");
+        const composer = root.querySelector<HTMLElement>(".composer");
+        const markdown = root.querySelector<HTMLElement>(".markdown");
+        if (!row || !avatar || !composer || !markdown) throw new Error("Workbench geometry elements missing");
         return {
           width: root.scrollWidth,
           height: root.scrollHeight,
@@ -584,7 +598,7 @@ test("conversation and settings retain their layout across widths and themes", a
           gap: parseFloat(getComputedStyle(row).columnGap),
           avatar: avatar.getBoundingClientRect().width,
           composerBottom: composer.getBoundingClientRect().bottom,
-          bodyFont: getComputedStyle(root.querySelector(".markdown")!).fontSize,
+          bodyFont: getComputedStyle(markdown).fontSize,
         };
       });
       expect(geometry.width).toBeLessThanOrEqual(width);

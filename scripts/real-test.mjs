@@ -146,7 +146,6 @@ const server = spawn(
   },
 );
 let serverOutput = "";
-let soakDeadlineTimer;
 server.stdout.on("data", (chunk) => {
   serverOutput = `${serverOutput}${chunk}`.slice(-12_000);
 });
@@ -399,19 +398,9 @@ try {
     // 先停止接收新 Run，再等待已受理请求；硬截止只处理在途供应商卡住的异常。
     const admissionDeadline =
       mode === "soak" ? deadline - 15_000 - Math.min(30_000, soakMinutes * 20_000) : deadline;
-    if (mode === "soak") {
-      // 预留关闭与日志写入时间；供应商卡住时也不得让短时实网测试无限越过五分钟。
-      soakDeadlineTimer = setTimeout(
-        () => {
-          console.error(
-            JSON.stringify({ event: "real.soak.deadline", passed: false, elapsedMs: Date.now() - startedAt }),
-          );
-          process.exitCode = 1;
-          server.kill("SIGTERM");
-        },
-        Math.max(1_000, soakMinutes * 60_000 - 15_000),
-      );
-    }
+    // admissionDeadline 停止接收新的 Run；已经受理的最后一个请求允许按
+    // runtime.modelTimeoutMs 完成，避免硬杀 Server 导致没有最终报告，
+    // 同时仍以单次模型超时保证供应商异常不会无限等待。
     let maxRss = 0;
     let maxWal = 0;
     let latestResource;
@@ -497,7 +486,6 @@ try {
     }
   }
 } finally {
-  if (soakDeadlineTimer) clearTimeout(soakDeadlineTimer);
   server.kill("SIGTERM");
   await new Promise((resolveExit) => {
     if (server.exitCode !== null) resolveExit();

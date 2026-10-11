@@ -132,12 +132,15 @@ describe("ContextManager", () => {
       message: { role: "user", content: "继续处理这个文件", timestamp: 9 } as AgentMessage,
     };
     const database = {
-      getMessage: vi.fn(() => ({
-        id: current.id,
-        sequence: current.sequence,
-        status: "complete",
-        content: "继续处理这个文件",
-        createdAt: 9,
+      getMessageWithAgentContext: vi.fn(() => ({
+        transcript: {
+          id: current.id,
+          sequence: current.sequence,
+          status: "complete",
+          content: "继续处理这个文件",
+          createdAt: 9,
+        },
+        agentMessage: current,
       })),
       getContextSummary: vi.fn(() => ({
         sessionId: session.id,
@@ -145,28 +148,20 @@ describe("ContextManager", () => {
         content: "Earlier context includes report.docx",
         updatedAt: 4,
       })),
-      listAgentMessages: vi.fn(
-        (_sessionId: string, options: { beforeSequence: number; afterSequence: number }) =>
-          options.beforeSequence === 9
-            ? [
-                {
-                  id: "history",
-                  sequence: 8,
-                  message: { role: "assistant", content: [], timestamp: 8 } as AgentMessage,
-                },
-              ]
-            : [current],
-      ),
+      listAgentMessages: vi.fn(() => [
+        {
+          id: "history",
+          sequence: 8,
+          message: { role: "assistant", content: [], timestamp: 8 } as AgentMessage,
+        },
+      ]),
     };
     const manager = new ContextManager(database as never, { get: vi.fn(() => model), models: {} } as never);
     const result = await manager.buildForMessage(session, current.id, new AbortController().signal, model);
-    expect(database.listAgentMessages).toHaveBeenNthCalledWith(1, session.id, {
+    expect(database.listAgentMessages).toHaveBeenCalledOnce();
+    expect(database.listAgentMessages).toHaveBeenCalledWith(session.id, {
       beforeSequence: 9,
       afterSequence: 4,
-    });
-    expect(database.listAgentMessages).toHaveBeenNthCalledWith(2, session.id, {
-      afterSequence: 8,
-      beforeSequence: 10,
     });
     expect(result.messages.filter((message) => message === current.message)).toHaveLength(0);
     expect(result.current).toBe(current);

@@ -246,10 +246,112 @@ describe("TelemetryStore", () => {
       errorRate: 0,
       writeFailures: 0,
       otlpExportFailures: 0,
+      orphanParentChains: 0,
+      retries: 0,
+      errorTypes: [],
+      queueWait: { count: 0, p50: 0, p95: 0, p99: 0 },
+      resources: {
+        samples: 0,
+        cpuAverageCorePercent: 0,
+        cpuPeakCorePercent: 0,
+        rssPeakBytes: 0,
+        walPeakBytes: 0,
+        eventLoopDelayP95Ms: 0,
+      },
       services: [{ service: "test", spans: 1, errors: 0 }],
       stageLatencyMs: { tool: { p50: 10, p95: 10, p99: 10 } },
       latencyMs: { p50: 10, p95: 10, p99: 10 },
     });
+    await store.close();
+  });
+
+  it("computes tree depth from ancestors outside the current page", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-depth-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "test");
+    const records = [
+      ["root", undefined],
+      ["child", "root"],
+      ["grandchild", "child"],
+    ] as const;
+    for (const [spanId, parentSpanId] of records) {
+      store.start({
+        traceId: "trace-depth",
+        spanId,
+        ...(parentSpanId ? { parentSpanId } : {}),
+        service: "test",
+        name: spanId,
+        kind: "test",
+        startedAt: 1,
+        attributes: {},
+      });
+      store.finish({
+        traceId: "trace-depth",
+        spanId,
+        ...(parentSpanId ? { parentSpanId } : {}),
+        service: "test",
+        name: spanId,
+        kind: "test",
+        status: "ok",
+        startedAt: 1,
+        endedAt: 2,
+        durationMs: 1,
+        attributes: {},
+        events: [],
+      });
+    }
+    await store.flush();
+    const all = store.listSpans({ traceId: "trace-depth", limit: 10 });
+    const grandchild = all.spans.find((span) => span.spanId === "grandchild");
+    expect(grandchild).toBeDefined();
+    expect(all.depthBySpanId.grandchild).toBe(2);
+    expect(all.rootSpanId).toBe("root");
+    const laterPage = store.listSpans({ traceId: "trace-depth", limit: 1, offset: 1 });
+    expect(laterPage.spans[0]?.spanId).toBe("grandchild");
+    expect(laterPage.depthBySpanId.grandchild).toBe(2);
+    expect(laterPage.rootSpanId).toBe("root");
+    await store.close();
+  });
+
+  it("bounds corrupt parent cycles and does not cross trace boundaries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-parent-chain-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "test");
+    const records = [
+      { traceId: "trace-cycle", spanId: "cycle-a", parentSpanId: "cycle-b" },
+      { traceId: "trace-cycle", spanId: "cycle-b", parentSpanId: "cycle-a" },
+      { traceId: "trace-other", spanId: "foreign-parent" },
+      { traceId: "trace-orphan", spanId: "orphan-child", parentSpanId: "foreign-parent" },
+    ];
+    for (const record of records) {
+      store.start({
+        ...record,
+        service: "test",
+        name: record.spanId,
+        kind: "test",
+        startedAt: 1,
+        attributes: {},
+      });
+      store.finish({
+        ...record,
+        service: "test",
+        name: record.spanId,
+        kind: "test",
+        status: "ok",
+        startedAt: 1,
+        endedAt: 2,
+        durationMs: 1,
+        attributes: {},
+        events: [],
+      });
+    }
+    await store.flush();
+    const cycle = store.listSpans({ traceId: "trace-cycle" });
+    expect(cycle.depthBySpanId).toEqual({ "cycle-a": 1, "cycle-b": 1 });
+    expect(cycle.rootSpanId).toBeUndefined();
+    const orphan = store.listSpans({ traceId: "trace-orphan" });
+    expect(orphan.depthBySpanId["orphan-child"]).toBe(0);
+    expect(orphan.rootSpanId).toBeUndefined();
     await store.close();
   });
 

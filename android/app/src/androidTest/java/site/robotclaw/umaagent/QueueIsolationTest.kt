@@ -27,7 +27,7 @@ class QueueIsolationTest {
     fun lateQueueReceiptsCannotReplaceAnotherConversation() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val app = ApplicationProvider.getApplicationContext<android.app.Application>()
-        val oldItem = UiQueueItem("old-run", "old-message", 1, "旧消息", "queued", "agent")
+        val oldItem = UiQueueItem("old-run", "old-message", 1, 1, "旧消息", "queued", "agent")
         val currentItem = oldItem.copy(runId = "current-run", messageId = "current-message")
         for (operation in listOf("read", "reorder", "prioritize", "cancel", "edit")) {
             for (switchSession in listOf(false, true)) {

@@ -57,7 +57,7 @@ class MessageEditTest {
             UmaAgentTheme {
                 Surface {
                     QueuePanel(
-                        queue = listOf(UiQueueItem("run", "message", 1, "原始内容", "queued", "agent")),
+                        queue = listOf(UiQueueItem("run", "message", 1, 1, "原始内容", "queued", "agent")),
                         enabled = true,
                         onReorder = {},
                         onPrioritize = {},

@@ -68,16 +68,6 @@ async function waitReady() {
   throw new Error(`Faux Core did not become ready:\n${output}`);
 }
 
-async function waitRun(runId) {
-  for (let attempt = 0; attempt < 600; attempt++) {
-    const run = await api(`/runs/${encodeURIComponent(runId)}`);
-    if (["completed", "failed", "cancelled", "interrupted", "awaiting_input"].includes(run.status))
-      return run;
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
-  }
-  throw new Error(`Run ${runId} did not reach a terminal state`);
-}
-
 async function residentBytes(pid) {
   if (process.platform === "win32") {
     const { stdout } = await exec("powershell", [
@@ -95,12 +85,84 @@ async function residentBytes(pid) {
   return Number(stdout.trim()) * 1024;
 }
 
+async function connectEventStream(sessionId) {
+  const url = new URL(`${base}/events`);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  eventSocket = new WebSocket(url);
+  await new Promise((resolveOpen, rejectOpen) => {
+    const timeout = setTimeout(() => rejectOpen(new Error("Performance event stream timed out")), 5_000);
+    eventSocket.addEventListener(
+      "open",
+      () => {
+        clearTimeout(timeout);
+        eventSocket.send(JSON.stringify({ type: "auth", token }));
+        eventSocket.send(
+          JSON.stringify({ type: "subscribe", sessions: [{ id: sessionId, lastSequence: 0 }] }),
+        );
+        resolveOpen();
+      },
+      { once: true },
+    );
+    eventSocket.addEventListener(
+      "error",
+      () => {
+        clearTimeout(timeout);
+        rejectOpen(new Error("Performance event stream failed"));
+      },
+      { once: true },
+    );
+  });
+  eventSocket.addEventListener("message", (message) => {
+    let event;
+    try {
+      event = JSON.parse(String(message.data));
+    } catch {
+      return;
+    }
+    if (event.type !== "run.updated" || typeof event.runId !== "string") return;
+    const status = String(event.payload?.status ?? "");
+    if (!status) return;
+    observedRunStatuses.set(event.runId, status);
+    const waiter = pendingRunWaiters.get(event.runId);
+    if (waiter && ["completed", "failed", "cancelled", "interrupted", "awaiting_input"].includes(status)) {
+      pendingRunWaiters.delete(event.runId);
+      waiter({ status, error: event.payload?.error });
+    }
+  });
+}
+
+async function waitRun(runId) {
+  const terminal = new Set(["completed", "failed", "cancelled", "interrupted", "awaiting_input"]);
+  const observed = observedRunStatuses.get(runId);
+  if (observed && terminal.has(observed)) return { status: observed };
+  const eventResult = await new Promise((resolveWait) => {
+    const timeout = setTimeout(() => {
+      pendingRunWaiters.delete(runId);
+      resolveWait(undefined);
+    }, 30_000);
+    pendingRunWaiters.set(runId, (value) => {
+      clearTimeout(timeout);
+      resolveWait(value);
+    });
+  });
+  if (eventResult) return eventResult;
+  for (let attempt = 0; attempt < 600; attempt++) {
+    const run = await api(`/runs/${encodeURIComponent(runId)}`);
+    if (terminal.has(run.status)) return run;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+  }
+  throw new Error(`Run ${runId} did not reach a terminal state`);
+}
+
 function percentile(values, percentileValue) {
   const ordered = [...values].sort((a, b) => a - b);
   return ordered[Math.min(ordered.length - 1, Math.ceil((percentileValue / 100) * ordered.length) - 1)] ?? 0;
 }
 
 let session;
+let eventSocket;
+const observedRunStatuses = new Map();
+const pendingRunWaiters = new Map();
 const apiSamples = [];
 const eventSamples = [];
 let cursor = 0;
@@ -113,6 +175,7 @@ try {
     method: "POST",
     body: JSON.stringify({ title: "Performance baseline" }),
   });
+  await connectEventStream(session.id);
   for (let index = 0; index < messages; index++) {
     const requestStart = performance.now();
     const accepted = await api(`/sessions/${encodeURIComponent(session.id)}/messages`, {
@@ -211,6 +274,7 @@ try {
   console.log(JSON.stringify(result));
   if (!result.passed) process.exitCode = 1;
 } finally {
+  eventSocket?.close();
   server.kill("SIGTERM");
   if (server.exitCode === null) await new Promise((resolveExit) => server.once("exit", resolveExit));
   await rm(stateDir, { recursive: true, force: true });

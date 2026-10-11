@@ -4,6 +4,7 @@ import type {
   BackgroundTask,
   CreateEvaluationReport,
   CreateScheduledTaskRequest,
+  DiagnosticsReport,
   EvaluationTrend,
   ModelRef,
   OptimizationProposal,
@@ -179,6 +180,10 @@ export class RuntimeResourceService {
 
   audit(runId: string) {
     return this.deps.database.listAudit(runId);
+  }
+
+  diagnosticsReport(from: number, to: number): DiagnosticsReport {
+    return this.deps.database.diagnosticsReport(from, to);
   }
 
   listSkills(): SkillSummary[] {

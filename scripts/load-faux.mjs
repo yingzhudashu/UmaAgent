@@ -59,7 +59,7 @@ async function run(sessionId, text) {
       ),
       `Run ${value.id}: ${value.status}`,
     );
-    await pause(40);
+    await pause(100);
   }
   throw new Error(`Run ${accepted.runId} timed out`);
 }

@@ -9,9 +9,9 @@ import {
 } from "@earendil-works/pi-ai";
 import type { Run, SessionSnapshot } from "@uma-agent/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { UmaDatabase } from "../src/database.js";
 import { ImageGenerationService } from "../src/image-generation.js";
 import { UmaRuntime } from "../src/runtime.js";
-import { UmaDatabase } from "../src/database.js";
 import type { UmaConfig } from "../src/types.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -823,7 +823,10 @@ describe("UmaRuntime preflight", () => {
   });
 
   it("rebuilds durable queued runs after a server restart", async () => {
-    const runtime = await runtimeWith([classification("simple"), fauxAssistantMessage("completed after queued restart")]);
+    const runtime = await runtimeWith([
+      classification("simple"),
+      fauxAssistantMessage("completed after queued restart"),
+    ]);
     const session = await runtime.createSession();
     const config = runtime.config;
     const model = runtime.models.snapshot(session.model);
@@ -831,8 +834,17 @@ describe("UmaRuntime preflight", () => {
     await runtime.stop();
     const durable = new UmaDatabase(config.server.stateDir);
     const messageId = "queued-restart-message";
-    const run = durable.createRun(session.id, messageId, model, thinkingLevel, "agent", "agent", { queuePosition: 1 }).run;
-    durable.insertMessage({ id: messageId, sessionId: session.id, runId: run.id, role: "user", status: "complete", content: "continue queued work" });
+    const run = durable.createRun(session.id, messageId, model, thinkingLevel, "agent", "agent", {
+      queuePosition: 1,
+    }).run;
+    durable.insertMessage({
+      id: messageId,
+      sessionId: session.id,
+      runId: run.id,
+      role: "user",
+      status: "complete",
+      content: "continue queued work",
+    });
     durable.close();
 
     const restarted = new UmaRuntime(config);
@@ -846,11 +858,14 @@ describe("UmaRuntime preflight", () => {
     await restarted.start();
     cleanup.push(async () => restarted.stop());
 
-    await vi.waitFor(() => {
-      const current = restarted.database.getRun(run.id);
-      if (current.status === "failed") throw new Error(current.error ?? "queued run failed");
-      expect(current.status).toBe("completed");
-    }, { timeout: 15_000 });
+    await vi.waitFor(
+      () => {
+        const current = restarted.database.getRun(run.id);
+        if (current.status === "failed") throw new Error(current.error ?? "queued run failed");
+        expect(current.status).toBe("completed");
+      },
+      { timeout: 15_000 },
+    );
     expect(restarted.database.getRun(run.id).status).toBe("completed");
   }, 30_000);
 

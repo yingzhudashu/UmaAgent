@@ -23,6 +23,52 @@ afterEach(async () =>
 );
 
 describe("UmaDatabase", () => {
+  it("builds bounded turn rollups from public text and keeps tool payloads out", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-turn-rollup-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    try {
+      const session = db.createSession({
+        title: "rollup",
+        workspace: root,
+        model: modelSnapshot.ref,
+        thinkingLevel: "off",
+      });
+      const run = db.createRun(session.id, "rollup-user", modelSnapshot, "off", "agent", "agent").run;
+      db.insertMessage({
+        sessionId: session.id,
+        runId: run.id,
+        role: "user",
+        status: "complete",
+        content: "问题",
+      });
+      db.insertMessage({
+        sessionId: session.id,
+        runId: run.id,
+        role: "tool",
+        status: "complete",
+        content: "private tool result",
+      });
+      db.insertMessage({
+        sessionId: session.id,
+        runId: run.id,
+        role: "assistant",
+        status: "complete",
+        content: "答复".repeat(3_000),
+      });
+
+      const rollup = db.turnRollup(session.id, run.id);
+      expect(rollup?.fromSequence).toBe(1);
+      expect(rollup?.toSequence).toBe(3);
+      expect(rollup?.summary).toHaveLength(4_000);
+      expect(rollup?.summary.startsWith("user: 问题\nassistant: ")).toBe(true);
+      expect(rollup?.summary).not.toContain("private tool result");
+      expect(db.getRunStatus(run.id)).toEqual({ sessionId: session.id, status: "queued" });
+    } finally {
+      db.close();
+    }
+  });
+
   it("preserves omitted Run fields while applying empty, zero and explicit null patches", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-run-patch-"));
     temporary.push(root);
@@ -261,7 +307,9 @@ describe("UmaDatabase", () => {
       thinkingLevel: "off",
     });
     const run = db.createRun(session.id, "active-message", modelSnapshot, "off", "agent", "agent").run;
-    const queued = db.createRun(session.id, "queued-message", modelSnapshot, "off", "agent", "agent", { queuePosition: 1 }).run;
+    const queued = db.createRun(session.id, "queued-message", modelSnapshot, "off", "agent", "agent", {
+      queuePosition: 1,
+    }).run;
     db.updateRun(run.id, { status: "running" });
     db.createCheckpoint({
       runId: run.id,
@@ -325,9 +373,28 @@ describe("UmaDatabase", () => {
     const root = await mkdtemp(join(tmpdir(), "uma-side-effect-gate-"));
     temporary.push(root);
     const db = testDatabase(root);
-    const session = db.createSession({ title: "gate", workspace: root, model: { provider: "test", id: "model" }, thinkingLevel: "off" });
-    const completed = db.createRun(session.id, "completed-message", modelSnapshot, "off", "agent", "agent").run;
-    const action = db.createRunAction({ runId: completed.id, toolCallId: "shell-terminal", toolName: "shell", toolClass: "shell", idempotencyKey: "shell-terminal", input: { command: "echo done" } });
+    const session = db.createSession({
+      title: "gate",
+      workspace: root,
+      model: { provider: "test", id: "model" },
+      thinkingLevel: "off",
+    });
+    const completed = db.createRun(
+      session.id,
+      "completed-message",
+      modelSnapshot,
+      "off",
+      "agent",
+      "agent",
+    ).run;
+    const action = db.createRunAction({
+      runId: completed.id,
+      toolCallId: "shell-terminal",
+      toolName: "shell",
+      toolClass: "shell",
+      idempotencyKey: "shell-terminal",
+      input: { command: "echo done" },
+    });
     db.updateRunAction(action.id, { status: "prepared" });
     db.updateRun(completed.id, { status: "completed" });
     expect(db.hasPendingSideEffects(session.id)).toBe(false);

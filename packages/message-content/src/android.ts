@@ -1,4 +1,4 @@
-import { renderMessage, updateMessageElement } from "./index.js";
+import { createMessageRenderer, updateMessageElement } from "./index.js";
 import "./style.css";
 
 declare global {
@@ -17,6 +17,7 @@ declare global {
   }
 }
 const root = document.getElementById("message") as HTMLElement;
+const renderMessage = createMessageRenderer();
 window.updateMessage = (content, theme) => {
   root.style.color = theme.text;
   root.style.fontSize = `${theme.size}px`;

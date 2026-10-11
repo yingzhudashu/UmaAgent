@@ -216,17 +216,15 @@ export class ContextManager {
     signal: AbortSignal,
     model: Model<UmaConfig["models"][number]["api"]>,
   ): Promise<MessageContext> {
-    const transcript = this.database.getMessage(messageId);
+    const { transcript, agentMessage: currentAgentMessage } =
+      this.database.getMessageWithAgentContext(messageId);
     if (transcript.status !== "complete") throw new Error("Context message is not complete");
     const summary = this.database.getContextSummary(session.id);
     const entries = this.database.listAgentMessages(session.id, {
       beforeSequence: transcript.sequence,
       ...(summary ? { afterSequence: summary.throughSequence } : {}),
     });
-    const current = this.database.listAgentMessages(session.id, {
-      afterSequence: transcript.sequence - 1,
-      beforeSequence: transcript.sequence + 1,
-    })[0] ?? {
+    const current = currentAgentMessage ?? {
       id: messageId,
       sequence: transcript.sequence,
       message: { role: "user", content: transcript.content, timestamp: transcript.createdAt },

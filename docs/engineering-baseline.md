@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本为 Core 1.3.0、Android 1.4.1、Protocol v16、SQLite schema 27。服务只接受当前格式；schema 26 通过 scripts/migrate-state-26-27.mjs 显式离线备份并转换，不保留运行时兼容。
+当前版本为 Core 1.3.0、Android 1.4.2（versionCode 16）、Protocol v16、SQLite schema 27。服务只接受当前格式；版本不匹配直接拒绝启动，旧数据库保留在匹配版本的隔离恢复环境，不提供运行时兼容或迁移。
 
 ## 已落地的边界
 
@@ -8,7 +8,7 @@
 - `UmaDatabase` 保留连接、schema 校验和事务入口；Session CRUD 与消息/附件只读投影分别由 `SessionRepository`、`MessageRepository` 承担。
 - Snapshot、History 和消息列表使用批量消息/附件查询；事件分页直接读取 Session cursor，不重新构建 Snapshot。
 - WebSocket 发送缓冲超过 4 MiB 时关闭连接并要求客户端按 Snapshot/cursor 恢复，避免无界内存增长。
-- 架构检查阻止旧 API 残留、跨包深层导入、非入口裸 `console.*`，并阻止已记录的大文件继续增长。
+- 架构检查阻止旧 API 残留、跨包深层导入、非入口裸 `console.*`，并报告大文件债务。六个已登记大文件按尺寸基线受控，不能继续增长；未登记的大文件直接失败。具体债务与复测结果见[发布验收](release-acceptance.md)。
 
 ## 性能预算
 
@@ -47,6 +47,6 @@ npm run test:soak:faux
 
 Android 设备矩阵脚本为 scripts/android-device-matrix.py，使用独立 debug 包，覆盖窄屏、手机、平板、双栏、大字号和横屏，并恢复设备设置。模拟器不能替代厂商真机。受控增量到正文显示 p95≤100ms，正常交互不能出现超过 700ms 的冻结帧。
 
-真实 Provider smoke、eval、20 请求性能与最多五分钟或 50 Run 的短时 soak 独立运行；配置只从指定文件和环境变量读取。2026-09-17 用户明确授权私人服务器发布；仍不发送闲鱼真实消息。Linux Native 发布验证与隔离性能测试分别记录，Docker、真机等未执行项保持未通过。
+真实 Provider smoke、eval、20 请求性能与最多五分钟或 50 Run 的短时 soak 独立运行；配置只从指定文件和环境变量读取。仍不发送闲鱼真实消息。当前支持范围为 Windows Native、Web/PWA 和 Android 模拟器；Linux Native、Docker、实体真机及无障碍专项在对应部署或发布面启用前执行，不阻塞当前范围的通过结论。
 
 本地结果集中记录在 [发布验收](release-acceptance.md)，其他文档不复制测试数量和性能结论。

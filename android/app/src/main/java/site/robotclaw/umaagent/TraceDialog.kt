@@ -29,19 +29,6 @@ internal fun TraceDialog(
         remember(data) {
             (data?.get("spans") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
         }
-    val byId = remember(spans) { spans.associateBy { managementText(it, "spanId") } }
-    fun depth(span: JsonObject): Int {
-        var parent = managementText(span, "parentSpanId")
-        val seen = mutableSetOf<String>()
-        var count = 0
-        // 分页可能尚未包含祖先；不猜测缺失关系，循环或深链不能挤掉手机正文。
-        while (parent.isNotBlank() && seen.add(parent) && count < 4) {
-            val ancestor = byId[parent] ?: break
-            count++
-            parent = managementText(ancestor, "parentSpanId")
-        }
-        return count
-    }
     val traceId = data?.get("traceId")?.jsonPrimitive?.contentOrNull.orEmpty()
     val clipboard = LocalClipboardManager.current
     var copyStatus by remember(traceId) { mutableStateOf("") }
@@ -69,7 +56,7 @@ internal fun TraceDialog(
                     if (copyStatus.isNotBlank()) Text(copyStatus)
                 }
                 items(spans, key = { managementText(it, "spanId") }) { span ->
-                    Column(Modifier.padding(start = (depth(span) * 12).dp)) {
+                    Column(Modifier.padding(start = ((span["depth"]?.jsonPrimitive?.intOrNull ?: 0) * 12).dp)) {
                         Text(
                             span["name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                             style = MaterialTheme.typography.titleSmall,

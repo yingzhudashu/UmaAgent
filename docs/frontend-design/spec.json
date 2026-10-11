@@ -4,7 +4,7 @@
   "prefix": "UM",
   "intro": "通用Agent对话、执行计划、后台任务和管理员渠道工作台的独立前端实施合同。",
   "implementationBaseline": {
-    "protocol": "Protocol v16 / HTTP /api/v16 / SQLite schema 25",
+    "protocol": "Protocol v16 / HTTP /api/v16 / SQLite schema 27",
     "serverChanges": "账号级免审批默认开启；统一执行策略、增量同步与 trace，详见后端设计。",
     "web": {
       "styleEntry": "styles.css then design-system.css",
@@ -48,7 +48,7 @@
       "queueReceipts": "队列及会话写入回执校验账号和会话；切换后不覆盖新会话队列、加载、取消状态或编辑弹窗，不跳回旧会话；写入先同步锁定入口。名称及头像更新列表，删除清理对应草稿与缓存。 模型切换成功/失败回执也核对发起会话；删除当前会话清理发送、取消、附件及未确认状态。",
       "runStatus": "准备、执行和校验阶段保留停止入口，使用v16 Run状态文案；业务澄清继续由用户输入。"
     },
-    "compatibility": "服务仅接受当前协议；schema24→25仅通过显式离线工具一次性升级，不保留运行时兼容层。"
+    "compatibility": "服务仅接受当前协议；服务只接受 schema 27；旧 schema 不提供运行时兼容或迁移工具。"
   },
   "scope": "电脑端为Windows浏览器/Web/PWA，当前没有Electron或原生Windows客户端，禁止凭空增加托盘进程。Android为Compose，手机/平板同一业务合同。普通用户与管理员入口按服务端角色决定；管理员可在同一身份下进入普通Agent工作台，切换普通账号是另一项操作。CLI不作为图形前端。",
   "findings": "Android为独立验收重点，页面与操作详见 docs/android-design.zh-CN.md；当前实现和验收结果以发布验收文档为准。",

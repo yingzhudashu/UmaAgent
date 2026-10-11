@@ -80,6 +80,7 @@ describe("protocol schemas", () => {
       Value.Check(TraceSpanSchema, {
         traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
         spanId: "00f067aa0ba902b7",
+        depth: 0,
         service: "core",
         name: "model.call",
         kind: "model",
@@ -100,6 +101,7 @@ describe("protocol schemas", () => {
         spanId: "span",
         runId: "run",
         sessionId: "session",
+        depth: 0,
         service: "core",
         name: "model",
         kind: "model",

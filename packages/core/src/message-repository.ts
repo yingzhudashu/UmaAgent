@@ -65,14 +65,14 @@ export class MessageRepository {
 
   /** 日/会话摘要仅需要末尾公开正文和范围边界，无需反复构造全部 Transcript 与附件。 */
   rollupContext(sessionId: string) {
-    const keys = this.visibleRows(sessionId, {}, "sequence,created_at");
-    const latest = keys.at(-1);
+    const latest = this.visibleRows(sessionId, { newestFirst: true, limit: 1 }, "sequence,created_at")[0];
     if (!latest) return undefined;
     const day = new Date(integer(latest.created_at)).toISOString().slice(0, 10);
     const dayStart = Date.parse(`${day}T00:00:00.000Z`);
-    const dayKeys = keys.filter(
-      (value) => integer(value.created_at) >= dayStart && integer(value.created_at) < dayStart + 86_400_000,
-    );
+    const dayBounds = { createdFrom: dayStart, createdBefore: dayStart + 86_400_000 };
+    const first = this.visibleRows(sessionId, { limit: 1 }, "sequence")[0];
+    const dayFirst = this.visibleRows(sessionId, { ...dayBounds, limit: 1 }, "sequence")[0];
+    const dayLast = this.visibleRows(sessionId, { ...dayBounds, newestFirst: true, limit: 1 }, "sequence")[0];
     const summarize = (values: Row[]) =>
       values
         .reverse()
@@ -81,10 +81,10 @@ export class MessageRepository {
         .slice(0, 8_000);
     return {
       day,
-      firstSequence: integer(keys[0]?.sequence),
+      firstSequence: integer(first?.sequence),
       lastSequence: integer(latest.sequence),
-      dayFirstSequence: integer(dayKeys[0]?.sequence),
-      dayLastSequence: integer(dayKeys.at(-1)?.sequence),
+      dayFirstSequence: integer(dayFirst?.sequence),
+      dayLastSequence: integer(dayLast?.sequence),
       dailyText: summarize(
         this.visibleRows(
           sessionId,
@@ -101,6 +101,23 @@ export class MessageRepository {
       sessionText: summarize(
         this.visibleRows(sessionId, { publicOnly: true, newestFirst: true, limit: 50 }, "role,content"),
       ),
+    };
+  }
+
+  turnRollup(sessionId: string, runId: string) {
+    // 只取序号、角色和正文，沿用活动分支可见性；不解析消息 payload 或附件 JSON。
+    const values = this.visibleRows(sessionId, { runId }, "sequence,role,content");
+    if (!values.length) return undefined;
+    let summary = "";
+    for (const value of values) {
+      if (text(value.role) === "tool" || summary.length >= 4_000) continue;
+      const line = `${summary ? "\n" : ""}${text(value.role)}: ${text(value.content)}`;
+      summary += line.slice(0, 4_000 - summary.length);
+    }
+    return {
+      fromSequence: integer(values[0]?.sequence),
+      toSequence: integer(values.at(-1)?.sequence),
+      summary,
     };
   }
 
@@ -208,6 +225,50 @@ export class MessageRepository {
       );
       return [{ id: text(value.id), sequence: integer(value.sequence), message }];
     });
+  }
+
+  /** Load the public transcript view and its agent payload with one row lookup,
+   * without running the branch CTE used by paged history queries.
+   */
+  getMessageWithAgentContext(id: string): {
+    transcript: TranscriptItem;
+    agentMessage?: StoredAgentMessage;
+  } {
+    const value = row(prepareStatement(this.db, "SELECT * FROM messages WHERE id=?"), id);
+    if (!value) throw new Error(`Message not found: ${id}`);
+    const attachmentIds = attachmentIdsFrom(value);
+    const attachments = this.loadAttachments(attachmentIds);
+    const transcript = this.toTranscriptItem(value, attachments);
+    if (text(value.status) !== "complete") return { transcript };
+    const parsed = parseJson<AgentMessage | null>(value.payload_json, null);
+    return {
+      transcript,
+      agentMessage: {
+        id: text(value.id),
+        sequence: integer(value.sequence),
+        message: this.withAttachmentContext(
+          parsed ?? this.deriveAgentMessage(value),
+          attachmentIds,
+          attachments,
+        ),
+      },
+    };
+  }
+
+  /** The terminal assistant row is queried directly instead of materializing
+   * every message and attachment in a run just to find its last response.
+   */
+  latestCompletedAssistant(sessionId: string, runId: string): TranscriptItem | undefined {
+    const value = row(
+      prepareStatement(
+        this.db,
+        "SELECT * FROM messages WHERE session_id=? AND run_id=? AND role='assistant' AND status='complete' ORDER BY sequence DESC LIMIT 1",
+      ),
+      sessionId,
+      runId,
+    );
+    if (!value) return undefined;
+    return this.toTranscriptItem(value);
   }
 
   listByIds(ids: string[]): TranscriptItem[] {
