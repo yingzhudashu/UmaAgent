@@ -14,6 +14,8 @@
 
 2026-10-11 已将生产配置的 `default`、`reasoning`、`fast` 和 `vision` 角色统一切换为 `openai/gpt-6.1-sol`，并重启 Core 后通过 `/api/v16/health/ready`。停服前已创建在线数据库备份 `state-default-model-20261011111225.db`；随后在事务中将现有 6 个 session 更新为 `openai/gpt-6.1-sol`。更新后 schema 为 27，`integrity_check=ok`、外键检查为空，session 不匹配数为 0；users、sessions、messages、runs、attachments 行数保持为 6/6/1209/110/55，110 条历史 Run 的 `model_snapshot_json` 哈希保持不变。该变更只影响现有 session 的后续消息和新 Run，不改写历史运行快照、消息、附件或账号数据。
 
+同日针对网关不接受 GPT-6.1 Sol 的 reasoning effort `none`/`minimal` 发布 hotfix release `20261011120205-d6c3aae`。运行时将这两个等级声明为不支持，使无显式思考等级的控制调用省略 reasoning 字段；显式 `off` 或 `minimal` 由 Pi 收敛到最低可用 `low`，其余支持等级按用户选择发送。Native promote 创建备份 `state-20261011120919.db`，受保护用户指纹校验与 ready 检查通过；Core、Browser Worker、Xianyu Adapter 均 active。部署后只做了 readiness 和数据完整性核验，未额外发送真实模型 smoke 请求。最终数据库仍为 schema 27、`integrity_check=ok`、外键检查为空，7 个 session 全部指向 `openai/gpt-6.1-sol`。
+
 同一构建曾在 staging 尝试启动；因 staging 历史数据库仍是旧 schema，新版本按契约拒绝启动，脚本自动恢复原 staging release。该回滚未影响生产，也未执行任何运行时迁移；staging 后续应先恢复匹配当前 schema 27 的隔离备份再复测。
 
 ## 当前契约
