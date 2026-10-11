@@ -403,7 +403,7 @@ class ApiTest {
     }
 
     @Test
-    fun messageEditAndQualityOperationsUseTheSharedContract() = runBlocking {
+    fun messageEditUsesTheSharedContract() = runBlocking {
         val requests = mutableListOf<Request>()
         val http =
             OkHttpClient.Builder()
@@ -423,8 +423,6 @@ class ApiTest {
         val client = UmaApi(token = "uma_pat_test", baseUrl = "https://core.test", http = http)
 
         client.editMessage("user-1", "修订后的问题")
-        client.reviewMessage("assistant-1")
-        client.improveMessage("assistant-1")
 
         assertEquals("PATCH", requests[0].method)
         assertEquals("/api/v16/messages/user-1", requests[0].url.encodedPath)
@@ -435,22 +433,6 @@ class ApiTest {
                 ?.jsonPrimitive
                 ?.content,
         )
-        assertEquals("POST", requests[1].method)
-        assertEquals("/api/v16/messages/assistant-1/review", requests[1].url.encodedPath)
-        assertEquals(
-            "",
-            Json.parseToJsonElement(Buffer().also { requests[1].body?.writeTo(it) }.readUtf8())
-                .jsonObject["feedback"]
-                ?.jsonPrimitive
-                ?.content,
-        )
-        assertEquals("POST", requests[2].method)
-        assertEquals("/api/v16/messages/assistant-1/improve", requests[2].url.encodedPath)
-        val improveBody =
-            Json.parseToJsonElement(Buffer().also { requests[2].body?.writeTo(it) }.readUtf8())
-                .jsonObject
-        assertEquals(false, improveBody["force"]?.jsonPrimitive?.boolean)
-        assertEquals(false, improveBody["reset"]?.jsonPrimitive?.boolean)
     }
 
     @Test

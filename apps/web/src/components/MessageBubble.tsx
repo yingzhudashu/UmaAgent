@@ -4,7 +4,6 @@ import { useState } from "react";
 import defaultAvatarUrl from "../assets/cat-avatar.png";
 import { Markdown } from "../Markdown.js";
 import { ActionMenu } from "./ActionMenu.js";
-import { type QualityOperationView, QualityPanel } from "./QualityPanel.js";
 import { useUnsavedForm } from "./UnsavedChanges.js";
 
 export function MessageBubble({
@@ -12,21 +11,13 @@ export function MessageBubble({
   session,
   onRetry,
   onAttachment,
-  onReview,
-  onImprove,
   onEdit,
-  qualityOperation,
-  onQualityRetry,
 }: {
   item: TranscriptItem;
   session: Session | undefined;
   onRetry: (() => void) | undefined;
   onAttachment: ((id: string) => void) | undefined;
-  onReview: (() => void) | undefined;
-  onImprove: (() => void) | undefined;
   onEdit: ((text: string) => Promise<void>) | undefined;
-  qualityOperation?: QualityOperationView;
-  onQualityRetry?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState("");
@@ -42,8 +33,6 @@ export function MessageBubble({
   const isTool = item.role === "tool";
   const toolSummary =
     item.status === "error" ? "执行失败" : item.status === "streaming" ? "执行中" : "已完成";
-  const qualityActive =
-    qualityOperation && ["submitting", "queued", "running"].includes(qualityOperation.status);
   const copy = async () => {
     try {
       if (!navigator.clipboard) throw new Error("Clipboard unavailable");
@@ -122,9 +111,7 @@ export function MessageBubble({
             </button>
           )}
           {!editing &&
-            ((item.status === "error" && onRetry) ||
-              (isUser && onEdit && item.status === "complete") ||
-              (!isUser && !isTool && (onReview || onImprove))) && (
+            ((item.status === "error" && onRetry) || (isUser && onEdit && item.status === "complete")) && (
               <ActionMenu label="消息更多操作">
                 {item.status === "error" && onRetry && (
                   <button type="button" className="text-action" onClick={onRetry}>
@@ -141,28 +128,6 @@ export function MessageBubble({
                     }}
                   >
                     <Pencil size={13} /> 编辑
-                  </button>
-                )}
-                {!isUser && !isTool && onReview && (
-                  <button
-                    type="button"
-                    className="text-action"
-                    onClick={onReview}
-                    disabled={qualityActive}
-                    title="只分析答案，不修改内容"
-                  >
-                    {qualityActive && qualityOperation.kind === "review" ? "审查中…" : "审查"}
-                  </button>
-                )}
-                {!isUser && !isTool && onImprove && (
-                  <button
-                    type="button"
-                    className="text-action"
-                    onClick={onImprove}
-                    disabled={qualityActive}
-                    title="根据审查建议生成新答案"
-                  >
-                    {qualityActive && qualityOperation.kind === "improve" ? "改进中…" : "改进"}
                   </button>
                 )}
               </ActionMenu>
@@ -195,9 +160,6 @@ export function MessageBubble({
                 <X size={13} /> 取消
               </button>
             </>
-          )}
-          {!isUser && !isTool && qualityOperation && onQualityRetry && (
-            <QualityPanel operation={qualityOperation} onRetry={onQualityRetry} />
           )}
           {item.attachments.map((attachment) => (
             <button

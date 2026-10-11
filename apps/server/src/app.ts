@@ -14,10 +14,8 @@ import {
   CreateSessionRequestSchema,
   EditMessageRequestSchema,
   ExecutionSettingsSchema,
-  ImproveMessageRequestSchema,
   PROTOCOL_VERSION,
   QueueReorderRequestSchema,
-  ReviewMessageRequestSchema,
   RunActionDecisionSchema,
   SendMessageRequestSchema,
   ShortcutRequestSchema,
@@ -54,23 +52,6 @@ function allowedOrigin(origin: string, configured: string[]): boolean {
 
 function errorBody(requestId: string, code: string, message: string, retryable = false) {
   return { error: { code, message, retryable, requestId } };
-}
-
-export function consumeRateLimit(
-  buckets: Map<string, { count: number; resetAt: number }>,
-  key: string,
-  now = Date.now(),
-  limit = 16,
-  windowMs = 60_000,
-): boolean {
-  const current = buckets.get(key);
-  if (!current || current.resetAt <= now) {
-    buckets.set(key, { count: 1, resetAt: now + windowMs });
-    return true;
-  }
-  if (current.count >= limit) return false;
-  current.count += 1;
-  return true;
 }
 
 export function shouldCloseForBufferedAmount(bufferedAmount: number, maxBufferedBytes: number): boolean {
@@ -115,7 +96,6 @@ export async function createServer(
       )
     : undefined;
   runtime.xianyuAgentApi = xianyu?.agentApi(runtime);
-  const qualityReadRate = new Map<string, { count: number; resetAt: number }>();
   await app.register(cookie);
   await app.register(cors, {
     origin: (origin, callback) =>
@@ -960,63 +940,6 @@ export async function createServer(
       runtime.database.runSession(request.params.id),
     ),
   );
-  app.get<{ Params: { id: string } }>("/api/v16/runs/:id/quality", async (request) =>
-    ownedResult(
-      request,
-      runtime.database.runOwner(request.params.id),
-      () => runtime.listQualityAssessments(request.params.id),
-      runtime.database.runSession(request.params.id),
-    ),
-  );
-  app.get<{ Params: { id: string } }>("/api/v16/sessions/:id/quality", async (request) =>
-    ownedResult(
-      request,
-      runtime.database.sessionOwner(request.params.id),
-      () => runtime.listSessionMessageQuality(request.params.id),
-      request.params.id,
-    ),
-  );
-  app.get<{ Params: { id: string } }>("/api/v16/messages/:id/quality", async (request, reply) => {
-    const sessionId = runtime.database.findMessageOwner(request.params.id)?.sessionId;
-    const principal = requireOwned(request, runtime.database.messageOwner(request.params.id), sessionId);
-    if (!consumeRateLimit(qualityReadRate, principal.userId))
-      return reply
-        .code(429)
-        .send(errorBody(request.id, "rate_limited", "Use the session quality endpoint for history", true));
-    return runtime.listMessageQuality(request.params.id);
-  });
-  app.post<{ Params: { id: string }; Body: { feedback?: string } }>(
-    "/api/v16/messages/:id/review",
-    async (request, reply) => {
-      if (!Value.Check(ReviewMessageRequestSchema, request.body ?? {}))
-        throw new Error("Invalid review request");
-      requireOwned(
-        request,
-        runtime.database.messageOwner(request.params.id),
-        runtime.database.findMessageOwner(request.params.id)?.sessionId,
-      );
-      const run = runtime.reviewMessage(
-        request.params.id,
-        request.body?.feedback ?? "",
-        requestTrace(request),
-      );
-      return reply.code(202).send({ runId: run.id, status: run.status });
-    },
-  );
-  app.post<{ Params: { id: string }; Body: { force?: boolean; reset?: boolean } }>(
-    "/api/v16/messages/:id/improve",
-    async (request, reply) => {
-      if (!Value.Check(ImproveMessageRequestSchema, request.body ?? {}))
-        throw new Error("Invalid improve request");
-      requireOwned(
-        request,
-        runtime.database.messageOwner(request.params.id),
-        runtime.database.findMessageOwner(request.params.id)?.sessionId,
-      );
-      const run = runtime.improveMessage(request.params.id, request.body ?? {}, requestTrace(request));
-      return reply.code(202).send({ runId: run.id, status: run.status });
-    },
-  );
   app.get<{ Params: { id: string } }>("/api/v16/runs/:id/checkpoints", async (request) =>
     ownedResult(
       request,
@@ -1162,7 +1085,6 @@ export async function createServer(
           "knowledge",
           "skills",
           "profile",
-          "quality",
           "config",
           "evaluations",
           "optimization",

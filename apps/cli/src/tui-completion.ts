@@ -7,8 +7,6 @@ export const TUI_COMMANDS = [
   "use",
   "older",
   "newer",
-  "review",
-  "improve",
   "queue",
   "btw",
   "session",

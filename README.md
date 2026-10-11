@@ -19,7 +19,6 @@ UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭�
 - PDF、DOCX、PPTX、XLSX 异步知识摄取，以及独立 Playwright Browser MCP Worker
 - 只通过 Client SDK 运行的黑盒 Eval Runner
 - Session 可选择严格 FIFO `queue` 或安全抢占 `preemptive`；澄清消息始终续接原 Run，副作用未决时不会启动替代 Run
-- `/review` 三轮内无工具审查与 `/improve` 不可变答案修订链
 - Agent Profile、结构化渐进记忆、事实 supersede、历史 rollup 与按需原文回溯
 - 技能包 staging、风险扫描、人工启用和热刷新；包含可执行代码的技能包会被拒绝
 - 证据化优化提案；接受提案后可在固定验证命令约束下备份、原子应用、失败回滚和人工回滚
@@ -147,7 +146,6 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 - `GET /api/v16/sessions/:id/history?before=<sequence>` 历史分页
 - `POST /api/v16/sessions/:id/messages|cancel|compact`
 - `PATCH /api/v16/sessions/:id` 可更新 `title`、`queueMode`、`assistantName` 和 `assistantAvatarAttachmentId`
-- `POST /api/v16/messages/:id/review|improve`、`GET /api/v16/runs/:id/quality`
 - `POST /api/v16/sessions/:id/commands` 在 Core 工作区执行遵循账号免审批策略的 Shell 命令
 - `GET /api/v16/attachments/:id/content`
 - `GET /api/v16/runs/:id/checkpoints|actions`
@@ -215,7 +213,6 @@ Android APK 是独立的静态发布物，不会随 Core Server 的 systemd 发�
 
 `queue` 模式按 Session 严格 FIFO，最多等待 100 条；`preemptive` 在新消息到达时取消旧排队 Run，并请求取消活动 Run。若活动工具可能产生副作用，其 Action 会转为 `uncertain`，必须先 acknowledge 或 reject，新 Run 才能继续。`awaiting_input` 的下一条消息始终作为原 Run 的澄清补充，不参与抢占。
 
-`/review [反馈]` 对目标答案执行最多三轮、无工具的结构化审查；`/improve` 根据最近评估只重写一次，`--force` 先评估，`--reset` 从原始答案而不是最近修订重写。原答案永久不变，新答案使用 `parentMessageId` 建立不可变消息树。
 
 Core 仅向上下文注入 Profile、active 事实和相关历史 rollup。事实 key 出现明确新值时，旧事实转为 `superseded` 并保留来源和证据；原始 transcript 仍是唯一历史原文。`history_search` 与 `history_read` 是只读工具，允许 Agent 从摘要回溯原文。
 

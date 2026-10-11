@@ -21,7 +21,6 @@ import type {
   ModelRef,
   OptimizationProposal,
   PublicConfig,
-  QualityAssessment,
   ReloadResult,
   Run,
   RunAction,
@@ -60,12 +59,10 @@ import { RunApprovals } from "./run-approvals.js";
 import { RunContextBuilder } from "./run-context.js";
 import { RunOrchestrator } from "./run-orchestrator.js";
 import { RunPreflight } from "./run-preflight.js";
-import { RunQualityService } from "./run-quality.js";
 import { bindAgentEvents } from "./runtime-agent-events.js";
 import { RuntimeCommandOperations } from "./runtime-command-operations.js";
 import { RuntimeOptimizationService } from "./runtime-optimization.js";
 import { RuntimeOptimizationExecutionService } from "./runtime-optimization-execution.js";
-import { RuntimeQualityOperations } from "./runtime-quality-operations.js";
 import { recoverRestartedRuns, syncResumedResponse, waitForRunTerminal } from "./runtime-recovery.js";
 import { RuntimeResourceService } from "./runtime-resources.js";
 import { RuntimeShortcutService } from "./runtime-shortcuts.js";
@@ -106,14 +103,12 @@ export class UmaRuntime {
   private contextBuilder: RunContextBuilder;
   private modelCalls: ModelCallService;
   private preflight: RunPreflight;
-  private quality: RunQualityService;
-  private readonly qualityOperations: RuntimeQualityOperations;
   private readonly commandOperations: RuntimeCommandOperations;
   private readonly optimization: RuntimeOptimizationService;
   readonly optimizationExecution: RuntimeOptimizationExecutionService;
   private readonly resources: RuntimeResourceService;
   private readonly shortcuts: RuntimeShortcutService;
-  /** Controllers are keyed by runId; a session can have a quality run and an agent run in flight. */
+  /** Controllers are keyed by runId so cancellation and shutdown reach active runs deterministically. */
   private readonly controllers = new Map<string, AbortController>();
   private readonly preemptedRuns = new Set<string>();
   private readonly approvals: RunApprovals;
@@ -170,20 +165,7 @@ export class UmaRuntime {
     );
     this.modelCalls = new ModelCallService(this.database, this.models, config.runtime.modelTimeoutMs);
     this.preflight = new RunPreflight(this.database, this.models, this.contextManager, this.modelCalls);
-    this.quality = new RunQualityService(this.modelCalls);
     this.orchestrator = new RunOrchestrator(config.runtime.maxParallelSessions);
-    this.qualityOperations = new RuntimeQualityOperations({
-      database: this.database,
-      events: this.events,
-      orchestrator: this.orchestrator,
-      controllers: this.controllers,
-      isAcceptingRuns: () => this.started && !this.stopping,
-      getQualityService: () => this.quality,
-      getReasoningModel: () => this.models.snapshot(this.config.roles.reasoning),
-      getContextManager: () => this.contextManager,
-      getModels: () => this.models,
-      trace: this.trace,
-    });
     this.optimization = new RuntimeOptimizationService(this.database, () =>
       this.invalidateResource("optimization"),
     );
@@ -290,7 +272,6 @@ export class UmaRuntime {
               run.id,
             );
           } else if (run.kind === "command") this.commandOperations.resumeQueued(run);
-          else if (run.kind === "review" || run.kind === "improve") this.qualityOperations.resumeQueued(run);
           else throw new Error(`Unsupported queued run kind: ${run.kind}`);
         } catch (error) {
           this.events.transaction(() => {
@@ -394,7 +375,6 @@ export class UmaRuntime {
       );
       this.modelCalls = new ModelCallService(this.database, this.models, next.runtime.modelTimeoutMs);
       this.preflight = new RunPreflight(this.database, this.models, this.contextManager, this.modelCalls);
-      this.quality = new RunQualityService(this.modelCalls);
       applied.push("models", "roles");
     }
     if (!hasQueued && nextMcp) {
@@ -440,7 +420,6 @@ export class UmaRuntime {
       | "knowledge"
       | "skills"
       | "profile"
-      | "quality"
       | "config"
       | "evaluations"
       | "optimization"
@@ -847,16 +826,6 @@ export class UmaRuntime {
   ) {
     return this.shortcuts.execute(sessionId, command, ownerId, reloadConfig);
   }
-  listQualityAssessments(runId: string): QualityAssessment[] {
-    return this.resources.listQualityAssessments(runId);
-  }
-  listMessageQuality(messageId: string) {
-    return this.resources.listMessageQuality(messageId);
-  }
-  listSessionMessageQuality(sessionId: string) {
-    return this.resources.listSessionMessageQuality(sessionId);
-  }
-
   private transitionRun(
     sessionId: string,
     runId: string,
@@ -1252,17 +1221,6 @@ export class UmaRuntime {
     if (continuation) this.orchestrator.resume(sessionId);
     return run;
   }
-  reviewMessage(messageId: string, feedback = "", traceParent?: TraceParent): Run {
-    return this.qualityOperations.start("review", messageId, { feedback }, traceParent);
-  }
-  improveMessage(
-    messageId: string,
-    options: { force?: boolean; reset?: boolean } = {},
-    traceParent?: TraceParent,
-  ): Run {
-    return this.qualityOperations.start("improve", messageId, options, traceParent);
-  }
-
   editMessage(sessionId: string, messageId: string, text: string, traceParent?: TraceParent): Run {
     const original = this.database.getMessage(messageId);
     const owner = this.database.findMessageOwner(messageId);

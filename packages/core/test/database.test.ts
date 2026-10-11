@@ -23,6 +23,26 @@ afterEach(async () =>
 );
 
 describe("UmaDatabase", () => {
+  it("keeps retired message-quality Run kinds readable as historical records", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-retired-run-kind-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    try {
+      const session = db.createSession({
+        title: "历史运行",
+        workspace: root,
+        model: modelSnapshot.ref,
+        thinkingLevel: "off",
+      });
+      const { run } = db.createRun(session.id, "historical-run", modelSnapshot, "off", "agent", "agent");
+      db.db.prepare("UPDATE runs SET kind='review',status='completed' WHERE id=?").run(run.id);
+
+      expect(db.getRun(run.id)).toMatchObject({ kind: "review", status: "completed" });
+    } finally {
+      db.close();
+    }
+  });
+
   it("builds bounded turn rollups from public text and keeps tool payloads out", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-turn-rollup-"));
     temporary.push(root);

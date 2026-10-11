@@ -481,12 +481,6 @@ describe("UmaClient", () => {
     await client.reviewMemoryFact("memory/id", "active");
     await client.deleteMemoryFact("memory/id");
     await client.listAudit("run/id");
-    await client.reviewMessage("message/id");
-    await client.reviewMessage("message/id", "check facts");
-    await client.improveMessage("message/id");
-    await client.improveMessage("message/id", { force: true, reset: true });
-    await client.listRunQuality("run/id");
-    await client.listSessionMessageQuality("session/id");
     await client.sendCommand("session/id", "pwd");
     await client.sendCommand("session/id", "pwd", "message/id");
     await client.listRunActions("run/id");

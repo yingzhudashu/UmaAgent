@@ -608,25 +608,6 @@ class UmaApi(
             buildJsonObject { put("decision", decision) },
         )
 
-    suspend fun reviewMessage(messageId: String, feedback: String = ""): JsonElement =
-        postJson(
-            "/messages/${encode(messageId)}/review",
-            buildJsonObject { put("feedback", feedback) },
-        )
-
-    suspend fun improveMessage(
-        messageId: String,
-        force: Boolean = false,
-        reset: Boolean = false,
-    ): JsonElement =
-        postJson(
-            "/messages/${encode(messageId)}/improve",
-            buildJsonObject {
-                put("force", force)
-                put("reset", reset)
-            },
-        )
-
     suspend fun editMessage(messageId: String, text: String): JsonElement =
         patchJson(
             "/messages/${encode(messageId)}",

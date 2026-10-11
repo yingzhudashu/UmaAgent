@@ -33,8 +33,6 @@ class SessionReceiptTest {
             listOf(
                 "confirm",
                 "edit",
-                "review",
-                "improve",
                 "approval",
                 "compact",
                 "cancel",
@@ -104,8 +102,6 @@ class SessionReceiptTest {
                         when (operation) {
                             "confirm" -> model.confirmPlan("old-run")
                             "edit" -> model.editMessage("old-message", "修改") { saved = true }
-                            "review" -> model.reviewMessage("old-message")
-                            "improve" -> model.improveMessage("old-message")
                             "approval" -> model.resolveApproval("old-approval", true)
                             "compact" -> model.compactSelectedSession()
                             "cancel" -> model.cancelSelectedSession()

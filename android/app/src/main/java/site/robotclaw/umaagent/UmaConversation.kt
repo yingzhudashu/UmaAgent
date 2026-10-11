@@ -373,8 +373,6 @@ internal fun ChatScreen(
                                     downloadsEnabled = !state.offline && !state.loading,
                                     onConfirmPlan = model::confirmPlan,
                                     onOpenTrace = model::openRunTrace,
-                                    onReviewMessage = model::reviewMessage,
-                                    onImproveMessage = model::improveMessage,
                                     onPreviewImage = model::previewImageAttachment,
                                     onDownloadAttachment = { attachment ->
                                         pendingTranscriptDownloadId = attachment.id
@@ -860,8 +858,6 @@ internal fun ResponseItem(
     downloadsEnabled: Boolean,
     onConfirmPlan: (String) -> Unit,
     onOpenTrace: (String) -> Unit,
-    onReviewMessage: (String) -> Unit,
-    onImproveMessage: (String) -> Unit,
     onPreviewImage: (UiAttachment) -> Unit,
     onDownloadAttachment: (UiAttachment) -> Unit,
 ) {
@@ -982,12 +978,6 @@ internal fun ResponseItem(
                         listOf(
                             MenuAction("链路与耗时", downloadsEnabled) {
                                 onOpenTrace(entry.response.runId)
-                            },
-                            MenuAction("审查", downloadsEnabled) {
-                                onReviewMessage(finalAssistant.id)
-                            },
-                            MenuAction("改进", downloadsEnabled) {
-                                onImproveMessage(finalAssistant.id)
                             },
                         )
                     )

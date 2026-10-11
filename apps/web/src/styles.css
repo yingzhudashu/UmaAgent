@@ -1945,31 +1945,6 @@
   color: var(--ink);
   background: var(--surface-0);
 }
-.uma-embed .quality-panel {
-  width: 100%;
-  margin-top: 8px;
-  padding: 9px 11px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface-0);
-  color: var(--ink);
-  font-size: 12px;
-}
-.uma-embed .quality-panel p {
-  margin: 6px 0 0;
-}
-.uma-embed .quality-panel__hint,
-.uma-embed .quality-panel__label {
-  color: var(--muted);
-  font-size: 11px;
-}
-.uma-embed .quality-panel__item {
-  padding-left: 9px;
-  border-left: 2px solid var(--accent);
-}
-.uma-embed .quality-panel__result {
-  white-space: pre-wrap;
-}
 .uma-embed .assistant-body {
   padding: 3px 0;
 }

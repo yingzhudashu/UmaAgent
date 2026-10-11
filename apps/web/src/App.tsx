@@ -48,8 +48,6 @@ import { ResponseCard } from "./components/ResponseCard.js";
 import { SessionSettingsPanel } from "./components/SessionSettingsPanel.js";
 import { UnsavedChanges, useLeaveConfirmation } from "./components/UnsavedChanges.js";
 import { Login } from "./Login.js";
-import { type QualityOperation, useQualityHistory } from "./quality-history.js";
-import { runQualityOperation } from "./quality-operations.js";
 import { requestErrorMessage } from "./request-error.js";
 import { buildConversationEntries } from "./responseTurns.js";
 import { applyDurableEvent, applyStreamingEvent, mergeSessionSnapshot } from "./streaming.js";
@@ -147,16 +145,6 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [deleteSessionPending, setDeleteSessionPending] = useState<string>();
-  const [qualityOperations, setQualityOperations] = useState<Record<string, QualityOperation>>({});
-  const mergeQualityHistory = useCallback((restored: Record<string, QualityOperation>) => {
-    setQualityOperations((current) => {
-      const next = { ...current };
-      for (const [messageId, operation] of Object.entries(restored))
-        if (!current[messageId] || current[messageId]?.runId === operation.runId) next[messageId] = operation;
-      return next;
-    });
-  }, []);
-
   const sessions = useQuery({
     queryKey: ["sessions"],
     enabled: loginRequired !== true,
@@ -313,7 +301,6 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
     enabled: Boolean(selected && selected !== "undefined") && authenticated,
     refetchInterval: false,
   });
-  useQualityHistory(client, snapshot.data?.transcript, Boolean(authenticated), selected, mergeQualityHistory);
   useEffect(() => {
     const capture = (event: Event) => {
       event.preventDefault();
@@ -675,18 +662,6 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
       throw new Error(requestErrorMessage(error));
     }
   };
-  const startQuality = (messageId: string, kind: "review" | "improve") => {
-    const current = qualityOperations[messageId];
-    if (current && ["submitting", "queued", "running"].includes(current.status)) return;
-    if (!selected) return;
-    const sessionId = selected;
-    void runQualityOperation(client, messageId, kind, (operation) => {
-      setQualityOperations((items) => ({ ...items, [messageId]: operation }));
-    }).then((result) => {
-      if (result?.run.status === "completed")
-        return queryClient.invalidateQueries({ queryKey: ["snapshot", sessionId] });
-    });
-  };
   const signOut = () => {
     clearDrafts();
     pendingCreatedSessions.current.clear();
@@ -694,7 +669,6 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
     setLoginRequired(true);
     setSelected(undefined);
     setProfileDraft(undefined);
-    setQualityOperations({});
     setCommandOpen(false);
     setLastSyncAt(undefined);
     setSyncCursor(undefined);
@@ -917,19 +891,6 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
                   session={snapshot.data?.session}
                   onRetry={entry.item.role === "user" ? () => retryMessage(entry.item) : undefined}
                   onEdit={entry.item.role === "user" ? (text) => editMessage(entry.item, text) : undefined}
-                  onReview={
-                    entry.item.role === "assistant" ? () => startQuality(entry.item.id, "review") : undefined
-                  }
-                  onImprove={
-                    entry.item.role === "assistant" ? () => startQuality(entry.item.id, "improve") : undefined
-                  }
-                  {...(qualityOperations[entry.item.id]
-                    ? {
-                        qualityOperation: qualityOperations[entry.item.id],
-                        onQualityRetry: () =>
-                          startQuality(entry.item.id, qualityOperations[entry.item.id]?.kind ?? "review"),
-                      }
-                    : {})}
                   onAttachment={(id) =>
                     void client.attachmentContent(id).then((blob) => {
                       const url = URL.createObjectURL(blob);
@@ -946,18 +907,6 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
                   run={entry.run}
                   items={entry.items}
                   isCurrentSegment={entry.isCurrentSegment}
-                  onReview={(messageId) => startQuality(messageId, "review")}
-                  onImprove={(messageId) => startQuality(messageId, "improve")}
-                  {...(() => {
-                    const messageId = entry.items.filter((item) => item.role === "assistant").at(-1)?.id;
-                    const operation = messageId ? qualityOperations[messageId] : undefined;
-                    return operation
-                      ? {
-                          qualityOperation: operation,
-                          onQualityRetry: () => startQuality(messageId as string, operation.kind),
-                        }
-                      : {};
-                  })()}
                   {...(entry.response.status === "awaiting_confirmation" && entry.isCurrentSegment
                     ? {
                         onConfirm: () =>

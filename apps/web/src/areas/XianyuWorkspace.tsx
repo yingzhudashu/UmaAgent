@@ -270,8 +270,6 @@ export function XianyuWorkspace({ client, embedded = false, onSwitchAccount }: X
                 session={snapshot.data?.session}
                 onRetry={undefined}
                 onAttachment={undefined}
-                onReview={undefined}
-                onImprove={undefined}
                 onEdit={undefined}
               />
             ) : (

@@ -3,13 +3,13 @@ import { AgentEventEnvelopeSchema } from "./event-contract.js";
 import { Id, PROTOCOL_VERSION, Strict, Timestamp } from "./schema-helpers.js";
 import { SkillSummarySchema } from "./skill-contract.js";
 
+export * from "./agent-profile-contract.js";
 export * from "./channel-contract.js";
 export * from "./command-contract.js";
 export * from "./diagnostics-contract.js";
 export * from "./event-contract.js";
 export * from "./knowledge-contract.js";
 export * from "./memory-contract.js";
-export * from "./quality-contract.js";
 export * from "./resource-contract.js";
 export { PROTOCOL_VERSION } from "./schema-helpers.js";
 export * from "./skill-contract.js";
@@ -41,11 +41,12 @@ export type InteractionMode = Static<typeof InteractionModeSchema>;
 export const QueueModeSchema = Type.Union([Type.Literal("queue"), Type.Literal("preemptive")]);
 export type QueueMode = Static<typeof QueueModeSchema>;
 
+// 已结束的历史 Run 仍可能携带已下线的 kind；新建执行只由运行时开放 agent/command。
 export const RunKindSchema = Type.Union([
   Type.Literal("agent"),
+  Type.Literal("command"),
   Type.Literal("review"),
   Type.Literal("improve"),
-  Type.Literal("command"),
 ]);
 export type RunKind = Static<typeof RunKindSchema>;
 
@@ -652,7 +653,6 @@ export const ResourceKindSchema = Type.Union([
   Type.Literal("knowledge"),
   Type.Literal("skills"),
   Type.Literal("profile"),
-  Type.Literal("quality"),
   Type.Literal("config"),
   Type.Literal("evaluations"),
   Type.Literal("optimization"),
@@ -688,16 +688,6 @@ export const ResourceResyncRequiredSchema = Strict({
 });
 export type ResourceResyncRequired = Static<typeof ResourceResyncRequiredSchema>;
 
-export const ReviewMessageRequestSchema = Strict({
-  feedback: Type.Optional(Type.String({ maxLength: 10_000 })),
-});
-export type ReviewMessageRequest = Static<typeof ReviewMessageRequestSchema>;
-
-export const ImproveMessageRequestSchema = Strict({
-  force: Type.Optional(Type.Boolean()),
-  reset: Type.Optional(Type.Boolean()),
-});
-
 export const EditMessageRequestSchema = Strict({
   text: Type.String({ minLength: 1, maxLength: 1_000_000 }),
 });
@@ -708,8 +698,6 @@ export const QueueReorderRequestSchema = Strict({
   queueRevision: Type.Integer({ minimum: 1 }),
 });
 export type QueueReorderRequest = Static<typeof QueueReorderRequestSchema>;
-export type ImproveMessageRequest = Static<typeof ImproveMessageRequestSchema>;
-
 export const ReloadResultSchema = Strict({
   applied: Type.Array(Type.String()),
   restartRequired: Type.Array(Type.String()),

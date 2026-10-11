@@ -7,7 +7,8 @@
 | queue/preemptive 消息队列 | implemented | Runtime queue、preemptive 和取消测试 | soak 中持续验证 |
 | direct/clarify/plan | implemented | Faux Eval 与 Runtime 测试 | 保持回归样本 |
 | ReAct 工具循环 | implemented | Tool loop guard、Action Ledger 测试 | 增加长循环性能样本 |
-| review/improve/correct | implemented | Server/API/Runtime 测试 | 补 CLI/Web 端到端用例 |
+| 助手回复审查/改进 | removed | Web、Android、CLI、Client、Server、Core 入口和执行链已删除 | 不提供 |
+| plan 结果校验与纠正 | implemented | Runtime 验证与单次纠正测试 | 保持回归样本 |
 | 记忆事实、候选、supersede | implemented | Memory API、FTS、审计测试 | 增加跨会话召回样本 |
 | rollup 与历史回溯 | implemented | Context、history search/read 测试 | 增加长历史性能样本 |
 | FTS5 知识库 | implemented | Knowledge ingest/search/reindex 测试 | 以 Recall@8 结果决定是否扩展 |

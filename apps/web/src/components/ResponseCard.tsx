@@ -4,8 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import defaultAvatarUrl from "../assets/cat-avatar.png";
 import { Markdown } from "../Markdown.js";
 import { responseStatusLabels } from "../statusLabels.js";
-import { ActionMenu } from "./ActionMenu.js";
-import { type QualityOperationView, QualityPanel } from "./QualityPanel.js";
 
 function toolStatus(item: TranscriptItem): string {
   if (item.status === "error") return "执行失败";
@@ -50,11 +48,7 @@ export function ResponseCard({
   items,
   onDownload,
   onConfirm,
-  onReview,
-  onImprove,
   isCurrentSegment = true,
-  qualityOperation,
-  onQualityRetry,
 }: {
   response: Response;
   session: Session | undefined;
@@ -62,11 +56,7 @@ export function ResponseCard({
   items: TranscriptItem[];
   onDownload: (id: string) => void;
   onConfirm?: () => void;
-  onReview?: (messageId: string) => void;
-  onImprove?: (messageId: string) => void;
   isCurrentSegment?: boolean;
-  qualityOperation?: QualityOperationView;
-  onQualityRetry?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState("");
@@ -97,8 +87,6 @@ export function ResponseCard({
   const hasSteps = timeline.length > 0;
   const hasPlan = planItems.length > 0 && run?.interactionMode === "plan";
   const terminal = (["completed", "failed", "cancelled"] as ResponseStatus[]).includes(response.status);
-  const qualityActive =
-    qualityOperation && ["submitting", "queued", "running"].includes(qualityOperation.status);
   const copy = async () => {
     try {
       if (!navigator.clipboard) throw new Error("Clipboard unavailable");
@@ -233,38 +221,8 @@ export function ResponseCard({
           <button type="button" className="text-action" onClick={() => void copy()} title="复制内容">
             {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "已复制" : "复制"}
           </button>
-          {finalAssistant && (onReview || onImprove) && (
-            <ActionMenu label="回复更多操作">
-              {finalAssistant && onReview && (
-                <button
-                  type="button"
-                  className="text-action"
-                  disabled={qualityActive}
-                  title="只分析答案，不修改内容"
-                  onClick={() => onReview(finalAssistant.id)}
-                >
-                  {qualityActive && qualityOperation.kind === "review" ? "审查中…" : "审查"}
-                </button>
-              )}
-              {finalAssistant && onImprove && (
-                <button
-                  type="button"
-                  className="text-action"
-                  disabled={qualityActive}
-                  title="根据审查建议生成新答案"
-                  onClick={() => onImprove(finalAssistant.id)}
-                >
-                  {qualityActive && qualityOperation.kind === "improve" ? "改进中…" : "改进"}
-                </button>
-              )}
-            </ActionMenu>
-          )}
           {copyError && <output className="error-text">{copyError}</output>}
         </div>
-        {qualityOperation && onQualityRetry && (
-          <QualityPanel operation={qualityOperation} onRetry={onQualityRetry} />
-        )}
-
         {response.attachments.length > 0 && (
           <div className="response-files">
             {response.attachments.map((attachment) =>

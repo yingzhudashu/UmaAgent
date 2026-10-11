@@ -18,7 +18,13 @@
 
 同一构建曾在 staging 尝试启动；因 staging 历史数据库仍是旧 schema，新版本按契约拒绝启动，脚本自动恢复原 staging release。该回滚未影响生产，也未执行任何运行时迁移；staging 后续应先恢复匹配当前 schema 27 的隔离备份再复测。
 
-2026-10-11 修复了回复下方“审查/改进”操作：普通助手消息此前没有持久化指向对应用户消息的父链，质量 Run 因而找不到待审查问题并失败；新回复和澄清回复现在记录父消息，既有缺少父链的历史记录从活动分支最近的前序用户消息解析，无需数据迁移。Web 点击后立即显示提交/排队/执行状态，按 Run 终态显示错误；改进正文从质量历史读取，避免因结果消息不属于活动分支而空白。提交 `33415c4` 部署为 Native release `20261011135637-33415c4`，创建在线备份 `state-20261011140416.db`；Native promote、依赖和包导入检查、受保护用户指纹校验均通过，Core、Browser Worker、Xianyu Adapter 均 active，live/ready 均返回 200，schema 仍为 27。验收命令 `npm run check`、`npm run test:coverage`、`npm run build`、`npm run test:web:e2e` 均通过；Vitest 62 个文件/356 项，覆盖率语句 81.91%、分支 73.27%、函数 77.03%、行 84.67%，Web E2E 37/37。
+历史记录（2026-10-11，当时发布版本）：修复了回复下方“审查/改进”操作：普通助手消息此前没有持久化指向对应用户消息的父链，质量 Run 因而找不到待审查问题并失败；新回复和澄清回复现在记录父消息，既有缺少父链的历史记录从活动分支最近的前序用户消息解析，无需数据迁移。Web 点击后立即显示提交/排队/执行状态，按 Run 终态显示错误；改进正文从质量历史读取，避免因结果消息不属于活动分支而空白。提交 `33415c4` 部署为 Native release `20261011135637-33415c4`，创建在线备份 `state-20261011140416.db`；Native promote、依赖和包导入检查、受保护用户指纹校验均通过，Core、Browser Worker、Xianyu Adapter 均 active，live/ready 均返回 200，schema 仍为 27。验收命令 `npm run check`、`npm run test:coverage`、`npm run build`、`npm run test:web:e2e` 均通过；Vitest 62 个文件/356 项，覆盖率语句 81.91%、分支 73.27%、函数 77.03%、行 84.67%，Web E2E 37/37。该版本功能已于 2026-10-12 从当前候选完整移除；本段只记录当时的发布事实。
+
+## 2026-10-12 助手回复审查/改进功能移除验收
+
+当前候选已从 Web、Android、CLI、Client SDK、Server API、Core Runtime 和 Protocol 中删除助手回复的审查/改进入口及执行链，并移除 UM-09 设计页、对应交互图和过期测试。系统管理员质量诊断、评测、记忆事实审核及 Skill 审查仍是独立能力，不在本次删除范围内。schema 维持 27，不做迁移；旧质量 Run 类型及质量记录表只保留为历史数据，不再提供新建入口。
+
+本次验证通过：`npm run check`、`npm run test:coverage`（59 文件/346 项）、`npm run build`、`npm run build:web:embed`、`npm run check:android`、`npm run test:eval:faux`（6/6）、`npm run test:perf`、`npm run test:web:e2e`（37/37）及 `python docs/frontend-design/validate.py`（31 页/82 动作/149 图/0 问题）。当前 20 请求性能结果为 API p95 5.84ms、事件分页 p95 1.58ms、RSS 112,246,784B、双库 WAL 2,224,864B、单核等效 CPU 平均/峰值 4.3437%、事件循环 p95 30.10ms，均低于现有门槛。Web E2E 断言助手回复不再出现审查、改进按钮；Server 测试断言旧 API 路径返回 404；Core 数据库测试确认历史 `review` Run 记录仍可读取。
 
 ## 当前契约
 
@@ -34,14 +40,14 @@
 | 架构检查 | 通过（受控债务） | `npm run check:architecture` 通过；六个登记文件超过 900 行但均受尺寸基线约束，新增或超基线文件会失败 |
 | 文档契约检查 | 通过 | `npm run check:docs-contracts`；14 个 Markdown 文件、版本/schema/命令/本地链接一致 |
 | Biome 与 TypeScript | 通过 | `npm run check` |
-| 单元测试与覆盖率 | 通过 | `npm run test:coverage`；62 个文件、356 项，语句 81.91%、分支 73.27%、函数 77.03%、行 84.67% |
-| 完整构建 | 通过 | `npm run build` |
-| 嵌入 Web 构建 | 通过 | `npm run build:web:embed`；CSS 114.33 KiB，入口 JS 540.84 KiB |
-| Faux 评测 | 通过 | `npm run test:eval:faux`；6/6 |
+| 单元测试与覆盖率 | 通过 | 当前候选 `npm run test:coverage`；59 个文件、345 项，语句 81.86%、分支 73.58%、函数 76.54%、行 84.66% |
+| 完整构建 | 通过 | 当前候选 `npm run build`；所有 workspace 编译、Web 生产包及 Workers 构建通过 |
+| 嵌入 Web 构建 | 通过 | 当前候选 `npm run build:web:embed`；CSS 113.88 KiB，入口 JS 536.39 KiB |
+| Faux 评测 | 通过 | 当前候选 `npm run test:eval:faux`；6/6 |
 | Faux 四小时 soak | 通过 | `artifacts/acceptance/soak-1791685462712/result.json`；约 4 小时、2615 条消息、游标 31416、RSS 峰值 158,969,856B、双库 WAL 峰值 2,661,584B |
-| Web 全量 E2E | 通过 | `npm run test:web:e2e`；37/37，包含审查/改进进度与结果回归 |
-| Android JVM/instrumentation 编译 | 通过 | `npm run check:android`；Gradle Debug 单测与 instrumentation Kotlin 编译 |
-| 前端设计产物 | 通过 | `python docs/frontend-design/render.py`、`python docs/frontend-design/validate.py`；32 页面、85 动作、154 图、0 问题 |
+| Web 全量 E2E | 通过 | 当前候选 `npm run test:web:e2e`；37/37，含助手回复菜单不再展示审查/改进的回归检查 |
+| Android JVM/instrumentation 编译 | 通过 | 当前候选 `npm run check:android`；Gradle Debug 单测与 instrumentation Kotlin 编译通过 |
+| 前端设计产物 | 通过 | 当前候选重新生成并校验；31 页面、82 动作、149 图、0 问题 |
 
 ## Windows 固定性能
 

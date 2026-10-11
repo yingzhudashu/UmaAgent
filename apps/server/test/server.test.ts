@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type UmaConfig, UmaRuntime } from "@uma-agent/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { consumeRateLimit, createServer, shouldCloseForBufferedAmount } from "../src/app.js";
+import { createServer, shouldCloseForBufferedAmount } from "../src/app.js";
 import { AuthService } from "../src/auth.js";
 import { crossOrigin, secureOrigin, trustLoopbackProxy } from "../src/request-origin.js";
 
@@ -26,16 +26,6 @@ describe("server", () => {
     expect(trustLoopbackProxy("127.0.0.1")).toBe(true);
     expect(trustLoopbackProxy("::1")).toBe(true);
     expect(trustLoopbackProxy("203.0.113.10")).toBe(false);
-  });
-
-  it("bounds legacy per-message quality reads within a user window", () => {
-    const buckets = new Map<string, { count: number; resetAt: number }>();
-    expect(Array.from({ length: 16 }, () => consumeRateLimit(buckets, "user-1", 1_000))).toEqual(
-      Array(16).fill(true),
-    );
-    expect(consumeRateLimit(buckets, "user-1", 1_000)).toBe(false);
-    expect(consumeRateLimit(buckets, "user-1", 61_000)).toBe(true);
-    expect(consumeRateLimit(buckets, "user-2", 1_000)).toBe(true);
   });
 
   it("requires auth and serves authoritative snapshots", async () => {
@@ -1010,11 +1000,21 @@ describe("server", () => {
         })
       ).json(),
     ).toEqual([]);
-    expect(
-      (
-        await app.inject({ method: "GET", url: `/api/v16/runs/${run.id}/quality`, headers: authHeaders })
-      ).json(),
-    ).toEqual([]);
+    for (const [method, url] of [
+      ["GET", `/api/v16/runs/${run.id}/quality`],
+      ["GET", `/api/v16/sessions/${session.id}/quality`],
+      ["GET", `/api/v16/messages/${run.messageId}/quality`],
+      ["POST", `/api/v16/messages/${run.messageId}/review`],
+      ["POST", `/api/v16/messages/${run.messageId}/improve`],
+    ] as const) {
+      const response = await app.inject({
+        method,
+        url,
+        headers: authHeaders,
+        ...(method === "POST" ? { payload: {} } : {}),
+      });
+      expect(response.statusCode, `${method} ${url} is removed`).toBe(404);
+    }
     expect(
       (
         await app.inject({ method: "GET", url: "/api/v16/optimization-proposals", headers: authHeaders })
@@ -1084,58 +1084,6 @@ describe("server", () => {
       ).json(),
     ).toMatchObject({ id: proposal.id, status: "accepted" });
 
-    runtime.database.insertMessage({
-      id: "quality-question",
-      sessionId: session.id,
-      role: "user",
-      status: "complete",
-      content: "What is the result?",
-    });
-    runtime.database.insertMessage({
-      id: "quality-answer",
-      sessionId: session.id,
-      role: "assistant",
-      status: "complete",
-      content: "The result is concise.",
-    });
-    expect(
-      (
-        await app.inject({
-          method: "GET",
-          url: "/api/v16/messages/quality-answer/quality",
-          headers: authHeaders,
-        })
-      ).statusCode,
-    ).toBe(200);
-    expect(
-      (
-        await app.inject({
-          method: "GET",
-          url: `/api/v16/sessions/${session.id}/quality`,
-          headers: authHeaders,
-        })
-      ).statusCode,
-    ).toBe(200);
-    expect(
-      (
-        await app.inject({
-          method: "POST",
-          url: "/api/v16/messages/quality-answer/review",
-          headers: authHeaders,
-          payload: { feedback: "check clarity" },
-        })
-      ).statusCode,
-    ).toBe(202);
-    expect(
-      (
-        await app.inject({
-          method: "POST",
-          url: "/api/v16/messages/quality-answer/improve",
-          headers: authHeaders,
-          payload: { force: true, reset: true },
-        })
-      ).statusCode,
-    ).toBe(202);
     expect(
       (
         await app.inject({
@@ -1180,8 +1128,6 @@ describe("server", () => {
       ["PATCH", `/api/v16/schedules/${scheduleId}`, { schedule: { kind: "invalid" } }],
       ["POST", `/api/v16/memory/${memory.json<{ id: string }>().id}`, { status: "invalid" }],
       ["POST", `/api/v16/runs/${run.id}/actions/missing/decide`, { decision: "invalid" }],
-      ["POST", `/api/v16/messages/${run.messageId}/review`, { feedback: 42 }],
-      ["POST", `/api/v16/messages/${run.messageId}/improve`, { force: "yes" }],
       ["POST", `/api/v16/sessions/${session.id}/commands`, { command: "" }],
       ["POST", "/api/v16/skills/install", { source: "unknown", reference: "x" }],
       ["PUT", "/api/v16/profile", {}],

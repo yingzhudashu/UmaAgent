@@ -20,7 +20,6 @@ import type {
   OptimizationApplication,
   OptimizationProposal,
   PublicConfig,
-  QualityAssessment,
   ReloadResult,
   ResourceInvalidated,
   ResourceResyncRequired,
@@ -49,10 +48,6 @@ import { UmaClientError } from "./http-error.js";
 import { traceparent } from "./trace-context.js";
 
 export { UmaClientError } from "./http-error.js";
-
-import { type MessageQualityHistory, qualityPath } from "./quality.js";
-
-export type { MessageQualityHistory } from "./quality.js";
 
 export interface UmaClientOptions {
   baseUrl: string;
@@ -587,21 +582,6 @@ export class UmaClient {
   listAudit(runId: string): Promise<AuditRecord[]> {
     return this.request(`/audit/runs/${encodeURIComponent(runId)}`);
   }
-  reviewMessage(messageId: string, feedback?: string): Promise<SendMessageResponse> {
-    return this.request(`/messages/${encodeURIComponent(messageId)}/review`, {
-      method: "POST",
-      body: JSON.stringify(feedback ? { feedback } : {}),
-    });
-  }
-  improveMessage(
-    messageId: string,
-    options: { force?: boolean; reset?: boolean } = {},
-  ): Promise<SendMessageResponse> {
-    return this.request(`/messages/${encodeURIComponent(messageId)}/improve`, {
-      method: "POST",
-      body: JSON.stringify(options),
-    });
-  }
   editMessage(messageId: string, text: string): Promise<SendMessageResponse> {
     return this.request(`/messages/${encodeURIComponent(messageId)}`, {
       method: "PATCH",
@@ -623,15 +603,6 @@ export class UmaClient {
   }
   prioritizeRun(runId: string): Promise<import("@uma-agent/protocol").Run> {
     return this.request(`/runs/${encodeURIComponent(runId)}/prioritize`, { method: "POST" });
-  }
-  listRunQuality(runId: string) {
-    return this.request<QualityAssessment[]>(qualityPath("runs", runId));
-  }
-  listMessageQuality(messageId: string) {
-    return this.request<MessageQualityHistory[]>(qualityPath("messages", messageId));
-  }
-  listSessionMessageQuality(sessionId: string) {
-    return this.request<Record<string, MessageQualityHistory[]>>(qualityPath("sessions", sessionId));
   }
   sendCommand(sessionId: string, command: string, messageId?: string): Promise<SendMessageResponse> {
     return this.request(`/sessions/${encodeURIComponent(sessionId)}/commands`, {

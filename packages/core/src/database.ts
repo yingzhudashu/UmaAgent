@@ -24,7 +24,6 @@ import type {
   OptimizationApplication,
   OptimizationProposal,
   PlanStep,
-  QualityAssessment,
   Response,
   ResponseActivity,
   ResponseStatus,
@@ -61,7 +60,6 @@ import {
 import { ExecutionPolicyRepository } from "./execution-policy-repository.js";
 import { serializeUpdatedMessagePayload } from "./message-payload.js";
 import { MessageRepository } from "./message-repository.js";
-import { QualityHistoryRepository } from "./quality-history-repository.js";
 import { QueueStateRepository } from "./queue-state.js";
 import { ResponseRepository } from "./response-repository.js";
 import { findRestartRecoverableRuns, SERVER_RESTART_ERROR } from "./run-recovery.js";
@@ -81,7 +79,6 @@ export class UmaDatabase {
   private readonly messages: MessageRepository;
   private readonly sessions: SessionRepository;
   private readonly queueState: QueueStateRepository;
-  private readonly qualityHistory: QualityHistoryRepository;
   private readonly scheduledTasks: ScheduledTaskRepository;
   private transactionDepth = 0;
 
@@ -94,7 +91,6 @@ export class UmaDatabase {
     this.messages = new MessageRepository(this.db);
     this.sessions = new SessionRepository(this.db);
     this.queueState = new QueueStateRepository(this.db);
-    this.qualityHistory = new QualityHistoryRepository(this.db);
     this.scheduledTasks = new ScheduledTaskRepository(this.db);
     // 每库约 1 MiB 触发自动 checkpoint，为单笔事务跨过阈值保留双库 WAL 余量。
     this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA wal_autocheckpoint = 256;");
@@ -903,7 +899,7 @@ export class UmaDatabase {
     messageId: string,
     model: ModelSnapshot,
     thinkingLevel: Run["thinkingLevel"],
-    kind: Run["kind"],
+    kind: "agent" | "command",
     interactionMode: Run["interactionMode"],
     options: { targetMessageId?: string; queuePosition?: number; branchRevision?: number } = {},
   ): { run: Run; created: boolean } {
@@ -1019,16 +1015,6 @@ export class UmaDatabase {
   }
   bumpBranchRevision(sessionId: string): number {
     return this.queueState.bumpBranchRevision(sessionId);
-  }
-
-  setRunKind(id: string, kind: Run["kind"]): Run {
-    const result = prepareStatement(this.db, "UPDATE runs SET kind=?,updated_at=? WHERE id=?").run(
-      kind,
-      Date.now(),
-      id,
-    );
-    if (!result.changes) throw new Error(`Run not found: ${id}`);
-    return this.getRun(id);
   }
 
   setPlan(runId: string, titles: string[]): PlanStep[] {
@@ -1411,17 +1397,6 @@ export class UmaDatabase {
     );
   }
 
-  findActiveQualityRun(targetMessageId: string, kind: Run["kind"]): Run | undefined {
-    const value = row(
-      prepareStatement(
-        this.db,
-        "SELECT id FROM runs WHERE target_message_id=? AND kind=? AND status IN ('queued','preflight','running','verifying') ORDER BY created_at DESC LIMIT 1",
-      ),
-      targetMessageId,
-      kind,
-    );
-    return value ? this.getRun(text(value.id)) : undefined;
-  }
   reorderQueuedRuns(sessionId: string, runIds: string[], expectedRevision: number): Run[] {
     return this.queueState.reorderQueuedRuns(sessionId, runIds, expectedRevision, () =>
       this.listQueuedRuns(sessionId),
@@ -2470,57 +2445,6 @@ export class UmaDatabase {
       "INSERT INTO agent_profiles(user_id,content,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at",
     ).run(userId, content, Date.now());
     return this.getAgentProfile(userId);
-  }
-
-  addQualityAssessment(input: Omit<QualityAssessment, "id" | "createdAt">): QualityAssessment {
-    const id = randomUUID();
-    const createdAt = Date.now();
-    prepareStatement(
-      this.db,
-      "INSERT INTO quality_assessments(id,run_id,target_message_id,passed,issues_json,suggestions_json,iteration,created_at) VALUES(?,?,?,?,?,?,?,?)",
-    ).run(
-      id,
-      input.runId,
-      input.targetMessageId,
-      input.passed ? 1 : 0,
-      JSON.stringify(input.issues),
-      JSON.stringify(input.suggestions),
-      input.iteration,
-      createdAt,
-    );
-    return { id, createdAt, ...input };
-  }
-
-  listQualityAssessments(runId: string): QualityAssessment[] {
-    return rows(
-      prepareStatement(
-        this.db,
-        "SELECT * FROM quality_assessments WHERE run_id=? ORDER BY iteration,created_at",
-      ),
-      runId,
-    ).map((value) => ({
-      id: text(value.id),
-      runId: text(value.run_id),
-      targetMessageId: text(value.target_message_id),
-      passed: integer(value.passed) === 1,
-      issues: parseJson(value.issues_json, []),
-      suggestions: parseJson(value.suggestions_json, []),
-      iteration: integer(value.iteration),
-      createdAt: integer(value.created_at),
-    }));
-  }
-
-  listQualityForMessage(messageId: string): QualityAssessment[] {
-    return rows(
-      prepareStatement(
-        this.db,
-        "SELECT run_id FROM quality_assessments WHERE target_message_id=? GROUP BY run_id ORDER BY MIN(created_at)",
-      ),
-      messageId,
-    ).flatMap((value) => this.listQualityAssessments(text(value.run_id)));
-  }
-  listQualityRunsForMessage(messageId: string) {
-    return this.qualityHistory.listForMessage(messageId);
   }
 
   listActivity(sessionId: string, limit = 200): Array<Record<string, unknown>> {

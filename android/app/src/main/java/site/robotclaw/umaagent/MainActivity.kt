@@ -1092,45 +1092,6 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun reviewMessage(messageId: String) =
-        runMessageQualityAction(messageId, "审查") { client ->
-            client.reviewMessage(messageId.trim())
-        }
-
-    fun improveMessage(messageId: String) =
-        runMessageQualityAction(messageId, "改进") { client ->
-            client.improveMessage(messageId.trim())
-        }
-
-    private fun runMessageQualityAction(
-        messageId: String,
-        action: String,
-        request: suspend (UmaApi) -> Unit,
-    ) {
-        val sessionId = state.value.selectedSessionId ?: return
-        if (state.value.loading || state.value.offline || messageId.isBlank()) return
-        val client = api ?: return
-        state.value = state.value.copy(loading = true, error = "")
-        viewModelScope.launch {
-            runRequestCatching { request(client) }
-                .onSuccess {
-                    if (api !== client || state.value.selectedSessionId != sessionId)
-                        return@onSuccess
-                    state.value = state.value.copy(loading = false)
-                    selectSession(sessionId)
-                }
-                .onFailure { error ->
-                    if (api !== client || state.value.selectedSessionId != sessionId)
-                        return@onFailure
-                    state.value =
-                        state.value.copy(
-                            loading = false,
-                            error = requestErrorMessage(error, "${action}失败"),
-                        )
-                }
-        }
-    }
-
     fun uploadAttachment(uri: Uri, name: String) {
         val sessionId = state.value.selectedSessionId ?: return
         val client = api ?: return

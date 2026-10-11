@@ -6,7 +6,7 @@ Core 是用户、会话、运行、权限和事件的事实源。客户端保存
 
 当前发布配置将 `default`、`reasoning`、`fast` 和 `vision` 四个角色统一解析为 `openai/gpt-6.1-sol`。创建 session 时记录该模型引用；批量切换已有 session 只更新 session 的当前模型字段，历史 Run 的模型快照保持不可变。
 
-会话编辑、重跑、审查、改进和队列行为以[会话、编辑重跑与执行队列整改规范](conversation-execution-recovery-design.zh-CN.md)为准。消息正文不可变；编辑通过明确的替代关系和活动分支切换隐藏旧后代。历史读取按父链计算可见路径，不能用全局 sequence 截断代替父链。质量结果默认是派生记录，不自动污染普通正文。
+会话编辑、重跑和队列行为以[会话、编辑重跑与执行队列整改规范](conversation-execution-recovery-design.zh-CN.md)为准。消息正文不可变；编辑通过明确的替代关系和活动分支切换隐藏旧后代。历史读取按父链计算可见路径，不能用全局 sequence 截断代替父链。
 
 用户记录的 `auto_approve` 默认开启。`GET/PATCH /api/v16/account/execution-settings` 仅操作认证账号，字段为 `autoApprove: boolean`。客户端不能提交其他用户 ID。设置事务提交后，开启策略会解决该用户已有待审批，计划确认亦进入执行。关闭策略只影响后续审批点，不中断已获许可的工具。账号权限、工作区、SSRF、工具可见性及未知副作用恢复不受该开关影响。
 

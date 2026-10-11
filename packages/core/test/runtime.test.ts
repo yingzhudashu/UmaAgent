@@ -1067,7 +1067,6 @@ describe("UmaRuntime preflight", () => {
       runtime.sendMessage(session.id, { messageId: "stopped", text: "no", mode: "agent" }),
     ).toThrow("not accepting");
     expect(() => runtime.sendCommand(workspace.id, "pwd")).toThrow("not accepting");
-    expect(() => runtime.reviewMessage("missing")).toThrow("not accepting");
     await expect(runtime.start()).rejects.toThrow("cannot restart");
   });
 
@@ -1512,114 +1511,6 @@ describe("UmaRuntime preflight", () => {
     expect(runtime.listRunActions(run.id)).toEqual([
       expect.objectContaining({ toolName: "shell", status: "completed" }),
     ]);
-  });
-
-  it("reviews and improves an immutable answer through tool-free quality Runs", async () => {
-    const runtime = await runtimeWith([
-      fauxAssistantMessage(
-        JSON.stringify({
-          passed: false,
-          issues: [{ type: "omission", description: "Missing one detail" }],
-          suggestions: ["Add the missing detail"],
-        }),
-      ),
-      fauxAssistantMessage(JSON.stringify({ improvedAnswer: "Answer with the missing detail" })),
-      fauxAssistantMessage(JSON.stringify({ improvedAnswer: "Reset improvement from original" })),
-      fauxAssistantMessage(JSON.stringify({ passed: true, issues: [], suggestions: [] })),
-    ]);
-    const session = await runtime.createSession();
-    const source = runtime.database.createRun(
-      session.id,
-      "quality-question",
-      runtime.models.snapshot(session.model),
-      session.thinkingLevel,
-      "agent",
-      "agent",
-    ).run;
-    runtime.database.insertMessage({
-      id: "quality-question",
-      sessionId: session.id,
-      runId: source.id,
-      role: "user",
-      status: "complete",
-      content: "What is the answer?",
-    });
-    runtime.database.insertMessage({
-      id: "quality-answer",
-      sessionId: session.id,
-      runId: source.id,
-      role: "assistant",
-      status: "complete",
-      content: "Original answer",
-    });
-    const qualityBranch = runtime.database.listBranches(session.id).find((branch) => branch.active);
-    runtime.database.db
-      .prepare("UPDATE conversation_branches SET head_message_id=?,updated_at=? WHERE id=?")
-      .run("quality-answer", Date.now(), qualityBranch?.id);
-    runtime.database.updateRun(source.id, { status: "completed" });
-    const review = runtime.reviewMessage("quality-answer", "Check completeness");
-    expect((await waitForRunTerminal(runtime, review.id)).status).toBe("completed");
-    expect((await runtime.listTrace({ runId: review.id })).spans).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: "review", kind: "run", status: "ok", runId: review.id }),
-        expect.objectContaining({ name: "model.review", kind: "model", status: "ok", runId: review.id }),
-      ]),
-    );
-    expect(runtime.listQualityAssessments(review.id)[0]).toMatchObject({
-      targetMessageId: "quality-answer",
-      passed: false,
-      iteration: 1,
-    });
-    expect(runtime.listMessageQuality("quality-answer")).toEqual([
-      expect.objectContaining({ kind: "review", runId: review.id, status: "completed" }),
-    ]);
-    const improve = runtime.improveMessage("quality-answer");
-    const improvedRun = await waitForRunTerminal(runtime, improve.id);
-    expect(improvedRun.status).toBe("completed");
-    expect((await runtime.listTrace({ runId: improve.id })).spans).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: "improve", kind: "run", status: "ok", runId: improve.id }),
-        expect.objectContaining({ name: "model.improve", kind: "model", status: "ok", runId: improve.id }),
-      ]),
-    );
-    const revision = improvedRun.resultMessageId
-      ? runtime.database.getMessage(improvedRun.resultMessageId)
-      : undefined;
-    expect(revision).toMatchObject({
-      content: "Answer with the missing detail",
-      parentMessageId: "quality-answer",
-    });
-    expect(runtime.getSnapshot(session.id).transcript.map((item) => item.id)).not.toContain(revision?.id);
-    expect(runtime.database.getMessage("quality-answer").content).toBe("Original answer");
-    expect(runtime.listMessageQuality("quality-answer").map((item) => item.kind)).toEqual([
-      "review",
-      "improve",
-    ]);
-    expect(runtime.listMessageQuality("quality-answer").at(-1)?.resultContent).toBe(
-      "Answer with the missing detail",
-    );
-    expect(runtime.listSessionMessageQuality(session.id)).toMatchObject({
-      "quality-answer": [
-        expect.objectContaining({ kind: "review", runId: review.id }),
-        expect.objectContaining({ kind: "improve", runId: improve.id }),
-      ],
-    });
-    expect(() => runtime.reviewMessage("quality-question")).toThrow("assistant message");
-    const reset = runtime.improveMessage(revision?.id as string, { reset: true });
-    const resetRun = await waitForRunTerminal(runtime, reset.id);
-    expect(resetRun.status, resetRun.error).toBe("completed");
-    const resetRunResult = resetRun.resultMessageId
-      ? runtime.database.getMessage(resetRun.resultMessageId)
-      : undefined;
-    expect(resetRunResult).toMatchObject({
-      content: "Reset improvement from original",
-      parentMessageId: "quality-answer",
-    });
-    expect(runtime.getSnapshot(session.id).transcript.map((item) => item.id)).not.toContain(
-      resetRunResult?.id,
-    );
-    const noFeedbackReview = runtime.reviewMessage("quality-answer");
-    expect((await waitForRunTerminal(runtime, noFeedbackReview.id)).status).toBe("completed");
   });
 
   it("reloads validated dynamic configuration atomically and defers unsafe active changes", async () => {

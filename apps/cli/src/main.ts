@@ -281,23 +281,6 @@ async function chat(): Promise<void> {
       render(`Compacted through message ${summary.throughSequence}`);
       return;
     }
-    if (value === "/review" || value.startsWith("/review ")) {
-      const target = [...snapshot.transcript].reverse().find((item) => item.role === "assistant");
-      if (!target) throw new Error("No assistant answer is available to review");
-      await client.reviewMessage(target.id, value.slice(7).trim());
-      refresh("Review queued");
-      return;
-    }
-    if (value === "/improve" || value.startsWith("/improve ")) {
-      const target = [...snapshot.transcript].reverse().find((item) => item.role === "assistant");
-      if (!target) throw new Error("No assistant answer is available to improve");
-      await client.improveMessage(target.id, {
-        force: value.includes("--force"),
-        reset: value.includes("--reset"),
-      });
-      refresh("Improvement queued");
-      return;
-    }
     if (value === "/queue status") {
       render(`Queue mode: ${active.queueMode}`);
       return;

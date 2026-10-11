@@ -1,7 +1,7 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>UmaAgent 前端设计规格</title><style>body{margin:0;background:#F5F3ED;color:#17212B;font:16px/1.7 "Microsoft YaHei","Segoe UI",sans-serif}a{color:#365F45}aside{position:fixed;width:244px;top:0;bottom:0;padding:24px 16px;overflow:auto;background:#FFFFFF}aside a{display:block;padding:8px;font-size:13px}main{margin-left:280px;padding:32px;max-width:1440px}img{max-width:100%;max-height:900px;display:block;margin:20px auto;background:white;border:1px solid #7B8A98}.table{overflow:auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #7B8A98;padding:12px;vertical-align:top;min-width:110px}h2{margin-top:70px;border-top:2px solid #7B8A98;padding-top:24px}code{word-break:break-word;background:#E6EFE7;padding:2px 5px}@media(max-width:800px){aside{position:static;width:auto;max-height:230px}main{margin:0;padding:16px}}</style><aside><strong>UmaAgent</strong><p>当前设计 · 界面索引</p><a href="#um-01">UM-01 登录与创建账户</a><a href="#um-02">UM-02 一次性令牌保存</a><a href="#um-03">UM-03 工作台与会话导航</a><a href="#um-04">UM-04 会话重命名与删除</a><a href="#um-05">UM-05 对话输入与附件草稿</a><a href="#um-06">UM-06 回复、引用与消息操作</a><a href="#um-07">UM-07 模型、思考与队列策略</a><a href="#um-08">UM-08 附件预览与下载</a><a href="#um-09">UM-09 消息审查与改进</a><a href="#um-10">UM-10 运行计划、确认与取消</a><a href="#um-11">UM-11 工具审批</a><a href="#um-12">UM-12 消息队列与编辑</a><a href="#um-13">UM-13 后台任务</a><a href="#um-14">UM-14 调度列表与开关</a><a href="#um-15">UM-15 新建调度</a><a href="#um-16">UM-16 调度运行历史</a><a href="#um-17">UM-17 知识库列表与检索</a><a href="#um-18">UM-18 添加知识来源</a><a href="#um-19">UM-19 Skill与MCP资源</a><a href="#um-20">UM-20 候选记忆审核</a><a href="#um-21">UM-21 质量中心</a><a href="#um-22">UM-22 账号执行权限、Profile 与外观</a><a href="#um-23">UM-23 账户切换、配置与更新</a><a href="#um-24">UM-24 咸鱼工作台与会话</a><a href="#um-25">UM-25 咸鱼登录与扫码状态</a><a href="#um-26">UM-26 渠道服务与自动回复</a><a href="#um-27">UM-27 渠道草稿与人工发送</a><a href="#um-28">UM-28 快捷命令与命令结果</a><a href="#um-29">UM-29 平板、更多与离线状态</a><a href="#um-30">UM-30 运行诊断报告</a><a href="#um-31">UM-31 评测历史与用例详情</a><a href="#um-32">UM-32 只读优化提案</a></aside><main><h1>UmaAgent 前端设计实施规格</h1>
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>UmaAgent 前端设计规格</title><style>body{margin:0;background:#F5F3ED;color:#17212B;font:16px/1.7 "Microsoft YaHei","Segoe UI",sans-serif}a{color:#365F45}aside{position:fixed;width:244px;top:0;bottom:0;padding:24px 16px;overflow:auto;background:#FFFFFF}aside a{display:block;padding:8px;font-size:13px}main{margin-left:280px;padding:32px;max-width:1440px}img{max-width:100%;max-height:900px;display:block;margin:20px auto;background:white;border:1px solid #7B8A98}.table{overflow:auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #7B8A98;padding:12px;vertical-align:top;min-width:110px}h2{margin-top:70px;border-top:2px solid #7B8A98;padding-top:24px}code{word-break:break-word;background:#E6EFE7;padding:2px 5px}@media(max-width:800px){aside{position:static;width:auto;max-height:230px}main{margin:0;padding:16px}}</style><aside><strong>UmaAgent</strong><p>当前设计 · 界面索引</p><a href="#um-01">UM-01 登录与创建账户</a><a href="#um-02">UM-02 一次性令牌保存</a><a href="#um-03">UM-03 工作台与会话导航</a><a href="#um-04">UM-04 会话重命名与删除</a><a href="#um-05">UM-05 对话输入与附件草稿</a><a href="#um-06">UM-06 回复、引用与消息操作</a><a href="#um-07">UM-07 模型、思考与队列策略</a><a href="#um-08">UM-08 附件预览与下载</a><a href="#um-10">UM-10 运行计划、确认与取消</a><a href="#um-11">UM-11 工具审批</a><a href="#um-12">UM-12 消息队列与编辑</a><a href="#um-13">UM-13 后台任务</a><a href="#um-14">UM-14 调度列表与开关</a><a href="#um-15">UM-15 新建调度</a><a href="#um-16">UM-16 调度运行历史</a><a href="#um-17">UM-17 知识库列表与检索</a><a href="#um-18">UM-18 添加知识来源</a><a href="#um-19">UM-19 Skill与MCP资源</a><a href="#um-20">UM-20 候选记忆审核</a><a href="#um-21">UM-21 质量中心</a><a href="#um-22">UM-22 账号执行权限、Profile 与外观</a><a href="#um-23">UM-23 账户切换、配置与更新</a><a href="#um-24">UM-24 咸鱼工作台与会话</a><a href="#um-25">UM-25 咸鱼登录与扫码状态</a><a href="#um-26">UM-26 渠道服务与自动回复</a><a href="#um-27">UM-27 渠道草稿与人工发送</a><a href="#um-28">UM-28 快捷命令与命令结果</a><a href="#um-29">UM-29 平板、更多与离线状态</a><a href="#um-30">UM-30 运行诊断报告</a><a href="#um-31">UM-31 评测历史与用例详情</a><a href="#um-32">UM-32 只读优化提案</a></aside><main><h1>UmaAgent 前端设计实施规格</h1>
 <p>通用Agent对话、执行计划、后台任务和管理员渠道工作台的独立前端实施合同。</p>
 <blockquote>
-<p>文档修订日期：2026-10-11。本文记录当前 Protocol v16、HTTP <code>/api/v16</code>、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 <a href="../release-acceptance.md">发布验收</a> 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。</p>
+<p>文档修订日期：2026-10-12。本文记录当前 Protocol v16、HTTP <code>/api/v16</code>、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 <a href="../release-acceptance.md">发布验收</a> 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。</p>
 </blockquote>
 <p><a href="../frontend-design/index.html">图文阅读版与界面索引</a> · <a href="../frontend-design/spec.json">结构化界面规格</a> · <a href="../release-acceptance.md">审查与验收记录</a></p>
 <h2>1. 权威顺序与实施范围</h2>
@@ -398,11 +398,6 @@
 <td>对话</td>
 </tr>
 <tr>
-<td>UM-09</td>
-<td>会话</td>
-<td>对话</td>
-</tr>
-<tr>
 <td>UM-10</td>
 <td>会话</td>
 <td>对话</td>
@@ -630,12 +625,6 @@
 <td>附件预览与下载</td>
 <td>Web, Android</td>
 <td><code>apps/web/src/Markdown.tsx</code></td>
-</tr>
-<tr>
-<td><a href="#um-09">UM-09</a></td>
-<td>消息审查与改进</td>
-<td>Web, Android</td>
-<td><code>apps/web/src/components/QualityPanel.tsx</code></td>
 </tr>
 <tr>
 <td><a href="#um-10">UM-10</a></td>
@@ -1484,7 +1473,7 @@
 <p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
 <p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
 <p><strong>布局</strong>：聊天模板：顶部会话标题与最多2条上下文信息；用户消息右对齐、助手回答左对齐；消息内容最大960宽，手机铺满减32；正文独立滚动，输入面板按多行内容增长并限制最大高度，固定在操作栏上方；其余字段在消息关联详情中展开。空态不生成假历史消息。</p>
-<p><strong>数据绑定</strong>：<code>apps/web/src/components/ResponseCard.tsx</code>。Response/TranscriptItem；quality操作API。</p>
+<p><strong>数据绑定</strong>：<code>apps/web/src/components/ResponseCard.tsx</code>。Response/TranscriptItem；复制、查看引用、编辑等消息操作。</p>
 <div class="table"><table>
 <thead>
 <tr>
@@ -1602,48 +1591,6 @@
 </tr>
 </tbody></table>
 </div><p><img loading="lazy" src="../design-assets/final/UM-06-i02.svg" alt="UM-06.I02 操作前、处理中、成功与失败"></p>
-<p><strong>UM-06.I03 — 审查与改进</strong></p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>条目</th>
-<th>精确定义</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>触发与前置</td>
-<td>用户点击“审查与改进”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
-</tr>
-<tr>
-<td>执行类别</td>
-<td>write（按G13解释）</td>
-</tr>
-<tr>
-<td>事件/调用</td>
-<td><code>reviewMessage / improveMessage</code></td>
-</tr>
-<tr>
-<td>处理中</td>
-<td>“审查与改进”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
-</tr>
-<tr>
-<td>成功</td>
-<td>进入UM-09，质量运行按messageId关联，不覆盖原回答。</td>
-</tr>
-<tr>
-<td>失败/重试</td>
-<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
-</tr>
-<tr>
-<td>返回/取消</td>
-<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
-</tr>
-<tr>
-<td>验收</td>
-<td>Given 操作前示例数据；When 触发“审查与改进”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
-</tr>
-</tbody></table>
-</div><p><img loading="lazy" src="../design-assets/final/UM-06-i03.svg" alt="UM-06.I03 操作前、处理中、成功与失败"></p>
 <h3>页面验收</h3>
 <p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
 <p><a id="um-07"></a></p>
@@ -1902,132 +1849,6 @@
 </tr>
 </tbody></table>
 </div><p><img loading="lazy" src="../design-assets/final/UM-08-i02.svg" alt="UM-08.I02 操作前、处理中、成功与失败"></p>
-<h3>页面验收</h3>
-<p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
-<p><a id="um-09"></a></p>
-<h2>UM-09 · 消息审查与改进</h2>
-<p><strong>入口与返回</strong>：UM-06更多→审查或改进。</p>
-<p><strong>角色/设备</strong>：已登录用户；Web, Android。</p>
-<p><strong>导航归属</strong>：电脑端：会话；Android：对话。返回沿本页规定入口恢复；从系统通知进入时无应用内历史则返回相应导航首页。</p>
-<p><strong>布局</strong>：使用§3设备壳。字段按表从上到下；主体单独滚动，操作区固定在主体底部；主次操作为交互表前两项，其余为右上“更多操作”。</p>
-<p><strong>数据绑定</strong>：<code>apps/web/src/components/QualityPanel.tsx</code>。reviewMessage/improveMessage/listMessageQuality。</p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>控件（从上到下）</th>
-<th>类型</th>
-<th>图中示例</th>
-<th>校验/显示合同</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>目标消息</td>
-<td>record</td>
-<td>资料总结回答</td>
-<td>固定messageId</td>
-</tr>
-<tr>
-<td>审查反馈</td>
-<td>textarea</td>
-<td>补充引用并精简结论</td>
-<td>仅审查使用，可空；UI最多2000字符；改进不提交此字段</td>
-</tr>
-<tr>
-<td>质量结果</td>
-<td>record</td>
-<td>完整性：待检查</td>
-<td>没有结果时不显示分数</td>
-</tr>
-</tbody></table>
-</div><p><strong>页面规则</strong>：进行中禁止同消息并发质量请求；失败不覆盖先前报告；评测百分比分母0时显示未提供。</p>
-<p><strong>空态/加载/错误</strong>：首次读取显示“正在加载消息审查与改进”；成功无记录显示“暂无消息审查与改进记录”并保留入口操作。失败就地显示错误区；旧数据标“上次同步”；离线远端写操作禁用；本地查看、返回、复制、外观保存和已明确允许的配置保存仍可用。</p>
-<p><img loading="lazy" src="../design-assets/final/UM-09-web.svg" alt="UM-09 Web 布局"></p>
-<p><img loading="lazy" src="../design-assets/final/UM-09-android.svg" alt="UM-09 Android 布局"></p>
-<h3>交互合同与状态图</h3>
-<p><strong>UM-09.I01 — 执行审查</strong></p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>条目</th>
-<th>精确定义</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>触发与前置</td>
-<td>用户点击“执行审查”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
-</tr>
-<tr>
-<td>执行类别</td>
-<td>write（按G13解释）</td>
-</tr>
-<tr>
-<td>事件/调用</td>
-<td><code>reviewMessage(messageId,feedback)</code></td>
-</tr>
-<tr>
-<td>处理中</td>
-<td>“执行审查”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
-</tr>
-<tr>
-<td>成功</td>
-<td>显示独立审查运行与历史，成功后展开证据。</td>
-</tr>
-<tr>
-<td>失败/重试</td>
-<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
-</tr>
-<tr>
-<td>返回/取消</td>
-<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
-</tr>
-<tr>
-<td>验收</td>
-<td>Given 操作前示例数据；When 触发“执行审查”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
-</tr>
-</tbody></table>
-</div><p><img loading="lazy" src="../design-assets/final/UM-09-i01.svg" alt="UM-09.I01 操作前、处理中、成功与失败"></p>
-<p><strong>UM-09.I02 — 提交改进</strong></p>
-<div class="table"><table>
-<thead>
-<tr>
-<th>条目</th>
-<th>精确定义</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>触发与前置</td>
-<td>用户点击“提交改进”；字段校验通过、在线、权限允许且此动作无在途请求。</td>
-</tr>
-<tr>
-<td>执行类别</td>
-<td>write（按G13解释）</td>
-</tr>
-<tr>
-<td>事件/调用</td>
-<td><code>improveMessage(messageId,{})</code></td>
-</tr>
-<tr>
-<td>处理中</td>
-<td>“提交改进”禁用并显示“处理中…”；本页对象保留，禁止并发重复提交。</td>
-</tr>
-<tr>
-<td>成功</td>
-<td>生成独立改进运行，保留原回答和历史。</td>
-</tr>
-<tr>
-<td>失败/重试</td>
-<td>错误区显示具体原因；保留本页输入，按G02先核实结果再手动重试。</td>
-</tr>
-<tr>
-<td>返回/取消</td>
-<td>返回触发页面，恢复原焦点/滚动；未保存输入按G03确认；在途操作不被伪装取消。</td>
-</tr>
-<tr>
-<td>验收</td>
-<td>Given 操作前示例数据；When 触发“提交改进”；Then 只有真实回执后呈现上述结果。另模拟失败、双击、离开页面，核对G02/G03。</td>
-</tr>
-</tbody></table>
-</div><p><img loading="lazy" src="../design-assets/final/UM-09-i02.svg" alt="UM-09.I02 操作前、处理中、成功与失败"></p>
 <h3>页面验收</h3>
 <p>本页每个字段、每个动作和全部失败分支都有对应UI；320宽和200%字号可滚动到所有控件。不得用空值模拟成功。绑定见本页来源文件；实现检查本页所有事件ID。</p>
 <p><a id="um-10"></a></p>
