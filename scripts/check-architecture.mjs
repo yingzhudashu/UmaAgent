@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
@@ -28,6 +29,12 @@ for (const root of roots) await walk(root);
 
 const violations = [];
 const sizeDebt = [];
+const trackedArtifacts = execFileSync("git", ["ls-files", "artifacts"], { encoding: "utf8" })
+  .trim()
+  .split(/\r?\n/)
+  .filter(Boolean);
+if (trackedArtifacts.length)
+  violations.push(`tracked process artifacts are not allowed: ${trackedArtifacts.join(", ")}`);
 for (const file of files) {
   const content = await readFile(file, "utf8");
   const lines = content.split(/\r?\n/).length;

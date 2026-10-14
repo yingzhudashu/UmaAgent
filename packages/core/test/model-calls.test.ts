@@ -31,7 +31,7 @@ describe("ModelCallService", () => {
     "terminates trace when %s fails without repeating accounting writes",
     async (failure) => {
       const { service, database, completeSimple } = fixture();
-      const span = { finish: vi.fn(), setAttributes: vi.fn() };
+      const span = { finish: vi.fn(), setAttributes: vi.fn(), addEvent: vi.fn() };
       const error = new Error("database unavailable");
       if (failure === "start")
         database.startModelCall.mockImplementation(() => {
@@ -100,7 +100,7 @@ describe("ModelCallService", () => {
       messages: [{ role: "user", content: "request", timestamp: 1 }],
       signal: new AbortController().signal,
     });
-    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ timeoutMs: 120_000 });
+    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ timeoutMs: 300_000 });
   });
 
   it("turns a provider timeout into a terminal model error", async () => {
@@ -215,6 +215,36 @@ describe("ModelCallService", () => {
       "call-1",
       expect.objectContaining({ status: "failed", error: "Stream ended without finish_reason" }),
     );
+  });
+
+  it("records a trace event for each missing finish marker retry", async () => {
+    const { service, completeSimple } = fixture();
+    const span = { finish: vi.fn(), setAttributes: vi.fn(), addEvent: vi.fn() };
+    completeSimple
+      .mockResolvedValueOnce({
+        ...fauxAssistantMessage(""),
+        content: [],
+        stopReason: "error",
+        errorMessage: "Stream ended without finish_reason",
+      })
+      .mockResolvedValueOnce({
+        ...fauxAssistantMessage("recovered"),
+        stopReason: "stop",
+      });
+    await service.complete({
+      runId: "run",
+      sessionId: "session-a",
+      role: "fast",
+      purpose: "classify",
+      systemPrompt: "Return text",
+      messages: [{ role: "user", content: "request", timestamp: 1 }],
+      signal: new AbortController().signal,
+      trace: { child: () => span } as never,
+    });
+    expect(span.addEvent).toHaveBeenCalledWith("model.retry", {
+      attempt: 1,
+      reason: "missing_finish_reason",
+    });
   });
 
   it("forwards compact JSON control-call options to OpenAI-compatible providers", async () => {

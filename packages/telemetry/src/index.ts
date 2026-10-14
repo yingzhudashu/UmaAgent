@@ -305,6 +305,8 @@ export class TelemetryStore {
       query.from === undefined &&
       query.to === undefined &&
       !query.name &&
+      !query.service &&
+      !query.kind &&
       !query.status
     )
       throw new Error("Trace query requires a filter");
@@ -348,6 +350,14 @@ export class TelemetryStore {
     if (query.name) {
       clauses.push("instr(name,?) > 0");
       params.push(query.name);
+    }
+    if (query.service) {
+      clauses.push("service=?");
+      params.push(query.service);
+    }
+    if (query.kind) {
+      clauses.push("kind=?");
+      params.push(query.kind);
     }
     const values = this.prepareQuery(
       `SELECT * FROM spans WHERE ${clauses.join(" AND ")} ORDER BY started_at,span_id LIMIT ? OFFSET ?`,

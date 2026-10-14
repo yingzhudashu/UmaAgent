@@ -1,6 +1,6 @@
 # UmaAgent 架构与质量约束
 
-当前 Core 1.3.0，Android 1.4.3（16），Protocol v16，HTTP `/api/v16`，业务 schema 27。接口与数据库只支持当前版本；旧数据库不受当前版本支持，服务启动拒绝版本不匹配的数据库，不执行迁移。
+当前 Core 1.3.0，Android 源码 1.4.3（versionCode 17；正式签名 APK 尚未发布），Protocol v16，HTTP `/api/v16`，业务 schema 27。接口与数据库只支持当前版本；旧数据库不受当前版本支持，服务启动拒绝版本不匹配的数据库，不执行迁移。
 
 ## 职责与事实源
 
@@ -31,6 +31,8 @@ Android 流式状态按 4ms 窗口合并发布（上限预算 50ms），终态�
 Trace 与资源写入 UMA_TELEMETRY_DIR/telemetry.db，业务数据写入 state.db。HTTP、排队、Run、模型、工具、审批和 Worker 通过 W3C traceparent 关联。Span 使用单调时钟计时，成功、失败、取消和关闭都有终结路径。只保存脱敏属性与耗时，不保存 prompt、模型正文、凭据或原始工具参数。
 
 SQLite 遥测写入由独立 Worker 批量提交。每进程每路径共享 Writer，使用引用计数关闭；队列容量包含排队和在途操作，上限 8192；累计入队达到 256 条或等待 100ms 即提交，逻辑事务不可拆分丢弃。查询前 flush 保证已提交写入可见；写入失败累计计数，不改变业务结果。Worker 无响应时 15 秒 watchdog 终结等待并累计丢失数。
+
+Trace 查询过滤条件包括 Run、Trace、时间、状态、名称、服务和 Span kind。服务端先做账号权限和 Run 子树限制，再执行分页与祖先深度计算；分页返回稳定的 `nextOffset`、`rootSpanId` 和每个 Span 的 `depth`。维护任务在数据库内按小时聚合超过 90 天的已结束 Span，并保留一年聚合数据；业务数据库、历史用户数据和附件不参与该清理。
 
 ## 工程门禁
 

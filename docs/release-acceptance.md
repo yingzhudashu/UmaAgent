@@ -1,12 +1,33 @@
 # UmaAgent 当前候选验收
 
-验收对象：Core 1.3.0、Android 源码 1.4.3（versionCode 16；APK 尚未发布）、Protocol v16、HTTP `/api/v16`、业务 SQLite schema 27。本文只记录当前候选的可复核结果；历史日志、截图和隔离数据库仍保存在 `artifacts/acceptance/`，不替代当前结果。
+## 2026-10-15 Trace、前端与全链路复核
+
+本轮在不改变 Protocol v16、业务 schema 27 和历史用户数据的前提下，补充 Trace 按 `service`/`kind` 的服务端过滤，并验证过滤先于分页；非法状态、名称、服务和阶段查询会直接返回 400。遥测仍使用独立 telemetry.db、有限批量 Worker、脱敏和重启 `IncompleteSpan` 终结逻辑。已从 Git 删除历史 APK、截图和过程性 `artifacts` 文件；当前架构门禁禁止重新跟踪该类产物。真实用户目录未纳入 Git，也未被本轮测试写入。
+
+### 本轮实际验收记录
+
+| 项目 | 实测结果 |
+| --- | --- |
+| 静态检查 | `npm run check` 通过；架构检查扫描 224 个源码文件，文档契约覆盖 14 个 Markdown 文件；Biome 与 TypeScript 通过 |
+| 单元测试与覆盖率 | `npm run test:coverage`：59 个文件、350 项通过；语句 81.96%、分支 73.90%、函数 76.49%、行 84.73% |
+| 完整构建 | 本轮 `npm run build` 通过，包含 Web 生产包和各 Worker；`npm run build:web:embed` 通过，嵌入版 CSS 118.62 KiB、入口 JS 543.32 KiB |
+| Android 编译、Faux、Web E2E | 本轮 `npm run check:android` 通过；Faux 评测 6/6；完整 Web E2E 38/38，含 Trace 筛选、Enter/Space disclosure、结果播报、清除筛选和 320–2560px 窄屏布局回归 |
+| 前端设计 | 本轮 `render.py` 生成 31 页、82 项交互和 149 张图；`validate.py` 31 页、82 项动作、149 张图、0 问题。校验限于结构、链接、图稿及语义检查，不表示目标设备或逐像素验收 |
+| 固定性能 | 本轮单独运行 `npm run test:perf`：API P95 5.52 ms、事件分页 P95 1.94 ms、RSS 峰值 111,357,952 B、双库 WAL 峰值 2,253,704 B、CPU 核心等效平均/峰值 3.1129%/3.1129%、事件循环 P95 30.36 ms；均未越过预算 |
+| Faux soak | 通过；`artifacts/acceptance/soak-1791991525766/result.json`：运行 14,404,242 ms（约 4 小时）、2626 条消息、游标 31,548、RSS 峰值 153,202,688 B、双库 WAL 峰值 2,529,744 B；基线 RSS 112,005,120 B，增长约 36.8%，游标连续且没有重复调度 |
+| Trace 服务端筛选 | Server 路由在筛选前验证 Run 所属权，并校验必须有过滤条件、状态、长度及分页边界；Server/Telemetry 覆盖组合筛选、筛选后分页、无过滤/非法状态拒绝、账号/Run 子树隔离 |
+| 用户数据盘点 | `users/` 含 574 个空目录、未发现文件；项目根 `state/`、`backups/` 不存在；未读取或修改用户数据。忽略目录 `artifacts/acceptance/` 仍含历史证据与过程文件，未删除其中内容 |
+| 真实模型 | 本机已使用隔离配置显式运行 smoke；模型列表诊断 HTTP 200，但两次隔离流式请求均以 `provider_error: terminated` 失败且 0 token。按故障规则停止重复请求；真实模型主链路、评测、性能及 soak 未验收 |
+
+Web 的 Trace 面板当前按 Run 查询，提供 service、kind、status、name 和最近时间窗筛选，文本输入防抖后请求；阶段按服务端分页展示，带层级缩进、语义状态色、空结果、错误重试和复制反馈，并以 live region 播报结果。新增交互已由 Faux Web E2E 在桌面和 320–2560px 视口验证，前端规格与生成的设计索引已同步。读屏器专项、真实设备视觉验收仍未完成。
+
+验收对象：Core 1.3.0、Android 源码 1.4.3（versionCode 17；正式签名 APK 尚未发布）、Protocol v16、HTTP `/api/v16`、业务 SQLite schema 27。本文只记录当前候选的可复核结果；历史日志、截图和隔离数据库仍保存在 `artifacts/acceptance/`，不替代当前结果。
 
 ## 当前结论
 
-**通过（Server/Web 当前候选）；Android APK 发布阻塞。** Windows Native Core、Web/PWA、真实 Provider 主链路、真实 Embedding 隔离 smoke、数据隔离、Trace 和性能门禁均已通过。Android 新源码通过 Gradle JVM 测试与 instrumentation 编译；六配置设备矩阵是上一版 APK 的证据，不能替代本次设备验收或新 APK 发布。架构门禁已通过，六个登记的大文件持续受尺寸基线监测，其中五个当前超过 900 行，CLI `main.ts` 为 894 行。Docker、Linux、实体真机、真实渠道、大规模知识库索引吞吐和无障碍专项属于目标环境适配证据，列为非阻塞缺口；启用对应部署或发布面前必须补做。
+**本地和 Faux 验收通过；真实模型与 Android APK 发布仍有阻塞。** Windows Native Core、Web/PWA、数据隔离、Trace、Faux 性能门禁和本轮四小时 Faux soak 已通过；Trace 面板改动后的完整 Web E2E 为 38/38。四小时 soak 完成 2626 条消息，RSS 峰值 153,202,688 B、双库 WAL 峰值 2,529,744 B，游标连续，脚本检查无重复调度。真实 Provider smoke 的模型列表诊断 HTTP 200，但两次隔离流式请求均以 `provider_error: terminated` 结束且无 token，未继续重放；真实模型主链路、评测、性能和 soak 因此不能标记通过。Android 新源码通过 Gradle JVM 测试与 instrumentation 编译；六配置设备矩阵是上一版 APK 的证据，不能替代本次设备验收或签名 APK 发布。架构门禁已通过，六个登记的大文件持续受尺寸基线监测，其中五个当前超过 900 行，CLI `main.ts` 为 894 行。Docker、Linux、实体真机、真实渠道、大规模知识库索引吞吐和无障碍专项属于目标环境适配证据，列为目标环境发布前的待验收项。
 
-当前候选真实 Provider smoke、3 项评测、20 请求性能和短 soak 已通过，使用隔离配置、脚本创建的临时 state、workspace、账号和令牌。20 请求性能 p50/p95/p99 为 6.31/18.50/18.81ms，RSS 峰值 121,352,192B，WAL 峰值 2,270,184B；短 soak 6 次请求全部完成，耗时 263.21s，RSS 峰值 117,612,544B，WAL 峰值 2,245,464B。真实 Embedding 隔离 smoke 已通过：`node --env-file=.env scripts/real-embedding-smoke.mjs`（`UMA_REAL_API=1`，两条输入、1024 维、315ms）。未启动闲鱼 Adapter，也未发送闲鱼消息。
+真实模型脚本只使用隔离配置、临时 state、workspace、账号和令牌；失败后脚本清理临时目录，未写入历史用户数据。当前可复核的真实 Embedding 隔离 smoke 仍为两条输入、1024 维、315ms；它不能替代聊天模型验收。未启动闲鱼 Adapter，也未发送闲鱼消息。
 
 ## 服务器部署结果
 
@@ -34,7 +55,7 @@ Server release `20261012011000-d83395b` 已 promote 到 `/opt/uma-agent/current`
 
 Android 源码移除回复审查/改进入口并通过 `npm run check:android`。本次另执行 `:app:assembleRelease`，构建成功但只生成 `app-release-unsigned.apk`；Gradle `signingReport` 的 release 配置为 `Config: null`，`apksigner` 无法验证 unsigned 产物。当前机器没有配置正式签名环境变量，服务器发布目录也未发现正式 keystore；依据[Android APK 发布规则](deployment.md#61-发布前置条件)，不能用 Debug 签名或新证书替代正式签名。
 
-生产 `/srv/www/robotclaw/app/latest.json` 仍指向 1.4.1（versionCode 15，release `15-3be11fc`）；`releases.json` 的最高历史版本为 1.4.3（versionCode 16，release `16-cf44345`）。当前源码 1.4.3（versionCode 16）因此不能作为升级版本发布，补齐原正式 keystore 后必须提升到 versionCode 17 并递增 versionName，再比较签名指纹、验证清单和 APK 哈希后原子发布。已安装客户端更新前仍会显示旧按钮；Server 当前代码已移除相应路由，自动化测试确认该 API 返回 404。实体 Android 设备尚未连接，正式 APK 发布前还须完成真实覆盖安装、登录、进程重启、历史读取和消息发送验收。当前 Android 发布结论为**阻塞**，未将 unsigned APK 上传或切换到线上。
+生产 `/srv/www/robotclaw/app/latest.json` 仍指向 1.4.1（versionCode 15，release `15-3be11fc`）；`releases.json` 的最高历史版本为 1.4.3（versionCode 16，release `16-cf44345`）。当前源码已更新为 1.4.3（versionCode 17），但正式签名 keystore 尚未配置，无法生成可覆盖已安装版本的发布 APK；取得原正式 keystore 后仍须比较签名指纹、验证清单和 APK 哈希，再由获授权的发布流程原子发布。已安装客户端更新前仍会显示旧按钮；Server 当前代码已移除相应路由，自动化测试确认该 API 返回 404。实体 Android 设备尚未连接，正式 APK 发布前还须完成真实覆盖安装、登录、进程重启、历史读取和消息发送验收。当前 Android 发布结论为**阻塞**，未将 unsigned APK 上传或切换到线上。
 
 ## 当前契约
 
@@ -50,12 +71,12 @@ Android 源码移除回复审查/改进入口并通过 `npm run check:android`�
 | 架构检查 | 通过（受控债务） | `npm run check:architecture` 通过；六个文件登记在尺寸基线，其中五个当前超过 900 行，CLI `main.ts` 为 894 行；超基线或未登记的大文件会失败 |
 | 文档契约检查 | 通过 | `npm run check:docs-contracts`；14 个 Markdown 文件、版本/schema/命令/本地链接一致 |
 | Biome 与 TypeScript | 通过 | `npm run check` |
-| 单元测试与覆盖率 | 通过 | 当前候选 `npm run test:coverage`；59 个文件、346 项，语句 81.86%、分支 73.58%、函数 76.54%、行 84.66% |
+| 单元测试与覆盖率 | 通过 | 当前候选 `npm run test:coverage`；59 个文件、350 项，语句 81.96%、分支 73.90%、函数 76.49%、行 84.73% |
 | 完整构建 | 通过 | 当前候选 `npm run build`；所有 workspace 编译、Web 生产包及 Workers 构建通过 |
-| 嵌入 Web 构建 | 通过 | 当前候选 `npm run build:web:embed`；CSS 113.88 KiB，入口 JS 536.39 KiB |
+| 嵌入 Web 构建 | 通过 | 当前候选 `npm run build:web:embed`；CSS 118.62 KiB，入口 JS 543.32 KiB |
 | Faux 评测 | 通过 | 当前候选 `npm run test:eval:faux`；6/6 |
-| Faux 四小时 soak | 通过 | `artifacts/acceptance/soak-1791685462712/result.json`；约 4 小时、2615 条消息、游标 31416、RSS 峰值 158,969,856B、双库 WAL 峰值 2,661,584B |
-| Web 全量 E2E | 通过 | 当前候选 `npm run test:web:e2e`；37/37，含助手回复菜单不再展示审查/改进的回归检查 |
+| Faux 四小时 soak | 通过 | 当前样本 `artifacts/acceptance/soak-1791991525766/result.json`：约 4 小时、2626 条消息、游标 31548、RSS 峰值 153,202,688B、双库 WAL 峰值 2,529,744B；历史样本 `artifacts/acceptance/soak-1791685462712/result.json` 亦通过 |
+| Web 全量 E2E | 通过 | 当前候选 `npm run test:web:e2e`；38/38，含 Trace 筛选、窄屏无溢出、助手回复菜单不再展示审查/改进的回归检查 |
 | Android JVM/instrumentation 编译 | 通过 | 当前候选 `npm run check:android`；Gradle Debug 单测与 instrumentation Kotlin 编译通过 |
 | 前端设计产物 | 通过 | 当前候选重新生成并校验；31 页面、82 动作、149 图、0 问题 |
 

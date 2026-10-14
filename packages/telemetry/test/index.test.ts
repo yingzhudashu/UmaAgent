@@ -265,6 +265,44 @@ describe("TelemetryStore", () => {
     await store.close();
   });
 
+  it("filters trace pages by service and span kind before pagination", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-filter-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "test");
+    const records = [
+      { spanId: "server-http", service: "server", kind: "http" },
+      { spanId: "core-run", service: "core", kind: "run" },
+      { spanId: "core-tool", service: "core", kind: "tool" },
+    ];
+    for (const record of records) {
+      store.start({
+        traceId: "trace-filter",
+        ...record,
+        name: record.kind,
+        startedAt: 1,
+        attributes: {},
+      });
+      store.finish({
+        traceId: "trace-filter",
+        ...record,
+        name: record.kind,
+        status: "ok",
+        startedAt: 1,
+        endedAt: 2,
+        durationMs: 1,
+        attributes: {},
+        events: [],
+      });
+    }
+    await store.flush();
+    expect(store.listSpans({ traceId: "trace-filter", service: "core", limit: 1 }).spans).toHaveLength(1);
+    expect(store.listSpans({ traceId: "trace-filter", service: "core", limit: 1 }).hasMore).toBe(true);
+    expect(
+      store.listSpans({ traceId: "trace-filter", kind: "tool" }).spans.map((span) => span.spanId),
+    ).toEqual(["core-tool"]);
+    await store.close();
+  });
+
   it("computes tree depth from ancestors outside the current page", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-telemetry-depth-"));
     roots.push(root);

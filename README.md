@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前 Core 版本为 `1.3.0`，Android 客户端版本为 `1.4.2`（versionCode `16`），协议版本为 `16`，SQLite schema 为 `27`。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前 Core 版本为 `1.3.0`，Android 客户端源码版本为 `1.4.3`（versionCode `17`；正式签名 APK 尚未发布），协议版本为 `16`，SQLite schema 为 `27`。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -127,7 +127,7 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 - `mcpServers`：`stdio` 需要 `command/args`，`http` 需要 Streamable HTTP `url`
 - 非回环 HTTP MCP 应设置 `authTokenEnv`，Core 从该环境变量注入 Bearer Token
 - `runtime.maxParallelSessions`：跨会话并发上限；单会话默认 FIFO，也可在 Session 上设为安全抢占模式
-- `runtime.modelTimeoutMs`：单次模型请求（含供应商重试和流式响应）的硬超时，默认 `120000` 毫秒，防止供应商无响应长期占满队列
+- `runtime.modelTimeoutMs`：每次模型请求（含供应商重试和流式响应）的硬超时，默认 `300000` 毫秒（5 分钟）；超时会中止本次请求，用户取消仍可立即生效。队列等待不计入该时限。已有配置若显式写了 `120000`，仍以该值为准；要放宽时需将配置值改为 `300000`，然后重载或重启 Core
 
 数据库只接受当前 `PRAGMA user_version=27`。版本不匹配会拒绝启动。历史数据库必须先停机、备份并完成匹配版本恢复；运行时无兼容层，其他旧格式不支持。
 
@@ -164,7 +164,7 @@ UmaAgent 只读取一个严格 JSON 配置文件，未知字段会导致启动�
 - `GET /api/v16/admin/config` 只返回模型引用、Role、技能/MCP 状态和配置 revision，不返回凭据
 - `/api/v16/schedules` 调度 CRUD、立即执行与运行历史
 - `GET /api/v16/reports/operations|diagnostics|resources` 脱敏运行、Trace 延迟和 CPU/RSS/WAL 统计
-- `GET /api/v16/traces?runId=<runId>` 查询 Run 的完整持久化 Trace Span 树，也支持按 Trace、时间、状态和名称过滤
+- `GET /api/v16/traces?runId=<runId>` 按 Run 查询持久化 Trace Span，也支持按 Trace、时间、状态、名称、服务和阶段类型过滤；先执行权限隔离，再过滤分页
 - `/api/v16/optimization-proposals` 提供证据、建议和人工接受/拒绝；`/api/v16/optimization-applications` 提供验证、回滚记录
 
 WebSocket 使用 Cookie，或在连接后的第一帧发送 `{ "type": "auth", "token": "..." }`，随后发送 `{ "type": "subscribe", "sessions": [{ "id": "...", "lastSequence": 42 }] }`。快照始终是事实源，客户端使用永久事件游标补齐断线期间的变更。

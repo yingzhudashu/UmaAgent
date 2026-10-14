@@ -23,6 +23,7 @@ CREATE INDEX IF NOT EXISTS spans_run_started ON spans(run_id, started_at, span_i
 CREATE INDEX IF NOT EXISTS spans_started ON spans(started_at);
 CREATE INDEX IF NOT EXISTS spans_status_started ON spans(status, started_at, span_id);
 CREATE INDEX IF NOT EXISTS spans_service_started ON spans(service, started_at, span_id);
+CREATE INDEX IF NOT EXISTS spans_kind_started ON spans(kind, started_at, span_id);
 
 CREATE TABLE IF NOT EXISTS span_events (
   span_id TEXT NOT NULL REFERENCES spans(span_id) ON DELETE CASCADE,

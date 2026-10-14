@@ -166,6 +166,34 @@ describe("builtin tools", () => {
     expect(output).toBe("Attachment created: [script.ps1](uma-attachment://attachment-1)");
   });
 
+  it("copies large attachments without reading their content into the tool result", async () => {
+    const value = await fixture();
+    const sourcePath = join(value.root, "source.txt");
+    await writeFile(sourcePath, Buffer.alloc(401_000, 0x61));
+    value.attachments.set("source", { path: sourcePath, name: "source.txt", mimeType: "text/plain" });
+    const copy = vi.fn(async (attachmentId: string) => {
+      expect(attachmentId).toBe("source");
+      return { id: "copy-1", name: "source.txt" };
+    });
+    const tools = createBuiltinTools({
+      session: value.session,
+      database: value.database as never,
+      knowledge: value.knowledge as never,
+      skills: value.skills as never,
+      workspacePolicy: new WorkspacePolicy([value.root]),
+      toolTimeoutMs: 5_000,
+      search: value.search as never,
+      scheduleManage: value.scheduleManage,
+      memoryWrite: value.memoryWrite as never,
+      attachmentCopyFromSession: copy,
+    });
+
+    expect(text(await execute(tools, "attachment_copy", { attachmentId: "source" }))).toBe(
+      "Attachment copied: [source.txt](uma-attachment://copy-1)",
+    );
+    expect(copy).toHaveBeenCalledOnce();
+  });
+
   it("exposes Xianyu tools only to channel sessions and routes live status queries", async () => {
     const value = await fixture();
     const xianyu = {
@@ -234,6 +262,21 @@ describe("builtin tools", () => {
     );
     await expect(execute(value.tools, "attachment_read", { attachmentId: "binary" })).rejects.toThrow(
       "not readable text",
+    );
+  });
+
+  it("keeps the model-context read limit for oversized text attachments", async () => {
+    const value = await fixture();
+    const largeText = join(value.root, "large.txt");
+    await writeFile(largeText, Buffer.alloc(400_001, 0x61));
+    value.attachments.set("large-text", {
+      path: largeText,
+      name: "large.txt",
+      mimeType: "text/plain",
+    });
+
+    await expect(execute(value.tools, "attachment_read", { attachmentId: "large-text" })).rejects.toThrow(
+      "400 KiB read limit",
     );
   });
 

@@ -452,6 +452,36 @@ describe("server", () => {
       hasMore: false,
       spans: [{ spanId: "server-model", parentSpanId: "server-root" }],
     });
+    const modelTrace = await app.inject({
+      method: "GET",
+      url: `/api/v16/traces?runId=${run.id}&service=core&kind=model`,
+      headers: { authorization: `Bearer ${testToken}` },
+    });
+    expect(modelTrace.statusCode).toBe(200);
+    expect(modelTrace.json()).toMatchObject({
+      hasMore: false,
+      spans: expect.arrayContaining([expect.objectContaining({ spanId: "server-model", kind: "model" })]),
+    });
+    expect(modelTrace.json().spans).toHaveLength(1);
+    const trimmedTrace = await app.inject({
+      method: "GET",
+      url: `/api/v16/traces?runId=${run.id}&service=%20core%20&kind=%20model%20`,
+      headers: { authorization: `Bearer ${testToken}` },
+    });
+    expect(trimmedTrace.statusCode).toBe(200);
+    expect(trimmedTrace.json().spans).toHaveLength(1);
+    const unfilteredTrace = await app.inject({
+      method: "GET",
+      url: "/api/v16/traces",
+      headers: { authorization: `Bearer ${testToken}` },
+    });
+    expect(unfilteredTrace.statusCode).toBe(400);
+    const invalidTraceStatus = await app.inject({
+      method: "GET",
+      url: `/api/v16/traces?runId=${run.id}&status=unknown`,
+      headers: { authorization: `Bearer ${testToken}` },
+    });
+    expect(invalidTraceStatus.statusCode).toBe(400);
     // 外部 traceparent 不是授权凭据：复用管理员 traceId 不能读取管理员 Span。
     const ownSession = await runtime.createSession({}, other.id);
     const ownRun = runtime.database.createRun(

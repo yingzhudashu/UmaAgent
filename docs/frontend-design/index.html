@@ -1,7 +1,7 @@
 <!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>UmaAgent 前端设计规格</title><style>body{margin:0;background:#F5F3ED;color:#17212B;font:16px/1.7 "Microsoft YaHei","Segoe UI",sans-serif}a{color:#365F45}aside{position:fixed;width:244px;top:0;bottom:0;padding:24px 16px;overflow:auto;background:#FFFFFF}aside a{display:block;padding:8px;font-size:13px}main{margin-left:280px;padding:32px;max-width:1440px}img{max-width:100%;max-height:900px;display:block;margin:20px auto;background:white;border:1px solid #7B8A98}.table{overflow:auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #7B8A98;padding:12px;vertical-align:top;min-width:110px}h2{margin-top:70px;border-top:2px solid #7B8A98;padding-top:24px}code{word-break:break-word;background:#E6EFE7;padding:2px 5px}@media(max-width:800px){aside{position:static;width:auto;max-height:230px}main{margin:0;padding:16px}}</style><aside><strong>UmaAgent</strong><p>当前设计 · 界面索引</p><a href="#um-01">UM-01 登录与创建账户</a><a href="#um-02">UM-02 一次性令牌保存</a><a href="#um-03">UM-03 工作台与会话导航</a><a href="#um-04">UM-04 会话重命名与删除</a><a href="#um-05">UM-05 对话输入与附件草稿</a><a href="#um-06">UM-06 回复、引用与消息操作</a><a href="#um-07">UM-07 模型、思考与队列策略</a><a href="#um-08">UM-08 附件预览与下载</a><a href="#um-10">UM-10 运行计划、确认与取消</a><a href="#um-11">UM-11 工具审批</a><a href="#um-12">UM-12 消息队列与编辑</a><a href="#um-13">UM-13 后台任务</a><a href="#um-14">UM-14 调度列表与开关</a><a href="#um-15">UM-15 新建调度</a><a href="#um-16">UM-16 调度运行历史</a><a href="#um-17">UM-17 知识库列表与检索</a><a href="#um-18">UM-18 添加知识来源</a><a href="#um-19">UM-19 Skill与MCP资源</a><a href="#um-20">UM-20 候选记忆审核</a><a href="#um-21">UM-21 质量中心</a><a href="#um-22">UM-22 账号执行权限、Profile 与外观</a><a href="#um-23">UM-23 账户切换、配置与更新</a><a href="#um-24">UM-24 咸鱼工作台与会话</a><a href="#um-25">UM-25 咸鱼登录与扫码状态</a><a href="#um-26">UM-26 渠道服务与自动回复</a><a href="#um-27">UM-27 渠道草稿与人工发送</a><a href="#um-28">UM-28 快捷命令与命令结果</a><a href="#um-29">UM-29 平板、更多与离线状态</a><a href="#um-30">UM-30 运行诊断报告</a><a href="#um-31">UM-31 评测历史与用例详情</a><a href="#um-32">UM-32 只读优化提案</a></aside><main><h1>UmaAgent 前端设计实施规格</h1>
 <p>通用Agent对话、执行计划、后台任务和管理员渠道工作台的独立前端实施合同。</p>
 <blockquote>
-<p>文档修订日期：2026-10-12。本文记录当前 Protocol v16、HTTP <code>/api/v16</code>、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 <a href="../release-acceptance.md">发布验收</a> 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。</p>
+<p>文档修订日期：2026-10-14。本文记录当前 Protocol v16、HTTP <code>/api/v16</code>、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 <a href="../release-acceptance.md">发布验收</a> 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。</p>
 </blockquote>
 <p><a href="../frontend-design/index.html">图文阅读版与界面索引</a> · <a href="../frontend-design/spec.json">结构化界面规格</a> · <a href="../release-acceptance.md">审查与验收记录</a></p>
 <h2>1. 权威顺序与实施范围</h2>
@@ -23,7 +23,7 @@
 </tr>
 <tr>
 <td>serverChanges</td>
-<td>账号级免审批默认开启；统一执行策略、增量同步与 trace，详见后端设计。</td>
+<td>账号级免审批默认开启；统一执行策略、增量同步与 trace，详见后端设计。Trace 查询 API 支持 Run/Trace、时间、状态、名称、service 和 kind 过滤；权限先过滤再分页，active Span 不直接展示，重启遗留节点标记为 IncompleteSpan。Web 的当前运行面板支持服务、阶段类型、状态、名称和最近时间窗筛选；名称与文本筛选防抖后查询，阶段仍按服务端分页加载，错误、空结果和复制状态均有明确反馈。</td>
 </tr>
 <tr>
 <td>web.styleEntry</td>
@@ -84,6 +84,10 @@
 <tr>
 <td>web.actionMenus</td>
 <td>辅助操作使用一层原生disclosure，Tab发现；上下方向键循环跳过禁用项，Home/End到首尾，Escape关闭并还原入口焦点。顶栏及操作容器允许菜单溢出，裁切只作用于标题；手机更多入口靠右，避免弹层越过左边界。独立和嵌入发布入口均验证320/390/1280px下全部菜单项的视口命中、实际点击、外部关闭及键盘操作。</td>
+</tr>
+<tr>
+<td>web.tracePanel</td>
+<td>运行记录按 Run 查询 Trace，仅在展开时请求；服务、阶段类型和名称输入防抖250ms，状态与时间范围即时生效，筛选值参与独立分页缓存键。筛选结果在服务端过滤后分页，页面提供清除筛选、空态、可重试错误、Trace ID 复制反馈及读屏结果播报。窄于480px单列，480–639px双列，更宽按控件最小宽度自动折列；控件使用至少12px辅助字号和44px触控高度，阶段层级缩进最多四层。错误、成功和警告状态使用语义化主题色，深色主题下保持明显文字与焦点对比。</td>
 </tr>
 <tr>
 <td>android.shell</td>

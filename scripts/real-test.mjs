@@ -90,7 +90,7 @@ const config = {
     maxParallelSessions: 2,
     approvalTimeoutMs: 120_000,
     toolTimeoutMs: 60_000,
-    modelTimeoutMs: 120_000,
+    modelTimeoutMs: 300_000,
   },
   roles: Object.fromEntries(
     ["default", "reasoning", "fast", "vision"].map((role) => [role, { provider: providerId, id: modelKey }]),

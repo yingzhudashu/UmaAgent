@@ -440,6 +440,7 @@ export function createBuiltinTools(input: {
   scheduleManage: (input: Record<string, unknown>) => unknown;
   memoryWrite: (scope: "global" | "session", content: string) => ReturnType<UmaDatabase["addMemoryFact"]>;
   attachmentCreateFromWorkspace?: (path: string) => Promise<{ id: string; name: string }>;
+  attachmentCopyFromSession?: (attachmentId: string) => Promise<{ id: string; name: string }>;
   imageGenerate?: (
     prompt: string,
     signal: AbortSignal,
@@ -459,6 +460,7 @@ export function createBuiltinTools(input: {
     scheduleManage,
     memoryWrite,
     attachmentCreateFromWorkspace,
+    attachmentCopyFromSession,
     imageGenerate,
     smath,
     traceParent,
@@ -859,6 +861,23 @@ export function createBuiltinTools(input: {
               const attachment = await attachmentCreateFromWorkspace(path);
               const link = `[${attachment.name}](uma-attachment://${attachment.id})`;
               return result(`Attachment created: ${link}`, { ...attachment, link });
+            },
+          }),
+        ]
+      : []),
+    ...(attachmentCopyFromSession
+      ? [
+          defineTool({
+            name: "attachment_copy",
+            label: "Copy attachment",
+            description:
+              "Copy an uploaded attachment from this session into the current response without reading or changing its bytes. Use this to return a downloadable copy of a large or binary file; the result includes the exact uma-attachment link.",
+            parameters: attachmentSchema,
+            executionMode: "sequential",
+            async execute(_id, params) {
+              const attachment = await attachmentCopyFromSession(params.attachmentId);
+              const link = `[${attachment.name}](uma-attachment://${attachment.id})`;
+              return result(`Attachment copied: ${link}`, { ...attachment, link });
             },
           }),
         ]

@@ -6,6 +6,9 @@ import {
   createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
 
+/** 单次 Provider 调用（含有界重试）的硬时限；用户取消仍由独立 AbortSignal 即时生效。 */
+export const DEFAULT_MODEL_TIMEOUT_MS = 5 * 60_000;
+
 /** Bound retries for transient provider gateway failures such as HTTP 524. */
 export const transientModelRetry = {
   maxRetries: 5,
@@ -59,6 +62,30 @@ export function modelRequestSignal(signal: AbortSignal, timeoutMs: number): Abor
   return AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
 }
 
+/** 在现有 Provider fetch 边界观察实际重试，不复制 SDK 的重试判定和退避策略。 */
+export function traceProviderRetries(
+  fetcher: typeof globalThis.fetch,
+  onRetry: (attempt: number) => void,
+): typeof globalThis.fetch {
+  let failedAttempt = false;
+  let retryCount = 0;
+  return async (input, init) => {
+    if (failedAttempt) {
+      retryCount++;
+      failedAttempt = false;
+      onRetry(retryCount);
+    }
+    try {
+      const response = await fetcher(input, init);
+      if (!response.ok) failedAttempt = true;
+      return response;
+    } catch (error) {
+      failedAttempt = true;
+      throw error;
+    }
+  };
+}
+
 function hasStreamOutput(event: AssistantMessageEvent): boolean {
   return (
     event.type === "text_delta" ||
@@ -72,6 +99,7 @@ function hasStreamOutput(event: AssistantMessageEvent): boolean {
 export function retryMissingFinishReasonStream(
   create: () => AssistantMessageEventStream | Promise<AssistantMessageEventStream>,
   signal: AbortSignal,
+  onRetry?: (attempt: number) => void,
 ): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
   void (async () => {
@@ -104,6 +132,7 @@ export function retryMissingFinishReasonStream(
         else pending.push(event);
       }
       if (shouldRetry) {
+        onRetry?.(attempt + 1);
         await waitForModelRetry(signal, missingFinishReasonRetry.baseDelayMs * 2 ** attempt);
         continue;
       }

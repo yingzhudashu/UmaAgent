@@ -731,6 +731,8 @@ export async function createServer(
       to?: string;
       status?: string;
       name?: string;
+      service?: string;
+      kind?: string;
       offset?: string;
       limit?: string;
     };
@@ -749,14 +751,32 @@ export async function createServer(
     const to = query.to === undefined ? undefined : Number(query.to);
     const offset = query.offset === undefined ? 0 : Number(query.offset);
     const limit = query.limit === undefined ? 500 : Number(query.limit);
+    const name = query.name?.trim() || undefined;
+    const service = query.service?.trim() || undefined;
+    const kind = query.kind?.trim() || undefined;
+    const hasFilter = Boolean(
+      runId ||
+        query.traceId ||
+        query.from !== undefined ||
+        query.to !== undefined ||
+        query.status ||
+        name ||
+        service ||
+        kind,
+    );
     if (
+      !hasFilter ||
       (from !== undefined && (!Number.isSafeInteger(from) || from < 0)) ||
       (to !== undefined && (!Number.isSafeInteger(to) || to < 0 || (from !== undefined && to < from))) ||
       !Number.isSafeInteger(offset) ||
       offset < 0 ||
       !Number.isSafeInteger(limit) ||
       limit < 1 ||
-      limit > 500
+      limit > 500 ||
+      (query.status !== undefined && !["ok", "error", "cancelled"].includes(query.status)) ||
+      (query.name !== undefined && (!name || name.length > 200)) ||
+      (query.service !== undefined && (!service || service.length > 80)) ||
+      (query.kind !== undefined && (!kind || kind.length > 40))
     )
       throw new Error("Invalid trace query");
     return runtime.listTrace(
@@ -768,7 +788,9 @@ export async function createServer(
         ...(query.status && ["ok", "error", "cancelled"].includes(query.status)
           ? { status: query.status as "ok" | "error" | "cancelled" }
           : {}),
-        ...(query.name ? { name: query.name } : {}),
+        ...(name ? { name } : {}),
+        ...(service ? { service } : {}),
+        ...(kind ? { kind } : {}),
         offset,
         limit,
       },

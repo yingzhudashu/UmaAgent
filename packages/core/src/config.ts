@@ -1,5 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
+import { DEFAULT_MODEL_TIMEOUT_MS } from "./model-retry.js";
 import type { ImageGenerationConfig, McpServerConfig, UmaConfig, UmaModelConfig } from "./types.js";
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -229,7 +230,7 @@ export async function loadConfig(path = "uma.config.json"): Promise<UmaConfig> {
       maxParallelSessions: numberValue(runtime.maxParallelSessions, "runtime.maxParallelSessions", 4),
       approvalTimeoutMs: numberValue(runtime.approvalTimeoutMs, "runtime.approvalTimeoutMs", 120_000),
       toolTimeoutMs: numberValue(runtime.toolTimeoutMs, "runtime.toolTimeoutMs", 60_000),
-      modelTimeoutMs: numberValue(runtime.modelTimeoutMs, "runtime.modelTimeoutMs", 120_000),
+      modelTimeoutMs: numberValue(runtime.modelTimeoutMs, "runtime.modelTimeoutMs", DEFAULT_MODEL_TIMEOUT_MS),
     },
     roles: {
       default: defaultRole,

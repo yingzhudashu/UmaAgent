@@ -127,6 +127,7 @@ describe("loadConfig", () => {
       delete server.maxUploadBytes;
       server.webOrigins = ["https://web.example", "https://web.example"];
       delete value.defaultThinkingLevel;
+      delete (value.runtime as Record<string, unknown>).modelTimeoutMs;
       value.mcpServers = [
         { name: "stdio", transport: "stdio", command: "node", args: ["server.js"], env: { A: "B" } },
         {
@@ -141,7 +142,7 @@ describe("loadConfig", () => {
     expect(loaded.server).toMatchObject({ port: 3210, maxUploadBytes: 20 * 1024 * 1024 });
     expect(loaded.server.webOrigins).toEqual(["https://web.example"]);
     expect(loaded.defaultThinkingLevel).toBe("medium");
-    expect(loaded.runtime.modelTimeoutMs).toBe(1000);
+    expect(loaded.runtime.modelTimeoutMs).toBe(300_000);
     expect(loaded.mcpServers).toHaveLength(2);
     expect(loaded.models[0]).toMatchObject({
       tools: true,

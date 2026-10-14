@@ -47,9 +47,11 @@ import { KnowledgeService } from "./knowledge.js";
 import { McpManager } from "./mcp.js";
 import { ModelCallService } from "./model-calls.js";
 import {
+  DEFAULT_MODEL_TIMEOUT_MS,
   modelCacheKey,
   modelRequestSignal,
   retryMissingFinishReasonStream,
+  traceProviderRetries,
   transientModelRetry,
 } from "./model-retry.js";
 import { ModelRegistry } from "./models.js";
@@ -1036,7 +1038,9 @@ export class UmaRuntime {
     for (const run of this.database.listQueuedRuns(id)) this.cancelRun(run.id);
     if (activeRunIds.length) {
       const timeoutMs =
-        (this.config.runtime.modelTimeoutMs ?? 120_000) + this.config.runtime.toolTimeoutMs + 5_000;
+        (this.config.runtime.modelTimeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS) +
+        this.config.runtime.toolTimeoutMs +
+        5_000;
       await Promise.all(
         activeRunIds.map((runId) =>
           waitForRunTerminal(
@@ -1361,10 +1365,7 @@ export class UmaRuntime {
       this.orchestrator.remove(run.sessionId, runId);
       this.trace.cancelQueued(runId);
       const queuedTrace = this.activeTraces.get(runId);
-      queuedTrace?.finish({
-        status: "error",
-        error: { name: "RunCancelled", message: "Cancelled before execution" },
-      });
+      queuedTrace?.finish({ status: "cancelled" });
       this.activeTraces.delete(runId);
       return this.events.transaction(() => {
         const cancelled = this.database.updateRun(runId, {
@@ -1988,6 +1989,23 @@ ${context.dailyText}`,
             allowWorkspaceScript: true,
           });
         },
+        attachmentCopyFromSession: async (attachmentId) => {
+          this.database.validateAttachmentForSession(attachmentId, session.id);
+          const source = this.database.getAttachment(attachmentId);
+          if (!source) throw new Error(`Attachment not found: ${attachmentId}`);
+          const data = await import("node:fs/promises").then((fs) =>
+            fs.readFile(this.database.getAttachmentPath(attachmentId, session.id)),
+          );
+          const responseId = runId ? this.database.responseForRun(runId)?.id : undefined;
+          return this.addAttachment({
+            sessionId: session.id,
+            ...(responseId ? { responseId } : {}),
+            name: source.name,
+            mimeType: source.mimeType,
+            data,
+            allowWorkspaceScript: true,
+          });
+        },
         imageGenerate: async (prompt, signal) => {
           const response = runId ? this.database.responseForRun(runId) : undefined;
           if (!response) throw new Error("Image generation requires an active response");
@@ -2333,14 +2351,20 @@ ${context.dailyText}`,
         (() => {
           const requestSignal = modelRequestSignal(
             options?.signal ?? signal,
-            this.config.runtime.modelTimeoutMs ?? 120_000,
+            this.config.runtime.modelTimeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS,
           );
           return retryMissingFinishReasonStream(
             () =>
               this.models.models.streamSimple(model, modelContext, {
                 ...options,
                 signal: requestSignal,
-                timeoutMs: this.config.runtime.modelTimeoutMs ?? 120_000,
+                fetch: traceProviderRetries(options?.fetch ?? globalThis.fetch, (attempt) =>
+                  this.activeTraces.get(runId)?.addEvent("model.retry", {
+                    attempt,
+                    reason: "provider_request",
+                  }),
+                ),
+                timeoutMs: this.config.runtime.modelTimeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS,
                 headers: {
                   ...(options?.headers ?? {}),
                   "user-agent": "UmaAgent/1.0",
@@ -2351,6 +2375,11 @@ ${context.dailyText}`,
                 ...transientModelRetry,
               }),
             options?.signal ?? signal,
+            (attempt) =>
+              this.activeTraces.get(runId)?.addEvent("model.retry", {
+                attempt,
+                reason: "missing_finish_reason",
+              }),
           );
         })(),
       toolExecution: "parallel",

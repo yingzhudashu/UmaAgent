@@ -32,6 +32,89 @@ test("quality tabs load and refresh only their own reports", async ({ page }) =>
   expect(paths.filter((path) => path === "/api/v16/reports/diagnostics")).toHaveLength(diagnosticsBefore);
 });
 
+test("run trace filters query the selected run and clear without breaking the layout", async ({ page }) => {
+  await login(page);
+  await page.getByRole("button", { name: "新会话", exact: true }).click();
+
+  const prompt = "trace filter acceptance";
+  await page.getByRole("textbox", { name: "消息内容", exact: true }).fill(prompt);
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(page.getByText(`Faux Core received: ${prompt}`, { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "运行记录", exact: true }).click();
+  const panel = page.locator(".trace-panel");
+  await expect(panel).toBeVisible();
+  const traceRequest = page.waitForRequest(
+    (request) => new URL(request.url()).pathname === "/api/v16/traces",
+  );
+  const summary = panel.locator(":scope > summary");
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(panel).toHaveAttribute("open", "");
+  await page.keyboard.press("Space");
+  await expect(panel).not.toHaveAttribute("open", "");
+  await page.keyboard.press("Space");
+  await expect(panel).toHaveAttribute("open", "");
+  await summary.focus();
+  await page.keyboard.press("Tab");
+  await expect(panel.getByLabel("按服务筛选链路")).toBeFocused();
+  const initialRequest = await traceRequest;
+  const runId = new URL(initialRequest.url()).searchParams.get("runId");
+  expect(runId).toBeTruthy();
+
+  const serviceRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v16/traces" && url.searchParams.get("service") === "core";
+  });
+  await panel.getByLabel("按服务筛选链路").fill("core");
+  const filteredService = await serviceRequest;
+  expect(new URL(filteredService.url()).searchParams.get("runId")).toBe(runId);
+
+  const statusRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v16/traces" && url.searchParams.get("status") === "ok";
+  });
+  await panel.getByLabel("按状态筛选链路").selectOption("ok");
+  await statusRequest;
+
+  const nameRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v16/traces" && url.searchParams.get("name") === "queue.wait";
+  });
+  await panel.getByLabel("按名称搜索阶段").fill("queue.wait");
+  await nameRequest;
+
+  const timeRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/v16/traces" && url.searchParams.has("from") && url.searchParams.has("to");
+  });
+  await panel.getByLabel("按时间范围筛选链路").selectOption("1h");
+  const ranged = new URL((await timeRequest).url());
+  expect(Number(ranged.searchParams.get("to"))).toBeGreaterThan(Number(ranged.searchParams.get("from")));
+
+  await panel.getByRole("button", { name: "清除筛选" }).click();
+  await expect(panel.getByLabel("按服务筛选链路")).toHaveValue("");
+  await expect(panel.getByLabel("按阶段类型筛选链路")).toHaveValue("");
+  await expect(panel.getByLabel("按状态筛选链路")).toHaveValue("");
+  await expect(panel.getByLabel("按名称搜索阶段")).toHaveValue("");
+  await expect(panel.getByLabel("按时间范围筛选链路")).toHaveValue("all");
+  for (const width of [320, 390, 479, 480, 639, 640, 768, 1024, 1920, 2560]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect
+      .poll(async () => panel.evaluate((element) => element.scrollWidth <= element.clientWidth))
+      .toBe(true);
+    await expect
+      .poll(async () => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+      .toBe(true);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await panel.getByLabel("按服务筛选链路").fill("core");
+  await expect(panel.locator(".trace-results-status")).toContainText("已加载");
+  await panel.getByRole("button", { name: "清除筛选" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(panel.getByLabel("按服务筛选链路")).toHaveValue("");
+});
+
 test("resource form cancellation preserves the independent skill draft", async ({ page }) => {
   await login(page, "uma_pat_00000000-0000-4000-8000-000000000001_faux-local-token-012345678901234567890123");
   await destination(page, "资源");

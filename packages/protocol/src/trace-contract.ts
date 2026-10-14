@@ -42,6 +42,8 @@ export const TraceQuerySchema = Strict({
   to: Type.Optional(Timestamp),
   status: Type.Optional(Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("cancelled")])),
   name: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+  service: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+  kind: Type.Optional(Type.String({ minLength: 1, maxLength: 40 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
 });

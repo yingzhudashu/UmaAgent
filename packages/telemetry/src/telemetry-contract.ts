@@ -38,6 +38,8 @@ export type TelemetrySpanQuery = {
   to?: number;
   status?: Exclude<TelemetryStatus, "active">;
   name?: string;
+  service?: string;
+  kind?: string;
   offset?: number;
   limit?: number;
   /** 服务端普通用户查询时，仅展开指定 Run 的 Span 子树。 */

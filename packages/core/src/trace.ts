@@ -55,10 +55,7 @@ export class TraceService extends SharedTraceService {
   }
   cancelQueued(runId: string): void {
     const wait = this.queuedWaits.get(runId);
-    wait?.finish({
-      status: "error",
-      error: { name: "RunCancelled", message: "Cancelled before execution" },
-    });
+    wait?.finish({ status: "cancelled" });
     this.queuedWaits.delete(runId);
   }
   async listTrace(query: TraceQuery, scopeToRun = false): Promise<TraceQueryPage> {

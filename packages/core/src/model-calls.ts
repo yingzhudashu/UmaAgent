@@ -3,10 +3,12 @@ import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai
 import { assertContextCapacity } from "./context-manager.js";
 import type { UmaDatabase } from "./database.js";
 import {
+  DEFAULT_MODEL_TIMEOUT_MS,
   isMissingFinishReasonError,
   missingFinishReasonRetry,
   modelRequestSignal,
   recoverMissingFinishReason,
+  traceProviderRetries,
   transientModelOptions,
   waitForModelRetry,
 } from "./model-retry.js";
@@ -34,7 +36,7 @@ export class ModelCallService {
   constructor(
     private readonly database: UmaDatabase,
     private readonly models: ModelRegistry,
-    private readonly modelTimeoutMs = 120_000,
+    private readonly modelTimeoutMs = DEFAULT_MODEL_TIMEOUT_MS,
   ) {}
 
   async complete(input: ModelCompletionInput): Promise<AssistantMessage> {
@@ -53,6 +55,9 @@ export class ModelCallService {
         ? { "context.summary_sequence": input.contextSummarySequence }
         : {}),
     });
+    const tracedFetch = traceProviderRetries(globalThis.fetch, (attempt) =>
+      span?.addEvent("model.retry", { attempt, reason: "provider_request" }),
+    );
     const startedAt = Date.now();
     const modelSignal = modelRequestSignal(input.signal, this.modelTimeoutMs);
     let callId: string | undefined;
@@ -79,6 +84,7 @@ export class ModelCallService {
               `${input.role}:${input.purpose}:${model.provider}:${model.id}`,
             ),
             signal: modelSignal,
+            fetch: tracedFetch,
             timeoutMs: this.modelTimeoutMs,
             ...(input.thinkingLevel && input.thinkingLevel !== "off"
               ? { reasoning: input.thinkingLevel }
@@ -100,6 +106,10 @@ export class ModelCallService {
           attempt >= missingFinishReasonRetry.maxRetries
         )
           break;
+        span?.addEvent("model.retry", {
+          attempt: attempt + 1,
+          reason: "missing_finish_reason",
+        });
         await waitForModelRetry(modelSignal, missingFinishReasonRetry.baseDelayMs * 2 ** attempt);
       }
       if (modelSignal.aborted && !input.signal.aborted)

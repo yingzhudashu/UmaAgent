@@ -229,7 +229,7 @@ def render():
             if isinstance(value,dict):value='、'.join(f'{k}: {v}' for k,v in value.items())
             baseline_rows.append(f'|{domain}{"."+key if key else ""}|{value}|')
     md=[f'# {NAME} 前端设计实施规格',SPEC['intro'],
-        '> 文档修订日期：2026-10-12。本文记录当前 Protocol v16、HTTP `/api/v16`、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 [发布验收](release-acceptance.md) 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。',
+        '> 文档修订日期：2026-10-14。本文记录当前 Protocol v16、HTTP `/api/v16`、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 [发布验收](release-acceptance.md) 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。',
         '[图文阅读版与界面索引](frontend-design/index.html) · [结构化界面规格](frontend-design/spec.json) · [审查与验收记录](release-acceptance.md)',
         '## 1. 权威顺序与实施范围',SPEC['scope'],
         '同一交付中：交互表和字段规则 > 几何规范 > SVG 示例值。示例值是合成测试数据，不是默认业务数据。业务状态只取服务端或本地桥接回执；画面不允许推断业务成功。若未来协议改变，必须升级本文件与 spec.json；不得让开发者自行猜测一个静默替代行为。',

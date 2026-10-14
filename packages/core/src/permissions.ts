@@ -40,6 +40,7 @@ const writeTools = new Set([
   "write",
   "edit",
   "attachment_create_from_workspace",
+  "attachment_copy",
   "smath_create",
   "smath_update",
   "smath_delete",

@@ -59,6 +59,7 @@ describe("session capabilities", () => {
     expect(policy.decide("agent", "schedule_manage").requiresApproval).toBe(false);
     expect(policy.decide("agent", "mcp_browser_open").requiresApproval).toBe(false);
     expect(policy.decide("agent", "shell").requiresApproval).toBe(true);
+    expect(policy.decide("agent", "attachment_copy").requiresApproval).toBe(true);
     expect(policy.decide("agent", "xianyu_status").requiresApproval).toBe(false);
     expect(policy.decide("agent", "xianyu_send").requiresApproval).toBe(false);
     expect(policy.decide("agent", "xianyu_publish").requiresApproval).toBe(true);

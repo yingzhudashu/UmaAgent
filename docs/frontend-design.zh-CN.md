@@ -2,7 +2,7 @@
 
 通用Agent对话、执行计划、后台任务和管理员渠道工作台的独立前端实施合同。
 
-> 文档修订日期：2026-10-12。本文记录当前 Protocol v16、HTTP `/api/v16`、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 [发布验收](release-acceptance.md) 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。
+> 文档修订日期：2026-10-14。本文记录当前 Protocol v16、HTTP `/api/v16`、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 [发布验收](release-acceptance.md) 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。
 
 [图文阅读版与界面索引](frontend-design/index.html) · [结构化界面规格](frontend-design/spec.json) · [审查与验收记录](release-acceptance.md)
 
@@ -21,7 +21,7 @@ Android为独立验收重点，页面与操作详见 docs/android-design.zh-CN.m
 |范围|实施规则|
 |---|---|
 |protocol|Protocol v16 / HTTP /api/v16 / SQLite schema 27|
-|serverChanges|账号级免审批默认开启；统一执行策略、增量同步与 trace，详见后端设计。|
+|serverChanges|账号级免审批默认开启；统一执行策略、增量同步与 trace，详见后端设计。Trace 查询 API 支持 Run/Trace、时间、状态、名称、service 和 kind 过滤；权限先过滤再分页，active Span 不直接展示，重启遗留节点标记为 IncompleteSpan。Web 的当前运行面板支持服务、阶段类型、状态、名称和最近时间窗筛选；名称与文本筛选防抖后查询，阶段仍按服务端分页加载，错误、空结果和复制状态均有明确反馈。|
 |web.styleEntry|styles.css then design-system.css|
 |web.shell|220px navigation + main workspace|
 |web.contentWidth|960px|
@@ -37,6 +37,7 @@ Android为独立验收重点，页面与操作详见 docs/android-design.zh-CN.m
 |web.registration|注册令牌复制成功或勾选手动保存后才允许继续；复制失败保留文本。|
 |web.commands|命令只调用Core executeShortcut，不预读管理页面数据；无搜索结果不能执行旧选中项，提交锁阻止双击重复请求；原生dialog处理焦点限制、Escape和返回焦点。 Ctrl+K/Meta+K仅在UmaAgent焦点范围内生效；方向键切换可见命令，Enter执行，输入法组合不触发选择。|
 |web.actionMenus|辅助操作使用一层原生disclosure，Tab发现；上下方向键循环跳过禁用项，Home/End到首尾，Escape关闭并还原入口焦点。顶栏及操作容器允许菜单溢出，裁切只作用于标题；手机更多入口靠右，避免弹层越过左边界。独立和嵌入发布入口均验证320/390/1280px下全部菜单项的视口命中、实际点击、外部关闭及键盘操作。|
+|web.tracePanel|运行记录按 Run 查询 Trace，仅在展开时请求；服务、阶段类型和名称输入防抖250ms，状态与时间范围即时生效，筛选值参与独立分页缓存键。筛选结果在服务端过滤后分页，页面提供清除筛选、空态、可重试错误、Trace ID 复制反馈及读屏结果播报。窄于480px单列，480–639px双列，更宽按控件最小宽度自动折列；控件使用至少12px辅助字号和44px触控高度，阶段层级缩进最多四层。错误、成功和警告状态使用语义化主题色，深色主题下保持明显文字与焦点对比。|
 |android.shell|UmaShell|
 |android.singlePaneBelowDp|600|
 |android.railFromDp|600|

@@ -12,6 +12,10 @@ const files = execFileSync(
   .split(/\r?\n/)
   .filter(Boolean);
 const findings = [];
+const trackedProcessArtifacts = execFileSync("git", ["ls-files", "artifacts"], { encoding: "utf8" })
+  .trim()
+  .split(/\r?\n/)
+  .filter(Boolean);
 for (const file of files) {
   try {
     await access(resolve(root, file));
@@ -31,4 +35,15 @@ for (const file of files) {
   });
 }
 // 审计结果是一次性诊断输出，不写入仓库，避免把机器生成的过程文件当成质量结论。
-console.log(JSON.stringify({ generatedAt: new Date().toISOString(), files: findings }, null, 2));
+console.log(
+  JSON.stringify(
+    {
+      generatedAt: new Date().toISOString(),
+      files: findings,
+      processArtifacts: trackedProcessArtifacts,
+      processArtifactCount: trackedProcessArtifacts.length,
+    },
+    null,
+    2,
+  ),
+);

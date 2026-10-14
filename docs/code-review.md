@@ -23,6 +23,8 @@
 - WebView 无凭据与文件访问能力；正文经过 DOMPurify，KaTeX 禁止可信命令。附件 URI 只转换链接目标，代码字面值保持原样。
 - 遥测事务失败整体回滚后隔离重试；故障累计计数，不改变业务结果。
 - Trace 查询在分页前执行用户过滤，复用 traceId 不能扩大权限。
+- Trace 支持按 service/kind 定位跨服务和阶段热点；查询不得无过滤扫描全库，active Span 不直接暴露，重启遗留 Span 必须标为 `IncompleteSpan`。
+- 遥测维护必须使用数据库内聚合，不能把长期历史 Span 全量读入应用堆；WAL、RSS、CPU 和事件循环样本必须能与 Trace 时间窗关联。
 
 ## 验证入口
 

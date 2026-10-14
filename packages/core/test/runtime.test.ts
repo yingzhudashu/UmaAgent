@@ -987,6 +987,12 @@ describe("UmaRuntime preflight", () => {
     runtime.resolveApproval(approval, true);
     expect(await activeTerminal).toMatchObject({ id: active.id, status: "completed" });
     expect(runtime.database.getRun(queued.id).status).toBe("cancelled");
+    expect((await runtime.listTrace({ runId: queued.id })).spans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "run", status: "cancelled" }),
+        expect.objectContaining({ name: "queue.wait", status: "cancelled" }),
+      ]),
+    );
   });
 
   it("acknowledges an uncertain side effect with read-only reconciliation", async () => {
@@ -1099,6 +1105,63 @@ describe("UmaRuntime preflight", () => {
         attachmentIds: [attachment.id],
       }),
     ).toThrow("does not support image");
+  });
+
+  it("copies a large session attachment byte-for-byte and rejects cross-session copies", async () => {
+    const runtime = await runtimeWith([]);
+    runtime.config.server.maxUploadBytes = 1024 * 1024;
+    const session = await runtime.createSession({ title: "Attachment copy" });
+    const otherSession = await runtime.createSession({ title: "Other session" });
+    const bytes = Buffer.alloc(401_000);
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 251;
+    const source = await runtime.addAttachment({
+      sessionId: session.id,
+      name: "large.txt",
+      mimeType: "text/plain",
+      data: bytes,
+    });
+    const tools = (
+      runtime as unknown as {
+        toolsForSession: (
+          currentSession: typeof session,
+          mode: "agent",
+        ) => Array<{
+          name: string;
+          execute: (id: string, params: { attachmentId: string }) => Promise<unknown>;
+        }>;
+      }
+    ).toolsForSession(session, "agent");
+    const copyTool = tools.find((tool) => tool.name === "attachment_copy");
+    expect(copyTool).toBeDefined();
+    const copiedResult = (await copyTool?.execute("call", { attachmentId: source.id })) as {
+      content: Array<{ text: string }>;
+    };
+    const copiedId = /uma-attachment:\/\/([^)]*)/.exec(copiedResult.content[0]?.text ?? "")?.[1];
+    expect(copiedId).toBeTruthy();
+    const sourceBytes = await readFile(runtime.getAttachmentPath(source.id));
+    const copiedBytes = await readFile(runtime.getAttachmentPath(copiedId as string));
+    expect(copiedBytes).toEqual(sourceBytes);
+    expect(runtime.getAttachment(copiedId as string)).toMatchObject({
+      name: "large.txt",
+      mimeType: "text/plain",
+      size: 401_000,
+    });
+    const otherTools = (
+      runtime as unknown as {
+        toolsForSession: (
+          currentSession: typeof otherSession,
+          mode: "agent",
+        ) => Array<{
+          name: string;
+          execute: (id: string, params: { attachmentId: string }) => Promise<unknown>;
+        }>;
+      }
+    ).toolsForSession(otherSession, "agent");
+    await expect(
+      otherTools
+        .find((tool) => tool.name === "attachment_copy")
+        ?.execute("call", { attachmentId: source.id }),
+    ).rejects.toThrow("belongs to another session");
   });
 
   it("rejects duplicate message ownership and invalid clarification continuations", async () => {
