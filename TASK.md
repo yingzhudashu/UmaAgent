@@ -18,6 +18,7 @@
 
 - 真实 Provider smoke 曾两次以 `provider_error: terminated`、0 token 失败；本轮未重放请求，真实模型对话仍未验收。
 - Docker/Linux、实体 Android 真机、读屏及真实闲鱼账号链路不在本轮验证范围，不能标为通过。
-- Claude Opus 5.5（请求 effort `max`，返回模型 `claude-opus-5-5`）最终只读复核完成，结论通过；它复核了生产、Android、Trace、性能、文档和未验收范围。
-- `artifacts/acceptance/soak-1792073458235/` 是唯一已确认的本轮过程目录遗留；执行环境阻止删除，仍需在本机清理。
+- `artifacts/acceptance/soak-1792073458235/` 中的三个临时文件已删除，仅剩空 ignored 目录；执行环境阻止删除空目录，未绕过限制。
+
+Claude Opus 5.5（请求 effort `max`，返回模型 `claude-opus-5-5`）已完成最终只读复核并通过，复核范围包括生产、Android、Trace、性能、前端与未验收范围。UmaAgent 文档/部署脚本提交和 MyServer 验收记录提交已在本地生成，远端推送按本轮明确授权继续进行。
 - MyServer `main` 有 6 个提交待推送；UmaAgent 本地有 staging 停用变更与验收文档差异待检查、提交和按授权推送。

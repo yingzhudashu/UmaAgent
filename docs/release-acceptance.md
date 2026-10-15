@@ -14,7 +14,7 @@ Android 1.4.3（versionCode 17，release `17-4633f95`）已正式签名并在线
 
 `npm run check`、`npm run test:coverage`（59 文件、356 项；语句 82.13%、分支 74.24%、函数 76.78%、行 84.91%）、完整 workspace `npm run build`、`npm run build:web:embed`、`npm run check:android`、`npm run test:eval:faux`（6/6）、`npm run test:web:e2e`（38/38）、`npm run test:perf` 和前端设计规格 `python docs/frontend-design/validate.py` 均通过。最终代码独占性能：API P95 6.05 ms、事件分页 P95 1.33 ms、RSS 峰值 111,988,736 B、双库 WAL 峰值 2,249,584 B、CPU 核心等效平均/峰值 5.5274%/5.5274%、事件循环 P95 29.8012 ms；全部低于既有预算。与 Gradle/Eval 并行时曾出现一次 CPU 峰值超预算，停止并发后独占重跑通过，未更改负载、功能或预算。
 
-`npm run test:soak:faux` 四小时终版通过：运行 14,403,552 ms，2,629 条消息，事件游标 31,584，基线 RSS 112,418,816 B，RSS 峰值 155,672,576 B，双库 WAL 峰值 2,723,384 B；资源预算、游标连续性和无重复调度检查均通过。必要数值已记入此处。执行环境拒绝删除本轮忽略目录 `artifacts/acceptance/soak-1792073458235/`；其中 `result.json`、`samples.jsonl`、`server.log` 临时证据仍在本机，未尝试绕过限制，也未改动其他历史验收目录。
+`npm run test:soak:faux` 四小时终版通过：运行 14,403,552 ms，2,629 条消息，事件游标 31,584，基线 RSS 112,418,816 B，RSS 峰值 155,672,576 B，双库 WAL 峰值 2,723,384 B；资源预算、游标连续性和无重复调度检查均通过。必要数值已记入此处。`artifacts/acceptance/soak-1792073458235/` 中的 `result.json`、`samples.jsonl`、`server.log` 已逐个删除，仅留下空的 ignored 目录；执行环境拒绝删除该空目录，未尝试绕过限制，也未改动其他历史验收目录。
 
 ### 前端复核与未验收边界
 
