@@ -99,7 +99,10 @@ class MessageBodyTest {
         assertEquals("1", evaluate("document.querySelectorAll('table').length"))
         assertEquals("1", evaluate("document.querySelectorAll('pre').length"))
         assertEquals("0", evaluate("document.querySelectorAll('pre .katex').length"))
-        assertEquals("5px", evaluate("getComputedStyle(document.querySelector('#message p code')).paddingLeft"))
+        assertEquals(
+            "true",
+            evaluate("getComputedStyle(document.querySelector('#message p code')).paddingLeft === '5px'"),
+        )
         assertEquals(
             "true",
             evaluate(
@@ -112,8 +115,10 @@ class MessageBodyTest {
             compose.runOnIdle { dark.value = isDark }
             compose.waitForIdle()
             assertEquals(
-                if (isDark) "rgb(41, 62, 84)" else "rgb(230, 239, 231)",
-                evaluate("getComputedStyle(document.querySelector('#message p code')).backgroundColor"),
+                "true",
+                evaluate(
+                    "getComputedStyle(document.querySelector('#message p code')).backgroundColor === '${if (isDark) "rgb(41, 62, 84)" else "rgb(230, 239, 231)"}'",
+                ),
             )
             val file =
                 File(

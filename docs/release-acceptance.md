@@ -22,6 +22,8 @@ Claude Opus 5.5 以请求 effort `max` 对 Web 前端进行了只读审美和交
 
 Claude Opus 5.5 对本次最终发布做了额外只读验收；工具返回的请求/模型字段分别报告 effort `max` 和 `claude-opus-5-5`，结论为**通过**。复核核对了版本契约、Trace 生命周期、SQLite 资源汇总、生产与 Android 发布证据、自动化测试和明确未验范围；没有要求修改生产代码。工具字段不能独立证明上游模型身份。
 
+2026-10-16 前端细节优化补充：Web 回复卡片采用克制的轻量阴影；共享 Markdown 的行内代码使用当前主题底色和 2px/5px 内边距，代码块保留 1px 边界；Android 回复 Surface 增加 1dp 阴影，标题/标签使用明确字重。`npm run check`、`npm run check:android`、`npm run build:android:content`、`python docs/frontend-design/render.py`、`python docs/frontend-design/validate.py` 均通过；定向 Web E2E 16/16 通过。Android 36 AVD 上正文主题断言通过；独占 `BodyPerformanceTest` 在默认手机配置下通过，p95 71.65 ms、最大帧 19.03 ms。六配置矩阵的四种配置通过，840dp 和横屏 200% 字体样本分别 p95 116.99 ms、102.13 ms，略超 100 ms 增量门槛；最大帧未超过 700 ms。该测试输入不含代码块或回复卡片，且两项样本在连续 2GB AVD 矩阵下出现资源波动，尚不能归因于视觉样式；未降低门槛。实体 Android、读屏和真实 Provider 仍按下文范围保留。
+
 本地及 Faux 流程、当前 Windows Native/Web 与 Android API 36 模拟器范围已验收。真实 Provider smoke 两次均以 `provider_error: terminated`、0 token 失败；遵守不重放同类付费请求的约束，本轮没有再次调用，因此真实模型对话仍是阻塞项。Docker/Linux、Android 实体设备和读屏专项不在本轮设备范围内，均未标为已验收；真实闲鱼账号和消息链路也未执行。生产服务没有重启，历史用户数据库、附件、workspace 与备份均未由本轮测试写入。
 
 **当前结论：Core/Web 生产发布与 Android 正式包上线验收通过；当前平台范围内的本地链路、模拟器安装/启动、浏览器挂载和性能稳定性验收通过。真实 Provider 对话及 Docker/Linux、实体设备、读屏仍有明确未验项。**
