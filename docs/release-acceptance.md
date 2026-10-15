@@ -6,7 +6,7 @@
 
 Core 与 Web 已从干净提交 `c53d333c4bb6c86b4858793727f653c1c44aceec` 发布到生产，release 分别为 `20261015133006-c53d333` 和 `20261015133024-c53d333`。Core 1.3.0、Protocol v16、数据库 schema 27；发布前备份、受保护账号指纹门禁和数据库完整性检查通过，没有执行迁移。2026-10-16 只读线上复验再次确认 Core/Web release、JS/CSS 哈希一致、Core/Browser Worker/Xianyu Adapter/RobotClaw/Nginx active、live/ready、退役路由状态及公网 390/1280px 浏览器挂载与公式字体通过；没有重启服务或写入生产数据。
 
-Android 1.4.3（versionCode 17，release `17-4633f95`）已正式签名并在线。公网清单及 APK 为 13,000,133 bytes，SHA-256 为 `87202a47455f9a8c3641d807d3544bf556d737327966885d06f2a45f90dea2a1`；本地正式 APK 的签名、包名、版本、大小及哈希均与公网一致。本轮在一次性 Android 36 AVD 安装正式 APK，并验证首次启动和强制停止后的冷启动；临时 AVD 已清理。未覆盖、卸载或修改既有模拟器用户数据。
+Android 1.4.4（versionCode 18）正在执行正式发布；线上旧版 1.4.3（versionCode 17）保留为可回滚版本，完成签名、清单、覆盖升级和公网验收后补入本节。
 
 ### Trace 修复与本地验收
 
@@ -59,7 +59,7 @@ Claude Opus 5.5 对本次最终发布做了额外只读验收；工具返回的�
 
 Web 的 Trace 面板当前按 Run 查询，提供 service、kind、status、name 和最近时间窗筛选，文本输入防抖后请求；阶段按服务端分页展示，带层级缩进、语义状态色、空结果、错误重试和复制反馈，并以 live region 播报结果。新增交互已由 Faux Web E2E 在桌面和 320–2560px 视口验证，前端规格与生成的设计索引已同步。读屏器专项、真实设备视觉验收仍未完成。
 
-当时验收对象：Core 1.3.0、Android 源码 1.4.3（versionCode 17）、Protocol v16、HTTP `/api/v16`、业务 SQLite schema 27。以下章节保留当时的候选及历史部署事实；当前正式环境状态以本文开头的 2026-10-16 记录为准。
+当时验收对象：Core 1.3.0、旧版客户端源码 1.4.3（versionCode 17）、Protocol v16、HTTP `/api/v16`、业务 SQLite schema 27。以下章节保留当时的候选及历史部署事实；当前正式环境状态以本文开头的 2026-10-16 记录为准。
 
 ## 前序候选结论（历史）
 
@@ -139,7 +139,7 @@ Android 源码移除回复审查/改进入口并通过 `npm run check:android`�
 
 ## Android 六配置矩阵
 
-证据目录为 `artifacts/acceptance/android-matrix-20261011-124744/`；API 36 模拟器、host GPU、Android 1.4.3 debug 包。六组功能与布局检查全部通过、截图无效项为 0，正文显示 p95 均低于 100ms，未出现超过 700ms 的冻结帧。
+证据目录为 `artifacts/acceptance/android-matrix-20261011-124744/`；API 36 模拟器、host GPU、旧版客户端 1.4.3 debug 包。六组功能与布局检查全部通过、截图无效项为 0，正文显示 p95 均低于 100ms，未出现超过 700ms 的冻结帧。
 
 | 配置 | 正文显示 p95 | 最大帧 | 结果 |
 | --- | ---: | ---: | --- |
