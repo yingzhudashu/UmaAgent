@@ -176,7 +176,13 @@ export class TraceService {
       name,
       kind,
       this.service,
-      { ...attributes, "trace.flags": parent?.traceFlags ?? 1 },
+      {
+        ...attributes,
+        "trace.flags": parent?.traceFlags ?? 1,
+        // 默认 parent 来自跨服务入口；同进程从已有 Span 派生的子 Span
+        // 可显式传 false，避免把本地父级误报成远端根。
+        "trace.parent_remote": attributes?.["trace.parent_remote"] ?? Boolean(parent),
+      },
     );
     if (runId) this.store.linkRun(runId, rootTraceId);
     return span;

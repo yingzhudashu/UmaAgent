@@ -1,5 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -121,6 +121,55 @@ describe("TelemetryStore", () => {
     await store.close();
   });
 
+  it("uses the local root for external parents and reports only missing local parents", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-remote-root-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "server");
+    const trace = new TraceService(store, "server");
+    const remoteRoot = trace.startRoot("run-remote", undefined, "request", undefined, {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: 1,
+    });
+    const child = remoteRoot.child("operation", "internal");
+    child.finish({ status: "ok" });
+    remoteRoot.finish({ status: "ok" });
+    store.start({
+      traceId: "trace-with-orphan",
+      spanId: "orphan",
+      parentSpanId: "missing-local-parent",
+      service: "server",
+      name: "orphan",
+      kind: "internal",
+      startedAt: 1,
+      attributes: {},
+    });
+    store.finish({
+      traceId: "trace-with-orphan",
+      spanId: "orphan",
+      parentSpanId: "missing-local-parent",
+      service: "server",
+      name: "orphan",
+      kind: "internal",
+      status: "ok",
+      startedAt: 1,
+      endedAt: 2,
+      durationMs: 1,
+      attributes: {},
+      events: [],
+    });
+    await store.flush();
+    const first = store.listSpans({ runId: "run-remote", limit: 1 });
+    const later = store.listSpans({ runId: "run-remote", limit: 1, offset: 1 });
+    expect(first).toMatchObject({
+      rootSpanId: remoteRoot.spanId,
+      hasMore: true,
+    });
+    expect(later.rootSpanId).toBe(remoteRoot.spanId);
+    expect(store.summarize(0, Date.now()).orphanParentChains).toBe(1);
+    await store.close();
+  });
+
   it("stores and lists resource samples in telemetry only", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-telemetry-resources-"));
     roots.push(root);
@@ -147,6 +196,46 @@ describe("TelemetryStore", () => {
       { id: "sample-1", walBytes: 64, queuedRuns: 2, sampleDurationMs: 1_000, cpuPercent: 0.0003 },
     ]);
     await store.close();
+  });
+
+  it("aggregates resource windows in SQLite without changing weighted metrics", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-telemetry-resource-summary-"));
+    roots.push(root);
+    const store = new TelemetryStore(root, "core");
+    const samples = [
+      { id: "short", duration: 1_000, cpu: 1, rss: 100, wal: 10, loop: 1 },
+      { id: "long", duration: 3_000, cpu: 3, rss: 300, wal: 30, loop: 3 },
+      { id: "middle", duration: 2_000, cpu: 2, rss: 200, wal: 20, loop: 2 },
+    ];
+    for (const sample of samples)
+      store.recordResource({
+        id: sample.id,
+        capturedAt: 100,
+        cpuUserMicros: 1,
+        cpuSystemMicros: 1,
+        sampleDurationMs: sample.duration,
+        cpuPercent: sample.cpu,
+        rssBytes: sample.rss,
+        heapUsedBytes: 1,
+        heapTotalBytes: 2,
+        externalBytes: 0,
+        arrayBuffersBytes: 0,
+        eventLoopDelayMs: sample.loop,
+        walBytes: sample.wal,
+        activeRuns: 0,
+        queuedRuns: 0,
+      });
+    await store.flush();
+    const summary = store.summarize(0, 200);
+    await store.close();
+    expect(summary.resources).toEqual({
+      samples: 3,
+      cpuAverageCorePercent: (14 / 6) * availableParallelism(),
+      cpuPeakCorePercent: 3 * availableParallelism(),
+      rssPeakBytes: 300,
+      walPeakBytes: 30,
+      eventLoopDelayP95Ms: 3,
+    });
   });
 
   it("returns cross-service spans linked to a Run through their shared trace", async () => {

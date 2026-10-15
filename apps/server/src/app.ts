@@ -25,7 +25,7 @@ import {
 } from "@uma-agent/protocol";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import Value from "typebox/value";
-import type { RawData } from "ws";
+import type { RawData, WebSocket } from "ws";
 import { type AuthPrincipal, AuthService } from "./auth.js";
 import { mapServerError } from "./error-mapping.js";
 import { installHttpTelemetry } from "./httpTelemetry.js";
@@ -58,6 +58,17 @@ export function shouldCloseForBufferedAmount(bufferedAmount: number, maxBuffered
   return bufferedAmount > maxBufferedBytes;
 }
 
+export function websocketCloseStatus(
+  code: number,
+): { status: "ok" | "cancelled" } | { status: "error"; error: { name: string; message: string } } {
+  if (code === 1000) return { status: "ok" };
+  if (code === 1001) return { status: "cancelled" };
+  return {
+    status: "error",
+    error: { name: "WebSocketClose", message: `Connection closed with code ${code}` },
+  };
+}
+
 export async function createServer(
   runtime: UmaRuntime,
   options: { webRoot?: string | false; configLoader?: () => Promise<UmaConfig> } = {},
@@ -83,8 +94,11 @@ export async function createServer(
   };
   const stopRuntimeLogging = installRuntimeLogging(runtime, app);
   const httpTelemetry = installHttpTelemetry(app, runtime.config.server.stateDir);
+  const websocketConnections = new Map<WebSocket, () => void>();
   const requestTrace = httpTelemetry.contextFor;
   app.addHook("onClose", async () => {
+    // Fastify 关闭时先让升级连接收敛并终结 Span，再关闭遥测 Worker/SQLite。
+    for (const closeConnection of websocketConnections.values()) closeConnection();
     stopRuntimeLogging();
     await httpTelemetry.close();
   });
@@ -1058,6 +1072,22 @@ export async function createServer(
   app.head("/api/v16/events", async (_request, reply) => reply.code(405).send());
   app.get("/api/v16/events", { websocket: true }, (socket, request) => {
     const connectionSpan = httpTelemetry.startSpan("websocket.connection", requestTrace(request));
+    httpTelemetry.finishRequest(request);
+    let connectionEnded = false;
+    let cleaned = false;
+    let cleanupConnection = () => {};
+    const finishConnection = (status: Parameters<typeof connectionSpan.finish>[0]) => {
+      if (connectionEnded) return;
+      connectionEnded = true;
+      connectionSpan.finish(status);
+    };
+    socket.on("close", (code: number) => {
+      finishConnection(websocketCloseStatus(code));
+      cleanupConnection();
+    });
+    socket.on("error", (error: Error) => {
+      finishConnection({ status: "error", error: { name: error.name, message: error.message } });
+    });
     if (request.method !== "GET") {
       socket.close(1003, "WebSocket requires GET");
       return;
@@ -1118,6 +1148,19 @@ export async function createServer(
     const timer = setTimeout(() => {
       if (!authenticated) socket.close(1008, "Authentication timeout");
     }, 5_000);
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING)
+        socket.close(1001, "Server is shutting down");
+      finishConnection({ status: "cancelled" });
+      clearTimeout(timer);
+      unsubscribe();
+      unsubscribeResources();
+      websocketConnections.delete(socket);
+    };
+    cleanupConnection = cleanup;
+    websocketConnections.set(socket, cleanup);
     socket.on("message", (raw: RawData) => {
       let message: SocketMessage;
       try {
@@ -1164,12 +1207,6 @@ export async function createServer(
           send({ type: "sync.completed", sessionId: id, sequence: page.snapshotSequence });
         }
       }
-    });
-    socket.on("close", () => {
-      connectionSpan.finish({ status: "ok" });
-      clearTimeout(timer);
-      unsubscribe();
-      unsubscribeResources();
     });
   });
   app.all("/api/*", async (request, reply) => {

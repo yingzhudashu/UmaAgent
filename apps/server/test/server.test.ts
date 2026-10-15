@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type UmaConfig, UmaRuntime } from "@uma-agent/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createServer, shouldCloseForBufferedAmount } from "../src/app.js";
+import { createServer, shouldCloseForBufferedAmount, websocketCloseStatus } from "../src/app.js";
 import { AuthService } from "../src/auth.js";
 import { crossOrigin, secureOrigin, trustLoopbackProxy } from "../src/request-origin.js";
 
@@ -19,6 +19,12 @@ describe("server", () => {
   it("closes an overloaded WebSocket instead of growing an unbounded queue", () => {
     expect(shouldCloseForBufferedAmount(4 * 1024 * 1024, 4 * 1024 * 1024)).toBe(false);
     expect(shouldCloseForBufferedAmount(4 * 1024 * 1024 + 1, 4 * 1024 * 1024)).toBe(true);
+    expect(websocketCloseStatus(1000)).toEqual({ status: "ok" });
+    expect(websocketCloseStatus(1001)).toEqual({ status: "cancelled" });
+    expect(websocketCloseStatus(1006)).toEqual({
+      status: "error",
+      error: { name: "WebSocketClose", message: "Connection closed with code 1006" },
+    });
     expect(crossOrigin(undefined, "localhost")).toBe(false);
     expect(crossOrigin("not a url", "localhost")).toBe(true);
     expect(secureOrigin(undefined)).toBe(false);
@@ -240,12 +246,14 @@ describe("server", () => {
     });
     expect(cookieSession.statusCode).toBe(200);
     const cookieSessionId = cookieSession.json<{ id: string }>().id;
+    const abnormalTraceId = "4bf92f3577b34da6a3ce929d0e0e47a9";
     const socket = await app.injectWS("/api/v16/events", {
       on: EventEmitter.prototype.on,
       socket: loopbackSocket,
       headers: {
         cookie: `${webCookie?.name}=${webCookie?.value}`,
         origin: "https://web.example",
+        traceparent: `00-${abnormalTraceId}-00f067aa0ba902b7-01`,
       },
     });
     const socketEvent = new Promise<{ type: string }>((resolve) => {
@@ -258,7 +266,21 @@ describe("server", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     runtime.updateSession(cookieSessionId, { title: "Synced over WebSocket" });
     expect((await socketEvent).type).toBe("session.snapshot");
+    const abnormalClosed = new Promise<number>((resolve) => socket.once("close", (code) => resolve(code)));
     socket.terminate();
+    expect(await abnormalClosed).toBe(1006);
+    const abnormalTrace = await app.inject({
+      method: "GET",
+      url: `/api/v16/traces?traceId=${abnormalTraceId}`,
+      headers: { authorization: `Bearer ${testToken}` },
+    });
+    expect(
+      abnormalTrace.json<{ spans: Array<{ kind: string; status: string; errorType?: string }> }>().spans,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "server.websocket", status: "error", errorType: "WebSocketClose" }),
+      ]),
+    );
 
     await expect(
       app.injectWS("/api/v16/events", {
@@ -1345,5 +1367,21 @@ describe("server", () => {
       headers: { authorization: `Bearer ${testToken}` },
     });
     expect(removedV4.statusCode).toBe(404);
+
+    const shutdownTraceId = "4bf92f3577b34da6a3ce929d0e0e47ab";
+    await app.injectWS("/api/v16/events", {
+      on: EventEmitter.prototype.on,
+      socket: loopbackSocket,
+      headers: {
+        cookie: `${webCookie?.name}=${webCookie?.value}`,
+        origin: "https://web.example",
+        traceparent: `00-${shutdownTraceId}-00f067aa0ba902b7-01`,
+      },
+    });
+    await app.close();
+    const shutdownTrace = await runtime.listTrace({ traceId: shutdownTraceId });
+    expect(shutdownTrace.spans).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "server.websocket", status: "cancelled" })]),
+    );
   });
 });

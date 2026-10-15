@@ -34,11 +34,11 @@ Protocol 提供严格类型，Client 负责通信，Server 负责认证和传输
 
 模型审计的 totalTokens、inputTokens 等明确数值计数保留；同名字符串、访问令牌及嵌套凭据仍脱敏。运营和诊断汇总读取持久化计数，不能把脱敏占位转成 NaN 或 null 后伪装为无用量。
 
-现有 W3C trace context 串联 HTTP、队列、Run、预检、模型、工具、审批及 Worker。单调时钟计算本进程耗时，不跨设备相减。诊断数据与业务库分离，按用户所属 Run 过滤后分页。禁止记录完整提示词、正文、工具参数和秘密。
+现有 W3C trace context 串联 HTTP、WebSocket、队列、Run、预检、模型、工具、审批及 Worker。单调时钟计算本进程耗时，不跨设备相减。外部 `traceparent` 的父 Span ID 用于跨服务关联，不要求该父级存在于本地库；入口 Span 通过 `trace.parent_remote` 明确标记这一来源，本地派生 Span 显式标记为 false。孤儿统计排除此类远端根，同时继续报告缺失的本地父 Span。对旧遥测行不做批量回写；历史 `server.http` 入口按其入口语义识别远端父级。诊断数据与业务库分离，按用户所属 Run 过滤后分页。禁止记录完整提示词、正文、工具参数和秘密。
 
-Trace 查询支持 `runId`、`traceId`、时间范围、状态、名称、`service`、`kind`、`offset` 和 `limit`；普通账号必须先通过自己拥有的 Run，管理员也必须使用至少一个过滤条件。服务端先完成权限和 Run 子树过滤，再分页并计算祖先深度，避免跨页树结构和跨账号泄露。Span 的 `active` 状态不会通过查询接口返回；服务重启会将遗留 Span 终结为 `IncompleteSpan`。`queue.wait`、模型重试、工具超时、审批等待、取消和 Worker 断连都必须有可查询的阶段 Span 或事件。
+Trace 查询支持 `runId`、`traceId`、时间范围、状态、名称、`service`、`kind`、`offset` 和 `limit`；普通账号必须先通过自己拥有的 Run，管理员也必须使用至少一个过滤条件。服务端先完成权限和 Run 子树过滤，再分页并计算祖先深度；分页树根是本地链路的最上层 Span，外部父级不作为本地孤儿节点。Span 的 `active` 状态不会通过查询接口返回；服务重启会将遗留 Span 终结为 `IncompleteSpan`。WebSocket 握手 HTTP Span 在升级后立即结束；连接 Span 在正常关闭（1000）、服务关闭（1001）、异常关闭、错误和服务清理时分别记录 ok、cancelled 或 error，并清除订阅和认证定时器。Preflight Provider 失败或取消时也显式结束阶段 Span，不把预期失败留作父 Span 结束时的 `IncompleteSpan`。`queue.wait`、模型重试、工具超时、审批等待、取消和 Worker 断连都必须有可查询的阶段 Span 或事件。
 
-遥测写入失败只增加失败计数，不回滚业务事务；批量队列包含排队和在途上限，`flush` 是读取前的持久化屏障，关闭会先排空并终止 Worker。资源报告同时记录 CPU、RSS、堆、事件循环延迟、WAL、活动 Run 和排队 Run，用于将长尾请求与资源峰值关联。遥测维护在 SQLite 内聚合过期 Span 后删除明细，避免把历史链路一次性加载到 Node 堆。
+遥测写入失败只增加失败计数，不回滚业务事务；批量队列包含排队和在途上限，`flush` 是读取前的持久化屏障，关闭会先排空并终止 Worker。资源报告同时记录 CPU、RSS、堆、事件循环延迟、WAL、活动 Run 和排队 Run，用于将长尾请求与资源峰值关联。CPU 平均按采样时长加权，延迟 p95 使用 nearest-rank，峰值使用窗口内最大样本；汇总由 SQLite 完成，不把时间窗内全部资源行复制到 Node 堆。遥测维护在 SQLite 内聚合过期 Span 后删除明细，避免把历史链路一次性加载到 Node 堆。
 
 遥测写入交给独立 Worker，以有界队列和批量事务避免 SQLite 锁等待阻塞业务线程。查询、flush、关闭和失败计数具有明确协议；取消、异常、超时及退出均终结 Span。客户端通过 Run/Trace ID 打开阶段详情。主 Agent 模型失败记录 ModelError 与脱敏后的原因，避免只有 error 状态而无可诊断信息。辅助模型调用在业务库创建或结算失败时也终结 Span，结算不重复写入；模型与结算同时失败保留两个错误。
 

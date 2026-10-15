@@ -896,6 +896,23 @@ describe("UmaRuntime preflight", () => {
     expect(run.taskClass).toBe("standard");
   });
 
+  it("finishes the preflight span when the provider fails", async () => {
+    const failure = {
+      ...fauxAssistantMessage(""),
+      content: [],
+      stopReason: "error" as const,
+      errorMessage: "provider unavailable",
+    };
+    const runtime = await runtimeWith([failure]);
+    const { run } = await runOnce(runtime);
+    const trace = await runtime.listTrace({ runId: run.id });
+    const preflight = trace.spans.find((span) => span.name === "preflight");
+    expect(run.status).toBe("failed");
+    expect(preflight).toMatchObject({ status: "error", errorType: "Error" });
+    expect(preflight?.errorMessage).toContain("provider unavailable");
+    expect(trace.spans.some((span) => span.errorType === "IncompleteSpan")).toBe(false);
+  });
+
   it("fails a plan step that reaches forty-eight Agent turns", async () => {
     const toolTurns = Array.from({ length: 48 }, (_, index) =>
       fauxAssistantMessage([fauxToolCall("list", { path: String(index) })]),

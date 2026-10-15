@@ -1,6 +1,28 @@
 # UmaAgent 当前候选验收
 
-## 2026-10-15 Trace、前端与全链路复核
+## 2026-10-15 本轮最终验收
+
+本轮修改修复 WebSocket 升级后 HTTP Span 未结束、连接关闭终态缺失，以及外部 W3C 父 Span 被统计为本地孤儿的问题。连接 Span 在正常 close、服务关闭、异常 close/error 和应用清理时幂等结束，订阅和认证超时器随连接清理；Preflight Provider 失败/取消会结束阶段 Span。遥测树根按本地祖先计算并识别远端根，历史 Span 不回写。资源统计改为 SQLite 汇总，维持既有 CPU 时长加权、nearest-rank p95 和窗口峰值语义。
+
+本轮验收结果：`npm run check`、`npm run test:coverage`（59 文件、356 项；语句 82.15%、分支 74.28%、函数 76.78%、行 84.92%）、完整 workspace `npm run build`、`npm run build:web:embed`、`npm run check:android`、`npm run test:eval:faux`（6/6）、`npm run test:web:e2e`（38/38）、`npm run test:perf` 和前端设计规格 `python docs/frontend-design/validate.py` 均通过。最终代码独占性能：API P95 6.05 ms、事件分页 P95 1.33 ms、RSS 峰值 111,988,736 B、双库 WAL 峰值 2,249,584 B、CPU 核心等效平均/峰值 5.5274%/5.5274%、事件循环 P95 29.8012 ms；全部低于既有预算。与 Gradle/Eval 并行时曾出现一次 CPU 峰值超预算，停止并发后独占重跑通过，未更改负载、功能或预算。
+
+`npm run test:soak:faux` 终版已完成四小时门禁并通过：`artifacts/acceptance/soak-1792037622280/result.json`，运行 14,400,396 ms，2,620 条消息，事件游标 31,476，基线 RSS 111,529,984 B，RSS 峰值 156,110,848 B，双库 WAL 峰值 2,542,104 B；游标连续、调度无重复，所有资源值低于既有预算。前两次未完成重跑不作为验收证据。它们留下的 ignored 样本目录、临时状态目录和 `soak-background.*.log` 仍未清除；当前执行环境拒绝递归删除，本轮没有尝试绕过。通过报告保留在仓库 ignored 的验收证据目录中。真实 Provider smoke 维持两次 `provider_error: terminated`、0 token 的既有阻塞结论，本轮未重复请求。支持范围外的 Docker/Linux、Android 实体设备、读屏和正式签名 APK 发布仍未验收。
+
+### 前端审美与交互复核
+
+Claude Opus 5.5 以请求 effort `max` 对 Web 前端进行了只读审美和交互复核，实际返回模型为 `claude-opus-5-5`，结论为**未发现确证的视觉缺陷或交互异常，不建议修改 UI**。复核读取设计令牌、响应式布局、Trace 面板、会话输入、消息卡片、队列、抽屉和操作菜单实现，并结合 Web E2E 38/38 与前端规格 31 页、82 项动作、149 张图、0 问题结果。结论仅覆盖代码和现有自动化证据；屏幕阅读器、实体移动设备、跨浏览器逐像素和色盲专项仍未执行，不能写成已验收。
+
+## 前序过程记录：2026-10-15 Trace 生命周期与汇总修复
+
+修复 WebSocket 握手 HTTP Span 在升级后仍保持 active 的问题；连接 Span 对正常关闭、服务关闭和异常 close code 分别记录终态，close/error 路径幂等结束 Span，服务关闭时先结束连接并清理订阅和认证定时器，再排空遥测 Worker。Preflight Provider 失败或取消时显式结束阶段 Span。新增的单测覆盖关闭状态映射、服务关闭实测和 Provider 失败，历史 Span 不回写、不删除。
+
+外部 W3C `traceparent` 父 Span 是远端根，不计作本地孤儿。新入口记录 `trace.parent_remote`；查询分页树根沿本地祖先链识别远端根；旧 `server.http` 入口按既有入口语义计算，不执行历史数据更新。真实缺失的非入口本地父 Span 仍计入孤儿统计。
+
+资源窗口汇总由 SQLite 执行，保持时长加权 CPU、nearest-rank event-loop p95、RSS/WAL/CPU 最大值定义，避免大规模采样被完整映射成 Node 对象和复制排序数组。没有放宽 WAL 或性能预算。此阶段先完成 Telemetry、HTTP telemetry、Server、Core runtime/model-calls 定向测试和 `npm run check`；随后完整覆盖率、构建、E2E、固定性能和 soak 的最终结果见上方“本轮最终验收”。
+
+过程产物清理检查发现 ignored `artifacts` 下旧日志、截图、部署交付包和历史 acceptance 证据混存。随后已删除根目录 71 个旧过程文件、`artifacts/android-optimization/`、`artifacts/refactor/` 和 `artifacts/acceptance/runtime-unpack-final106/`；保留 `artifacts/acceptance/` 其余历史验收证据、`artifacts/delivery/`、Android production 目录、生产发布证据和 `users/`。真实 Provider 未重试，继续保留既有 `provider_error: terminated` 阻塞结论；生产服务和用户数据未写入。
+
+## 前序候选：2026-10-15 Trace、前端与全链路复核
 
 本轮在不改变 Protocol v16、业务 schema 27 和历史用户数据的前提下，补充 Trace 按 `service`/`kind` 的服务端过滤，并验证过滤先于分页；非法状态、名称、服务和阶段查询会直接返回 400。遥测仍使用独立 telemetry.db、有限批量 Worker、脱敏和重启 `IncompleteSpan` 终结逻辑。已从 Git 删除历史 APK、截图和过程性 `artifacts` 文件；当前架构门禁禁止重新跟踪该类产物。真实用户目录未纳入 Git，也未被本轮测试写入。
 
@@ -25,7 +47,7 @@ Web 的 Trace 面板当前按 Run 查询，提供 service、kind、status、name
 
 ## 当前结论
 
-**本地和 Faux 验收通过；真实模型与 Android APK 发布仍有阻塞。** Windows Native Core、Web/PWA、数据隔离、Trace、Faux 性能门禁和本轮四小时 Faux soak 已通过；Trace 面板改动后的完整 Web E2E 为 38/38。四小时 soak 完成 2626 条消息，RSS 峰值 153,202,688 B、双库 WAL 峰值 2,529,744 B，游标连续，脚本检查无重复调度。真实 Provider smoke 的模型列表诊断 HTTP 200，但两次隔离流式请求均以 `provider_error: terminated` 结束且无 token，未继续重放；真实模型主链路、评测、性能和 soak 因此不能标记通过。Android 新源码通过 Gradle JVM 测试与 instrumentation 编译；六配置设备矩阵是上一版 APK 的证据，不能替代本次设备验收或签名 APK 发布。架构门禁已通过，六个登记的大文件持续受尺寸基线监测，其中五个当前超过 900 行，CLI `main.ts` 为 894 行。Docker、Linux、实体真机、真实渠道、大规模知识库索引吞吐和无障碍专项属于目标环境适配证据，列为目标环境发布前的待验收项。
+**前序候选当时结论：本地和 Faux 验收通过；真实模型与 Android APK 发布仍有阻塞。** 该段记录的四小时 Faux soak、性能及 Web E2E 均属于前序候选，不能用作本轮最终源码的验收证据。本轮终版 soak 未达到四小时；当前未验收项见上方“2026-10-15 本轮最终验收”。其余内容记录当时的 Windows Native Core、Web/PWA、数据隔离、Trace 和 Android 签名状态。
 
 真实模型脚本只使用隔离配置、临时 state、workspace、账号和令牌；失败后脚本清理临时目录，未写入历史用户数据。当前可复核的真实 Embedding 隔离 smoke 仍为两条输入、1024 维、315ms；它不能替代聊天模型验收。未启动闲鱼 Adapter，也未发送闲鱼消息。
 

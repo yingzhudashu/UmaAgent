@@ -106,9 +106,15 @@ export function spanTree(
     const origin = String(row.origin_span_id);
     depths[origin] = Math.max(depths[origin] ?? 0, Number(row.depth ?? 0));
   }
-  const root = firstSpanId
-    ? rows.find((row) => String(row.origin_span_id) === firstSpanId && row.parent_span_id == null)
-    : undefined;
+  const path = firstSpanId ? rows.filter((row) => String(row.origin_span_id) === firstSpanId) : [];
+  const terminal = path.reduce<Record<string, unknown> | undefined>(
+    (current, row) => (!current || Number(row.depth ?? 0) > Number(current.depth ?? 0) ? row : current),
+    undefined,
+  );
+  const root =
+    terminal && (terminal.parent_span_id == null || terminal.origin_remote_parent === 1)
+      ? terminal
+      : undefined;
   return {
     depthBySpanId: depths,
     ...(root ? { rootSpanId: String(root.span_id) } : {}),

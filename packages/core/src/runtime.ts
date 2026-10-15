@@ -1537,21 +1537,35 @@ export class UmaRuntime {
         return preflightRun;
       });
       const preflightTrace = rootTrace.child("preflight", "run");
-      const decision =
-        resumeFromCheckpoint && currentRun.route && currentRun.route !== "clarify"
-          ? {
-              route: currentRun.route,
-              taskClass: currentRun.taskClass ?? "standard",
-              goal: currentRun.goal ?? input.text,
-              reasoningSummary: currentRun.reasoningSummary ?? "Resuming from checkpoint",
-              successCriteria: currentRun.successCriteria,
-              assumptions: currentRun.assumptions,
-              questions: [],
-              steps: currentRun.plan.map((step) => step.title),
-            }
-          : reusedPreflight
-            ? reusedPreflight
-            : await this.preflight.decide(session, input, controller.signal, runId, preflightTrace);
+      let decision: PreflightDecision;
+      try {
+        decision =
+          resumeFromCheckpoint && currentRun.route && currentRun.route !== "clarify"
+            ? {
+                route: currentRun.route,
+                taskClass: currentRun.taskClass ?? "standard",
+                goal: currentRun.goal ?? input.text,
+                reasoningSummary: currentRun.reasoningSummary ?? "Resuming from checkpoint",
+                successCriteria: currentRun.successCriteria,
+                assumptions: currentRun.assumptions,
+                questions: [],
+                steps: currentRun.plan.map((step) => step.title),
+              }
+            : reusedPreflight
+              ? reusedPreflight
+              : await this.preflight.decide(session, input, controller.signal, runId, preflightTrace);
+      } catch (error) {
+        // Provider 失败/取消也要结束 preflight 阶段，避免只因父 Run 结束而伪报 IncompleteSpan。
+        preflightTrace.finish(
+          controller.signal.aborted
+            ? { status: "cancelled" }
+            : {
+                status: "error",
+                error: { name: error instanceof Error ? error.name : "Error", message: String(error) },
+              },
+        );
+        throw error;
+      }
       // 路由、检查点和下一状态属于同一同步阶段，原子提交后再发布事件，避免逐状态 fsync。
       const preflightStatus = this.events.transaction(() => {
         this.events.transaction(() => {

@@ -10,6 +10,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 
 export type HttpTelemetry = {
   contextFor(request: FastifyRequest): TraceParent | undefined;
+  finishRequest(request: FastifyRequest, statusCode?: number): void;
   startSpan(name: string, parent?: TraceParent): TraceSpanContext;
   close(): Promise<void>;
 };
@@ -35,18 +36,22 @@ export function installHttpTelemetry(app: FastifyInstance, stateDir: string): Ht
         {
           method: request.method,
           path,
+          ...(parent ? { "trace.parent_remote": true } : {}),
         },
         parent,
         "server.http",
       ),
     );
   });
-  app.addHook("onResponse", async (request, reply) => {
-    const failed = reply.statusCode >= 500;
+  const finishRequest = (request: FastifyRequest, statusCode = 200) => {
+    const failed = statusCode >= 500;
     spans.get(request)?.finish({
       status: failed ? "error" : "ok",
-      ...(failed ? { error: { name: `HTTP${reply.statusCode}`, message: "HTTP request failed" } } : {}),
+      ...(failed ? { error: { name: `HTTP${statusCode}`, message: "HTTP request failed" } } : {}),
     });
+  };
+  app.addHook("onResponse", async (request, reply) => {
+    finishRequest(request, reply.statusCode);
   });
   app.addHook("onTimeout", async (request) => {
     spans
@@ -63,8 +68,16 @@ export function installHttpTelemetry(app: FastifyInstance, stateDir: string): Ht
         ? { traceId: span.traceId, spanId: span.spanId, traceFlags: traceFlags.get(request) ?? 1 }
         : undefined;
     },
+    finishRequest,
     startSpan(name, parent) {
-      return trace.startRoot(undefined, undefined, name, undefined, parent, "server.websocket");
+      return trace.startRoot(
+        undefined,
+        undefined,
+        name,
+        { "trace.parent_remote": false },
+        parent,
+        "server.websocket",
+      );
     },
     close: () => telemetry.close(),
   };

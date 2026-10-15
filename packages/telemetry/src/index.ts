@@ -5,7 +5,6 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { context, trace as otelTrace, type Span, TraceFlags, type Tracer } from "@opentelemetry/api";
 import { SqlWriter } from "./sql-writer.js";
 import {
-  percentile,
   type ResourceSample,
   spanTree,
   type TelemetryEvent,
@@ -366,17 +365,24 @@ export class TelemetryStore {
     const selectedIds = selected.map((span) => String(span.span_id));
     const treeRows = selected.length
       ? (this.prepareQuery(
-          `WITH RECURSIVE ancestors(origin_span_id,trace_id,span_id,parent_span_id,depth,path) AS (
-             SELECT span_id,trace_id,span_id,parent_span_id,0,'|' || span_id || '|'
+          `WITH RECURSIVE ancestors(origin_span_id,trace_id,span_id,parent_span_id,depth,path,origin_remote_parent) AS (
+             SELECT span_id,trace_id,span_id,parent_span_id,0,'|' || span_id || '|',
+                    CASE WHEN json_extract(attributes_json,'$."trace.parent_remote"')=1
+                               OR (kind='server.http' AND parent_span_id IS NOT NULL)
+                         THEN 1 ELSE 0 END
              FROM spans WHERE span_id IN (${selectedIds.map(() => "?").join(",")})
              UNION ALL
              SELECT child.origin_span_id,child.trace_id,parent.span_id,parent.parent_span_id,
-                    child.depth+1,child.path || parent.span_id || '|'
+                    child.depth+1,child.path || parent.span_id || '|',
+                    MAX(child.origin_remote_parent,
+                        CASE WHEN json_extract(parent.attributes_json,'$."trace.parent_remote"')=1
+                                   OR (parent.kind='server.http' AND parent.parent_span_id IS NOT NULL)
+                             THEN 1 ELSE 0 END)
              FROM ancestors child JOIN spans parent
                ON parent.span_id=child.parent_span_id AND parent.trace_id=child.trace_id
              WHERE child.parent_span_id IS NOT NULL
                AND instr(child.path,'|' || parent.span_id || '|')=0
-           ) SELECT origin_span_id,span_id,parent_span_id,depth FROM ancestors`,
+            ) SELECT origin_span_id,span_id,parent_span_id,depth,origin_remote_parent FROM ancestors`,
         ).all(...selectedIds) as Array<Record<string, unknown>>)
       : [];
     const tree = spanTree(treeRows, selected[0] ? String(selected[0].span_id) : undefined);
@@ -516,7 +522,12 @@ export class TelemetryStore {
     const orphanParentChains = Number(
       (
         this.prepareQuery(
-          "SELECT COUNT(*) AS count FROM spans child WHERE child.parent_span_id IS NOT NULL AND child.started_at BETWEEN ? AND ? AND NOT EXISTS (SELECT 1 FROM spans parent WHERE parent.span_id=child.parent_span_id AND parent.trace_id=child.trace_id)",
+          `SELECT COUNT(*) AS count FROM spans child
+           WHERE child.parent_span_id IS NOT NULL AND child.started_at BETWEEN ? AND ?
+             AND child.kind <> 'server.http'
+             AND COALESCE(json_extract(child.attributes_json,'$."trace.parent_remote"'),0) <> 1
+             AND NOT EXISTS (SELECT 1 FROM spans parent
+                             WHERE parent.span_id=child.parent_span_id AND parent.trace_id=child.trace_id)`,
         ).get(from, to) as Record<string, unknown>
       )?.count ?? 0,
     );
@@ -528,16 +539,24 @@ export class TelemetryStore {
       type: String(row.error_type ?? "Error").slice(0, 200),
       count: Number(row.count ?? 0),
     }));
-    const resourceRows = this.prepareQuery(
-      "SELECT cpu_percent,sample_duration_ms,rss_bytes,wal_bytes,event_loop_delay_ms FROM resource_samples WHERE captured_at BETWEEN ? AND ? ORDER BY captured_at",
-    ).all(from, to) as Array<Record<string, unknown>>;
-    const resourceDuration = resourceRows.reduce((sum, row) => sum + Number(row.sample_duration_ms ?? 0), 0);
-    const cpuAverage = resourceDuration
-      ? resourceRows.reduce(
-          (sum, row) => sum + Number(row.cpu_percent ?? 0) * Number(row.sample_duration_ms ?? 0),
-          0,
-        ) / resourceDuration
-      : 0;
+    // 汇总直接在 SQLite 中完成；长期留存的采样数增长时，不再按行创建 Node 对象和排序数组。
+    const resources = this.prepareQuery(
+      `SELECT COUNT(*) AS samples,
+              COALESCE(SUM(cpu_percent * sample_duration_ms) / NULLIF(SUM(sample_duration_ms),0),0) AS cpu_average,
+              COALESCE(MAX(cpu_percent),0) AS cpu_peak,
+              COALESCE(MAX(rss_bytes),0) AS rss_peak,
+              COALESCE(MAX(wal_bytes),0) AS wal_peak
+       FROM resource_samples WHERE captured_at BETWEEN ? AND ?`,
+    ).get(from, to) as Record<string, unknown>;
+    const eventLoopP95 = this.prepareQuery(
+      `WITH ranked AS (
+         SELECT event_loop_delay_ms,
+                ROW_NUMBER() OVER (ORDER BY event_loop_delay_ms) AS sample_rank,
+                COUNT(*) OVER () AS sample_count
+         FROM resource_samples WHERE captured_at BETWEEN ? AND ?
+       ) SELECT event_loop_delay_ms FROM ranked
+         WHERE sample_rank=MAX(1,CAST(sample_count*0.95+0.999999 AS INTEGER)) LIMIT 1`,
+    ).get(from, to) as Record<string, unknown> | undefined;
     const coreCount = availableParallelism();
     const queueLatency = stageLatencyMs.queue ?? { p50: 0, p95: 0, p99: 0 };
     return {
@@ -552,16 +571,12 @@ export class TelemetryStore {
       errorTypes,
       queueWait: { count: queueWaitCount, ...queueLatency },
       resources: {
-        samples: resourceRows.length,
-        cpuAverageCorePercent: cpuAverage * coreCount,
-        cpuPeakCorePercent:
-          Math.max(0, ...resourceRows.map((row) => Number(row.cpu_percent ?? 0))) * coreCount,
-        rssPeakBytes: Math.max(0, ...resourceRows.map((row) => Number(row.rss_bytes ?? 0))),
-        walPeakBytes: Math.max(0, ...resourceRows.map((row) => Number(row.wal_bytes ?? 0))),
-        eventLoopDelayP95Ms: percentile(
-          resourceRows.map((row) => Number(row.event_loop_delay_ms ?? 0)),
-          95,
-        ),
+        samples: Number(resources.samples ?? 0),
+        cpuAverageCorePercent: Number(resources.cpu_average ?? 0) * coreCount,
+        cpuPeakCorePercent: Number(resources.cpu_peak ?? 0) * coreCount,
+        rssPeakBytes: Number(resources.rss_peak ?? 0),
+        walPeakBytes: Number(resources.wal_peak ?? 0),
+        eventLoopDelayP95Ms: Number(eventLoopP95?.event_loop_delay_ms ?? 0),
       },
       services,
       stageLatencyMs,
