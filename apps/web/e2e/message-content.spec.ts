@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 
 test("the packaged Android body renders math safely and preserves completed blocks while streaming", async ({
   page,
-}) => {
+}, testInfo) => {
   const assets = resolve("android/app/src/main/assets/message");
   await page.route("https://appassets.androidplatform.net/assets/message/**", async (route) => {
     const pathname = decodeURIComponent(new URL(route.request().url()).pathname);
@@ -39,7 +39,7 @@ test("the packaged Android body renders math safely and preserves completed bloc
   await page.goto("https://appassets.androidplatform.net/assets/message/android.html");
   await page.waitForFunction(() => typeof Reflect.get(window, "updateMessage") === "function");
   const content =
-    "# 标题\n\n正文 **强调** $a^2$。\n\n> 引用\n\n- 一级\n  - 二级\n\n| 列 | 长内容 |\n| --- | --- |\n| 数据 | " +
+    "# 标题\n\n正文 **强调** `state` 和 $a^2$。\n\n> 引用\n\n- 一级\n  - 二级\n\n| 列 | 长内容 |\n| --- | --- |\n| 数据 | " +
     "表格内容".repeat(40) +
     " |\n\n```js\nconst formula = '$notMath$';\n" +
     "longCode".repeat(50) +
@@ -52,6 +52,7 @@ test("the packaged Android body renders math safely and preserves completed bloc
         link: "#365f45",
         size: 16,
         code: "#eeeeee",
+        border: "#aab5ad",
       });
     }, text);
   await render(content);
@@ -59,6 +60,12 @@ test("the packaged Android body renders math safely and preserves completed bloc
   await expect(page.locator(".katex")).toHaveCount(2);
   await expect(page.locator("pre .katex")).toHaveCount(0);
   await expect(page.locator("ul ul li")).toHaveText("二级");
+  await expect(page.locator(".uma-message p code").first()).toHaveCSS("padding-left", "5px");
+  await expect(page.locator(".uma-message p code").first()).toHaveCSS(
+    "background-color",
+    "rgb(238, 238, 238)",
+  );
+  await expect(page.locator(".uma-message pre")).toHaveCSS("border-top-width", "1px");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(await page.evaluate(() => Reflect.get(window, "injected"))).toBeUndefined();
   await expect(page.locator("#message script, #message [onerror], a[href^='javascript:']")).toHaveCount(0);
@@ -88,5 +95,8 @@ test("the packaged Android body renders math safely and preserves completed bloc
     await page.evaluate(() => Reflect.get(window, "copyBefore") === document.querySelector(".code-copy")),
   ).toBe(true);
   await expect(page.getByRole("button", { name: "复制失败，请选择文本复制" })).toBeVisible();
-  await page.screenshot({ path: "artifacts/acceptance/shared-body-320.png", fullPage: true });
+  await testInfo.attach("shared-body-320.png", {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
 });

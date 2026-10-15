@@ -2,7 +2,7 @@
 
 通用Agent对话、执行计划、后台任务和管理员渠道工作台的独立前端实施合同。
 
-> 文档修订日期：2026-10-14。本文记录当前 Protocol v16、HTTP `/api/v16`、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 [发布验收](release-acceptance.md) 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。
+> 文档修订日期：2026-10-16。本文记录当前 Protocol v16、HTTP `/api/v16`、业务 schema 27 的前端实现合同；未执行的设备、网络和真实模型验收以 [发布验收](release-acceptance.md) 标为阻塞。设计图为可编辑 SVG 结构稿，不是产品运行截图，也不是 ImageGen 输出。
 
 [图文阅读版与界面索引](frontend-design/index.html) · [结构化界面规格](frontend-design/spec.json) · [审查与验收记录](release-acceptance.md)
 
@@ -86,7 +86,7 @@ Android为独立验收重点，页面与操作详见 docs/android-design.zh-CN.m
 深色主题明确映射：bg=#111820，surface=#1B2632，text=#F1F5F9，muted=#BCC8D5，border=#65768A，selected=#293E54；主色文字在深色下用#A8D0FF，实心按钮背景固定为#365F45、文字#FFFFFF（与浅色主题的primary token一致）；#A8D0FF仅用于深色主题链接和文字，不作为白字按钮底色。Android固定使用本项目品牌色：浅色primary=#365F45、onPrimary=#FFFFFF；深色primary=#A5D6B0、onPrimary=#153C23、primaryContainer=#263D30、onPrimaryContainer=#D6EFDE，原生Material控件使用此语义映射。其余上述蓝色链接和白字实心按钮规则用于Web。本版不提供动态色开关。按钮hover叠加5%黑色，pressed叠加10%黑色（sRGB通道分别乘0.95/0.90并四舍五入），键盘focus使用2px #A8D0FF外圈，disabled使用surface背景和muted文字，并由真实disabled属性阻止提交。危险按钮浅色#B42318/白字，成功#067647，警告#8A4B08。
 
 
-会话正文16px/24px，折叠步骤12px/18px。Web头像48px，840px以下38px；消息列间距桌面14px、移动10px；回复卡片四周16px内边距。正文、队列和输入区最大960px，队列摘要位于输入区正常布局内，详情向上展开。状态摘要使用16px内边距和可收缩的两列，长路径可换行。Android正文bodyMedium，详细步骤bodySmall；回复头像24dp、聊天头部不显示装饰头像。
+会话正文16px/24px，折叠步骤12px/18px。共享 Markdown 正文使用主题语义色：行内代码使用当前 selected 底色与 2px/5px 内边距，代码块保留 1px 边界，引用使用同一边界色；Web 与 Android 共用渲染 CSS。Web头像48px，840px以下38px；消息列间距桌面14px、移动10px；回复卡片四周16px内边距。正文、队列和输入区最大960px，队列摘要位于输入区正常布局内，详情向上展开。状态摘要使用16px内边距和可收缩的两列，长路径可换行。Android正文bodyMedium，详细步骤bodySmall；回复头像24dp、聊天头部不显示装饰头像。
 
 
 |Token|浅色值|用途|

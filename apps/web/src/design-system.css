@@ -29,6 +29,11 @@
   --accent: #365f45;
   --accent-soft: #e6efe7;
   --accent-ink: #ffffff;
+  /* 轻量层次只用于可浮起的表面，聊天阅读区仍保持安静、无装饰。 */
+  --shadow-sm: 0 1px 2px rgb(23 33 43 / 8%);
+  --shadow-md: 0 6px 18px rgb(23 33 43 / 10%);
+  --shadow-lg: 0 16px 36px rgb(23 33 43 / 16%);
+  --shadow: var(--shadow-md);
   font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
   font-size: 16px;
   color: var(--text);
@@ -50,6 +55,10 @@
     --ink-muted: #bcc8d5;
     --line: #65768a;
     --accent-soft: #293e54;
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 22%);
+    --shadow-md: 0 6px 18px rgb(0 0 0 / 28%);
+    --shadow-lg: 0 16px 36px rgb(0 0 0 / 42%);
+    --shadow: var(--shadow-md);
     color-scheme: dark;
   }
   &.uma-embed--standalone {
@@ -359,7 +368,7 @@
     padding: 16px;
     border-radius: 12px;
     border: 1px solid var(--border);
-    box-shadow: none;
+    box-shadow: var(--shadow-sm);
     background: var(--surface-1);
   }
   .empty {
@@ -1157,4 +1166,13 @@
 .uma-embed .queue-dock__actions .action-menu-items {
   position: static;
   box-shadow: none;
+}
+
+/* 共享 Markdown 正文从当前主题读取语义色，代码标记在两端保持一致。 */
+.uma-embed[data-design-shell] .markdown {
+  --message-code-bg: var(--surface-3);
+  --message-border: var(--line);
+}
+.uma-embed[data-design-shell] .markdown pre {
+  border-color: var(--line);
 }

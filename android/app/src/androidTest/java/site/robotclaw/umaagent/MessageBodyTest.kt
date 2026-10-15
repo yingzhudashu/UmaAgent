@@ -55,7 +55,7 @@ class MessageBodyTest {
                 """
                 # 手机阅读
 
-                正文 **强调** 和行内公式 ${'$'}a^2+b^2=c^2${'$'}。
+                正文 **强调**、行内代码 `state` 和行内公式 ${'$'}a^2+b^2=c^2${'$'}。
 
                 > 引用内容
 
@@ -99,6 +99,7 @@ class MessageBodyTest {
         assertEquals("1", evaluate("document.querySelectorAll('table').length"))
         assertEquals("1", evaluate("document.querySelectorAll('pre').length"))
         assertEquals("0", evaluate("document.querySelectorAll('pre .katex').length"))
+        assertEquals("5px", evaluate("getComputedStyle(document.querySelector('#message p code')).paddingLeft"))
         assertEquals(
             "true",
             evaluate(
@@ -110,6 +111,10 @@ class MessageBodyTest {
         for (isDark in listOf(false, true)) {
             compose.runOnIdle { dark.value = isDark }
             compose.waitForIdle()
+            assertEquals(
+                if (isDark) "rgb(41, 62, 84)" else "rgb(230, 239, 231)",
+                evaluate("getComputedStyle(document.querySelector('#message p code')).backgroundColor"),
+            )
             val file =
                 File(
                     compose.activity.cacheDir,

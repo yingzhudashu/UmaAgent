@@ -48,6 +48,7 @@ internal fun RichMessageContent(
                 .put("background", "transparent")
                 .put("link", color(colors.primary))
                 .put("code", color(colors.surfaceVariant))
+                .put("border", color(colors.outline))
                 .put("size", (if (compact) 14 else 16) * scale)
                 .toString()
         }

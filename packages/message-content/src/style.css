@@ -38,9 +38,11 @@
   padding-inline-start: 1.5em;
 }
 .uma-message pre {
+  box-sizing: border-box;
   overflow-x: auto;
   max-width: 100%;
   padding: 12px;
+  border: 1px solid var(--message-border, #aab5ad);
   border-radius: 8px;
   background: var(--message-code-bg, #eee);
   white-space: pre;
@@ -49,6 +51,11 @@
   font:
     0.875em / 1.6 ui-monospace,
     monospace;
+}
+.uma-message :not(pre) > code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--message-code-bg, #eee);
 }
 .uma-message table {
   display: block;

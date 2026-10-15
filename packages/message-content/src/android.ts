@@ -12,7 +12,14 @@ declare global {
     };
     updateMessage: (
       content: string,
-      theme: { text: string; background: string; link: string; size: number; code: string },
+      theme: {
+        text: string;
+        background: string;
+        link: string;
+        size: number;
+        code: string;
+        border: string;
+      },
     ) => void;
   }
 }
@@ -23,6 +30,7 @@ window.updateMessage = (content, theme) => {
   root.style.fontSize = `${theme.size}px`;
   root.style.setProperty("--message-link", theme.link);
   root.style.setProperty("--message-code-bg", theme.code);
+  root.style.setProperty("--message-border", theme.border);
   document.body.style.background = theme.background;
   updateMessageElement(root, renderMessage(content));
   // ResizeObserver 是尺寸变化的唯一通知源，避免每个增量额外安排一次跨线程测量。

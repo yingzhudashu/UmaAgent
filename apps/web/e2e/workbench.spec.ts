@@ -632,7 +632,7 @@ test("loads settings data only when its area is opened", async ({ page }) => {
   await expect(settings.getByRole("heading", { name: "后台任务" })).toHaveCount(0);
 });
 
-test("conversation and settings retain their layout across widths and themes", async ({ page }) => {
+test("conversation and settings retain their layout across widths and themes", async ({ page }, testInfo) => {
   await login(page);
   const created = page.waitForResponse(
     (response) =>
@@ -648,7 +648,7 @@ test("conversation and settings retain their layout across widths and themes", a
   await input.fill(
     "布局验收 " +
       "长路径/".repeat(55) +
-      "\n\n```ts\nconst value = 42;\n```\n\n|列一|列二|\n|---|---|\n|长文本|内容|",
+      "\n\n运行状态为 `completed`。\n\n```ts\nconst value = 42;\n```\n\n|列一|列二|\n|---|---|\n|长文本|内容|",
   );
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.locator(".response-card .markdown").first()).toContainText(
@@ -690,8 +690,20 @@ test("conversation and settings retain their layout across widths and themes", a
       expect(geometry.avatar).toBe(width < 840 ? 38 : 48);
       expect(geometry.gap).toBeGreaterThanOrEqual(10);
       expect(geometry.bodyFont).toBe("16px");
+      const inlineCode = page.locator(".response-card .markdown p code").first();
+      await expect(inlineCode).toHaveCSS("padding-left", "5px");
+      await expect(inlineCode).toHaveCSS("background-color", dark ? "rgb(41, 62, 84)" : "rgb(230, 239, 231)");
+      expect(
+        await page
+          .locator(".response-card")
+          .first()
+          .evaluate((card) => getComputedStyle(card).boxShadow),
+      ).not.toBe("none");
       expect(geometry.composerBottom).toBeLessThanOrEqual(height);
-      await page.screenshot({ path: `artifacts/refactor/chat-${width}-${dark ? "dark" : "light"}.png` });
+      await testInfo.attach(`chat-${width}-${dark ? "dark" : "light"}.png`, {
+        body: await page.screenshot(),
+        contentType: "image/png",
+      });
       await openSessionSettings(page);
       const summary = page.locator(".status-summary");
       await expect(summary).toBeVisible();
@@ -706,8 +718,9 @@ test("conversation and settings retain their layout across widths and themes", a
       expect(bounds.x + bounds.width).toBeLessThanOrEqual(dialogBounds.x + dialogBounds.width - 16);
       expect(card.padding).toBeGreaterThanOrEqual(16);
       expect(card.scroll).toBeLessThanOrEqual(card.width);
-      await page.screenshot({
-        path: `artifacts/refactor/session-settings-${width}-${dark ? "dark" : "light"}.png`,
+      await testInfo.attach(`session-settings-${width}-${dark ? "dark" : "light"}.png`, {
+        body: await page.screenshot(),
+        contentType: "image/png",
       });
       await page.keyboard.press("Escape");
     }

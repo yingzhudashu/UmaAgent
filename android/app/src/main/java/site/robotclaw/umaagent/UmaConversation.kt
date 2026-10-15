@@ -880,6 +880,7 @@ internal fun ResponseItem(
         Modifier.fillMaxWidth().padding(horizontal = 4.dp),
         color = MaterialTheme.colorScheme.surface,
         shape = MaterialTheme.shapes.medium,
+        shadowElevation = 1.dp,
         tonalElevation = 1.dp,
     ) {
         Column(
