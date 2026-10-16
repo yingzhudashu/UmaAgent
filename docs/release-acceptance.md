@@ -4,9 +4,13 @@
 
 ### 正式发布
 
-Core 与 Web 已从干净提交 `c53d333c4bb6c86b4858793727f653c1c44aceec` 发布到生产，release 分别为 `20261015133006-c53d333` 和 `20261015133024-c53d333`。Core 1.3.0、Protocol v16、数据库 schema 27；发布前备份、受保护账号指纹门禁和数据库完整性检查通过，没有执行迁移。2026-10-16 只读线上复验再次确认 Core/Web release、JS/CSS 哈希一致、Core/Browser Worker/Xianyu Adapter/RobotClaw/Nginx active、live/ready、退役路由状态及公网 390/1280px 浏览器挂载与公式字体通过；没有重启服务或写入生产数据。
+Core 与 Web 已从干净提交 `818cd0d96bcfc24c39f5fca5d57ade7c1b09014b` 正式发布到生产：Core release `20261016000741-818cd0d`，Web release `20261016000804-818cd0d`。Core 1.3.0、Protocol v16、业务 SQLite schema 27；生产发布前在线备份、受保护账号指纹、原子切换和 readiness 门禁通过。发布期间按正式流程重启 Core 以加载新 release；没有修改 Nginx，也没有发送真实业务消息。
 
-Android 1.4.4（versionCode 18）正在执行正式发布；线上旧版 1.4.3（versionCode 17）保留为可回滚版本，完成签名、清单、覆盖升级和公网验收后补入本节。
+2026-10-16 只读线上复核确认：Core、Browser Worker、Xianyu Adapter、RobotClaw 和 Nginx 均 active；`/api/v16/health/live` 与 `/api/v16/health/ready` 均返回 200；公网 `/umaagent/` 在 390px 和 1280px 视口均挂载成功，公式字体加载正常；退役入口 `/app`、`/demo/`、`/enzo/`、`/enzoagent/`、`/enzoapp/` 均返回 404。Core 与公网 Embed 的 JS/CSS 哈希一致，分别为 `b028fc17b3b562a4be587b7edb44a89d6b44c61ad23d8787d33036efa708a13a` 和 `c7e5b563e6ece63e7e5f1b0d8abe9a551c7c0452942501a8ff3abb8e910f9ff2`。
+
+生产数据库使用只读连接复核，未写入数据：`user_version=27`、`integrity_check=ok`、`foreign_key_check` 违规 0；本次摘要计数为 users 6、sessions 6、messages 1289、runs 127、attachments 54。历史用户数据、附件、workspace 和备份均保留，本轮没有执行迁移。
+
+Android 1.4.4（versionCode 18）已正式发布，release `18-818cd0d`。公网 `latest.json` 与 APK 元数据一致：APK 大小 `13,000,165` bytes，SHA-256 `9ed5d4b1273af2f5d7d8523ca7ba119a5fa97bbe5cbc643f61b8f5562832f711`；正式签名证书与线上旧包一致。公网下载后重新核对哈希和大小；API 36 模拟器完成安装、首次启动及强制停止后的冷启动。未连接实体设备，因此实体设备登录、真实消息和读屏专项仍未验收。
 
 ### Trace 修复与本地验收
 
@@ -24,7 +28,7 @@ Claude Opus 5.5 对本次最终发布做了额外只读验收；工具返回的�
 
 2026-10-16 前端细节优化补充：Web 回复卡片采用克制的轻量阴影；共享 Markdown 的行内代码使用当前主题底色和 2px/5px 内边距，代码块保留 1px 边界；Android 回复 Surface 增加 1dp 阴影，标题/标签使用明确字重。`npm run check`、`npm run check:android`、`npm run build:android:content`、`python docs/frontend-design/render.py`、`python docs/frontend-design/validate.py` 均通过；定向 Web E2E 16/16 通过。Android 36 AVD 上正文主题断言通过；独占 `BodyPerformanceTest` 在默认手机配置下通过，p95 71.65 ms、最大帧 19.03 ms。六配置矩阵的四种配置通过，840dp 和横屏 200% 字体样本分别 p95 116.99 ms、102.13 ms，略超 100 ms 增量门槛；最大帧未超过 700 ms。该测试输入不含代码块或回复卡片，且两项样本在连续 2GB AVD 矩阵下出现资源波动，尚不能归因于视觉样式；未降低门槛。实体 Android、读屏和真实 Provider 仍按下文范围保留。
 
-本地及 Faux 流程、当前 Windows Native/Web 与 Android API 36 模拟器范围已验收。真实 Provider smoke 两次均以 `provider_error: terminated`、0 token 失败；遵守不重放同类付费请求的约束，本轮没有再次调用，因此真实模型对话仍是阻塞项。Docker/Linux、Android 实体设备和读屏专项不在本轮设备范围内，均未标为已验收；真实闲鱼账号和消息链路也未执行。生产服务没有重启，历史用户数据库、附件、workspace 与备份均未由本轮测试写入。
+本地及 Faux 流程、当前 Windows Native/Web 与 Android API 36 模拟器范围已验收。真实 Provider smoke 两次均以 `provider_error: terminated`、0 token 失败；遵守不重放同类付费请求的约束，本轮没有再次调用，因此真实模型对话仍是阻塞项。Docker/Linux、Android 实体设备和读屏专项不在本轮设备范围内，均未标为已验收；真实闲鱼账号和消息链路也未执行。发布期间已按正式流程重启 Core；本轮只读复验未再次重启生产服务，历史用户数据库、附件、workspace 与备份均未由验收测试写入。
 
 **当前结论：Core/Web 生产发布与 Android 正式包上线验收通过；当前平台范围内的本地链路、模拟器安装/启动、浏览器挂载和性能稳定性验收通过。真实 Provider 对话及 Docker/Linux、实体设备、读屏仍有明确未验项。**
 

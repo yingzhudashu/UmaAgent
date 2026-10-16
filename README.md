@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前 Core 版本为 `1.3.0`，Android 正式版本为 `1.4.4`（versionCode `18`，待本次发布验收），协议版本为 `16`，SQLite schema 为 `27`。当前正式环境与验收结果见[发布验收](docs/release-acceptance.md)。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前 Core 版本为 `1.3.0`，Android 正式版本为 `1.4.4`（versionCode `18`，已正式发布），协议版本为 `16`，SQLite schema 为 `27`。当前正式环境与验收结果见[发布验收](docs/release-acceptance.md)。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 

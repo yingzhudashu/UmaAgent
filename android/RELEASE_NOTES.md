@@ -9,6 +9,7 @@
 ## 当前版本
 
 - 1.4.4：同步 Web/Android 消息正文层级与轻量阴影，保持深浅主题、正文离线渲染和窄屏布局行为。
+- 正式发布 release `18-818cd0d`；公网 APK 大小 `13,000,165` bytes，SHA-256 为 `9ed5d4b1273af2f5d7d8523ca7ba119a5fa97bbe5cbc643f61b8f5562832f711`。
 
 
 - 1.4.3：统一当前 Core/Protocol/schema 契约，完善队列版本回执、Trace 树展示和跨账号回执隔离。
