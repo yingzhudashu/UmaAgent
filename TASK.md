@@ -35,8 +35,18 @@ Claude Opus 5.5 以请求 effort `max` 完成只读发布复核并通过；复�
 - 用户追加目标：弱 Provider 环境下不因三次应用层退避不足而频繁中断，接受更长等待，要求保持取消和副作用安全边界。
 - 已在当前工作树的既有重试改动上增强：默认模型请求硬时限由 300000ms 调整为 600000ms；流式瞬态错误最多重试 7 次，退避 1000ms 起、30 秒封顶并带抖动；缺失 `finish_reason` 最多重试 5 次。
 - SSE/Fetch 异步迭代器在尚未暴露有效输出时抛出异常也会进入同一重连路径；已有有效输出后仍不重放，避免重复文本和未知工具副作用；用户取消仍即时打断退避。
-- 本地验证：定向 Core 测试 3 个文件共 35 项通过；模型重试/调用测试 28 项通过；Runtime 测试 50 项通过；全部 Core 测试 34 个文件、245 项通过；`npm run check`、Core 构建与 `git diff --check` 均通过。基线策略 3 次重试与增强策略 7 次重试均有隔离输出记录，回滚副本恢复原 SHA 后同一探针回到 3 次重试。尚未进行真实 Provider 调用、生产部署或服务重启。
+- 本地验证：定向 Core 测试 3 个文件共 35 项通过；模型重试/调用测试 28 项通过；Runtime 测试 50 项通过；全部 Core 测试 34 个文件、245 项通过；`npm run check`、Core 构建与 `git diff --check` 均通过。基线策略 3 次重试与增强策略 7 次重试均有隔离输出记录，回滚副本恢复原 SHA 后同一探针回到 3 次重试。本节最初记录时尚未进行真实 Provider 调用或生产部署；后续实测见下节。
 - Codex 的内部重连实现及精确重试预算没有可核实的公开依据，本次只采用有界重试、指数退避与抖动、尊重 `Retry-After`、共享硬超时、即时取消等通用恢复模式，不声称复刻其私有机制。
-- Claude 只读规划和复核均已返回；本次工具元数据为 `requested_effort=medium`，复核结论通过，但高档请求未被工具确认，不将其表述为 high 复核。
+- 此前 Claude 只读规划和复核的工具元数据为 `requested_effort=medium`。本轮发布前另行调用只读 plan/review，二者工具元数据均为 `requested_effort=high`；review 返回可进入 Native 发布的结论。该网关元数据不是独立上游身份认证。
 - 当前 `uma.config.json` 为本地显式配置且仍是 300000ms；未改动该含凭据配置。若要让已部署实例采用 10 分钟预算，需在受控环境把 `runtime.modelTimeoutMs` 改为 `600000` 后按发布流程重载/重启并验收。
 - 发布前一致性核查发现 Native、production、staging 三个示例配置及真实 Provider 隔离测试夹具仍显式使用 300000ms；已统一改为 600000ms。受控生产 `/etc/uma-agent/uma.config.json` 当前未显式设置该字段，因而新版本会使用代码默认值 600000ms；真实 Provider 测试脚本本轮不执行，避免重放已有失败请求。
+
+## 2026-10-20 Native 发布与复核
+
+- 发布源为本地提交 `06f861fddd5f34e67b01d20b675589275b5d985c`（未推送 Git 远端）；发布包 SHA-256 `01d27d6d2b161bb906657ae0c0c70b4024104f949ecc3cf63dd57a04415958da`，本地留存于 `artifacts/acceptance/retry-resilience-20261020/20261020114045-06f861f.tar.gz`。
+- `npm run check`、完整 `npm test -- --run --reporter=dot`（59 个文件、368 项）、`npm run build`、`git diff --check` 通过；改动后补跑定向测试（3 个文件、36 项）也通过。Native release 候选在服务器运行 `link-native-dependencies.sh` 与 `verify-native-release.sh` 成功。
+- 发布前通过本地已配置 SSH 别名及严格主机密钥校验确认目标；Core、Browser Worker、Xianyu Adapter 均 active；数据库 `integrity_check=ok`、schema 27、外键违规 0，且无 queued/preflight/running Run。生产配置未显式设置 `runtime.modelTimeoutMs`。
+- 正式 Promote 成功，线上 `current` 已切换至 `/opt/uma-agent/releases/20261020114045-06f861f`；Promote 内建在线备份为 `/srv/backups/uma-agent/state-20261020114501.db`。新代码实测导出默认超时 600000ms、瞬态重试 7 次、缺失结束标记重试 5 次；线上 Core、Browser Worker、Xianyu Adapter active，live/ready 均返回 200。当前库与备份库均为 schema 27、完整性 ok、外键违规 0；发布后无 active Run，服务启动后 error-priority journal 无记录。
+- 本次没有改动 Android、Web UI 或客户端协议，不需要新的 APK/客户端发布；仅 Native Core 服务端 release。
+- 根因尚未完全确认：既有记录中真实 Provider 两次 `provider_error: terminated`；但线上数据库最近 7 天的只读汇总为 model call 186 次、failed 74 次，其中错误文本字面匹配 `timed out` 为 13、`401` 为 1、`abort` 为 2、`terminated` 为 0（分类可能重叠）。本轮未读取原始错误正文，也未发送新的真实 Provider 请求，因此不能证明所有故障都是可重试瞬态或宣称问题完全根治。
+- 未验收项：真实 Provider smoke/弱网现场效果、10 分钟真实等待体验及长期失败率变化。发布仅证明新策略已上线且服务健康；部署后运行效果需在真实用户流量中继续观察。
