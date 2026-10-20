@@ -50,3 +50,14 @@ Claude Opus 5.5 以请求 effort `max` 完成只读发布复核并通过；复�
 - 本次没有改动 Android、Web UI 或客户端协议，不需要新的 APK/客户端发布；仅 Native Core 服务端 release。
 - 根因尚未完全确认：既有记录中真实 Provider 两次 `provider_error: terminated`；但线上数据库最近 7 天的只读汇总为 model call 186 次、failed 74 次，其中错误文本字面匹配 `timed out` 为 13、`401` 为 1、`abort` 为 2、`terminated` 为 0（分类可能重叠）。本轮未读取原始错误正文，也未发送新的真实 Provider 请求，因此不能证明所有故障都是可重试瞬态或宣称问题完全根治。
 - 未验收项：真实 Provider smoke/弱网现场效果、10 分钟真实等待体验及长期失败率变化。发布仅证明新策略已上线且服务健康；部署后运行效果需在真实用户流量中继续观察。
+
+## 2026-10-20 最新会话过载失败修复与部署
+
+- 生产只读核查到最新失败 Run `d971193d-6587-4972-ba2a-372a2acfbe47`：provider 报错 `Our servers are currently overloaded. Please try again later.`；最后失败 model call 用时 5677ms，未记录 `model.retry` 事件；最终失败助手正文只有一个 ASCII 空格。Pi AI 0.84.2 的 retry classifier 对该过载文案返回可重试。
+- 因果缺口：生产未保留原始 SSE 内容。结合最终正文只有空格、错误本应可重试且没有 retry 事件，最可能原因是 Provider 在错误前发送纯空白 text/thinking 片段；`hasStreamOutput` 只按字符串长度判定，误把空白当作可见内容，因而禁止安全重试。此为强推断，非原始 SSE 直接证据。
+- 修复：`packages/core/src/model-retry.ts` 对纯空白 `text_delta`、`thinking_delta`、`text_end`、`thinking_end` 继续缓冲；只有非空白文本才阻止重放。成功答复的空格保持原样；工具调用与已有实质输出后的重试保护不变。
+- 回归覆盖：空白片段后 Provider 过载应重试；包含前后空格的成功答复需保真；thinking/text 空白与 text_end 一并覆盖。
+- 本地验证：定向模型/运行时测试 80/80；Core 全量 34 文件、247 项；最终模型重试测试 14 项；`npm run check`、全项目 `npm run build` 和 `git diff --check` 通过。行为探针相同输入下，基线为 1 次失败、0 次重试；修复后为 2 次尝试、1 次重试并成功；独立回滚副本恢复基线 SHA 后重现基线失败行为，随后已恢复修复版本。
+- Claude 参与：high 档只读计划与复核；复核结论通过。计划/复核模型与档位字段为工具返回声明，不构成独立上游身份认证。
+- 部署：本地提交 `54c45e2bbf48bc61736e76da08570f934ff0af30`；Native release `20261020215812-54c45e2`，包 SHA-256 `19ef611ba96486fb3cfc45738484672958af2161e5df786c6540277686309993`；生产 `/opt/uma-agent/current` 已切换至该 release。在线备份 `/srv/backups/uma-agent/state-20261020140333.db`（332853248 bytes，0600）。Core、Browser Worker、Xianyu Adapter 均 active，live/ready HTTP 200。当前数据库 integrity ok、外键违规 0、active Run 0；备份 integrity ok、外键违规 0。
+- 未验证：本轮没有发送新的真实 Provider 请求；生产原始 SSE 未持久化，故不能宣称已直接复现那一个空白片段；真实弱网成功率与持续失败率需在后续流量中观察。本轮无 Web UI、协议或 Android 改动。
