@@ -108,9 +108,9 @@ export function traceProviderRetries(
 }
 
 function hasStreamOutput(event: AssistantMessageEvent): boolean {
-  if (event.type === "text_delta" || event.type === "thinking_delta" || event.type === "toolcall_delta")
-    return event.delta.length > 0;
-  if (event.type === "text_end" || event.type === "thinking_end") return event.content.length > 0;
+  if (event.type === "text_delta" || event.type === "thinking_delta") return event.delta.trim().length > 0;
+  if (event.type === "toolcall_delta") return event.delta.length > 0;
+  if (event.type === "text_end" || event.type === "thinking_end") return event.content.trim().length > 0;
   return event.type === "toolcall_end";
 }
 

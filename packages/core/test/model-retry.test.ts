@@ -148,6 +148,86 @@ describe("model stream recovery", () => {
     expect(events.at(-1)?.type).toBe("error");
   });
 
+  it("retries an overloaded provider after whitespace-only stream fragments", async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      let attempts = 0;
+      const retryEvents: Array<{ attempt: number; reason: string }> = [];
+      const create = () => {
+        attempts++;
+        const source = createAssistantMessageEventStream();
+        if (attempts === 1) {
+          const message = {
+            ...fauxAssistantMessage(" "),
+            stopReason: "error" as const,
+            errorMessage: "Our servers are currently overloaded. Please try again later.",
+          };
+          source.push({ type: "start", partial: message });
+          source.push({ type: "text_delta", contentIndex: 0, delta: " ", partial: message });
+          source.push({ type: "text_end", contentIndex: 0, content: " ", partial: message });
+          source.push({ type: "thinking_delta", contentIndex: 0, delta: "\n", partial: message });
+          source.push({ type: "thinking_end", contentIndex: 0, content: "\n", partial: message });
+          source.push({ type: "error", reason: "error", error: message });
+        } else {
+          const message = fauxAssistantMessage("recovered");
+          source.push({ type: "start", partial: message });
+          source.push({ type: "text_delta", contentIndex: 0, delta: "recovered", partial: message });
+          source.push({ type: "done", reason: "stop", message });
+        }
+        source.end();
+        return source;
+      };
+      const recovered = retryMissingFinishReasonStream(
+        create,
+        new AbortController().signal,
+        (attempt, reason) => retryEvents.push({ attempt, reason }),
+      );
+      const eventsPromise = (async () => {
+        const events = [];
+        for await (const event of recovered) events.push(event);
+        return events;
+      })();
+      await vi.runAllTimersAsync();
+      const events = await eventsPromise;
+
+      expect(attempts).toBe(2);
+      expect(retryEvents).toEqual([{ attempt: 1, reason: "transient_provider_error" }]);
+      expect(events.at(-1)?.type).toBe("done");
+      expect(
+        events
+          .filter((event) => event.type === "text_delta")
+          .map((event) => (event.type === "text_delta" ? event.delta : "")),
+      ).toEqual(["recovered"]);
+    } finally {
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves whitespace in a successful response while buffering it", async () => {
+    const source = createAssistantMessageEventStream();
+    const message = fauxAssistantMessage("  content  ");
+    source.push({ type: "start", partial: message });
+    source.push({ type: "text_delta", contentIndex: 0, delta: "  ", partial: message });
+    source.push({ type: "text_delta", contentIndex: 0, delta: "content", partial: message });
+    source.push({ type: "text_delta", contentIndex: 0, delta: "  ", partial: message });
+    source.push({ type: "done", reason: "stop", message });
+    source.end();
+
+    const recovered = retryMissingFinishReasonStream(() => source, new AbortController().signal);
+    const events = [];
+    for await (const event of recovered) events.push(event);
+
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => (event.type === "text_delta" ? event.delta : ""))
+        .join(""),
+    ).toBe("  content  ");
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
   it("retries a transient error thrown before the stream is created", async () => {
     let attempts = 0;
     const create = () => {
