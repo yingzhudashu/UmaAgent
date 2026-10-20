@@ -2,7 +2,7 @@ import { createModels, fauxAssistantMessage, fauxProvider, type Model } from "@e
 import { describe, expect, it, vi } from "vitest";
 import { ContextOverflowError } from "../src/context-manager.js";
 import { ModelCallService } from "../src/model-calls.js";
-import { modelCacheKey } from "../src/model-retry.js";
+import { DEFAULT_MODEL_TIMEOUT_MS, modelCacheKey, transientStreamRetry } from "../src/model-retry.js";
 
 const model = {
   provider: "faux",
@@ -100,7 +100,7 @@ describe("ModelCallService", () => {
       messages: [{ role: "user", content: "request", timestamp: 1 }],
       signal: new AbortController().signal,
     });
-    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ timeoutMs: 300_000 });
+    expect(completeSimple.mock.calls[0]?.[2]).toMatchObject({ timeoutMs: DEFAULT_MODEL_TIMEOUT_MS });
   });
 
   it("turns a provider timeout into a terminal model error", async () => {
@@ -150,6 +150,99 @@ describe("ModelCallService", () => {
     });
   });
 
+  it("retries transient provider responses and preserves the final successful result", async () => {
+    const { service, completeSimple, database } = fixture();
+    completeSimple
+      .mockResolvedValueOnce({
+        ...fauxAssistantMessage(""),
+        content: [],
+        stopReason: "error",
+        errorMessage: "provider_error: terminated",
+      })
+      .mockResolvedValueOnce(fauxAssistantMessage("recovered"));
+
+    const response = await service.complete({
+      runId: "run",
+      sessionId: "session-a",
+      role: "fast",
+      purpose: "classify",
+      systemPrompt: "Return text",
+      messages: [{ role: "user", content: "request", timestamp: 1 }],
+      signal: new AbortController().signal,
+    });
+
+    expect(response.stopReason).toBe("stop");
+    expect(response.content[0]).toMatchObject({ type: "text", text: "recovered" });
+    expect(completeSimple).toHaveBeenCalledTimes(2);
+    expect(database.finishModelCall).toHaveBeenCalledWith(
+      "call-1",
+      expect.objectContaining({ status: "completed" }),
+    );
+  });
+
+  it("keeps retrying transient control-call failures through the expanded budget", async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      const { service, completeSimple } = fixture();
+      for (let index = 0; index < transientStreamRetry.maxRetries; index++) {
+        completeSimple.mockResolvedValueOnce({
+          ...fauxAssistantMessage(""),
+          content: [],
+          stopReason: "error",
+          errorMessage: "provider_error: terminated",
+        });
+      }
+      completeSimple.mockResolvedValueOnce(fauxAssistantMessage("recovered"));
+      const span = { finish: vi.fn(), setAttributes: vi.fn(), addEvent: vi.fn() };
+      const responsePromise = service.complete({
+        runId: "run",
+        sessionId: "session-a",
+        role: "fast",
+        purpose: "classify",
+        systemPrompt: "Return text",
+        messages: [{ role: "user", content: "request", timestamp: 1 }],
+        signal: new AbortController().signal,
+        trace: { child: () => span } as never,
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      const response = await responsePromise;
+
+      expect(response.stopReason).toBe("stop");
+      expect(response.content[0]).toMatchObject({ type: "text", text: "recovered" });
+      expect(completeSimple).toHaveBeenCalledTimes(transientStreamRetry.maxRetries + 1);
+      expect(span.addEvent.mock.calls.filter(([name]) => name === "model.retry")).toHaveLength(
+        transientStreamRetry.maxRetries,
+      );
+    } finally {
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry permanent provider responses", async () => {
+    const { service, completeSimple } = fixture();
+    completeSimple.mockResolvedValueOnce({
+      ...fauxAssistantMessage(""),
+      content: [],
+      stopReason: "error",
+      errorMessage: "insufficient_quota",
+    });
+
+    const response = await service.complete({
+      runId: "run",
+      sessionId: "session-a",
+      role: "fast",
+      purpose: "classify",
+      systemPrompt: "Return text",
+      messages: [],
+      signal: new AbortController().signal,
+    });
+
+    expect(response.stopReason).toBe("error");
+    expect(completeSimple).toHaveBeenCalledTimes(1);
+  });
+
   it("recovers a complete response when the gateway omits the stream finish marker", async () => {
     const { service, completeSimple, database } = fixture();
     completeSimple.mockResolvedValueOnce({
@@ -178,43 +271,40 @@ describe("ModelCallService", () => {
   });
 
   it("retries an empty stream finish failure and preserves a real failure", async () => {
-    const { service, completeSimple, database } = fixture();
-    completeSimple
-      .mockResolvedValueOnce({
-        ...fauxAssistantMessage(""),
-        content: [],
-        stopReason: "error",
-        errorMessage: "Stream ended without finish_reason",
-      })
-      .mockResolvedValueOnce({
-        ...fauxAssistantMessage("still unavailable"),
-        content: [],
-        stopReason: "error",
-        errorMessage: "Stream ended without finish_reason",
-      })
-      .mockResolvedValueOnce({
-        ...fauxAssistantMessage(""),
-        content: [],
-        stopReason: "error",
-        errorMessage: "Stream ended without finish_reason",
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      const { service, completeSimple, database } = fixture();
+      for (let attempt = 0; attempt < 6; attempt++)
+        completeSimple.mockResolvedValueOnce({
+          ...fauxAssistantMessage(""),
+          content: [],
+          stopReason: "error",
+          errorMessage: "Stream ended without finish_reason",
+        });
+
+      const responsePromise = service.complete({
+        runId: "run",
+        sessionId: "session-a",
+        role: "fast",
+        purpose: "classify",
+        systemPrompt: "Return JSON",
+        messages: [{ role: "user", content: "request", timestamp: 1 }],
+        signal: new AbortController().signal,
       });
+      await vi.advanceTimersByTimeAsync(20_000);
+      const response = await responsePromise;
 
-    const response = await service.complete({
-      runId: "run",
-      sessionId: "session-a",
-      role: "fast",
-      purpose: "classify",
-      systemPrompt: "Return JSON",
-      messages: [{ role: "user", content: "request", timestamp: 1 }],
-      signal: new AbortController().signal,
-    });
-
-    expect(response.stopReason).toBe("error");
-    expect(completeSimple).toHaveBeenCalledTimes(3);
-    expect(database.finishModelCall).toHaveBeenCalledWith(
-      "call-1",
-      expect.objectContaining({ status: "failed", error: "Stream ended without finish_reason" }),
-    );
+      expect(response.stopReason).toBe("error");
+      expect(completeSimple).toHaveBeenCalledTimes(6);
+      expect(database.finishModelCall).toHaveBeenCalledWith(
+        "call-1",
+        expect.objectContaining({ status: "failed", error: "Stream ended without finish_reason" }),
+      );
+    } finally {
+      random.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("records a trace event for each missing finish marker retry", async () => {

@@ -76,6 +76,6 @@
     "maxParallelSessions": 1,
     "approvalTimeoutMs": 120000,
     "toolTimeoutMs": 60000,
-    "modelTimeoutMs": 300000
+    "modelTimeoutMs": 600000
   }
 }

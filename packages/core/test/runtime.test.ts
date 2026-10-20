@@ -1496,14 +1496,29 @@ describe("UmaRuntime preflight", () => {
     expect(await clarifyTerminal).toMatchObject({ status: "completed", route: "direct" });
   });
 
-  it("surfaces provider response errors without adding a second retry loop", async () => {
+  it("surfaces permanent provider response errors without retrying", async () => {
     const transient = fauxAssistantMessage("");
     transient.stopReason = "error";
-    transient.errorMessage = "HTTP 429 rate limit";
+    transient.errorMessage = "insufficient_quota";
     const runtime = await runtimeWith([transient]);
     const result = (await runOnce(runtime)).run;
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("HTTP 429 rate limit");
+    expect(result.error).toContain("insufficient_quota");
+  });
+
+  it("retries a transient agent stream failure and completes the same run", async () => {
+    const transient = fauxAssistantMessage("");
+    transient.stopReason = "error";
+    transient.errorMessage = "provider_error: terminated";
+    const runtime = await runtimeWith([
+      classification("simple"),
+      transient,
+      fauxAssistantMessage("recovered"),
+    ]);
+
+    const result = (await runOnce(runtime)).run;
+    expect(result.status).toBe("completed");
+    expect(result.error).toBeUndefined();
   });
 
   it("records the agent model failure reason in its own span without leaking credentials", async () => {

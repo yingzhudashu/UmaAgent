@@ -2361,41 +2361,66 @@ ${context.dailyText}`,
         tools: context.tools,
         messages: context.messages,
       },
-      streamFn: (model, modelContext, options) =>
-        (() => {
-          const requestSignal = modelRequestSignal(
-            options?.signal ?? signal,
-            this.config.runtime.modelTimeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS,
-          );
-          return retryMissingFinishReasonStream(
-            () =>
-              this.models.models.streamSimple(model, modelContext, {
-                ...options,
-                signal: requestSignal,
-                fetch: traceProviderRetries(options?.fetch ?? globalThis.fetch, (attempt) =>
-                  this.activeTraces.get(runId)?.addEvent("model.retry", {
-                    attempt,
-                    reason: "provider_request",
-                  }),
-                ),
-                timeoutMs: this.config.runtime.modelTimeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS,
-                headers: {
-                  ...(options?.headers ?? {}),
-                  "user-agent": "UmaAgent/1.0",
-                  accept: "application/json",
-                },
-                sessionId: modelCacheKey(session.id, `agent:${model.provider}:${model.id}`),
-                cacheRetention: "short",
-                ...transientModelRetry,
-              }),
-            options?.signal ?? signal,
-            (attempt) =>
-              this.activeTraces.get(runId)?.addEvent("model.retry", {
-                attempt,
-                reason: "missing_finish_reason",
-              }),
-          );
-        })(),
+      streamFn: (model, modelContext, options) => {
+        const cancelSignal = options?.signal ?? signal;
+        const timeoutMs = this.config.runtime.modelTimeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS;
+        const requestSignal = modelRequestSignal(cancelSignal, timeoutMs);
+        return retryMissingFinishReasonStream(
+          () =>
+            this.models.models.streamSimple(model, modelContext, {
+              ...options,
+              signal: requestSignal,
+              fetch: traceProviderRetries(options?.fetch ?? globalThis.fetch, (attempt) =>
+                this.activeTraces.get(runId)?.addEvent("model.retry", {
+                  attempt,
+                  reason: "provider_request",
+                }),
+              ),
+              timeoutMs,
+              headers: {
+                ...(options?.headers ?? {}),
+                "user-agent": "UmaAgent/1.0",
+                accept: "application/json",
+              },
+              sessionId: modelCacheKey(session.id, `agent:${model.provider}:${model.id}`),
+              cacheRetention: "short",
+              ...transientModelRetry,
+            }),
+          requestSignal,
+          (attempt, reason) =>
+            this.activeTraces.get(runId)?.addEvent("model.retry", {
+              attempt,
+              reason,
+            }),
+          (error) => ({
+            role: "assistant",
+            content: [],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: cancelSignal.aborted ? "aborted" : "error",
+            ...(!cancelSignal.aborted
+              ? {
+                  errorMessage:
+                    requestSignal.aborted && !cancelSignal.aborted
+                      ? `Model request timed out after ${timeoutMs}ms`
+                      : error instanceof Error
+                        ? error.message
+                        : String(error),
+                }
+              : {}),
+            timestamp: Date.now(),
+          }),
+        );
+      },
       toolExecution: "parallel",
       shouldStopAfterTurn: () => {
         stepTurns++;

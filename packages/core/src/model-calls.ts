@@ -1,5 +1,9 @@
 import { type AgentMessage, convertToLlm } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessage,
+  isRetryableAssistantError,
+  type ModelThinkingLevel,
+} from "@earendil-works/pi-ai";
 import { assertContextCapacity } from "./context-manager.js";
 import type { UmaDatabase } from "./database.js";
 import {
@@ -7,9 +11,11 @@ import {
   isMissingFinishReasonError,
   missingFinishReasonRetry,
   modelRequestSignal,
+  modelRetryDelayMs,
   recoverMissingFinishReason,
   traceProviderRetries,
   transientModelOptions,
+  transientStreamRetry,
   waitForModelRetry,
 } from "./model-retry.js";
 import type { ModelRegistry } from "./models.js";
@@ -70,10 +76,12 @@ export class ModelCallService {
         role: `${input.role}:${input.purpose}`,
       });
       injectRuntimeFault("model.started");
-      // pi-ai owns the single retry loop. Keeping retries out of this service prevents
-      // nested retry budgets while retaining Retry-After handling and abortable waits.
+      // pi-ai owns HTTP status retries and Retry-After handling. This separate bounded
+      // budget recovers transient failures returned after the SDK has exhausted that attempt.
       let response: AssistantMessage;
-      for (let attempt = 0; ; attempt++) {
+      let retryCount = 0;
+      let missingFinishRetryCount = 0;
+      for (;;) {
         response = await this.models.models.completeSimple(
           model,
           { systemPrompt: input.systemPrompt, messages },
@@ -101,16 +109,39 @@ export class ModelCallService {
           break;
         }
         if (
-          response.stopReason !== "error" ||
-          !isMissingFinishReasonError(response.errorMessage) ||
-          attempt >= missingFinishReasonRetry.maxRetries
-        )
-          break;
-        span?.addEvent("model.retry", {
-          attempt: attempt + 1,
-          reason: "missing_finish_reason",
-        });
-        await waitForModelRetry(modelSignal, missingFinishReasonRetry.baseDelayMs * 2 ** attempt);
+          response.stopReason === "error" &&
+          isMissingFinishReasonError(response.errorMessage) &&
+          missingFinishRetryCount < missingFinishReasonRetry.maxRetries &&
+          retryCount < transientStreamRetry.maxRetries
+        ) {
+          retryCount++;
+          missingFinishRetryCount++;
+          span?.addEvent("model.retry", {
+            attempt: retryCount,
+            reason: "missing_finish_reason",
+          });
+          await waitForModelRetry(
+            modelSignal,
+            modelRetryDelayMs(retryCount, missingFinishReasonRetry.baseDelayMs),
+          );
+          continue;
+        }
+        if (
+          response.stopReason === "error" &&
+          !isMissingFinishReasonError(response.errorMessage) &&
+          !modelSignal.aborted &&
+          retryCount < transientStreamRetry.maxRetries &&
+          isRetryableAssistantError(response)
+        ) {
+          retryCount++;
+          span?.addEvent("model.retry", {
+            attempt: retryCount,
+            reason: "transient_provider_error",
+          });
+          await waitForModelRetry(modelSignal, modelRetryDelayMs(retryCount));
+          continue;
+        }
+        break;
       }
       if (modelSignal.aborted && !input.signal.aborted)
         throw new Error(`Model request timed out after ${this.modelTimeoutMs}ms`);

@@ -4,10 +4,11 @@ import {
   type AssistantMessageEvent,
   type AssistantMessageEventStream,
   createAssistantMessageEventStream,
+  isRetryableAssistantError,
 } from "@earendil-works/pi-ai";
 
-/** 单次 Provider 调用（含有界重试）的硬时限；用户取消仍由独立 AbortSignal 即时生效。 */
-export const DEFAULT_MODEL_TIMEOUT_MS = 5 * 60_000;
+/** 单次 Provider 调用（含 SDK/应用层重试）的硬时限；用户取消仍由独立 AbortSignal 即时生效。 */
+export const DEFAULT_MODEL_TIMEOUT_MS = 10 * 60_000;
 
 /** Bound retries for transient provider gateway failures such as HTTP 524. */
 export const transientModelRetry = {
@@ -19,9 +20,27 @@ export const transientModelRetry = {
 
 /** A gateway can close a complete SSE response before sending its final marker. */
 export const missingFinishReasonRetry = {
-  maxRetries: 2,
-  baseDelayMs: 250,
+  maxRetries: 5,
+  baseDelayMs: 500,
 } as const;
+
+/** Retry transient provider failures before any part of the response is exposed. */
+export const transientStreamRetry = {
+  maxRetries: 7,
+  baseDelayMs: 1_000,
+  maxDelayMs: 30_000,
+} as const;
+
+export type ModelRetryReason = "missing_finish_reason" | "transient_provider_error";
+export type ModelRetryErrorFactory = (error: unknown) => AssistantMessage;
+
+export function modelRetryDelayMs(
+  attempt: number,
+  baseDelayMs: number = transientStreamRetry.baseDelayMs,
+): number {
+  const exponential = Math.min(baseDelayMs * 2 ** Math.max(0, attempt - 1), transientStreamRetry.maxDelayMs);
+  return Math.floor(exponential * (0.5 + Math.random() * 0.5));
+}
 
 export function isMissingFinishReasonError(message: string | undefined): boolean {
   return message?.trim() === "Stream ended without finish_reason";
@@ -47,6 +66,7 @@ export async function waitForModelRetry(signal: AbortSignal, delayMs: number): P
   await new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
       reject(new Error("Request was aborted"));
     };
     const timer = setTimeout(() => {
@@ -54,6 +74,7 @@ export async function waitForModelRetry(signal: AbortSignal, delayMs: number): P
       resolve();
     }, delayMs);
     signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
   });
 }
 
@@ -87,60 +108,167 @@ export function traceProviderRetries(
 }
 
 function hasStreamOutput(event: AssistantMessageEvent): boolean {
-  return (
-    event.type === "text_delta" ||
-    event.type === "thinking_delta" ||
-    event.type === "toolcall_delta" ||
-    event.type === "toolcall_end"
-  );
+  if (event.type === "text_delta" || event.type === "thinking_delta" || event.type === "toolcall_delta")
+    return event.delta.length > 0;
+  if (event.type === "text_end" || event.type === "thinking_end") return event.content.length > 0;
+  return event.type === "toolcall_end";
 }
 
-/** Preserve token streaming while retrying an empty, prematurely closed SSE stream. */
+/** Preserve live streaming, retrying transient failures only before meaningful output. */
 export function retryMissingFinishReasonStream(
   create: () => AssistantMessageEventStream | Promise<AssistantMessageEventStream>,
   signal: AbortSignal,
-  onRetry?: (attempt: number) => void,
+  onRetry?: (attempt: number, reason: ModelRetryReason) => void,
+  createErrorMessage?: ModelRetryErrorFactory,
 ): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
+  let retryCount = 0;
+  let lastErrorMessage: AssistantMessage | undefined;
   void (async () => {
-    for (let attempt = 0; ; attempt++) {
-      const source = await create();
+    for (;;) {
+      let source: AssistantMessageEventStream;
+      try {
+        source = await create();
+      } catch (error) {
+        const message = createErrorMessage?.(error);
+        const retryable =
+          message !== undefined &&
+          !signal.aborted &&
+          retryCount < transientStreamRetry.maxRetries &&
+          isRetryableAssistantError(message);
+        if (retryable) {
+          retryCount++;
+          onRetry?.(retryCount, "transient_provider_error");
+          await waitForModelRetry(signal, modelRetryDelayMs(retryCount));
+          continue;
+        }
+        if (message) {
+          lastErrorMessage = message;
+          output.push({
+            type: "error",
+            reason: message.stopReason === "aborted" ? "aborted" : "error",
+            error: message,
+          });
+        }
+        output.end();
+        return;
+      }
       const pending: AssistantMessageEvent[] = [];
       let started = false;
       let shouldRetry = false;
-      for await (const event of source) {
-        if (event.type === "error" && isMissingFinishReasonError(event.error.errorMessage)) {
-          const recovered = recoverMissingFinishReason(event.error);
-          if (recovered) {
-            for (const buffered of pending) output.push(buffered);
-            output.push({
-              type: "done",
-              reason: "stop",
-              message: recovered,
-            });
-            output.end();
-            return;
+      let retryReason: ModelRetryReason = "missing_finish_reason";
+      let hasTerminalEvent = false;
+      let lastPartial: AssistantMessage | undefined;
+      let streamIterationFailed = false;
+      let streamIterationError: unknown;
+      try {
+        for await (const event of source) {
+          if ("partial" in event) lastPartial = event.partial;
+          if (event.type === "error" && isMissingFinishReasonError(event.error.errorMessage)) {
+            lastErrorMessage = event.error;
+            hasTerminalEvent = true;
+            const recovered = recoverMissingFinishReason(event.error);
+            if (recovered) {
+              for (const buffered of pending) output.push(buffered);
+              output.push({
+                type: "done",
+                reason: "stop",
+                message: recovered,
+              });
+              output.end();
+              return;
+            }
+            shouldRetry = !started && retryCount < missingFinishReasonRetry.maxRetries;
+            retryReason = "missing_finish_reason";
+          } else if (event.type === "error") {
+            lastErrorMessage = event.error;
+            hasTerminalEvent = true;
+            shouldRetry =
+              !started &&
+              event.error.stopReason === "error" &&
+              retryCount < transientStreamRetry.maxRetries &&
+              isRetryableAssistantError(event.error);
+            retryReason = "transient_provider_error";
           }
-          shouldRetry = !started && attempt < missingFinishReasonRetry.maxRetries;
+          if (event.type === "done") hasTerminalEvent = true;
+          if (!started && hasStreamOutput(event)) {
+            started = true;
+            for (const buffered of pending) output.push(buffered);
+            pending.length = 0;
+          }
+          if (started) output.push(event);
+          else pending.push(event);
         }
-        if (!started && hasStreamOutput(event)) {
-          started = true;
-          for (const buffered of pending) output.push(buffered);
-          pending.length = 0;
-        }
-        if (started) output.push(event);
-        else pending.push(event);
+      } catch (error) {
+        // Fetch/SSE adapters may reject the async iterator instead of emitting an error event.
+        // Treat that transport close exactly like an empty transient stream, but never replay
+        // after meaningful output has already reached the caller.
+        streamIterationError = error;
+        streamIterationFailed = true;
       }
+      if (streamIterationFailed) {
+        const message = createErrorMessage?.(streamIterationError);
+        if (message) {
+          lastErrorMessage = message;
+          hasTerminalEvent = true;
+          shouldRetry =
+            !started && retryCount < transientStreamRetry.maxRetries && isRetryableAssistantError(message);
+          retryReason = "transient_provider_error";
+          const errorEvent: AssistantMessageEvent = {
+            type: "error",
+            reason: message.stopReason === "aborted" ? "aborted" : "error",
+            error: message,
+          };
+          if (started) output.push(errorEvent);
+          else pending.push(errorEvent);
+        }
+      }
+
+      // Some transports close the socket without emitting a final event. Surface that
+      // as a retryable provider failure instead of silently ending the agent stream.
+      if (!hasTerminalEvent) {
+        const error = new Error("Provider stream terminated before a final response");
+        const message = lastPartial
+          ? { ...lastPartial, stopReason: "error" as const, errorMessage: error.message }
+          : createErrorMessage?.(error);
+        if (message) {
+          lastErrorMessage = message;
+          shouldRetry =
+            !started && retryCount < transientStreamRetry.maxRetries && isRetryableAssistantError(message);
+          retryReason = "transient_provider_error";
+          const errorEvent: AssistantMessageEvent = {
+            type: "error",
+            reason: "error",
+            error: message,
+          };
+          if (started) output.push(errorEvent);
+          else pending.push(errorEvent);
+        }
+      }
+
       if (shouldRetry) {
-        onRetry?.(attempt + 1);
-        await waitForModelRetry(signal, missingFinishReasonRetry.baseDelayMs * 2 ** attempt);
+        retryCount++;
+        onRetry?.(retryCount, retryReason);
+        const baseDelayMs =
+          retryReason === "missing_finish_reason"
+            ? missingFinishReasonRetry.baseDelayMs
+            : transientStreamRetry.baseDelayMs;
+        await waitForModelRetry(signal, modelRetryDelayMs(retryCount, baseDelayMs));
         continue;
       }
       for (const buffered of pending) output.push(buffered);
       output.end();
       return;
     }
-  })().catch(() => {
+  })().catch((error: unknown) => {
+    const message = createErrorMessage?.(error) ?? lastErrorMessage;
+    if (message) {
+      output.push({
+        type: "error",
+        reason: message.stopReason === "aborted" ? "aborted" : "error",
+        error: message,
+      });
+    }
     output.end();
   });
   return output;

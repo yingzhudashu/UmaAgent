@@ -142,7 +142,7 @@ describe("loadConfig", () => {
     expect(loaded.server).toMatchObject({ port: 3210, maxUploadBytes: 20 * 1024 * 1024 });
     expect(loaded.server.webOrigins).toEqual(["https://web.example"]);
     expect(loaded.defaultThinkingLevel).toBe("medium");
-    expect(loaded.runtime.modelTimeoutMs).toBe(300_000);
+    expect(loaded.runtime.modelTimeoutMs).toBe(600_000);
     expect(loaded.mcpServers).toHaveLength(2);
     expect(loaded.models[0]).toMatchObject({
       tools: true,
