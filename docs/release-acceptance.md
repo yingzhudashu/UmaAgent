@@ -1,5 +1,14 @@
 # UmaAgent 当前发布验收
 
+## 2026-10-21 Native：历史摘要后的工具结果续接修复
+
+- 生产会话“电感”在继续时失败于 Preflight classify，报错提示 Responses `function_call_output` 缺少匹配 `item_reference`。只读核查确认摘要边界为 sequence 760；其后 8 条 toolResult 对应的 assistant toolCall 已被压缩进摘要。该形状与 400 相符；网关内部 Chat Completions 到 Responses 的转换细节未直接观察。
+- Core 将此类孤立结果作为标注过的不可信历史数据传入，不再以工具结果 role 暴露；新生成摘要时切点和批次保持工具调用与结果完整。多工具、孤立结果、缺失结果、晚到结果及历史字符串消息均有回归覆盖。
+- 来源提交 `9506b92c4e2c389995e1c9e45d13ad75e7ea6d48`（保留在本地 master，未推送）；Native release `20261021142428-9506b92`。发布包 `artifacts/acceptance/responses-tool-context-20261021/20261021142428-9506b92.tar.gz`，SHA-256 `f4366c24ebfc2542932dc3b8116f0b0122172edb3f9e229933957c157e914a1d`，2,880,254 bytes。
+- 全量 Vitest（单 worker，降低 Windows shell fixture 与并发 CPU 竞争）59 文件/385 项通过；覆盖率 59 文件/385 项通过，Statements 82.25%、Branches 74.11%、Functions 77.03%、Lines 85.02%；`npm run check`、`npm run build` 均通过。隔离 Faux 评测器 6/6；对实际发布前数据库在线备份进行旧/新 release 历史转换探针，确认旧版生成 8 个孤立工具结果，修复版生成 8 个有标记的数据消息且保留所有结果块；未向模型 Provider 发送请求。
+- Native 候选通过依赖和 schema 27 校验，受保护 Promote 成功；生产 `/opt/uma-agent/current` 指向 `/opt/uma-agent/releases/20261021142428-9506b92`。在线备份 `/srv/backups/uma-agent/state-20261021142557.db`（332,853,248 bytes，root:root、0600）。部署后 Core/Browser Worker/Xianyu Adapter 均 active，live/ready HTTP 200；state.db 与备份 integrity 均为 ok、foreign key violations 0、active Run 0、started model call 0；发布后 error-priority journal 无记录。
+- 本轮仅 Native Core 服务端 release；没有 Web UI、协议、Android 或客户端改动，因此未发布 APK。当前仍未验证真实 Provider 调用成功率及后续真实流量效果。只读 Claude plan 等待超时，review operation 过期；Claude 复核未完成，实施、测试和部署均由 GPT 完成。
+
 ## 2026-10-16 当前状态
 
 ### 正式发布

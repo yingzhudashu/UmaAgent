@@ -74,3 +74,12 @@ Claude Opus 5.5 以请求 effort `max` 完成只读发布复核并通过；复�
 - 对照行为探针：输入 `Upstream request failed`，基线行为 `{attempts:1,errors:1,terminal:error,text:""}`；修复版 `{attempts:2,errors:0,terminal:done,text:"recovered"}`。在单独副本执行 `ROLLBACK.sh` 后，副本 SHA-256 与原始基线相同，重跑探针恢复同样基线失败行为。证据及四个角色文件位于 `artifacts/acceptance/upstream-transport-retry-20261021/`。
 - 未做：真实 Provider 请求、真实弱网环境试验、生产部署、服务重启或服务器写入。由于用户禁止部署，以上本地通过不等于生产已修复/验收；上线后真实流量效果仍待后续受控观察。本次未发布任何客户端或应用产物。
 - Claude 参与：只读 plan 与只读 review 均已完成，review 结论 PASS；模型/档位仅为工具网关声明。实施和测试由 GPT 完成。真实 Provider/staging 消息变体仍待验证。
+
+## 2026-10-21 “电感” Responses 工具续接修复与部署
+
+- 线上只读证据：会话“电感”的 `context_summaries.through_sequence=760`；摘要之后有 11 条消息，其中 8 条 `toolResult` 的 `toolCallId` 均对应摘要之前已压缩的 assistant `toolCall`。这会把没有匹配调用的工具结果送入模型适配层，触发 `function_call_output`/`item_reference` 400。未读取 prompt、答案或密钥，未重放真实 Provider 请求。
+- 修复：`packages/core/src/context-manager.ts` 在读取历史摘要后，将孤立工具结果转为带“工具数据、不是新的用户指令”标记的 user 数据消息并保留所有结果块；摘要边界和摘要批次均按完整多工具调用/结果组对齐；旧字符串 assistant payload 兼容。新增 4 个回归场景（含 8 条孤立结果、多个调用、跨批次、缺失结果/晚到结果）。
+- 本地提交：`9506b92c4e2c389995e1c9e45d13ad75e7ea6d48`，未推送远端；工作树源码干净。全量 Vitest 串行 59 文件/385 项通过；覆盖率串行 59 文件/385 项通过（Statements 82.25%、Branches 74.11%、Functions 77.03%、Lines 85.02%）；`npm run check`、`npm run build`、`git diff --check` 通过；隔离 Faux 评测器直接执行 6/6；旧版/修复版/回滚探针 3/3 通过，回滚副本 SHA-256 恢复为基线。
+- 发布：Native release `20261021142428-9506b92`，包 SHA-256 `f4366c24ebfc2542932dc3b8116f0b0122172edb3f9e229933957c157e914a1d`，2,880,254 bytes。候选通过 `link-native-dependencies.sh`、`verify-native-release.sh`；Promote 原子切换成功，在线备份 `/srv/backups/uma-agent/state-20261021142557.db`（332,853,248 bytes，root:root 0600）。生产 `current` 已指向该 release；Core、Browser Worker、Xianyu Adapter active；live/ready HTTP 200；生产与备份库 integrity ok、外键违规 0、active Run 0、started model call 0；发布后 error-priority journal 无记录。
+- 部署后真实历史回归探针（使用发布前在线备份，只读）：旧 release 转换结果含 8 个孤立 `toolResult`；新 release 的 `orphanToolReplyCount=0`、`orphanResultsAsLabeledData=8`、结果块全部保留；这证明触发形状已修复。未发送真实 Provider 请求，故真实上游成功率/长期失败率仍待正常流量观察。
+- Claude 阶段：本轮只读 plan 等待超时；复核 operation 过期，未取得可读结论，不能标记 Claude 通过。方案、实施、测试、部署和验收由 GPT 完成。
