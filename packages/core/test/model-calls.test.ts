@@ -180,6 +180,41 @@ describe("ModelCallService", () => {
     );
   });
 
+  it.each(["Upstream request failed", "Upstream HTTP/2 stream failed"])(
+    "retries an observed upstream transport response: %s",
+    async (errorMessage) => {
+      vi.useFakeTimers();
+      const random = vi.spyOn(Math, "random").mockReturnValue(0);
+      try {
+        const { service, completeSimple } = fixture();
+        completeSimple
+          .mockResolvedValueOnce({
+            ...fauxAssistantMessage(""),
+            content: [],
+            stopReason: "error",
+            errorMessage,
+          })
+          .mockResolvedValueOnce(fauxAssistantMessage("recovered"));
+        const responsePromise = service.complete({
+          runId: "run",
+          sessionId: "session-a",
+          role: "fast",
+          purpose: "classify",
+          systemPrompt: "Return text",
+          messages: [{ role: "user", content: "request", timestamp: 1 }],
+          signal: new AbortController().signal,
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        const response = await responsePromise;
+        expect(response.stopReason).toBe("stop");
+        expect(completeSimple).toHaveBeenCalledTimes(2);
+      } finally {
+        random.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("keeps retrying transient control-call failures through the expanded budget", async () => {
     vi.useFakeTimers();
     const random = vi.spyOn(Math, "random").mockReturnValue(0);

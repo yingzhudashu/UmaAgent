@@ -61,3 +61,16 @@ Claude Opus 5.5 以请求 effort `max` 完成只读发布复核并通过；复�
 - Claude 参与：high 档只读计划与复核；复核结论通过。计划/复核模型与档位字段为工具返回声明，不构成独立上游身份认证。
 - 部署：本地提交 `54c45e2bbf48bc61736e76da08570f934ff0af30`；Native release `20261020215812-54c45e2`，包 SHA-256 `19ef611ba96486fb3cfc45738484672958af2161e5df786c6540277686309993`；生产 `/opt/uma-agent/current` 已切换至该 release。在线备份 `/srv/backups/uma-agent/state-20261020140333.db`（332853248 bytes，0600）。Core、Browser Worker、Xianyu Adapter 均 active，live/ready HTTP 200。当前数据库 integrity ok、外键违规 0、active Run 0；备份 integrity ok、外键违规 0。
 - 未验证：本轮没有发送新的真实 Provider 请求；生产原始 SSE 未持久化，故不能宣称已直接复现那一个空白片段；真实弱网成功率与持续失败率需在后续流量中观察。本轮无 Web UI、协议或 Android 改动。
+
+## 2026-10-21 偶发会话中断增量修复（本地验证、未部署）
+
+- 用户追加目标：核查近期偶发会话中断并修复，充分验证；明确要求本轮不部署。继续遵守此前要求：代码改动提交到本地，不推送远端。
+- 线上只读复核：服务器服务在检查时 active，当前 release 仍为 `20261020215812-54c45e2`。近 24 小时模型调用 122 次：119 completed、2 failed（transport）、1 started；最近 7 天 156 次：138 completed、17 failed、1 started。最近 7 天终态失败归类为 timeout 13、transport 3、cancel 1；模型 Span 观察到 overload/rate-limit 51、transport 9、auth 1、cancel 3、other 4。仅作类型计数，分类基于已有脱敏错误文本，不含 prompt/答案。最近两条失败是 `Upstream request failed` 与 `Upstream HTTP/2 stream failed`。线上请求未重放、数据库未写入。
+- 本地核实 `@earendil-works/pi-ai` 0.84.2 分类器对上述两条传输错误均返回不可重试；对 `Our servers are currently overloaded...` 返回可重试。因此这两条可重试传输错误未被此前通用重试覆盖，是本次可直接证实的原因；实际 Provider 原始 HTTP/SSE 仍未留存，不能从错误文案反推更底层网络根因。
+- 修复：`packages/core/src/model-retry.ts` 增加窄范围 `isRetryableModelError`，只补充明确观察到的上游 request / HTTP/2 stream 失败文案；先拒绝 quota、billing、401/403、无效 Key 等永久错误，再调用 Pi AI 原分类器。流式（包括 iterator 抛错）与非流式重试共用该判断。未扩大最大重试次数、600 秒硬超时、退避、取消和已输出内容不重放边界。
+- 回归覆盖：两种上游错误可分类且分别在流式/非流式中恢复；HTTP/2 async iterator 抛错恢复；配额、账单、401、403 不重试。原有取消、内容暴露和重试预算测试继续通过。
+- 验证：`npm test -- --run packages/core/test/model-retry.test.ts packages/core/test/model-calls.test.ts --reporter=dot`：2 文件、41 项通过；`npm test -- --reporter=dot`：59 文件、381 项通过；`npm run test:coverage`：通过，Statements 82.11%、Branches 74.01%、Functions 76.93%、Lines 84.88%；`npm run check` 通过；`npm run build` 全项目通过；`git diff --check` 通过。
+- 补充验证：`npm run test:eval:faux` 6/6 通过；按标准 20 条样本运行 `npm run test:perf` 通过（API P95 7.59ms、事件 P95 2.08ms、RSS 111656960 bytes、WAL 2294904 bytes）。一次仅 3 条样本的探索性性能命令因样本波动使 API P95 15.92ms 超预算而失败，未计入通过结论；随后已用标准样本重跑通过。
+- 对照行为探针：输入 `Upstream request failed`，基线行为 `{attempts:1,errors:1,terminal:error,text:""}`；修复版 `{attempts:2,errors:0,terminal:done,text:"recovered"}`。在单独副本执行 `ROLLBACK.sh` 后，副本 SHA-256 与原始基线相同，重跑探针恢复同样基线失败行为。证据及四个角色文件位于 `artifacts/acceptance/upstream-transport-retry-20261021/`。
+- 未做：真实 Provider 请求、真实弱网环境试验、生产部署、服务重启或服务器写入。由于用户禁止部署，以上本地通过不等于生产已修复/验收；上线后真实流量效果仍待后续受控观察。本次未发布任何客户端或应用产物。
+- Claude 参与：只读 plan 与只读 review 均已完成，review 结论 PASS；模型/档位仅为工具网关声明。实施和测试由 GPT 完成。真实 Provider/staging 消息变体仍待验证。

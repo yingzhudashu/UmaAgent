@@ -34,6 +34,21 @@ export const transientStreamRetry = {
 export type ModelRetryReason = "missing_finish_reason" | "transient_provider_error";
 export type ModelRetryErrorFactory = (error: unknown) => AssistantMessage;
 
+const NON_RETRYABLE_PROVIDER_ERROR_PATTERN =
+  /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing|\b401\b|\b403\b|unauthori[sz]ed|\bforbidden\b|invalid (?:api )?key/i;
+const ADDITIONAL_TRANSIENT_UPSTREAM_ERROR_PATTERN =
+  /\bupstream\s+(?:request|http\/2\s+stream)\s+(?:failed|failure|interrupted|terminated|closed|reset)\b/i;
+
+/** Fill transport-message gaps in the pinned Pi AI classifier without retrying account errors. */
+export function isRetryableModelError(message: AssistantMessage): boolean {
+  if (message.stopReason !== "error" || !message.errorMessage) return false;
+  if (NON_RETRYABLE_PROVIDER_ERROR_PATTERN.test(message.errorMessage)) return false;
+  return (
+    isRetryableAssistantError(message) ||
+    ADDITIONAL_TRANSIENT_UPSTREAM_ERROR_PATTERN.test(message.errorMessage)
+  );
+}
+
 export function modelRetryDelayMs(
   attempt: number,
   baseDelayMs: number = transientStreamRetry.baseDelayMs,
@@ -135,7 +150,7 @@ export function retryMissingFinishReasonStream(
           message !== undefined &&
           !signal.aborted &&
           retryCount < transientStreamRetry.maxRetries &&
-          isRetryableAssistantError(message);
+          isRetryableModelError(message);
         if (retryable) {
           retryCount++;
           onRetry?.(retryCount, "transient_provider_error");
@@ -187,7 +202,7 @@ export function retryMissingFinishReasonStream(
               !started &&
               event.error.stopReason === "error" &&
               retryCount < transientStreamRetry.maxRetries &&
-              isRetryableAssistantError(event.error);
+              isRetryableModelError(event.error);
             retryReason = "transient_provider_error";
           }
           if (event.type === "done") hasTerminalEvent = true;
@@ -212,7 +227,7 @@ export function retryMissingFinishReasonStream(
           lastErrorMessage = message;
           hasTerminalEvent = true;
           shouldRetry =
-            !started && retryCount < transientStreamRetry.maxRetries && isRetryableAssistantError(message);
+            !started && retryCount < transientStreamRetry.maxRetries && isRetryableModelError(message);
           retryReason = "transient_provider_error";
           const errorEvent: AssistantMessageEvent = {
             type: "error",
@@ -234,7 +249,7 @@ export function retryMissingFinishReasonStream(
         if (message) {
           lastErrorMessage = message;
           shouldRetry =
-            !started && retryCount < transientStreamRetry.maxRetries && isRetryableAssistantError(message);
+            !started && retryCount < transientStreamRetry.maxRetries && isRetryableModelError(message);
           retryReason = "transient_provider_error";
           const errorEvent: AssistantMessageEvent = {
             type: "error",

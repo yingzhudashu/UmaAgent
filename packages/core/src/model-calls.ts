@@ -1,14 +1,11 @@
 import { type AgentMessage, convertToLlm } from "@earendil-works/pi-agent-core";
-import {
-  type AssistantMessage,
-  isRetryableAssistantError,
-  type ModelThinkingLevel,
-} from "@earendil-works/pi-ai";
+import type { AssistantMessage, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { assertContextCapacity } from "./context-manager.js";
 import type { UmaDatabase } from "./database.js";
 import {
   DEFAULT_MODEL_TIMEOUT_MS,
   isMissingFinishReasonError,
+  isRetryableModelError,
   missingFinishReasonRetry,
   modelRequestSignal,
   modelRetryDelayMs,
@@ -131,7 +128,7 @@ export class ModelCallService {
           !isMissingFinishReasonError(response.errorMessage) &&
           !modelSignal.aborted &&
           retryCount < transientStreamRetry.maxRetries &&
-          isRetryableAssistantError(response)
+          isRetryableModelError(response)
         ) {
           retryCount++;
           span?.addEvent("model.retry", {

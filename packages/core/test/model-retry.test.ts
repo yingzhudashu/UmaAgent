@@ -2,6 +2,7 @@ import { createAssistantMessageEventStream, fauxAssistantMessage } from "@earend
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_MODEL_TIMEOUT_MS,
+  isRetryableModelError,
   missingFinishReasonRetry,
   modelRetryDelayMs,
   recoverMissingFinishReason,
@@ -12,6 +13,34 @@ import {
 } from "../src/model-retry.js";
 
 describe("model stream recovery", () => {
+  it.each(["Upstream request failed", "Upstream HTTP/2 stream failed"])(
+    "classifies observed transient transport failures as retryable: %s",
+    (errorMessage) => {
+      const error = {
+        ...fauxAssistantMessage(""),
+        content: [],
+        stopReason: "error" as const,
+        errorMessage,
+      };
+      expect(isRetryableModelError(error)).toBe(true);
+    },
+  );
+
+  it.each([
+    "Upstream request failed: insufficient_quota",
+    "Upstream HTTP/2 stream failed: billing",
+    "Upstream request failed: HTTP 401 unauthorized",
+    "Upstream HTTP/2 stream failed: HTTP 403 forbidden",
+  ])("does not retry permanent provider/account failures: %s", (errorMessage) => {
+    const error = {
+      ...fauxAssistantMessage(""),
+      content: [],
+      stopReason: "error" as const,
+      errorMessage,
+    };
+    expect(isRetryableModelError(error)).toBe(false);
+  });
+
   it("converts a non-tool response missing only the finish marker into a normal stop", async () => {
     const source = createAssistantMessageEventStream();
     const message = {
@@ -122,6 +151,57 @@ describe("model stream recovery", () => {
     ).toEqual(["recovered"]);
     expect(events.at(-1)?.type).toBe("done");
   });
+
+  it.each(["Upstream request failed", "Upstream HTTP/2 stream failed"])(
+    "retries an observed upstream transport error and returns only the recovered answer: %s",
+    async (errorMessage) => {
+      vi.useFakeTimers();
+      const random = vi.spyOn(Math, "random").mockReturnValue(0);
+      try {
+        let attempts = 0;
+        const create = () => {
+          attempts++;
+          const source = createAssistantMessageEventStream();
+          if (attempts === 1) {
+            const message = {
+              ...fauxAssistantMessage(""),
+              content: [],
+              stopReason: "error" as const,
+              errorMessage,
+            };
+            source.push({ type: "start", partial: message });
+            source.push({ type: "error", reason: "error", error: message });
+          } else {
+            const message = fauxAssistantMessage("recovered");
+            source.push({ type: "start", partial: message });
+            source.push({ type: "text_delta", contentIndex: 0, delta: "recovered", partial: message });
+            source.push({ type: "done", reason: "stop", message });
+          }
+          source.end();
+          return source;
+        };
+        const recovered = retryMissingFinishReasonStream(create, new AbortController().signal);
+        const eventsPromise = (async () => {
+          const events = [];
+          for await (const event of recovered) events.push(event);
+          return events;
+        })();
+        await vi.advanceTimersByTimeAsync(60_000);
+        const events = await eventsPromise;
+        expect(attempts).toBe(2);
+        expect(events.filter((event) => event.type === "error")).toHaveLength(0);
+        expect(events.at(-1)?.type).toBe("done");
+        expect(
+          events
+            .filter((event) => event.type === "text_delta")
+            .map((event) => (event.type === "text_delta" ? event.delta : "")),
+        ).toEqual(["recovered"]);
+      } finally {
+        random.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("does not retry a transient error after response content has been exposed", async () => {
     let attempts = 0;
@@ -256,6 +336,54 @@ describe("model stream recovery", () => {
 
     expect(attempts).toBe(2);
     expect(events.at(-1)?.type).toBe("done");
+  });
+
+  it("retries a classified HTTP/2 interruption thrown by the async stream iterator", async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      let attempts = 0;
+      const create = () => {
+        attempts++;
+        if (attempts === 1) {
+          return (async function* () {
+            yield* [];
+            throw new Error("Upstream HTTP/2 stream failed");
+          })() as unknown as ReturnType<typeof createAssistantMessageEventStream>;
+        }
+        const source = createAssistantMessageEventStream();
+        const message = fauxAssistantMessage("recovered");
+        source.push({ type: "start", partial: message });
+        source.push({ type: "text_delta", contentIndex: 0, delta: "recovered", partial: message });
+        source.push({ type: "done", reason: "stop", message });
+        source.end();
+        return source;
+      };
+      const recovered = retryMissingFinishReasonStream(
+        create,
+        new AbortController().signal,
+        undefined,
+        (error) => ({
+          ...fauxAssistantMessage(""),
+          content: [],
+          stopReason: "error",
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      const eventsPromise = (async () => {
+        const events = [];
+        for await (const event of recovered) events.push(event);
+        return events;
+      })();
+      await vi.advanceTimersByTimeAsync(5_000);
+      const events = await eventsPromise;
+      expect(attempts).toBe(2);
+      expect(events.filter((event) => event.type === "error")).toHaveLength(0);
+      expect(events.at(-1)?.type).toBe("done");
+    } finally {
+      random.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("reconnects when the stream iterator throws before exposing output", async () => {
