@@ -208,7 +208,7 @@ class ConversationLayoutTest {
 
     @Test
     fun delayedContentMeasurementDoesNotPullAUserBackToTheTail() {
-        state.value = state.value.copy(snapshot = transcript(40))
+        state.value = state.value.copy(snapshot = responseTranscript(40))
         openConversation()
         val messages = compose.onNodeWithTag("conversation-messages")
         messages.performTouchInput { swipeDown() }
@@ -222,8 +222,7 @@ class ConversationLayoutTest {
         // Simulate asynchronous Markdown/WebView remeasurement while the reader is
         // inspecting old entries. The viewport must stay where the gesture left it.
         compose.runOnIdle {
-            state.value =
-                state.value.copy(snapshot = transcript(40, "\n" + "延迟排版变化".repeat(80)))
+            state.value = state.value.copy(snapshot = responseTranscript(40, "\n" + "延迟排版变化".repeat(80)))
         }
         compose.waitForIdle()
         assertEquals(
@@ -236,6 +235,17 @@ class ConversationLayoutTest {
             0.01f,
         )
         compose.onNodeWithText("最新消息").assertIsDisplayed()
+    }
+
+    @Test
+    fun responseCardDoesNotOverlapTheFollowingQuestion() {
+        state.value = state.value.copy(snapshot = responseTranscript(2, "简短的完整回答"))
+        openConversation()
+
+        val responseCard = compose.onNodeWithTag("response-card-response-1:question-1")
+        val cardBounds = responseCard.fetchSemanticsNode().boundsInRoot
+        val nextQuestion = compose.onNodeWithText("随后提出的问题").fetchSemanticsNode().boundsInRoot
+        assertTrue("回复卡片与后续提问必须保持可见间隔", nextQuestion.top >= cardBounds.bottom)
     }
 
     private fun transcript(count: Int, tail: String = "") = buildJsonObject {
@@ -253,6 +263,76 @@ class ConversationLayoutTest {
                         }
                     )
                 }
+            },
+        )
+    }
+        .toString()
+
+    private fun responseTranscript(count: Int, content: String = "流式回答") = buildJsonObject {
+        put(
+            "transcript",
+            buildJsonArray {
+                repeat(count) { index ->
+                    add(
+                        buildJsonObject {
+                            val responseQuestion = index == count - 1
+                            put("id", if (responseQuestion) "question-1" else "message-$index")
+                            put("sequence", index + 1)
+                            put("role", "user")
+                            put("status", "complete")
+                            put("content", if (responseQuestion) "回复前的问题" else "历史问题$index")
+                            if (responseQuestion) put("runId", "run-1")
+                        }
+                    )
+                }
+                add(
+                    buildJsonObject {
+                        put("id", "answer-1")
+                        put("sequence", count + 1)
+                        put("role", "assistant")
+                        put("status", "streaming")
+                        put("content", content)
+                        put("runId", "run-1")
+                    }
+                )
+                add(
+                    buildJsonObject {
+                        put("id", "question-2")
+                        put("sequence", count + 2)
+                        put("role", "user")
+                        put("status", "complete")
+                        put("content", "随后提出的问题")
+                    }
+                )
+            },
+        )
+        put(
+            "recentRuns",
+            buildJsonArray {
+                add(
+                    buildJsonObject {
+                        put("id", "run-1")
+                        put("status", "running")
+                        put("interactionMode", "agent")
+                        put("plan", buildJsonArray {})
+                    }
+                )
+            },
+        )
+        put(
+            "responses",
+            buildJsonArray {
+                add(
+                    buildJsonObject {
+                        put("id", "response-1")
+                        put("runId", "run-1")
+                        put("messageId", "question-1")
+                        put("status", "streaming")
+                        put("content", content)
+                        put("activities", buildJsonArray {})
+                        put("attachments", buildJsonArray {})
+                    }
+                )
             },
         )
     }

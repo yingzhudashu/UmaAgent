@@ -1,5 +1,14 @@
 # UmaAgent 可用性整改与验收
 
+## 2026-10-22 Android 偶发闪退追加核查（候选修改，尚未发布）
+
+- 用户追加要求将 Android 偶发闪退一并核查修复；沿用前序授权：充分验证后可进行服务端部署、发布必要 APK 并推送远端。
+- 当前模拟器 crash-dropbox 中可读 native SIGSEGV 都属于第三方输入法（豆包输入法）进程，不能归因到 UmaAgent 或用户真机。UmaAgent 1.4.5 debug 另有一次启动期 ANR，系统摘要为“failed to complete startup”，RSS 约 218 MiB，并伴随内存、CPU、IO 压力；ANR trace 因系统权限不可读，实际用户闪退根因仍未证实。
+- 已确认风险：启动期同步读取最多 16 MiB 离线缓存与快照解析可能造成主线程阻塞；WebView renderer 退出时没有降级路径；WebSocket open 回调同步读取 Android Keystore PAT。已分别改为 IO/Default dispatcher、捕获 renderer exit 后 Compose 纯文本降级、异步读取 WebSocket PAT。新回归使用真实 API 36 `WebViewRenderProcess.terminate()`，通过；启动缓存约 11 MiB 回归通过。
+- 本轮实际验证：Android 相关 instrumentation 11/11；`npm run check:android`；`npm run check`；`npm test -- --run --reporter=dot` 60 文件/392 项；`npm run build`，均通过。之前的 UI 显示/历史滚动与 Browser Worker Chromium 安装候选同处当前脏工作树，尚未做最终候选构建、正式签名 APK、线上部署及公网验收。
+- Claude 已完成一次只读 plan；本轮 review 请求结束时没有返回实际审查正文或结论，因此复核阶段未完成，后续由 GPT 对照源码和实测证据独立检查，不将工具响应记作 Claude 通过。
+- 尚未完成：正式 Android 构建与签名连续性核验；按官方入口部署 Core/Browser Worker 及发布 APK；生产健康/浏览器检查与 APK 公网下载/签名验收；UmaAgent 与 MyServer 改动提交、远端推送。只在这些实际步骤完成后更新状态，不能将模拟器结果写成真机/长期生产验证。
+
 ## 目标与边界
 
 修复 Trace 生命周期、外部父链和遥测聚合；审查代码、前端、文档与过程文件；完成 Core/Web 生产发布、Android 正式包发布及当前支持范围验收。历史用户数据必须保留；本轮不执行数据库迁移，不发送真实渠道消息，不重放已失败的真实 Provider 请求。

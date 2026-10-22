@@ -2,8 +2,8 @@ package site.robotclaw.umaagent
 
 import kotlinx.serialization.json.*
 
-/** 4ms 合并窗口为重组、WebView 栅格化与宿主帧提交留出预算；UI 自身仍按帧合并。 */
-internal const val STREAM_PUBLISH_INTERVAL_MS = 4L
+/** 与 60Hz 屏幕帧对齐，避免高频增量驱动 Compose/WebView 超过可见刷新率。 */
+internal const val STREAM_PUBLISH_INTERVAL_MS = 16L
 
 /** 永久事件更新游标，临时增量只改变正文。纯函数可在 JVM 覆盖重放、去重和终态覆盖。 */
 internal fun projectSnapshot(snapshot: JsonObject, event: JsonObject): JsonObject {

@@ -5,6 +5,7 @@ import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -162,7 +163,6 @@ internal fun ChatScreen(
     val approvals = state.approvals ?: remember(state.snapshot) { pendingApprovals(state.snapshot) }
     val listState = rememberLazyListState()
     var followTail by rememberSaveable(state.selectedSessionId) { mutableStateOf(true) }
-    var scrollingToTail by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     if (state.traceRunId != null)
         TraceDialog(
@@ -174,16 +174,11 @@ internal fun ChatScreen(
         )
     suspend fun scrollToLatest() {
         if (conversation.isEmpty()) return
-        scrollingToTail = true
-        try {
-            listState.requestScrollToItem(conversation.lastIndex, Int.MAX_VALUE)
-            withFrameNanos {}
-            listState.scrollToItem(conversation.lastIndex, Int.MAX_VALUE)
-            // Use the measured height so a reply taller than the viewport ends at its last line.
-            followTail = true
-        } finally {
-            scrollingToTail = false
-        }
+        listState.requestScrollToItem(conversation.lastIndex, Int.MAX_VALUE)
+        withFrameNanos {}
+        listState.scrollToItem(conversation.lastIndex, Int.MAX_VALUE)
+        // Use the measured height so a reply taller than the viewport ends at its last line.
+        followTail = true
     }
     val attachmentPicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -243,14 +238,6 @@ internal fun ChatScreen(
         )
     }
 
-    LaunchedEffect(listState, selectedSession?.id) {
-        snapshotFlow {
-            Triple(listState.isScrollInProgress, listState.canScrollForward, scrollingToTail)
-        }
-            .collect { (scrolling, canScrollForward, automatic) ->
-                if (!automatic && scrolling) followTail = !canScrollForward
-            }
-    }
     LaunchedEffect(conversation.lastOrNull(), selectedSession?.id) {
         if (followTail) scrollToLatest()
     }
@@ -366,7 +353,7 @@ internal fun ChatScreen(
                             )
                             .testTag("conversation-messages"),
                     contentPadding = PaddingValues(vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(conversation, key = { it.id }) { entry ->
                         when (entry) {
@@ -901,10 +888,11 @@ internal fun ResponseItem(
     val hasDetails = detailCount > 0 || entry.response.activities.isNotEmpty()
 
     Surface(
-        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp).testTag("response-card-${entry.id}"),
         color = MaterialTheme.colorScheme.surface,
         shape = MaterialTheme.shapes.medium,
-        shadowElevation = 1.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 0.dp,
         tonalElevation = 1.dp,
     ) {
         Column(

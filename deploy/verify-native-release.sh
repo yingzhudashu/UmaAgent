@@ -25,6 +25,28 @@ case "$release_real" in
   *) echo "release resolves outside $release_root: $release_real" >&2; exit 1 ;;
 esac
 
+browser_path=/var/lib/uma-agent/browser/.cache/ms-playwright
+browser_executable=$(cd "$release_real" && PLAYWRIGHT_BROWSERS_PATH="$browser_path" \
+  "$node_bin" --input-type=module -e 'import { chromium } from "playwright"; process.stdout.write(chromium.executablePath())')
+case "$browser_executable" in
+  "$browser_path"/*) ;;
+  *) echo "Playwright Chromium resolves outside $browser_path: $browser_executable" >&2; exit 1 ;;
+esac
+[[ -x "$browser_executable" ]] || {
+  echo "Playwright Chromium executable is missing: $browser_executable" >&2
+  echo "Run deploy/install-playwright-browsers.sh for this candidate before verification." >&2
+  exit 1
+}
+(
+  cd "$release_real"
+  runuser -u umaagent-browser -- env PLAYWRIGHT_BROWSERS_PATH="$browser_path" \
+    "$node_bin" --input-type=module -e '
+      import { chromium } from "playwright";
+      const browser = await chromium.launch({ channel: "chromium", headless: true });
+      await browser.close();
+    '
+)
+
 for package in browser-worker channel-adapter cli client core eval-runner protocol server smath-worker telemetry xianyu-adapter; do
   case "$package" in
     browser-worker|cli|eval-runner|server|smath-worker|xianyu-adapter) parent=apps ;;

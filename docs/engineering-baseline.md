@@ -1,6 +1,6 @@
 # UmaAgent 工程基线
 
-当前版本为 Core 1.3.0、Android 正式版本 1.4.5（versionCode 19，已发布）、Protocol v16、SQLite schema 27。服务只接受当前格式；版本不匹配直接拒绝启动，旧数据库保留在匹配版本的隔离恢复环境，不提供运行时兼容或迁移。生产和验收状态以[发布验收](release-acceptance.md)为准。
+当前版本为 Core 1.3.0、Android 1.4.6（候选，versionCode 20，待发布；线上仍为 1.4.5）、Protocol v16、SQLite schema 27。服务只接受当前格式；版本不匹配直接拒绝启动，旧数据库保留在匹配版本的隔离恢复环境，不提供运行时兼容或迁移。生产和验收状态以[发布验收](release-acceptance.md)为准。
 
 ## 已落地的边界
 

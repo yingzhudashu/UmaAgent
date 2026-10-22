@@ -93,6 +93,22 @@ data class AttachmentPreview(
     val bytes: ByteArray,
 )
 
+private data class LocalStartupData(
+    val cache: CacheEnvelope?,
+    val drafts: Map<String, SessionDraft>,
+    val token: String?,
+    val stagingPassword: String?,
+)
+
+private data class RestoredLocalState(
+    val selectedSessionId: String?,
+    val snapshot: String,
+    val parsedSnapshot: JsonObject?,
+    val conversation: List<UiConversationEntry>?,
+    val approvals: List<UiApproval>?,
+    val queue: List<UiQueueItem>,
+)
+
 class UmaViewModel(application: Application) : AndroidViewModel(application) {
     private val appearance =
         application.getSharedPreferences("appearance", android.content.Context.MODE_PRIVATE)
@@ -100,11 +116,16 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     private val stagingAuthStore = StagingAuthStore(application)
     private val cache = SnapshotCache(application)
     private val draftStore = DraftStore(application)
-    private val drafts = draftStore.read().toMutableMap()
+    private val drafts = mutableMapOf<String, SessionDraft>()
+    private var startupStorageLoaded = false
+    private var loadedStagingPassword: String? = null
     private var draftJob: Job? = null
     private val state =
         MutableStateFlow(
-            UmaUiState(themeMode = appearance.getString("theme", "system") ?: "system")
+            UmaUiState(
+                themeMode = appearance.getString("theme", "system") ?: "system",
+                loading = true,
+            )
         )
     val uiState = state.asStateFlow()
     private var api: UmaApi? = null
@@ -135,48 +156,89 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
         }
 
     private fun stagingPassword(): String? =
-        if (BuildConfig.STAGING_BUILD) stagingAuthStore.read() else null
+        if (!BuildConfig.STAGING_BUILD) null
+        else if (startupStorageLoaded) loadedStagingPassword
+        else stagingAuthStore.read()
 
     private fun client(token: String = ""): UmaApi =
         UmaApi(token, BuildConfig.UMA_BASE_URL, stagingPassword())
 
     init {
-        val cached = cache.read()
-        if (cached != null) {
-            sequences.putAll(cached.sequences)
-            // 在联网前恢复当前会话和正文；冷启动离线也能直接阅读，不依赖登录回执。
-            val selected =
-                cached.selectedSessionId?.takeIf { id -> cached.sessions.any { it.id == id } }
-            val snapshot = cached.snapshots[selected].orEmpty()
-            val parsed = runCatching { json.parseToJsonElement(snapshot) as JsonObject }.getOrNull()
-            projectedSession = selected
-            projectedSnapshot = parsed
-            val attachments = drafts[selected]?.attachments.orEmpty()
+        // A 16 MiB cache can expand substantially during JSON decoding. Keep startup I/O,
+        // Keystore reads and snapshot projection off the UI thread to prevent cold-start ANRs.
+        viewModelScope.launch {
+            try {
+            val stored =
+                withContext(Dispatchers.IO) {
+                    LocalStartupData(
+                        cache = cache.read(),
+                        drafts = draftStore.read(),
+                        token = patStore.read(),
+                        stagingPassword = stagingAuthStore.read(),
+                    )
+                }
+            val restored =
+                withContext(Dispatchers.Default) {
+                    val cached = stored.cache
+                    val selected =
+                        cached?.selectedSessionId?.takeIf { id -> cached.sessions.any { it.id == id } }
+                    val snapshot = selected?.let { cached?.snapshots?.get(it) }.orEmpty()
+                    val parsed =
+                        runCatching { json.parseToJsonElement(snapshot) as JsonObject }.getOrNull()
+                    RestoredLocalState(
+                        selectedSessionId = selected,
+                        snapshot = snapshot,
+                        parsedSnapshot = parsed,
+                        conversation = parsed?.let(::parseSnapshotConversation),
+                        approvals = parsed?.let(::pendingApprovals),
+                        queue = parsed?.let(::parseQueue).orEmpty(),
+                    )
+                }
+
+            drafts.putAll(stored.drafts)
+            loadedStagingPassword = stored.stagingPassword
+            startupStorageLoaded = true
+            val cached = stored.cache
+            if (cached != null) sequences.putAll(cached.sequences)
+            projectedSession = restored.selectedSessionId
+            projectedSnapshot = restored.parsedSnapshot
+            val attachments = drafts[restored.selectedSessionId]?.attachments.orEmpty()
+            val stagingAccessMissing = BuildConfig.STAGING_BUILD && stored.stagingPassword == null
             state.value =
                 state.value.copy(
-                    sessions = cached.sessions,
-                    selectedSessionId = selected,
-                    snapshot = snapshot,
-                    conversation = parsed?.let(::parseSnapshotConversation),
-                    approvals = parsed?.let(::pendingApprovals),
-                    queue = parsed?.let(::parseQueue).orEmpty(),
+                    stagingAccessRequired = stagingAccessMissing,
+                    sessions = cached?.sessions.orEmpty(),
+                    selectedSessionId = restored.selectedSessionId,
+                    snapshot = restored.snapshot,
+                    conversation = restored.conversation,
+                    approvals = restored.approvals,
+                    queue = restored.queue,
                     pendingAttachments = attachments,
                     pendingAttachmentIds = attachments.map { it.id },
-                    unconfirmedSend = drafts[selected]?.pending != null,
-                    interactionMode = drafts[selected]?.pending?.mode ?: "agent",
+                    unconfirmedSend = drafts[restored.selectedSessionId]?.pending != null,
+                    interactionMode = drafts[restored.selectedSessionId]?.pending?.mode ?: "agent",
+                    loading = false,
                 )
-        }
-        val stagingAccessMissing = BuildConfig.STAGING_BUILD && stagingPassword() == null
-        state.value = state.value.copy(stagingAccessRequired = stagingAccessMissing)
-        patStore
-            .read()
-            ?.takeIf { !stagingAccessMissing }
-            ?.let {
-                state.value =
-                    state.value.copy(tokenPresent = cached != null, offline = cached != null)
-                login(it, persist = false)
+
+            if (!stagingAccessMissing) {
+                stored.token?.let {
+                    state.value =
+                        state.value.copy(tokenPresent = cached != null, offline = cached != null)
+                    login(it, persist = false)
+                }
+                checkForUpdate()
             }
-        if (!stagingAccessMissing) checkForUpdate()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                startupStorageLoaded = true
+                state.value =
+                    state.value.copy(
+                        loading = false,
+                        error = requestErrorMessage(error, "恢复本机数据失败"),
+                    )
+            }
+        }
     }
 
     fun checkForUpdate() {
@@ -247,6 +309,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     fun login(token: String, persist: Boolean = true) {
         if (token.isBlank()) return
         viewModelScope.launch {
+            while (!startupStorageLoaded) delay(10)
             state.value = state.value.copy(loading = true, error = "")
             try {
                 val client = client(token)
@@ -356,8 +419,11 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             }
                 .onSuccess {
                     localStorage { stagingAuthStore.save(password) }
+                    loadedStagingPassword = password
                     state.value = state.value.copy(stagingAccessRequired = false, loading = false)
-                    patStore.read()?.let { login(it, persist = false) }
+                    withContext(Dispatchers.IO) { patStore.read() }?.let {
+                        login(it, persist = false)
+                    }
                     checkForUpdate()
                 }
                 .onFailure { error ->
@@ -372,7 +438,9 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
 
     fun retryLogin() {
         if (state.value.loading) return
-        patStore.read()?.let { login(it, persist = false) }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { patStore.read() }?.let { login(it, persist = false) }
+        }
     }
 
     fun logout() {
@@ -401,6 +469,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             draftStore.clear()
             drafts.clear()
         }
+        if (clearStaging) loadedStagingPassword = null
         sessions = emptyList()
         sequences.clear()
         projectedSession = null
@@ -495,16 +564,19 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                 currentCoroutineContext().ensureActive()
                 if (api !== client || state.value.selectedSessionId != id) return@launch
                 val cached = localStorage { cache.read()?.snapshots?.get(id) }.orEmpty()
-                val parsed = withContext(Dispatchers.Default) { parseSnapshotConversation(cached) }
+                val (parsedSnapshot, parsed) = withContext(Dispatchers.Default) {
+                    val snapshot =
+                        runCatching { json.parseToJsonElement(cached) as JsonObject }.getOrNull()
+                    snapshot to snapshot?.let(::parseSnapshotConversation).orEmpty()
+                }
                 projectedSession = id
-                projectedSnapshot =
-                    runCatching { json.parseToJsonElement(cached) as JsonObject }.getOrNull()
+                projectedSnapshot = parsedSnapshot
                 state.value =
                     state.value.copy(
                         snapshot = cached,
                         conversation = parsed,
-                        approvals = pendingApprovals(cached),
-                        queue = parseQueue(cached),
+                        approvals = parsedSnapshot?.let(::pendingApprovals).orEmpty(),
+                        queue = parsedSnapshot?.let(::parseQueue).orEmpty(),
                         assistantAvatar = null,
                         offline = true,
                         loading = false,
@@ -2226,16 +2298,18 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                         webSocket.close(1000, "account-changed")
                         return@connectEvents
                     }
-                    val token = patStore.read()
-                    if (token != null) {
-                        webSocket.send(
-                            buildJsonObject {
-                                put("type", "auth")
-                                put("token", token)
-                            }
-                                .toString()
-                        )
-                        sendSubscriptions(webSocket)
+                    viewModelScope.launch {
+                        val token = withContext(Dispatchers.IO) { patStore.read() }
+                        if (api === client && token != null) {
+                            webSocket.send(
+                                buildJsonObject {
+                                    put("type", "auth")
+                                    put("token", token)
+                                }
+                                    .toString()
+                            )
+                            sendSubscriptions(webSocket)
+                        }
                     }
                     viewModelScope.launch { state.value.selectedSessionId?.let(::selectSession) }
                     refreshXianyuWorkspace()

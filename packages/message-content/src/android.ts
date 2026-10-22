@@ -4,7 +4,7 @@ import "./style.css";
 declare global {
   interface Window {
     UmaBody: {
-      height(value: number): void;
+      height(value: number, revision: string): void;
       copy(value: string): boolean;
       ready(): void;
       attachment(id: string): void;
@@ -20,12 +20,15 @@ declare global {
         code: string;
         border: string;
       },
+      revision: string,
     ) => void;
   }
 }
 const root = document.getElementById("message") as HTMLElement;
 const renderMessage = createMessageRenderer();
-window.updateMessage = (content, theme) => {
+let messageRevision = "";
+window.updateMessage = (content, theme, revision) => {
+  messageRevision = revision;
   root.style.color = theme.text;
   root.style.fontSize = `${theme.size}px`;
   root.style.setProperty("--message-link", theme.link);
@@ -54,5 +57,7 @@ root.addEventListener("click", (event) => {
     } else window.UmaBody.image(target.src);
   }
 });
-new ResizeObserver(() => window.UmaBody.height(root.getBoundingClientRect().height)).observe(root);
+new ResizeObserver(() => window.UmaBody.height(root.getBoundingClientRect().height, messageRevision)).observe(
+  root,
+);
 window.UmaBody.ready();

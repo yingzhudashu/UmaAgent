@@ -11,19 +11,23 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.RenderProcessGoneDetail
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 import org.json.JSONObject
+import java.util.UUID
 
 /** 正文唯一宿主：离线资源与受控桥接，导航、输入和消息操作仍使用 Compose。 */
 @Composable
@@ -32,12 +36,14 @@ internal fun RichMessageContent(
     modifier: Modifier = Modifier,
     compact: Boolean = false,
     onAttachment: (String) -> Unit = {},
+    onRendererGone: () -> Unit = {},
 ) {
     val colors = MaterialTheme.colorScheme
     val density = LocalDensity.current
     val scale = density.fontScale
     var height by remember { mutableIntStateOf(24) }
     var previewUrl by remember { mutableStateOf<String?>(null) }
+    var rendererFailed by remember { mutableStateOf(false) }
     previewUrl?.let { RemoteImagePreview(it) { previewUrl = null } }
     fun color(value: androidx.compose.ui.graphics.Color) =
         "#%06x".format(value.toArgb() and 0xffffff)
@@ -53,7 +59,19 @@ internal fun RichMessageContent(
                 .toString()
         }
     val payload =
-        remember(content, theme) { "window.updateMessage(${JSONObject.quote(content)},$theme)" }
+        remember(content, theme) {
+            val revision = UUID.randomUUID().toString()
+            "window.updateMessage(${JSONObject.quote(content)},$theme,${JSONObject.quote(revision)})" to revision
+        }
+    if (rendererFailed) {
+        Text(
+            content,
+            modifier = modifier.fillMaxWidth(),
+            color = colors.onSurface,
+            fontSize = ((if (compact) 14 else 16) * scale).sp,
+        )
+        return
+    }
     AndroidView(
         // 高度回执只使布局重新测量，不重新组合正文、更不重复转义整段长回复。
         modifier =
@@ -66,13 +84,21 @@ internal fun RichMessageContent(
         factory = { context ->
             BodyWebView(context).also { web ->
                 web.onHeight = { pixels -> height = pixels.coerceAtLeast(24) }
+                web.onRendererGone = {
+                    rendererFailed = true
+                    onRendererGone()
+                }
             }
         },
         update = { web ->
             web.onHeight = { pixels -> height = pixels.coerceAtLeast(24) }
+            web.onRendererGone = {
+                rendererFailed = true
+                onRendererGone()
+            }
             web.onAttachment = onAttachment
             web.onImage = { previewUrl = it }
-            web.updateBody(payload)
+            web.updateBody(payload.first, payload.second)
         },
         onRelease = { it.releaseBody() },
     )
@@ -83,10 +109,13 @@ internal class BodyWebView(context: Context) : WebView(context) {
     var onHeight: (Int) -> Unit = {}
     var onAttachment: (String) -> Unit = {}
     var onImage: (String) -> Unit = {}
+    var onRendererGone: () -> Unit = {}
     private var released = false
+    private var rendererGone = false
     private var ready = false
     private var payload = ""
     private var applied = ""
+    private var bodyRevision = ""
     private val loader =
         WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
@@ -104,8 +133,11 @@ internal class BodyWebView(context: Context) : WebView(context) {
         addJavascriptInterface(
             object {
                 @JavascriptInterface
-                fun height(value: Double) {
-                    post { if (!released && value.isFinite()) onHeight(ceil(value).toInt()) }
+                fun height(value: Double, revision: String) {
+                    post {
+                        if (!released && !rendererGone && value.isFinite() && revision == bodyRevision)
+                            onHeight(ceil(value).toInt())
+                    }
                 }
 
                 @JavascriptInterface
@@ -177,12 +209,38 @@ internal class BodyWebView(context: Context) : WebView(context) {
                         runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
                     return true
                 }
+
+                override fun onRenderProcessGone(
+                    view: WebView,
+                    detail: RenderProcessGoneDetail,
+                ): Boolean {
+                    // Android kills the host process when this callback is not handled. The
+                    // renderer is not reusable, so release this view and let Compose render a
+                    // plain-text fallback instead of taking down the whole conversation screen.
+                    handleRendererGone()
+                    return true
+                }
             }
         loadUrl("https://appassets.androidplatform.net/assets/message/android.html")
     }
 
-    fun updateBody(value: String) {
+    private fun handleRendererGone() {
+        if (released || rendererGone) return
+        rendererGone = true
+        released = true
+        ready = false
+        payload = ""
+        applied = ""
+        bodyRevision = ""
+        removeJavascriptInterface("UmaBody")
+        stopLoading()
+        onHeight(24)
+        onRendererGone()
+    }
+
+    fun updateBody(value: String, revision: String) {
         payload = value
+        bodyRevision = revision
         applyBody()
     }
 
@@ -197,12 +255,18 @@ internal class BodyWebView(context: Context) : WebView(context) {
         onHeight = {}
         onAttachment = {}
         onImage = {}
+        onRendererGone = {}
         payload = ""
         applied = ""
+        bodyRevision = ""
         if (ready) evaluateJavascript("document.getElementById('message').replaceChildren()", null)
     }
 
     fun releaseBody() {
+        if (rendererGone && released) {
+            destroy()
+            return
+        }
         released = true
         resetBody()
         removeJavascriptInterface("UmaBody")

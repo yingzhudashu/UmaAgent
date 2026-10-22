@@ -1,6 +1,7 @@
 package site.robotclaw.umaagent
 
 import android.graphics.Bitmap
+import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -14,14 +15,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assume.assumeTrue
 import org.junit.runner.RunWith
 
 /** 验证 APK 中真正打包的 WebView 正文，而不是用 JVM 或浏览器替代 Android 渲染。 */
@@ -142,5 +149,72 @@ class MessageBodyTest {
         }
         assertTrue(completed)
         assertEquals("true", evaluate("window.originalHeading === document.querySelector('h1')"))
+    }
+
+    @Test
+    fun staleWebViewHeightCallbacksAreIgnoredAfterContentChanges() {
+        val observed = Collections.synchronizedList(mutableListOf<Int>())
+        val body = AtomicReference<BodyWebView?>()
+        compose.setContent {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
+                    BodyWebView(context).also { view ->
+                        view.onHeight = { observed.add(it) }
+                        body.set(view)
+                    }
+                },
+            )
+        }
+        compose.waitUntil(10_000) { findWeb(compose.activity.window.decorView) != null }
+        compose.waitUntil(10_000) { evaluate("typeof window.updateMessage === 'function'") == "true" }
+        compose.runOnUiThread {
+            body.get()!!.updateBody(
+                "window.updateMessage('新回复',{text:'#000000',background:'transparent',link:'#0000ff',size:16,code:'#eeeeee',border:'#cccccc'},'revision-new')",
+                "revision-new",
+            )
+        }
+        compose.waitForIdle()
+
+        evaluate("window.UmaBody.height(777, 'revision-old'); true")
+        android.os.SystemClock.sleep(100)
+        assertFalse("旧正文的延迟高度回执不能覆盖新正文高度", synchronized(observed) { 777 in observed })
+
+        evaluate("window.UmaBody.height(123, 'revision-new'); true")
+        compose.waitUntil(5_000) { synchronized(observed) { 123 in observed } }
+    }
+
+    @Test
+    fun rendererProcessExitFallsBackToReadableTextInsteadOfCrashingTheScreen() {
+        val body = AtomicReference<BodyWebView?>()
+        val rendererReady = AtomicInteger()
+        val callbacks = AtomicInteger()
+        compose.setContent {
+            UmaAgentTheme {
+                RichMessageContent(
+                    "渲染进程退出后仍可阅读的回复",
+                    modifier = Modifier.fillMaxSize(),
+                    onRendererGone = { callbacks.incrementAndGet() },
+                )
+            }
+        }
+        compose.waitUntil(10_000) {
+            body.set(findWeb(compose.activity.window.decorView) as? BodyWebView)
+            body.get() != null
+        }
+
+        assumeTrue("WebViewRenderProcess.terminate requires Android 10+", Build.VERSION.SDK_INT >= 29)
+        compose.waitUntil(10_000) {
+            compose.runOnUiThread {
+                if (body.get()?.webViewRenderProcess != null) rendererReady.set(1)
+            }
+            rendererReady.get() == 1
+        }
+        compose.runOnUiThread {
+            checkNotNull(body.get()?.webViewRenderProcess).terminate()
+        }
+        compose.waitUntil(10_000) { callbacks.get() == 1 }
+        compose.onNodeWithText("渲染进程退出后仍可阅读的回复").assertIsDisplayed()
+        assertEquals("同一次渲染进程退出只能通知一次", 1, callbacks.get())
     }
 }

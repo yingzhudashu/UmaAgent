@@ -7,11 +7,11 @@ import { parseTraceparent, TelemetryStore, TraceService, type TraceSpanContext }
 import type { Request, Response } from "express";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
 import { z } from "zod";
+import { createBrowserInstanceFactory } from "./browser-instance.js";
 import { assertPublicUrl, createValidatingProxy } from "./network.js";
 
 type Handle = { context: BrowserContext; page: Page; expiresAt: number };
 const handles = new Map<string, Handle>();
-let browser: Browser | undefined;
 const proxy = await createValidatingProxy();
 const telemetryDir = process.env.UMA_TELEMETRY_DIR?.trim();
 if (!telemetryDir) throw new Error("UMA_TELEMETRY_DIR is required");
@@ -36,23 +36,33 @@ async function traced<T>(name: string, kind: string, operation: () => Promise<T>
   }
 }
 
-async function browserInstance(): Promise<Browser> {
-  if (!browser) {
-    try {
-      browser = await traced("browser.launch", "browser", () =>
-        chromium.launch({
-          channel: "chromium",
-          headless: true,
-          args: [`--proxy-server=${proxy.url}`],
-        }),
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("browser.execution.failed", { phase: "launch", error: message.slice(0, 300) });
-      throw new Error(`browser_launch_failed: ${message}`, { cause: error });
-    }
+const browserFactory = createBrowserInstanceFactory(async () => {
+  try {
+    return await traced("browser.launch", "browser", () =>
+      chromium.launch({
+        channel: "chromium",
+        headless: true,
+        args: [`--proxy-server=${proxy.url}`],
+      }),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("browser.execution.failed", { phase: "launch", error: message.slice(0, 300) });
+    throw new Error(`browser_launch_failed: ${message}`, { cause: error });
   }
-  return browser;
+});
+
+async function browserInstance(): Promise<Browser> {
+  return browserFactory.get();
+}
+
+/*
+ * The worker must not advertise readiness until the exact browser runtime it serves
+ * can launch. The service unit also waits on /health, so a missing browser stays
+ * visibly unavailable rather than failing only after the first user request.
+ */
+async function warmBrowser(): Promise<void> {
+  await browserInstance();
 }
 
 function getHandle(id: string): Handle {
@@ -216,8 +226,13 @@ app.use((request: Request, response: Response, next) => {
   response.once("close", finish);
   activeTrace.run(span, next);
 });
-app.get("/health", (_request: Request, response: Response) => {
-  response.json({ status: "ok", service: "browser-worker" });
+app.get("/health", async (_request: Request, response: Response) => {
+  try {
+    await browserInstance();
+    response.json({ status: "ok", service: "browser-worker", browser: "connected" });
+  } catch {
+    response.status(503).json({ status: "degraded", service: "browser-worker", browser: "unavailable" });
+  }
 });
 app.all("/mcp", async (request: Request, response: Response) => {
   if (!authenticated(request.headers.authorization)) {
@@ -244,6 +259,7 @@ app.all("/mcp", async (request: Request, response: Response) => {
     if (!response.headersSent) response.status(500).end();
   }
 });
+await warmBrowser();
 const server = app.listen(port, host);
 
 const expiry = setInterval(() => {
@@ -252,7 +268,7 @@ const expiry = setInterval(() => {
 const stop = async () => {
   clearInterval(expiry);
   for (const id of [...handles.keys()]) await closeHandle(id);
-  await browser?.close();
+  await browserFactory.close();
   await proxy.close();
   await Promise.allSettled([...sessions.values()].map(({ transport }) => transport.close()));
   sessions.clear();

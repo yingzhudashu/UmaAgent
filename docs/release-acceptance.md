@@ -1,5 +1,12 @@
 # UmaAgent 当前发布验收
 
+## 2026-10-22 Android 偶发闪退核查与 1.4.6 候选修复
+
+- 当前可读的模拟器 crash-dropbox 记录中，native `SIGSEGV` 归属第三方输入法进程，不是 UmaAgent；该模拟器也出现 UmaAgent 1.4.5 debug 进程启动期 ANR（系统记为“未完成启动”，RSS 约 218 MiB，并伴随明显内存/CPU/IO 压力）。ANR trace 路径受 Android 权限保护无法读取，故不能据此确认用户设备闪退的真实原因；模拟器第三方输入法 crash 也不能归因于用户真机。
+- 可证实的应用风险及修复：1）最多 16 MiB 的离线缓存、凭据文件和快照解析原先在 ViewModel 初始化路径同步进行，缓存 JSON 体积展开后可能阻塞冷启动主线程；现改由 IO/Default dispatcher 读取和解析，并有约 11 MiB 缓存启动回归。2）Android WebView renderer 退出未处理会使会话正文宿主不可用；现通过 `onRenderProcessGone` 销毁失效 WebView 并降级成 Compose 纯文本。3）WebSocket 连接回调不再在主线程读取加密 PAT。
+- 实际验证：`MessageBodyTest#rendererProcessExitFallsBackToReadableTextInsteadOfCrashingTheScreen` 在 API 36 模拟器通过真实 `WebViewRenderProcess.terminate()` 终止 renderer，回调后正文仍显示且整个宿主应用存活；Android 定向 instrumentation 11/11（OfflineRecovery、MessageBody、ConversationLayout），包括约 11 MiB 离线缓存恢复与会话布局；`npm run check:android`、`npm run check`、`npm test -- --run --reporter=dot`（60 文件、392 项）及全 workspace `npm run build` 均通过。
+- Android 版本 1.4.6 / versionCode 20，仍是待正式签名构建与发布的候选。当前没有用户真机 crash 堆栈或可复现步骤，不能声称根因已被证实或闪退已完全根治；正式上线后的效果仍需真实设备日志观察。未部署服务端或发布 APK 的结论需以本节后续记录更新。
+
 ## 2026-10-21 Native：历史摘要后的工具结果续接修复
 
 - 生产会话“电感”在继续时失败于 Preflight classify，报错提示 Responses `function_call_output` 缺少匹配 `item_reference`。只读核查确认摘要边界为 sequence 760；其后 8 条 toolResult 对应的 assistant toolCall 已被压缩进摘要。该形状与 400 相符；网关内部 Chat Completions 到 Responses 的转换细节未直接观察。
@@ -215,7 +222,7 @@ npm run test:real:embedding
 
 - 源码提交 `086cc28c7121d7f2913d5d6d18e96a99d1eec5de` 已推送至 UmaAgent `master`。发布入口 `release-uma-agent.ps1` 在匹配 lock、干净提交、正式备份、Native 候选依赖校验后完成原子 Promote；Core release `20261022084152-086cc28`。Web 静态 embed release `20261022084215-086cc28`。
 - 发布前 Vitest 59 文件/389 项通过，覆盖率 82.48% statements、74.19% branches、77.46% functions、85.20% lines；`npm run check`、全 workspace `npm run build`、`npm run build:web:embed`、Playwright 38/38 均通过。Faux 评测 6/6、性能基线通过证据见 `TASK.md`。
-- Android 1.4.5/versionCode 19 正式包经 release unit tests、Lint、签名和 APK manifest 校验构建。线上旧包与新包 signer SHA-256 均为 `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`。发布 release `19-086cc28`；APK SHA-256 `ae3e8e3246dcecba14f928fafda0585e181f430d02c0752a429000186eedd182`，13,000,169 bytes。发布后公网 manifest 与下载 APK 的版本、SHA、大小一致，apksigner 验证通过；API 36 模拟器安装、首次启动及强制停止后的冷启动通过。
+- 正式包 1.4.5/versionCode 19 经 release unit tests、Lint、签名和 APK manifest 校验构建。线上旧包与新包 signer SHA-256 均为 `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`。发布 release `19-086cc28`；APK SHA-256 `ae3e8e3246dcecba14f928fafda0585e181f430d02c0752a429000186eedd182`，13,000,169 bytes。发布后公网 manifest 与下载 APK 的版本、SHA、大小一致，apksigner 验证通过；API 36 模拟器安装、首次启动及强制停止后的冷启动通过。
 - Android API 36 `ConversationLayoutTest` 5/5 通过。全量 `connectedDebugAndroidTest` 在 API 36 模拟器单设备串行运行两次，均报告相同 9 项非本次改动目标的测试失败（AvatarFlow、BackgroundFlow、BodyPerformance、CoreFlow、ProcessRecoverySeed、ProfileRecovery、ResourceForm、RunCancellation、TraceDialog，含超时/性能阈值/断言失败）；本次 `ConversationLayoutTest` 5/5 通过。全量仪器测试仍未通过，不将失败归因于本次历史滚动修复。实体 Android 设备和 TalkBack 未测试。
 - 生产验收：Core、Browser Worker、Xianyu Adapter active；公网 live/ready HTTP 200；线上 `/umaagent/` 390px/1280px 均成功挂载、公式字体加载；生产与发布前备份 SQLite `integrity_check=ok`、schema 27、外键违规 0；发布后 active Run 0。线上 release JS/CSS 清单哈希匹配 Core。备份 `/srv/backups/uma-agent/state-20261022084159.db`。未执行数据库迁移或发送真实 Provider 请求。
 - 未验收：真实 Provider 成功率/长期会话在真实流量中的效果、实体 Android 及 TalkBack；需在后续真实使用中观察。

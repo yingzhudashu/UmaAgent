@@ -39,6 +39,7 @@ write_maintenance() {
 release_real=$(readlink -f -- "$release_dir")
 case "$release_real" in /opt/uma-agent/releases/*) ;; *) echo "invalid release path" >&2; exit 1 ;; esac
 
+bash "$release_real/deploy/install-playwright-browsers.sh" "$release_real"
 bash "$release_real/deploy/verify-native-release.sh" "$release_real" "$shared_dir"
 xianyu_enabled=$("$node_bin" -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync("/etc/uma-agent/config.user.json","utf8")); process.stdout.write(value.xianyu ? "1" : "0")')
 if [[ "$xianyu_enabled" = 1 ]]; then
