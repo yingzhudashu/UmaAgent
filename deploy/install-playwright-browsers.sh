@@ -4,7 +4,9 @@ set -euo pipefail
 release_dir=${1:?usage: install-playwright-browsers.sh RELEASE_DIR}
 node_bin=/opt/node-v22.23.2-linux-x64/bin/node
 browser_user=umaagent-browser
-browser_group=umaagent-browser
+# Core's ExecStartPre checks the browser executable as `umaagent`, and the
+# Browser Worker already receives this group as a supplementary group.
+browser_group=umaagent
 browser_path=/var/lib/uma-agent/browser/.cache/ms-playwright
 
 [[ -x "$node_bin" ]] || { echo "required Node runtime is missing: $node_bin" >&2; exit 1; }
@@ -32,5 +34,15 @@ if [[ ! -x "$expected" ]]; then
     "$node_bin" "$cli" install chromium
 fi
 
+# The browser is downloaded by the worker account, but Core's preflight must
+# be able to inspect and launch the same immutable files. Keep the cache
+# private while granting the shared service group read/execute access.
+chgrp -R "$browser_group" "$browser_path"
+chmod -R u+rwX,g+rX,o-rwx "$browser_path"
+
 [[ -x "$expected" ]] || { echo "Playwright Chromium executable is missing after installation: $expected" >&2; exit 1; }
+runuser -u umaagent -- test -x "$expected" || {
+  echo "Core service account cannot access Playwright Chromium: $expected" >&2
+  exit 1
+}
 printf 'Playwright Chromium installed: %s\n' "$expected"

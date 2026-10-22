@@ -37,15 +37,25 @@ esac
   echo "Run deploy/install-playwright-browsers.sh for this candidate before verification." >&2
   exit 1
 }
-(
-  cd "$release_real"
-  runuser -u umaagent-browser -- env PLAYWRIGHT_BROWSERS_PATH="$browser_path" \
-    "$node_bin" --input-type=module -e '
-      import { chromium } from "playwright";
-      const browser = await chromium.launch({ channel: "chromium", headless: true });
-      await browser.close();
-    '
-)
+test -x "$browser_executable" || {
+  echo "Current service account cannot access Playwright Chromium: $browser_executable" >&2
+  exit 1
+}
+browser_check='import { chromium } from "playwright"; const browser = await chromium.launch({ channel: "chromium", headless: true }); await browser.close();'
+if [[ $(id -u) = 0 ]]; then
+  runuser -u umaagent -- test -x "$browser_executable"
+  (
+    cd "$release_real"
+    runuser -u umaagent-browser -- env PLAYWRIGHT_BROWSERS_PATH="$browser_path" \
+      "$node_bin" --input-type=module -e "$browser_check"
+  )
+else
+  (
+    cd "$release_real"
+    PLAYWRIGHT_BROWSERS_PATH="$browser_path" \
+      "$node_bin" --input-type=module -e "$browser_check"
+  )
+fi
 
 for package in browser-worker channel-adapter cli client core eval-runner protocol server smath-worker telemetry xianyu-adapter; do
   case "$package" in

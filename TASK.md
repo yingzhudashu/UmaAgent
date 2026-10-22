@@ -128,3 +128,21 @@ Claude Opus 5.5 以请求 effort `max` 完成只读发布复核并通过；复�
 
 - 发布入口首轮因误传不存在的 `D:\AIhub\MyServer\ops\projects\robotclaw` 参数而在 `Resolve-Path` 本地校验失败（exit 1；未 SSH、未写生产）；改用实际仓库 `D:\AIhub\MyServer\projects\robotclaw` 后官方入口成功。
 - UmaAgent 功能代码 commit `086cc28` 已推送远端。最终验收文档 commit（当前 `70bc08e`）推送遇 HTTPS 网络错误（reset / GitHub 443 connection timeout），故仍为本地 ahead 1；MyServer release-lock commit `69f4126` 也仅本地，push 遇网络 reset。生产发布已完成；网络恢复后才可同步这两项文档/运维记录。
+
+## 2026-10-23 Android 闪退修复发布续行
+
+- 发布前已核实模拟器证据：设备可读 native SIGSEGV 属于第三方豆包输入法；UmaAgent 1.4.5 曾有启动期 ANR，但系统 trace 不可读。用户真机闪退栈仍未获取，因此确切根因未确证；本次仅针对可重现/审查出的启动期主线程阻塞、Keystore 同步读取和 WebView renderer 退出风险做防护。
+- 1.4.6/versionCode 20 APK 通过正式产物清单校验：SHA-256 `cc339eb6dffdcaaa36db30a517ad1ec1bddc7fce98121ab4fbf1c1549d8faf15`、13,000,169 bytes；正式签名证书 SHA-256 `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`。APK 尚未发布。
+- 服务器备份完成：`/srv/backups/uma-agent/uma-agent-20261022154128.tar.gz`；候选 Native release `/opt/uma-agent/releases/20261022155213-99a0b09`。官方安装过程发现 Playwright CDN 大文件下载非常慢；按 Range 续传后验证大小 193,282,658 bytes、MD5 `d0396d5ed8a9977fc1d359c279734fc7`、ZIP 测试通过，Chromium 1234 已装到服务账号私有缓存。
+- 首次 Promote 被启动门禁拦截并回滚：Chrome 目录权限未授予 Core 组；修订安装脚本让缓存以 `umaagent` 组可读/执行，并增加 Core 账号权限检查。第二次候选验证又发现 systemd 的 Core `ExecStartPre` 非 root 运行，不能嵌套 `runuser`；因此验证脚本现按运行身份分别检查 Core 可执行性并由 root 执行 Browser Worker 身份无头启动检查。
+- 修正后的候选在服务器已通过 bash 语法、root 候选验证、模拟 systemd `umaagent` 身份预检；无头 Chromium 实际启动关闭成功。两次 Promote 均已自动回滚到 `/opt/uma-agent/releases/20261022084152-086cc28`，Core、Browser Worker、Xianyu Adapter 均 active，未改变数据库 schema 或业务数据。
+- 尚未完成：最终修正提交/推送、锁文件更新、重跑受保护发布流程、生产 Core/Web 公网验收、Android 1.4.6 发布与公网下载签名/哈希验收。完成后追加实际 release ID、备份和验收数据。无真实真机 crash 日志，不能声称确切崩溃根因已证实或长期问题根治。
+
+### 2026-10-23 发布完成
+
+- 最终修正已提交本地 UmaAgent `bd6daa7c62a1b91ef887a44937b591f2634d3c69`：Playwright 缓存改为 Core/Browser Worker 共享组可读执行；验证脚本按 root、Core 服务账号和 Browser Worker 账号分别执行，不再嵌套非 root `runuser`。本地 `git diff --check`、远端候选 `bash -n`、root/Core 双身份验证及真实 Chromium 无头启动均通过。
+- GitHub 推送：UmaAgent 与 MyServer 均曾因 GitHub 443 网络超时未完成；当前 UmaAgent 本地 master 含 `bd6daa7`，MyServer 本地 main 含 `331095b`，两者远端同步状态需网络恢复后补推。未跟踪的 `MyServer/task-artifacts/` 未提交。
+- 受保护生产发布成功：备份 `/srv/backups/uma-agent/uma-agent-20261022174551.tar.gz`；Core release `20261022175440-bd6daa7`，Promote 后 `/opt/uma-agent/current` 已指向该版本；RobotClaw embed `20261022175510-bd6daa7` 已切换。首次两次候选切换因权限/验证脚本门禁自动回滚，未损坏数据，最终修正版才完成切换。
+- 发布后验收：Core/Browser Worker/Xianyu Adapter active；Core live/ready 与 Browser Worker `/health` 通过；以 `umaagent-browser` 真实启动 Chromium 1234 成功；数据库只读 `integrity=ok`、schema 27、活动 Run 0；Web 公网 390/1280 挂载与公式字体检查通过。
+- Android 1.4.6/versionCode 20 已发布，release `20-99a0b09`；公网清单、APK 下载哈希和大小均匹配：SHA-256 `cc339eb6dffdcaaa36db30a517ad1ec1bddc7fce98121ab4fbf1c1549d8faf15`、13,000,169 bytes；本地候选与公网 APK 签名证书 SHA-256 均为 `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`。
+- 本轮最终本地/线上测试：`npm run check`、Vitest 60 文件/392 项、全工作区 `npm run build`、`npm run build:web:embed`、Web E2E 38/38、Android 相关 instrumentation 11/11 与 renderer terminate 专项 1/1；未执行真实 Provider 请求、实体 Android 真机和 TalkBack，用户真机闪退确切根因仍待真实崩溃栈。
