@@ -107,3 +107,15 @@ Claude Opus 5.5 以请求 effort `max` 完成只读发布复核并通过；复�
 - 线上正式 APK 下载后哈希与 `latest.json` 声明一致；其 signer SHA-256 已核验。待新正式 APK 与线上 signer 对照。
 - 生产只读数据库活动 Run 现为 0；Native 依赖 `package-lock.json` 与本机版本完全同哈希。
 - Android 1.4.5 正式 build/instrumentation、Core/Web 正式发布、APK 发布以及公网验收尚未完成。
+
+
+## 2026-10-22 服务端/Web/Android 发布完成
+
+- 源码变更提交并推送至 UmaAgent `master`：`086cc28c7121d7f2913d5d6d18e96a99d1eec5de`。发布 lock 已核对相同 commit 和嵌入资源 SHA。
+- Core `20261022084152-086cc28` 与 RobotClaw embed `20261022084215-086cc28` 由官方发布入口部署；发布前备份 `/srv/backups/uma-agent/state-20261022084159.db`。
+- Android 1.4.5/versionCode 19 已以与线上旧包相同的正式证书签名并发布，release `19-086cc28`；SHA-256 `ae3e8e3246dcecba14f928fafda0585e181f430d02c0752a429000186eedd182`，13,000,169 bytes。公网下载 hash/size、manifest、签名验证通过，API36模拟器安装和冷启动通过。
+- 发布后服务 active、live/ready 200、数据库 integrity ok/schema27/FK 0/active Run 0；Web 公网 browser verify 390px/1280px通过。Android 全量 connected 测试一次运行失败9项（超时/性能和非目标路径）；相关 ConversationLayoutTest 在API36 5/5通过，未宣称全量仪器测试通过。
+- 未执行真实 Provider 请求、实体设备与 TalkBack验收；继续观察真实流量效果。未做数据库迁移。
+
+- 发布入口首轮因误传不存在的 `D:\AIhub\MyServer\ops\projects\robotclaw` 参数而在 `Resolve-Path` 本地校验失败（exit 1；未 SSH、未写生产）；改用实际仓库 `D:\AIhub\MyServer\projects\robotclaw` 后官方入口成功。
+- UmaAgent 功能代码 commit `086cc28` 已推送远端。最终验收文档 commit（当前 `70bc08e`）推送遇 HTTPS 网络错误（reset / GitHub 443 connection timeout），故仍为本地 ahead 1；MyServer release-lock commit `69f4126` 也仅本地，push 遇网络 reset。生产发布已完成；网络恢复后才可同步这两项文档/运维记录。

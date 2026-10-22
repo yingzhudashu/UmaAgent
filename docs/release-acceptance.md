@@ -209,3 +209,14 @@ npm run test:real:embedding
 
 设备矩阵入口为 `python scripts/android-device-matrix.py`。容器目标另执行 `docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config --quiet`。设计规格见[前端设计](frontend-design.zh-CN.md)，后端、部署、工程基线和代码审查中的版本与接口由 `npm run check:docs-contracts` 持续校验。
 
+
+
+## 2026-10-22 会话历史显示与 Android 阅读体验修复发布
+
+- 源码提交 `086cc28c7121d7f2913d5d6d18e96a99d1eec5de` 已推送至 UmaAgent `master`。发布入口 `release-uma-agent.ps1` 在匹配 lock、干净提交、正式备份、Native 候选依赖校验后完成原子 Promote；Core release `20261022084152-086cc28`。Web 静态 embed release `20261022084215-086cc28`。
+- 发布前 Vitest 59 文件/389 项通过，覆盖率 82.48% statements、74.19% branches、77.46% functions、85.20% lines；`npm run check`、全 workspace `npm run build`、`npm run build:web:embed`、Playwright 38/38 均通过。Faux 评测 6/6、性能基线通过证据见 `TASK.md`。
+- Android 1.4.5/versionCode 19 正式包经 release unit tests、Lint、签名和 APK manifest 校验构建。线上旧包与新包 signer SHA-256 均为 `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`。发布 release `19-086cc28`；APK SHA-256 `ae3e8e3246dcecba14f928fafda0585e181f430d02c0752a429000186eedd182`，13,000,169 bytes。发布后公网 manifest 与下载 APK 的版本、SHA、大小一致，apksigner 验证通过；API 36 模拟器安装、首次启动及强制停止后的冷启动通过。
+- Android API 36 `ConversationLayoutTest` 5/5 通过。全量 `connectedDebugAndroidTest` 在 API 36 模拟器单设备串行运行两次，均报告相同 9 项非本次改动目标的测试失败（AvatarFlow、BackgroundFlow、BodyPerformance、CoreFlow、ProcessRecoverySeed、ProfileRecovery、ResourceForm、RunCancellation、TraceDialog，含超时/性能阈值/断言失败）；本次 `ConversationLayoutTest` 5/5 通过。全量仪器测试仍未通过，不将失败归因于本次历史滚动修复。实体 Android 设备和 TalkBack 未测试。
+- 生产验收：Core、Browser Worker、Xianyu Adapter active；公网 live/ready HTTP 200；线上 `/umaagent/` 390px/1280px 均成功挂载、公式字体加载；生产与发布前备份 SQLite `integrity_check=ok`、schema 27、外键违规 0；发布后 active Run 0。线上 release JS/CSS 清单哈希匹配 Core。备份 `/srv/backups/uma-agent/state-20261022084159.db`。未执行数据库迁移或发送真实 Provider 请求。
+- 未验收：真实 Provider 成功率/长期会话在真实流量中的效果、实体 Android 及 TalkBack；需在后续真实使用中观察。
+- Claude 只读复核已取得正文，但其中关于快照代码缺失、签名未配置的两点与当前源码/本机现场不符；GPT 已独立核实源码、签名连续性及线上验收，不将该复核错误前提当作事实。工具返回模型字段为网关声明。
