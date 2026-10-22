@@ -519,6 +519,67 @@ describe("UmaDatabase", () => {
     db.close();
   });
 
+  it("keeps the triggering question in a bounded snapshot when its answer remains in the window", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-snapshot-trigger-message-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    try {
+      const session = db.createSession({
+        title: "trigger question",
+        workspace: root,
+        model: modelSnapshot.ref,
+        thinkingLevel: "off",
+      });
+      const triggerRun = db.createRun(
+        session.id,
+        "trigger-question",
+        modelSnapshot,
+        "off",
+        "agent",
+        "agent",
+      ).run;
+      db.insertMessage({
+        id: "trigger-question",
+        sessionId: session.id,
+        runId: triggerRun.id,
+        role: "user",
+        status: "complete",
+        content: "这条提问早于最近 100 条消息",
+      });
+      db.createResponse({ sessionId: session.id, runId: triggerRun.id, messageId: "trigger-question" });
+      db.insertMessage({
+        sessionId: session.id,
+        runId: triggerRun.id,
+        role: "assistant",
+        status: "complete",
+        content: "较早的中间回复",
+      });
+      for (let index = 0; index < 99; index++)
+        db.insertMessage({
+          sessionId: session.id,
+          role: "user",
+          status: "complete",
+          content: `新问题 ${index}`,
+        });
+      db.insertMessage({
+        sessionId: session.id,
+        runId: triggerRun.id,
+        role: "assistant",
+        status: "complete",
+        content: "仍位于快照窗口内的回复",
+      });
+
+      const snapshot = db.getSnapshot(session.id);
+      expect(snapshot.transcript).toHaveLength(101);
+      expect(snapshot.transcript.some((item) => item.id === "trigger-question")).toBe(true);
+      expect(snapshot.transcript.at(-1)?.content).toBe("仍位于快照窗口内的回复");
+      // Backfilled prompts do not move the paging frontier; the older page still returns the gap.
+      expect(snapshot.history).toEqual({ oldestMessageSequence: 3, hasMoreBefore: true });
+    } finally {
+      db.close();
+    }
+  });
+
   it("only returns responses attached to the active conversation branch", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-response-branch-"));
     temporary.push(root);

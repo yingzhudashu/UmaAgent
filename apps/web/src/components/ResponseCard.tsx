@@ -3,6 +3,7 @@ import { Check, ChevronRight, Copy, Download, FileText, LoaderCircle, Wrench } f
 import { useEffect, useRef, useState } from "react";
 import defaultAvatarUrl from "../assets/cat-avatar.png";
 import { Markdown } from "../Markdown.js";
+import { responseDisplayContent } from "../responseTurns.js";
 import { responseStatusLabels } from "../statusLabels.js";
 
 function toolStatus(item: TranscriptItem): string {
@@ -65,7 +66,7 @@ export function ResponseCard({
   const previewRef = useRef<HTMLDialogElement>(null);
   const assistantItems = items.filter((item) => item.role === "assistant");
   const finalAssistant = assistantItems.at(-1);
-  const finalContent = finalAssistant?.content || response.content || "";
+  const finalContent = responseDisplayContent(response.content, finalAssistant?.content);
   const intermediateItems = items
     .filter((item) => item.role !== "user" && item.id !== finalAssistant?.id)
     .sort((a, b) => a.sequence - b.sequence);

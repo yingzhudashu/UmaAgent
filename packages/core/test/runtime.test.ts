@@ -541,6 +541,22 @@ describe("UmaRuntime preflight", () => {
     expect(run.status, run.error).toBe("completed");
     expect(run.assumptions).toEqual(["Use the existing workspace as the target"]);
     expect(snapshot.transcript.at(-1)?.content).toContain("执行假设：");
+    expect(snapshot.transcript.at(-1)?.content).toContain("finished with the selected target");
+  });
+
+  it("does not turn a whitespace-only answer into an execution-assumptions-only reply", async () => {
+    const runtime = await runtimeWith([
+      classification("standard"),
+      decision("plan", ["Use the existing workspace as the target"]),
+      fauxAssistantMessage(" \n\t "),
+    ]);
+    const { run, snapshot } = await runOnce(runtime);
+
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain("empty final assistant response");
+    expect(snapshot.responses[0]).toMatchObject({ status: "failed" });
+    expect(snapshot.responses[0]?.content).toContain("empty final assistant response");
+    expect(snapshot.transcript.some((item) => item.content.includes("执行假设："))).toBe(false);
   });
 
   it("persists clarification questions without entering the agent loop", async () => {

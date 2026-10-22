@@ -1747,6 +1747,9 @@ export class UmaRuntime {
         });
         injectRuntimeFault("verify.completed");
       }
+      const finalAnswer = this.database.latestCompletedAssistant(session.id, runId);
+      if (!finalAnswer?.content.trim())
+        throw new Error("Provider contract error: empty final assistant response");
       if (input.mode === "agent" || input.mode === "plan") {
         // 同一轮的 turn/day/session 摘要和裁剪必须原子提交，避免独立 fsync 与半更新摘要。
         this.database.withTransaction(() => this.persistTurnRollup(session.id, runId));
@@ -2552,7 +2555,7 @@ ${context.dailyText}`,
     const assumptions = run.assumptions.filter((item) => !isSecretLike(item));
     if (!assumptions.length) return;
     const final = this.database.latestCompletedAssistant(sessionId, runId);
-    if (!final || final.content.includes("执行假设：")) return;
+    if (!final || !final.content.trim() || final.content.includes("执行假设：")) return;
     const content = `${final.content}\n\n执行假设：\n${assumptions.map((item) => `- ${item}`).join("\n")}`;
     this.events.transaction(() => {
       const message = this.database.updateMessage(final.id, { content });

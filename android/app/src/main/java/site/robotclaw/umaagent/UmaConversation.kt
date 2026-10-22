@@ -56,6 +56,10 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
@@ -245,7 +249,6 @@ internal fun ChatScreen(
         }
             .collect { (scrolling, canScrollForward, automatic) ->
                 if (!automatic && scrolling) followTail = !canScrollForward
-                if (!canScrollForward) followTail = true
             }
     }
     LaunchedEffect(conversation.lastOrNull(), selectedSession?.id) {
@@ -258,7 +261,7 @@ internal fun ChatScreen(
             listState.layoutInfo.visibleItemsInfo.lastOrNull()?.let { it.key to it.size }
         }
             .collect {
-                if (followTail && !listState.isScrollInProgress) {
+                if (followTail && !listState.isScrollInProgress && !listState.canScrollForward) {
                     withFrameNanos {}
                     scrollToLatest()
                 }
@@ -341,7 +344,27 @@ internal fun ChatScreen(
             } else {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.weight(1f).fillMaxWidth().testTag("conversation-messages"),
+                    modifier =
+                        Modifier.weight(1f)
+                            .fillMaxWidth()
+                            .nestedScroll(
+                                remember {
+                                    object : NestedScrollConnection {
+                                        override fun onPreScroll(
+                                            available: Offset,
+                                            source: NestedScrollSource,
+                                        ): Offset {
+                                            if (
+                                                source == NestedScrollSource.UserInput &&
+                                                    kotlin.math.abs(available.y) > 1f
+                                            )
+                                                followTail = false
+                                            return Offset.Zero
+                                        }
+                                    }
+                                }
+                            )
+                            .testTag("conversation-messages"),
                     contentPadding = PaddingValues(vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -865,7 +888,8 @@ internal fun ResponseItem(
     var copied by rememberSaveable(entry.id) { mutableStateOf(false) }
     var detailsExpanded by rememberSaveable(entry.id) { mutableStateOf(false) }
     val finalAssistant = entry.items.lastOrNull { it.role == "assistant" }
-    val finalContent = finalAssistant?.content?.takeIf { it.isNotBlank() } ?: entry.response.content
+    val finalContent =
+        entry.response.content.takeIf { it.isNotBlank() } ?: finalAssistant?.content.orEmpty()
     val intermediateItems =
         entry.items.filter { item ->
             item.role != "user" && item.id != finalAssistant?.id

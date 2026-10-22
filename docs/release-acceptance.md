@@ -19,7 +19,7 @@ Core 与 Web 已从干净提交 `818cd0d96bcfc24c39f5fca5d57ade7c1b09014b` 正�
 
 生产数据库使用只读连接复核，未写入数据：`user_version=27`、`integrity_check=ok`、`foreign_key_check` 违规 0；本次摘要计数为 users 6、sessions 6、messages 1289、runs 127、attachments 54。历史用户数据、附件、workspace 和备份均保留，本轮没有执行迁移。
 
-Android 1.4.4（versionCode 18）已正式发布，release `18-818cd0d`。公网 `latest.json` 与 APK 元数据一致：APK 大小 `13,000,165` bytes，SHA-256 `9ed5d4b1273af2f5d7d8523ca7ba119a5fa97bbe5cbc643f61b8f5562832f711`；正式签名证书与线上旧包一致。公网下载后重新核对哈希和大小；API 36 模拟器完成安装、首次启动及强制停止后的冷启动。未连接实体设备，因此实体设备登录、真实消息和读屏专项仍未验收。
+正式 APK 1.4.4（versionCode 18）已发布，release `18-818cd0d`。公网 `latest.json` 与 APK 元数据一致：APK 大小 `13,000,165` bytes，SHA-256 `9ed5d4b1273af2f5d7d8523ca7ba119a5fa97bbe5cbc643f61b8f5562832f711`；正式签名证书与线上旧包一致。公网下载后重新核对哈希和大小；API 36 模拟器完成安装、首次启动及强制停止后的冷启动。未连接实体设备，因此实体设备登录、真实消息和读屏专项仍未验收。
 
 ### Trace 修复与本地验收
 

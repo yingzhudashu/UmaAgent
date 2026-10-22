@@ -11,6 +11,14 @@ export type ConversationEntry =
       isCurrentSegment: boolean;
     };
 
+/** Prefer the durable response projection when it has a completed answer;
+ * transcript deltas are a fallback while that projection is still empty.
+ */
+export function responseDisplayContent(responseContent: string, assistantContent?: string): string {
+  if (responseContent.trim()) return responseContent;
+  return assistantContent?.trim() ? assistantContent : "";
+}
+
 function responseForItem(
   item: TranscriptItem,
   byMessageId: Map<string, Response>,

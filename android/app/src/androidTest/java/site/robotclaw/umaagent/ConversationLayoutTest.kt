@@ -206,6 +206,38 @@ class ConversationLayoutTest {
         compose.onNodeWithContentDescription("发送消息").assertIsDisplayed()
     }
 
+    @Test
+    fun delayedContentMeasurementDoesNotPullAUserBackToTheTail() {
+        state.value = state.value.copy(snapshot = transcript(40))
+        openConversation()
+        val messages = compose.onNodeWithTag("conversation-messages")
+        messages.performTouchInput { swipeDown() }
+        compose.onNodeWithText("最新消息").assertIsDisplayed()
+        val previousScroll =
+            messages
+                .fetchSemanticsNode()
+                .config[SemanticsProperties.VerticalScrollAxisRange]
+                .value()
+
+        // Simulate asynchronous Markdown/WebView remeasurement while the reader is
+        // inspecting old entries. The viewport must stay where the gesture left it.
+        compose.runOnIdle {
+            state.value =
+                state.value.copy(snapshot = transcript(40, "\n" + "延迟排版变化".repeat(80)))
+        }
+        compose.waitForIdle()
+        assertEquals(
+            "异步内容高度变化不能把历史阅读者拉回最新消息",
+            previousScroll,
+            messages
+                .fetchSemanticsNode()
+                .config[SemanticsProperties.VerticalScrollAxisRange]
+                .value(),
+            0.01f,
+        )
+        compose.onNodeWithText("最新消息").assertIsDisplayed()
+    }
+
     private fun transcript(count: Int, tail: String = "") = buildJsonObject {
         put(
             "transcript",

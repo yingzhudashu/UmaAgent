@@ -1,6 +1,6 @@
 import type { Response, Run, TranscriptItem } from "@uma-agent/protocol";
 import { describe, expect, it } from "vitest";
-import { buildConversationEntries } from "../src/responseTurns.js";
+import { buildConversationEntries, responseDisplayContent } from "../src/responseTurns.js";
 
 const item = (
   value: Partial<TranscriptItem> & Pick<TranscriptItem, "id" | "sequence" | "role">,
@@ -186,5 +186,16 @@ describe("buildConversationEntries", () => {
       "latest-user",
       "latest-response",
     ]);
+  });
+});
+
+describe("responseDisplayContent", () => {
+  it("prefers the durable response body over a stale assistant transcript item", () => {
+    expect(responseDisplayContent("真正的最终回答", "执行假设：\n- 默认采用安全方案")).toBe("真正的最终回答");
+  });
+
+  it("uses the streamed assistant body until the durable response body is available", () => {
+    expect(responseDisplayContent("", "流式回答中")).toBe("流式回答中");
+    expect(responseDisplayContent(" \n", "有效正文")).toBe("有效正文");
   });
 });

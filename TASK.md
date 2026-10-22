@@ -83,3 +83,27 @@ Claude Opus 5.5 以请求 effort `max` 完成只读发布复核并通过；复�
 - 发布：Native release `20261021142428-9506b92`，包 SHA-256 `f4366c24ebfc2542932dc3b8116f0b0122172edb3f9e229933957c157e914a1d`，2,880,254 bytes。候选通过 `link-native-dependencies.sh`、`verify-native-release.sh`；Promote 原子切换成功，在线备份 `/srv/backups/uma-agent/state-20261021142557.db`（332,853,248 bytes，root:root 0600）。生产 `current` 已指向该 release；Core、Browser Worker、Xianyu Adapter active；live/ready HTTP 200；生产与备份库 integrity ok、外键违规 0、active Run 0、started model call 0；发布后 error-priority journal 无记录。
 - 部署后真实历史回归探针（使用发布前在线备份，只读）：旧 release 转换结果含 8 个孤立 `toolResult`；新 release 的 `orphanToolReplyCount=0`、`orphanResultsAsLabeledData=8`、结果块全部保留；这证明触发形状已修复。未发送真实 Provider 请求，故真实上游成功率/长期失败率仍待正常流量观察。
 - Claude 阶段：本轮只读 plan 等待超时；复核 operation 过期，未取得可读结论，不能标记 Claude 通过。方案、实施、测试、部署和验收由 GPT 完成。
+
+## 2026-10-22 会话提问/正文显示与 Android 历史滚动修复（本地，未部署）
+
+- 根因（代码路径核实）：快照只取最近 100 条消息，长执行的触发提问可能被裁掉而回复仍可见；空白最终助手消息可能被“执行假设”拼接后误作成功，且 Web/Android 可能优先显示过时助手消息而非已保存回复；Android 跟尾状态会因滚动状态/内容重排重新启用，异步高度校正将历史阅读者拉回底部。
+- 修复：快照为可见回复补入其触发用户消息，但历史游标仍使用真实页边界；运行时拒绝空白最终回答、假设附加不再把空白当正文，Web/Android 以持久化回复为优先、实时助手消息作回退；Android 用户手势退出跟尾，异步尺寸校正只在仍位于底部时执行。
+- 验证（当前工作树）：Vitest 59 个文件、389 项通过；`npm run check` 与 `npm run build` 通过；Android 单元测试和测试编译通过，API 36 模拟器上的历史阅读及延迟排版滚动回归通过；定向 Web Playwright 1/1 通过。完整 `ConversationLayoutTest` 有 4/5 通过，唯一未通过为既有键盘/IME 等待测试超时，非本轮滚动用例。
+- 最终差异检查：换行格式保持原文件风格；`git -c core.whitespace=cr-at-eol diff --check` 通过，去除行尾换行差异后为预期的 11 个文件改动。
+- Claude 只读复核未完成：已有 review 操作返回通用欢迎提示，无针对差异的审查结论；不标为 Claude 通过。GPT 根据源码与测试证据完成检查。
+- 边界：未部署、未重启服务、未发布 Web/Android 产物、未提交或推送代码；改动仍在本地工作树。未进行线上回放或真实用户环境验收，因此生产效果待后续受控观察。
+## 2026-10-22 发布跟进（服务端已授权、验证阶段）
+
+- 用户已明确授权：充分测试后部署服务端，并发布必要应用产物。
+- 当前正式生产前只读核查：Native release 仍为 `20261021142428-9506b92`，三项 systemd 服务 active，schema 27、Protocol 16，主机运行时 Node v22.23.2；本次核查期间在线活动 Run 从 1 降至 0，未因部署中断执行中的会话。Promote 所需受保护 PAT 为 root:root 0600，sudo 非交互可用，磁盘空间充足；未读取 PAT。
+- 发布验证：Vitest 59 文件/389 项；覆盖率同样 59/389（Statements 82.48%、Branches 74.19%、Functions 77.46%、Lines 85.20%）；`npm run check`、全项目 `npm run build`、`npm run build:web:embed`、`npm run check:android` 通过；Android API 36 `ConversationLayoutTest` 5/5；Web 历史滚动 Playwright 1/1；Faux 评测 6/6；标准 20 条性能基线通过（API P95 6.04ms、事件 P95 1.65ms、RSS 峰值 112037888 bytes、WAL 峰值 2253704 bytes）。真实 Provider 请求未执行，避免重放与本 UI 修复无关的付费请求。
+- 线上 Android 为 1.4.4/versionCode 18。复核后确认正式签名 properties、keystore、HTTPS origin 已本地配置；远端 APK 哈希与本地最新清单一致，现有发布证书 SHA-256 已读取用于签名连续性比对。Android versionCode/name 已 bump 为 19/1.4.5，正式构建、模拟器测试和签名对照待完成。
+- Claude plan 工具请求完成但只返回无实际方案的通用状态提示；本阶段不记为 Claude 计划通过，GPT 按部署文档继续。
+
+### 本轮追加验证（2026-10-22）
+
+- 本地 `npm run check` 通过；Vitest 59 文件/389 项通过；覆盖率 82.48% statements、74.19% branches、77.46% functions、85.20% lines。
+- `npm run check` 首次因版本合同文档仍引用 1.4.4 失败；已将当前状态元数据更新为 1.4.5 候选，并保留历史发布证据原样；随后检查通过。
+- 线上正式 APK 下载后哈希与 `latest.json` 声明一致；其 signer SHA-256 已核验。待新正式 APK 与线上 signer 对照。
+- 生产只读数据库活动 Run 现为 0；Native 依赖 `package-lock.json` 与本机版本完全同哈希。
+- Android 1.4.5 正式 build/instrumentation、Core/Web 正式发布、APK 发布以及公网验收尚未完成。

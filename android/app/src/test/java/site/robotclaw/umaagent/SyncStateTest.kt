@@ -136,6 +136,28 @@ class SyncStateTest {
     }
 
     @Test
+    fun responseSnapshotRetainsItsTriggeringQuestionAlongsideTheAnswer() {
+        val entries =
+            parseSnapshotConversation(
+                """{
+                "transcript":[
+                    {"id":"trigger-question","sequence":1,"role":"user","status":"complete","content":"最初的问题","runId":"run-1","attachments":[]},
+                    {"id":"assistant-answer","sequence":101,"role":"assistant","status":"complete","content":"最终回答","runId":"run-1","attachments":[]}
+                ],
+                "recentRuns":[{"id":"run-1","status":"completed","interactionMode":"agent","plan":[]}],
+                "responses":[{"id":"response-1","sessionId":"session-1","runId":"run-1","messageId":"trigger-question","status":"completed","content":"最终回答","activities":[],"attachments":[],"createdAt":1,"updatedAt":2}],
+                "pendingApprovals":[]
+            }"""
+            )
+
+        assertEquals(2, entries.size)
+        assertEquals("trigger-question", (entries[0] as UiConversationEntry.MessageEntry).item.id)
+        val answer = entries[1] as UiConversationEntry.ResponseEntry
+        assertEquals("最终回答", answer.response.content)
+        assertEquals(listOf("trigger-question", "assistant-answer"), answer.items.map { it.id })
+    }
+
+    @Test
     fun attachmentMetadataFallsBackSafelyAndFormatsSizes() {
         val message =
             parseSnapshotMessages(

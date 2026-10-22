@@ -845,7 +845,12 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
                 className="run-action"
                 onClick={() => {
                   if (!selected) return;
-                  const before = transcript[0]?.sequence ?? snapshot.data?.history.oldestMessageSequence;
+                  // Snapshot may include an older triggering question alongside a newer
+                  // bounded page. Use the true page edge until explicit older pages load.
+                  const before =
+                    visibleHistorical[0]?.sequence ??
+                    snapshot.data?.history.oldestMessageSequence ??
+                    transcript[0]?.sequence;
                   const area = transcriptRef.current;
                   const previousHeight = area?.scrollHeight ?? 0;
                   const previousTop = area?.scrollTop ?? 0;
