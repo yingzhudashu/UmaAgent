@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { Session } from "@uma-agent/protocol";
+import { isUsableContextSummary } from "./context-summary.js";
 import type { UmaDatabase } from "./database.js";
 import type { ModelRegistry } from "./models.js";
 import type { ContextSummary, StoredAgentMessage, UmaConfig } from "./types.js";
@@ -45,27 +46,23 @@ export function assertContextCapacity(
 }
 
 function composeMessages(summary: ContextSummary | undefined, pending: StoredAgentMessage[]): AgentMessage[] {
-  // Provider usage on an assistant message describes the pre-compaction
-  // request. Keeping it after inserting a summary makes the SDK estimator
-  // treat the compacted prefix as if it were still present and can report a
-  // false context overflow during an edit/rerun.
-  const compactedPending = summary
-    ? pending.map((entry) => {
-        if (entry.message.role !== "assistant") return entry.message;
-        const message = entry.message as AgentMessage & { usage?: Record<string, unknown> };
-        return {
-          ...message,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-        } as AgentMessage;
-      })
-    : pending.map((entry) => entry.message);
+  // Persisted usage belongs to the original request, not this reconstructed
+  // branch/summary. Estimate the actual messages; never mutate stored usage.
+  const compactedPending = pending.map((entry) => {
+    if (entry.message.role !== "assistant") return entry.message;
+    const message = entry.message as AgentMessage & { usage?: Record<string, unknown> };
+    return {
+      ...message,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    } as AgentMessage;
+  });
   return [
     ...(summary
       ? [createCompactionSummaryMessage(summary.content, 0, summary.updatedAt) as AgentMessage]
@@ -98,12 +95,37 @@ function boundedMessage(message: AgentMessage, maxTokens: number): AgentMessage 
   } as AgentMessage;
 }
 
-function fallbackSummary(entries: AgentMessage[], previous?: string): string {
-  const lines = entries.map((message) => `[${message.role}] ${messageText(message)}`);
-  const text = [previous ? `已有摘要：${previous}` : "已有摘要：无", ...lines].join("\n");
-  return text.length <= 24_000
-    ? text
-    : `${text.slice(0, 20_000)}\n[…历史已压缩，以上为保留内容…]\n${text.slice(-4_000)}`;
+function usableSummary(summary: ContextSummary | undefined): ContextSummary | undefined {
+  return summary && isUsableContextSummary(summary.content) ? summary : undefined;
+}
+
+/** Temporary provider-failure context: retain ALL dialogue, abbreviate tool data only.
+ * Nothing is persisted, so a later healthy request can summarize the original data. */
+function fallbackContext(entries: StoredAgentMessage[]): StoredAgentMessage[] {
+  return entries.map((entry) => {
+    if (entry.message.role !== "toolResult") return entry;
+    const text = entry.message.content
+      .flatMap((block) => (block.type === "text" ? [block.text] : []))
+      .join("\n");
+    if (
+      text.length <= 2_000 &&
+      entry.message.content.every((block) => block.type === "text") &&
+      !text.includes("%PDF-")
+    )
+      return entry;
+    return {
+      ...entry,
+      message: {
+        ...entry.message,
+        content: [
+          {
+            type: "text" as const,
+            text: `[历史工具结果临时省略：${entry.message.toolName}。完整数据仍保存在会话记录中，需要具体数据时请重新读取来源；不要将省略视为无结果。]`,
+          },
+        ],
+      },
+    };
+  });
 }
 
 function toolCallIds(message: AgentMessage): string[] {
@@ -222,18 +244,12 @@ export class ContextManager {
     force = false,
     modelOverride?: Model<UmaConfig["models"][number]["api"]>,
   ): Promise<CompactedContext> {
-    let summary = this.database.getContextSummary(session.id);
+    let summary = usableSummary(this.database.getContextSummary(session.id));
     let pending = preserveOrphanToolResults(
       entries.filter((entry) => entry.sequence > (summary?.throughSequence ?? 0)),
     );
-    const summaryMessage = summary
-      ? [createCompactionSummaryMessage(summary.content, 0, summary.updatedAt) as AgentMessage]
-      : [];
     const model = modelOverride ?? this.models.get(session.model);
-    const contextTokens = estimateContextTokens([
-      ...summaryMessage,
-      ...pending.map((entry) => entry.message),
-    ]).tokens;
+    const contextTokens = estimateContextTokens(composeMessages(summary, pending)).tokens;
     if ((!force && contextTokens < model.contextWindow * 0.65) || pending.length < 6)
       return { messages: composeMessages(summary, pending), ...(summary ? { summary } : {}) };
 
@@ -256,8 +272,10 @@ export class ContextManager {
 
     let generatedContent = summary?.content;
     let lastSuccessful: StoredAgentMessage | undefined;
+    let failed = false;
     try {
       for (const currentBatch of batches) {
+        signal.throwIfAborted();
         const input = currentBatch.map((entry) => ({
           ...entry,
           message: boundedMessage(
@@ -275,20 +293,17 @@ export class ContextManager {
           generatedContent?.slice(-24_000),
           session.thinkingLevel,
         );
-        generatedContent = generated.ok
-          ? generated.value
-          : fallbackSummary(
-              input.map((entry) => entry.message),
-              generatedContent,
-            );
+        signal.throwIfAborted();
+        if (!generated.ok || !isUsableContextSummary(generated.value)) {
+          failed = true;
+          break;
+        }
+        generatedContent = generated.value;
         lastSuccessful = currentBatch.at(-1);
       }
     } catch {
-      generatedContent = fallbackSummary(
-        toSummarize.map((entry) => entry.message),
-        generatedContent,
-      );
-      lastSuccessful = toSummarize.at(-1);
+      signal.throwIfAborted();
+      failed = true;
     }
     if (generatedContent && lastSuccessful) {
       // The database keeps the newest boundary when two runs compact concurrently.
@@ -296,13 +311,17 @@ export class ContextManager {
         session.id,
         lastSuccessful.sequence,
         generatedContent,
+        session.activeBranchId,
       );
       summary = persisted;
       pending = preserveOrphanToolResults(
         entries.filter((entry) => entry.sequence > persisted.throughSequence),
       );
     }
-    return { messages: composeMessages(summary, pending), ...(summary ? { summary } : {}) };
+    return {
+      messages: composeMessages(summary, failed ? fallbackContext(pending) : pending),
+      ...(summary ? { summary } : {}),
+    };
   }
 
   async buildForMessage(
@@ -314,7 +333,7 @@ export class ContextManager {
     const { transcript, agentMessage: currentAgentMessage } =
       this.database.getMessageWithAgentContext(messageId);
     if (transcript.status !== "complete") throw new Error("Context message is not complete");
-    const summary = this.database.getContextSummary(session.id);
+    const summary = usableSummary(this.database.getContextSummary(session.id));
     const entries = this.database.listAgentMessages(session.id, {
       beforeSequence: transcript.sequence,
       ...(summary ? { afterSequence: summary.throughSequence } : {}),

@@ -31,3 +31,5 @@
 - 本轮覆盖率、构建、Web40/40、Faux6/6及固定性能预算通过。新公告发现body-parser和zod高危，已升级锁定依赖，官方审计0漏洞，正在复验。
 - 本轮Claude max规划operation 533e3e34-bb93-4e8f-a51c-bb56ae22c2a2返回API525，无正文；GPT继续。
 - GitHub HTTPS两次连接重置，正在检查可用既有连接；不更换远端、不关闭TLS校验。
+
+- 合并远端5427d95及8109671，保留已在线上的会话记忆恢复和Sol上下文扩展；仅TASK状态冲突，保留本轮状态并记录远端能力，源码自动合并。部署前复验context-manager与context-memory-recovery。
