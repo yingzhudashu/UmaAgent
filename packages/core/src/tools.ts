@@ -6,6 +6,7 @@ import { dirname, join, relative } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Session } from "@uma-agent/protocol";
 import type { TraceParent } from "@uma-agent/telemetry";
+import ipaddr from "ipaddr.js";
 import Type, { type TSchema } from "typebox";
 import type { UmaDatabase } from "./database.js";
 import type { KnowledgeService } from "./knowledge.js";
@@ -337,36 +338,9 @@ function runShell(
 }
 
 function privateAddress(address: string): boolean {
-  const normalized = address.toLowerCase();
-  const mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
-  if (mapped) return privateAddress(mapped);
-  if (
-    normalized === "::" ||
-    normalized === "::1" ||
-    normalized.startsWith("fc") ||
-    normalized.startsWith("fd") ||
-    /^fe[89ab]/.test(normalized) ||
-    normalized.startsWith("ff")
-  )
-    return true;
-  if (isIP(normalized) === 4) {
-    const [a = 0, b = 0, c = 0] = normalized.split(".").map(Number);
-    return (
-      a === 10 ||
-      a === 127 ||
-      a === 0 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 198 && (b === 18 || b === 19)) ||
-      (a === 192 && b === 0 && (c === 0 || c === 2)) ||
-      (a === 198 && b === 51 && c === 100) ||
-      (a === 203 && b === 0 && c === 113) ||
-      a >= 224
-    );
-  }
-  return false;
+  // 使用现有网络依赖的地址解析器统一处理 IPv4、压缩 IPv6 和 IPv4 映射地址。
+  // process 会先将映射地址还原为 IPv4，避免十六进制写法绕过内网校验。
+  return !ipaddr.isValid(address) || ipaddr.process(address).range() !== "unicast";
 }
 
 export async function safeFetch(raw: string, signal?: AbortSignal): Promise<string> {
@@ -376,7 +350,10 @@ export async function safeFetch(raw: string, signal?: AbortSignal): Promise<stri
       throw new Error("Only HTTP(S) URLs are supported");
     let resolved: Array<{ address: string; family: number }>;
     try {
-      resolved = await lookup(url.hostname, { all: true });
+      // URL.hostname 保留 IPv6 方括号；字面地址直接校验，不交给系统 DNS。
+      const hostname = url.hostname.replace(/^\[|\]$/g, "");
+      const family = isIP(hostname);
+      resolved = family ? [{ address: hostname, family }] : await lookup(hostname, { all: true });
     } catch (error) {
       const cause = error instanceof Error ? error : new Error(String(error));
       const code = "code" in cause && typeof cause.code === "string" ? cause.code : cause.name;

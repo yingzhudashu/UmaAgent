@@ -6,6 +6,7 @@ import { safeFetch } from "../src/tools.js";
 const network = vi.hoisted(() => ({
   lookup: vi.fn(),
   status: 200,
+  origin: "https://public.example.test",
   dispatchers: [] as Array<{ close: MockInstance<MockAgent["close"]>; options: Agent.Options }>,
 }));
 vi.mock("node:dns/promises", () => ({ lookup: network.lookup }));
@@ -17,7 +18,7 @@ vi.mock("undici", async (importOriginal) => {
       constructor(options: Agent.Options) {
         super();
         this.disableNetConnect();
-        this.get("https://public.example.test")
+        this.get(network.origin)
           .intercept({ path: "/", method: "GET" })
           .reply(network.status, "<!doctype html><title>Isolated response</title>");
         network.dispatchers.push({ close: vi.spyOn(this, "close"), options });
@@ -29,10 +30,21 @@ vi.mock("undici", async (importOriginal) => {
 beforeEach(() => {
   network.lookup.mockReset().mockResolvedValue([{ address: "93.184.215.14", family: 4 }]);
   network.status = 200;
+  network.origin = "https://public.example.test";
   network.dispatchers.length = 0;
 });
 
 describe("safe HTTP fetch with isolated DNS and transport", () => {
+  it.each(["93.184.215.14", "[2606:4700:4700::1111]"])(
+    "keeps public literal %s usable without a DNS dependency",
+    async (address) => {
+      network.origin = `https://${address}`;
+      await expect(safeFetch(`${network.origin}/`)).resolves.toContain("Isolated response");
+      expect(network.lookup).not.toHaveBeenCalled();
+      expect(network.dispatchers[0]?.close).toHaveBeenCalledOnce();
+    },
+  );
+
   it("fetches a public URL and pins both Node DNS callback forms to the validated address", async () => {
     const body = await safeFetch("https://public.example.test/");
     expect(body).toContain("<!doctype html>");
@@ -47,6 +59,15 @@ describe("safe HTTP fetch with isolated DNS and transport", () => {
     lookup("public.example.test", { all: false }, single);
     expect(single).toHaveBeenCalledExactlyOnceWith(null, "93.184.215.14", 4);
   });
+
+  it.each(["127.0.0.1", "[::1]", "[::ffff:127.0.0.1]", "[::ffff:7f00:1]", "[fc00::1]"])(
+    "rejects private literal %s without consulting DNS or creating a transport",
+    async (address) => {
+      await expect(safeFetch(`http://${address}/`)).rejects.toThrow("Private");
+      expect(network.lookup).not.toHaveBeenCalled();
+      expect(network.dispatchers).toHaveLength(0);
+    },
+  );
 
   it("preserves DNS failure diagnostics without contacting a transport", async () => {
     network.lookup.mockRejectedValue(

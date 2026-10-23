@@ -59,3 +59,7 @@ database.ts、runtime.ts、App.tsx、server/app.ts、client/index.ts 仍超过 9
 不改变业务或遥测 schema，不增加 migration、旧路由或供应商 fallback，不写真实 state、附件、Cookie 和凭据。users 目录在测试前后以清单/哈希对照。Faux 和文档回归只用独立夹具。
 
 删除重复的 android-layout-optimization 过程稿，并将仍适用尺寸合并到 Android 设计；TASK 与发布验收不再堆叠历史过程记录。测试夹具属于可重复执行的测试输入。运行日志、截图、覆盖率、构建与回滚证据留在忽略目录，不进入产品源码或发布清单；不批量删除来源不明的历史发布备份。
+
+## Linux 发布前补充审查
+
+合并远端已部署的会话记忆恢复与500k模型窗口模板，保留原有分支隔离和摘要恢复行为。Linux实测发现IPv6字面地址误入DNS查询，网页抓取改用现有依赖ipaddr.js统一分类；新增私网映射地址和公网IPv4/IPv6无网络夹具验证。工具测试用平台路径和通用echo命令，不再写死Windows结果。本机私有运行配置不参与版本模板单元测试，避免测试读取凭据并强迫用户修改配置。安全公告新增的body-parser和zod高危已按锁文件更新，审计及实际发布结果见发布验收。

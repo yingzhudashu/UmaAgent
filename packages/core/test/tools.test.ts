@@ -309,14 +309,12 @@ describe("builtin tools", () => {
     await expect(
       execute(value.tools, "edit", { path: "duplicate.txt", oldText: "same", newText: "x" }),
     ).rejects.toThrow("not unique");
-    expect(text(await execute(value.tools, "list", {}))).toContain("src\\file.txt");
+    expect(text(await execute(value.tools, "list", {}))).toContain(join("src", "file.txt"));
     expect(text(await execute(value.tools, "search", { query: "changed", path: "src" }))).toContain(
       "file.txt:2:changed",
     );
     expect(text(await execute(value.tools, "search", { query: "absent" }))).toBe("No matches");
-    expect(text(await execute(value.tools, "shell", { command: "Write-Output tool-ok" }))).toContain(
-      "tool-ok",
-    );
+    expect(text(await execute(value.tools, "shell", { command: "echo tool-ok" }))).toContain("tool-ok");
     expect(text(await execute(value.tools, "memory_write", { content: "fact" }))).toBe("Memory stored");
     expect(text(await execute(value.tools, "memory_search", { query: "fact", limit: 1 }))).toContain(
       "remembered",
