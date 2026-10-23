@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -126,16 +126,16 @@ describe("context memory recovery", () => {
     }
   });
 
-  it("configures GPT-6.1 Sol at 500k across runtime and release templates", () => {
+  it("configures GPT-6.1 Sol at 500k across versioned release templates", () => {
+    // 单元测试只校验仓库合同；本机私有配置可以按供应商额度设置不同窗口，
+    // 不读取其中的凭据，也不要求开发者为运行测试修改实际运行配置。
     for (const file of [
-      "uma.config.json",
       "uma.config.example.json",
       "docker/uma.config.json",
       "deploy/uma.config.native.example.json",
       "deploy/uma.config.production.example.json",
       "deploy/uma.config.staging.example.json",
     ]) {
-      if (file === "uma.config.json" && !existsSync(file)) continue;
       const config = JSON.parse(readFileSync(resolve(process.cwd(), file), "utf8"));
       expect(config.models["gpt-6.1-sol"].contextWindow, file).toBe(500_000);
     }
