@@ -1,6 +1,6 @@
 # UmaAgent 架构与质量约束
 
-当前 Core 1.3.0，Android 1.4.8（versionCode 22；历史分页修复候选），Protocol v16，HTTP `/api/v16`，业务 schema 27。接口与数据库只支持当前版本；旧数据库不受当前版本支持，服务启动拒绝版本不匹配的数据库，不执行迁移。正式环境和支持范围验收见[发布验收](release-acceptance.md)。
+当前 Core 1.3.0，Android 1.4.8（versionCode 22；已发布），Protocol v16，HTTP `/api/v16`，业务 schema 27。接口与数据库只支持当前版本；旧数据库不受当前版本支持，服务启动拒绝版本不匹配的数据库，不执行迁移。正式环境和支持范围验收见[发布验收](release-acceptance.md)。
 
 ## 职责与事实源
 

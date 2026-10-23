@@ -9,10 +9,10 @@
 - 用户反馈：Web 历史回答碎片化、执行步骤外露；Android 无历史加载入口。
 - 已定位：历史接口缺少 Response/Run 投影，Web 单独拼接消息；Android 没有历史分页 UI。
 - 当前已补接口与两端统一投影、分支校验、分页游标和 Android 按钮/上滑加载。Web 390/1280 回归3项、数据库/Web单元49项、Android投影单元及编译已通过。
-- Android专用API35模拟器HTTP三页分页1/1和原有滚动/输入布局6/6已通过；后端/Web418项通过1跳过，Web全套43/43与最终分页4/4通过。Claude max规划2e6ef1c5-bce6-4ec5-b436-c3d5f03024aa因API525失败，无方案正文；max复核bd23cdc9-67c5-4a4f-8e48-60999cd9223b运行中。
-- 剩余：复核结果、Core/Web/Android 1.4.8(22) 发布、线上验证、四角色回滚验证并推送。补充证据沿用 artifacts/acceptance/usability-20261023/history-20261024，四角色不变。
+- Android专用API35模拟器HTTP三页分页1/1和原有滚动/输入布局6/6已通过；后端/Web418项通过1跳过，Web全套43/43与最终分页4/4通过。Claude max规划2e6ef1c5-bce6-4ec5-b436-c3d5f03024aa因API525失败，无方案正文；max复核bd23cdc9-67c5-4a4f-8e48-60999cd9223b同样API525无正文，GPT独立验收。
+- Core/Web源码b5e9644已发布；Android1.4.8(22)、公网下载、21→22覆盖升级通过；服务3项active/NRestarts0，用户6/会话7/消息3547不变。测试与发布均完成；四角色回滚结果保存transaction-result.json，最终推送回执由Git远端记录和release-20261024/push-UmaAgent-result.json核验。补充证据沿用 artifacts/acceptance/usability-20261023/history-20261024，四角色不变。
 
-## 已完成（2026-10-24）
+## 上一轮已完成（2026-10-24）
 
 - 原始基线d452fb2；合并远端5427d95及8109671，保留线上记忆恢复。部署源码dc081e4；Core /opt/uma-agent/releases/20261023230821-dc081e4；Web /srv/www/robotclaw/releases/20261023231807-dc081e4；Android1.4.7(21) release 21-cb1e3c9。
 - 本地及Linux各63文件416通过1私有夹具跳过，覆盖率门槛通过；Web40/40，Faux6/6，Linux真实Provider一次成功且Trace6span。IPv6与跨平台问题修复；依赖公告高危已清零。
