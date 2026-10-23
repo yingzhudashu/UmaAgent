@@ -1060,6 +1060,65 @@ describe("UmaDatabase", () => {
     db.close();
   });
 
+  it("returns complete answer projections and keeps the raw cursor across split history pages", async () => {
+    const root = await mkdtemp(join(tmpdir(), "uma-history-response-"));
+    temporary.push(root);
+    const db = testDatabase(root);
+    try {
+      const session = db.createSession({
+        title: "paged",
+        workspace: root,
+        model: modelSnapshot.ref,
+        thinkingLevel: "off",
+      });
+      const run = db.createRun(session.id, "old-question", modelSnapshot, "off", "agent", "agent").run;
+      const question = db.insertMessage({
+        id: "old-question",
+        sessionId: session.id,
+        runId: run.id,
+        role: "user",
+        status: "complete",
+        content: "旧问题",
+      });
+      const response = db.createResponse({ sessionId: session.id, runId: run.id, messageId: question.id });
+      db.addResponseActivity({ responseId: response.id, kind: "tool", text: "读取历史文件" });
+      const step = db.insertMessage({
+        sessionId: session.id,
+        runId: run.id,
+        role: "tool",
+        status: "complete",
+        content: "工具结果",
+        name: "read",
+      });
+      db.insertMessage({
+        sessionId: session.id,
+        runId: run.id,
+        role: "assistant",
+        status: "complete",
+        content: "完整的旧回答",
+      });
+      db.updateResponse(response.id, { content: "完整的旧回答", status: "completed" });
+      db.updateRun(run.id, { status: "completed" });
+      for (let index = 0; index < 105; index++)
+        db.insertMessage({ sessionId: session.id, role: "user", status: "complete", content: String(index) });
+      expect(db.getSnapshot(session.id).responses).toHaveLength(0);
+      const page = db.listHistory(session.id, step.sequence + 1, 1);
+      expect(page.items.map((item) => item.id)).toEqual([question.id, step.id]);
+      expect(page.oldestSequence).toBe(step.sequence);
+      expect(page.hasMore).toBe(true);
+      expect(page.responses).toMatchObject([
+        { id: response.id, content: "完整的旧回答", activities: [{ text: "读取历史文件" }] },
+      ]);
+      expect(page.runs).toMatchObject([{ id: run.id, status: "completed" }]);
+      const first = db.listHistory(session.id, page.oldestSequence, 1);
+      expect(first.items.map((item) => item.id)).toEqual([question.id]);
+      expect(first.hasMore).toBe(false);
+      expect(first.responses[0]?.id).toBe(response.id);
+    } finally {
+      db.close();
+    }
+  });
+
   it("claims an Action transition only once", async () => {
     const root = await mkdtemp(join(tmpdir(), "uma-action-"));
     temporary.push(root);

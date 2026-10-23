@@ -62,3 +62,7 @@ Trace 查询支持 `runId`、`traceId`、时间范围、状态、名称、`servi
 ## 网页抓取的网络边界
 
 `safeFetch` 使用 `ipaddr.js` 解析地址，只允许公网单播。IPv6 URL 的方括号先移除，字面 IP 直接分类；域名解析得到的每个地址都须通过相同校验，并将选定结果绑定到本次连接，防止解析与连接之间更换地址。IPv4 映射 IPv6 先还原再分类；每次重定向重新执行边界校验。DNS错误与网络策略拒绝分别报告，不把私网目标误报为DNS故障。
+
+## 会话历史分页合同
+
+GET /api/v16/sessions/:id/history 在原有 items、oldestSequence、hasMore 之外返回 responses、runs、activeBranchId 和 branchRevision。每页按原始消息窗口取数，批量读取关联回答及其全部活动和附件，并补齐当前分支可见的原始提问；不全量加载会话回答。oldestSequence 始终是原始窗口边界，不能被补齐提问的序号替代。首屏快照使用同一查询，确保首屏与历史页具有一致的完整回答语义。读取不改历史记录、数据库版本和用户数据。

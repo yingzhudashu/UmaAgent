@@ -842,6 +842,10 @@ export type RunActionDecision = Static<typeof RunActionDecisionSchema>;
 export const SessionHistoryPageSchema = Strict({
   sessionId: Id,
   items: Type.Array(TranscriptItemSchema),
+  responses: Type.Array(ResponseSchema),
+  runs: Type.Array(RunSchema),
+  activeBranchId: Type.Optional(Id),
+  branchRevision: Type.Integer({ minimum: 0 }),
   oldestSequence: Type.Integer({ minimum: 0 }),
   hasMore: Type.Boolean(),
 });

@@ -850,8 +850,28 @@ export class UmaDatabase {
   }
 
   listHistory(sessionId: string, beforeSequence?: number, limit = 100): SessionHistoryPage {
-    this.getSession(sessionId);
-    return this.messages.listHistory(sessionId, beforeSequence, limit);
+    const session = this.getSession(sessionId);
+    const page = this.messages.listHistory(sessionId, beforeSequence, limit);
+    const responses = this.responses.list(sessionId, {
+      runIds: [...new Set(page.items.flatMap((item) => (item.runId ? [item.runId] : [])))],
+      messageIds: page.items.map((item) => item.id),
+    });
+    // 页边界可能落在一次回答内部。补齐提问，但游标仍指向实际查询窗口，
+    // 否则下一次会跳过提问与当前窗口之间尚未读取的步骤和消息。
+    const visibleIds = new Set(this.messages.visibleKeys(sessionId).map((item) => text(item.id)));
+    const questions = this.messages
+      .listByIds(responses.map((response) => response.messageId))
+      .filter((item) => item.role === "user" && visibleIds.has(item.id));
+    return {
+      ...page,
+      items: [...new Map([...questions, ...page.items].map((item) => [item.id, item])).values()].sort(
+        (left, right) => left.sequence - right.sequence,
+      ),
+      responses,
+      runs: [...new Set(responses.map((response) => response.runId))].map((id) => this.getRun(id)),
+      ...(session.activeBranchId ? { activeBranchId: session.activeBranchId } : {}),
+      branchRevision: session.branchRevision ?? 0,
+    };
   }
 
   listAgentMessages(
@@ -1442,36 +1462,21 @@ export class UmaDatabase {
       prepareStatement(this.db, "SELECT next_event_sequence FROM sessions WHERE id=?"),
       sessionId,
     );
-    const page = this.messages.listHistory(sessionId, undefined, 100);
+    const page = this.listHistory(sessionId, undefined, 100);
     const visible = page.items;
     const hasMoreBefore = page.hasMore;
-    // 分支过滤只保留标识，避免为了筛选响应再次解析整段历史正文。
-    const keys = this.messages.visibleKeys(sessionId);
-    const activeMessageIds = new Set(keys.map((item) => text(item.id)));
-    const activeRunIds = new Set(keys.flatMap((item) => (item.run_id ? [text(item.run_id)] : [])));
-    const visibleMessageIds = new Set(visible.map((item) => item.id));
-    const visibleRunIds = new Set(visible.flatMap((item) => (item.runId ? [item.runId] : [])));
-    const responses = this.listResponses(sessionId).filter(
-      (response) =>
-        (activeMessageIds.has(response.messageId) || activeRunIds.has(response.runId)) &&
-        (visibleMessageIds.has(response.messageId) || visibleRunIds.has(response.runId)),
-    );
-    // The latest bounded page can begin in the middle of a long run. Include the
-    // originating user message for each visible response so the answer never
-    // appears without its question; keep the page cursor at the actual page edge.
-    const triggerMessages = this.messages
-      .listByIds(responses.map((response) => response.messageId))
-      .filter((message) => message.role === "user" && activeMessageIds.has(message.id));
-    const transcriptById = new Map([...visible, ...triggerMessages].map((item) => [item.id, item]));
-    const transcript = [...transcriptById.values()].sort((left, right) => left.sequence - right.sequence);
+    // 与历史分页使用同一回答投影，首屏和旧页保持相同的卡片/步骤语义。
+    const responses = page.responses;
     return {
       session,
-      transcript,
-      recentRuns: this.listRecentRuns(sessionId),
+      transcript: visible,
+      recentRuns: [
+        ...new Map([...page.runs, ...this.listRecentRuns(sessionId)].map((run) => [run.id, run])).values(),
+      ],
       pendingApprovals: this.listPendingApprovals(sessionId),
       snapshotSequence: Math.max(0, integer(sessionState?.next_event_sequence) - 1),
       history: {
-        oldestMessageSequence: visible.length ? integer(visible[0]?.sequence) : 0,
+        oldestMessageSequence: page.oldestSequence,
         hasMoreBefore,
       },
       responses,

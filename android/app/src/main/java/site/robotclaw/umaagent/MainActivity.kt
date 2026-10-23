@@ -51,6 +51,9 @@ data class UmaUiState(
     val snapshot: String = "",
     val approvals: List<UiApproval>? = null,
     val conversation: List<UiConversationEntry>? = null,
+    val historyHasMore: Boolean = false,
+    val historyLoading: Boolean = false,
+    val historyError: String = "",
     val xianyuStatus: String = "",
     val xianyuLogin: String = "",
     val xianyuLoaded: Boolean = false,
@@ -135,6 +138,8 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     private val eventMutex = Mutex()
     private var projectedSession: String? = null
     private var projectedSnapshot: JsonObject? = null
+    private var historyJob: Job? = null
+    private var historyRequestId = 0L
     private var selectionJob: Job? = null
     private var publishJob: Job? = null
     private var cacheJob: Job? = null
@@ -211,6 +216,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                     selectedSessionId = restored.selectedSessionId,
                     snapshot = restored.snapshot,
                     conversation = restored.conversation,
+                    historyHasMore = snapshotHistoryHasMore(restored.parsedSnapshot),
                     approvals = restored.approvals,
                     queue = restored.queue,
                     pendingAttachments = attachments,
@@ -522,6 +528,9 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectSession(id: String) {
+        historyRequestId++
+        historyJob?.cancel()
+        state.value = state.value.copy(historyLoading = false, historyError = "")
         selectionJob?.cancel()
         val client = api
         val changed = state.value.selectedSessionId != id
@@ -534,6 +543,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                     selectedSessionId = id,
                     snapshot = "",
                     conversation = null,
+                    historyHasMore = false,
                     approvals = null,
                     sending = false,
                     cancelling = false,
@@ -554,8 +564,8 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                     if (api !== client || state.value.selectedSessionId != id) return@launch
                     updateSessionMetadata(client, snapshot, reloadAvatar = true)
                     projectedSession = id
-                    projectedSnapshot = snapshot
-                    sequences[id] = snapshot["snapshotSequence"]?.jsonPrimitive?.longOrNull ?: 0L
+                    projectedSnapshot = mergeSessionSnapshots(projectedSnapshot, snapshot)
+                    sequences[id] = projectedSnapshot?.get("snapshotSequence")?.jsonPrimitive?.longOrNull ?: 0L
                     publishProjection(client, id)
                     state.value = state.value.copy(loading = false)
                 }
@@ -575,6 +585,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                     state.value.copy(
                         snapshot = cached,
                         conversation = parsed,
+                        historyHasMore = snapshotHistoryHasMore(parsedSnapshot),
                         approvals = parsedSnapshot?.let(::pendingApprovals).orEmpty(),
                         queue = parsedSnapshot?.let(::parseQueue).orEmpty(),
                         assistantAvatar = null,
@@ -582,6 +593,41 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
                         loading = false,
                         error = requestErrorMessage(error, "无法读取会话"),
                     )
+            }
+        }
+    }
+
+    /** 历史加载与实时事件共用投影锁，但网络读取不占锁，也不阻塞输入区。 */
+    fun loadEarlierMessages() {
+        val client = api ?: return
+        val sessionId = state.value.selectedSessionId ?: return
+        val initial = projectedSnapshot ?: return
+        if (state.value.historyLoading || state.value.offline || !snapshotHistoryHasMore(initial)) return
+        val before = snapshotHistoryCursor(initial)
+        if (before <= 0L) return
+        val requestId = ++historyRequestId
+        state.value = state.value.copy(historyLoading = true, historyError = "")
+        historyJob = viewModelScope.launch(Dispatchers.Main.immediate) {
+            try {
+                val page = client.history(sessionId, before)
+                eventMutex.withLock {
+                    val current = projectedSnapshot ?: return@withLock
+                    if (requestId != historyRequestId || api !== client || state.value.selectedSessionId != sessionId ||
+                        snapshotHistoryCursor(current) != before)
+                        return@withLock
+                    val merged = mergeSnapshotHistoryPage(current, page)
+                    if (merged === current) return@withLock
+                    projectedSnapshot = merged
+                    publishProjection(client, sessionId)
+                }
+                flushCache()
+            } catch (error: Exception) {
+                currentCoroutineContext().ensureActive()
+                if (requestId == historyRequestId && api === client && state.value.selectedSessionId == sessionId)
+                    state.value = state.value.copy(historyError = requestErrorMessage(error, "加载更早记录失败"))
+            } finally {
+                if (requestId == historyRequestId && api === client && state.value.selectedSessionId == sessionId)
+                    state.value = state.value.copy(historyLoading = false)
             }
         }
     }
@@ -2520,6 +2566,7 @@ class UmaViewModel(application: Application) : AndroidViewModel(application) {
             state.value =
                 state.value.copy(
                     conversation = parsed,
+                    historyHasMore = snapshotHistoryHasMore(snapshot),
                     approvals = pendingApprovals(snapshot),
                     queue = parseQueue(snapshot),
                     offline = false,

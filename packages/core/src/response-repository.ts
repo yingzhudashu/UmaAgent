@@ -7,24 +7,39 @@ import { prepareStatement } from "./sql-statements.js";
 export class ResponseRepository {
   constructor(private readonly db: DatabaseSync) {}
 
-  list(sessionId: string): Response[] {
+  list(sessionId: string, page?: { runIds: string[]; messageIds: string[] }): Response[] {
+    // 分页只读取当前页涉及的回答及其步骤、附件，不能为翻一页反复加载整段会话。
+    const clauses: string[] = [];
+    const parameters = [sessionId];
+    if (page) {
+      for (const [column, ids] of [
+        ["run_id", page.runIds],
+        ["message_id", page.messageIds],
+      ] as const) {
+        if (!ids.length) continue;
+        clauses.push(`r.${column} IN (${ids.map(() => "?").join(",")})`);
+        parameters.push(...ids);
+      }
+      if (!clauses.length) return [];
+    }
+    const filter = `r.session_id=?${page ? ` AND (${clauses.join(" OR ")})` : ""}`;
     const values = rows(
-      prepareStatement(this.db, "SELECT * FROM responses WHERE session_id=? ORDER BY created_at"),
-      sessionId,
+      prepareStatement(this.db, `SELECT r.* FROM responses r WHERE ${filter} ORDER BY r.created_at`),
+      ...parameters,
     );
     const activities = rows(
       prepareStatement(
         this.db,
-        "SELECT a.* FROM response_activities a JOIN responses r ON r.id=a.response_id WHERE r.session_id=? ORDER BY a.created_at",
+        `SELECT a.* FROM response_activities a JOIN responses r ON r.id=a.response_id WHERE ${filter} ORDER BY a.created_at`,
       ),
-      sessionId,
+      ...parameters,
     );
     const attachments = rows(
       prepareStatement(
         this.db,
-        "SELECT * FROM attachments WHERE session_id=? AND response_id IS NOT NULL ORDER BY created_at",
+        `SELECT a.* FROM attachments a JOIN responses r ON r.id=a.response_id WHERE ${filter} ORDER BY a.created_at`,
       ),
-      sessionId,
+      ...parameters,
     );
     const groupedActivities = new Map<string, Row[]>();
     const groupedAttachments = new Map<string, Row[]>();

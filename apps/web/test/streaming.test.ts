@@ -1,7 +1,18 @@
 import { QueryClient } from "@tanstack/react-query";
-import type { AgentEventEnvelope, Response, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
+import type {
+  AgentEventEnvelope,
+  Response,
+  SessionHistoryPage,
+  SessionSnapshot,
+  TranscriptItem,
+} from "@uma-agent/protocol";
 import { describe, expect, it } from "vitest";
-import { applyDurableEvent, applyStreamingEvent, mergeSessionSnapshot } from "../src/streaming.js";
+import {
+  applyDurableEvent,
+  applyStreamingEvent,
+  mergeSessionHistoryPage,
+  mergeSessionSnapshot,
+} from "../src/streaming.js";
 
 const transcriptItem = (content = ""): TranscriptItem => ({
   id: "assistant-1",
@@ -228,4 +239,37 @@ it("keeps the original projection for duplicate, missing and invalid deltas", ()
   );
   expect(current.transcript[1]?.content).toBe("你好，world！ ");
   expect(current.transcript[0]).toBe(original.transcript[0]);
+});
+
+describe("history page projections", () => {
+  it("keeps answer cards, steps and page cursor after duplicate pages and live refreshes", () => {
+    const current = { ...snapshot(), history: { oldestMessageSequence: 101, hasMoreBefore: true } };
+    const page: SessionHistoryPage = {
+      sessionId: "session-1",
+      branchRevision: 0,
+      oldestSequence: 2,
+      hasMore: true,
+      items: [{ ...transcriptItem("旧问题"), id: "old-user", role: "user", sequence: 1, runId: "old-run" }],
+      responses: [
+        {
+          ...response(2),
+          id: "old-response",
+          messageId: "old-user",
+          runId: "old-run",
+          content: "完整旧答案",
+          status: "completed",
+        },
+      ],
+      runs: [],
+    };
+    const loaded = mergeSessionHistoryPage(current, page);
+    const repeated = mergeSessionHistoryPage(loaded, page);
+    expect(repeated.transcript.filter((item) => item.id === "old-user")).toHaveLength(1);
+    expect(repeated.responses?.filter((item) => item.id === "old-response")).toHaveLength(1);
+    const refreshed = mergeSessionSnapshot(repeated, { ...current, snapshotSequence: 2 });
+    expect(refreshed.responses).toContainEqual(page.responses[0]);
+    expect(refreshed.history).toEqual({ oldestMessageSequence: 2, hasMoreBefore: true });
+    expect(mergeSessionHistoryPage(current, { ...page, sessionId: "different-session" })).toBe(current);
+    expect(mergeSessionHistoryPage(current, { ...page, branchRevision: 1 })).toBe(current);
+  });
 });

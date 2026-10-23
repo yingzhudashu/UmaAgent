@@ -174,9 +174,9 @@ internal fun ChatScreen(
         )
     suspend fun scrollToLatest() {
         if (conversation.isEmpty()) return
-        listState.requestScrollToItem(conversation.lastIndex, Int.MAX_VALUE)
+        listState.requestScrollToItem(conversation.size, Int.MAX_VALUE)
         withFrameNanos {}
-        listState.scrollToItem(conversation.lastIndex, Int.MAX_VALUE)
+        listState.scrollToItem(conversation.size, Int.MAX_VALUE)
         // Use the measured height so a reply taller than the viewport ends at its last line.
         followTail = true
     }
@@ -255,6 +255,10 @@ internal fun ChatScreen(
             }
     }
     LaunchedEffect(selectedSession?.id) { model.loadQueue() }
+    LaunchedEffect(listState, selectedSession?.id) {
+        snapshotFlow { listState.firstVisibleItemIndex <= 1 && listState.isScrollInProgress }
+            .collect { atStart -> if (atStart && !followTail) model.loadEarlierMessages() }
+    }
 
     // Consume IME insets once at the conversation boundary. The composer itself
     // must not add a second imePadding, otherwise a large gap appears above the keyboard.
@@ -355,6 +359,20 @@ internal fun ChatScreen(
                     contentPadding = PaddingValues(vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
+                    // 固定分页项的key和位置，正文依靠稳定key在前插历史后保持阅读锚点。
+                    item(key = "history-pagination") {
+                        if (state.historyHasMore) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                                TextButton(
+                                    onClick = { followTail = false; model.loadEarlierMessages() },
+                                    enabled = !state.historyLoading && !state.offline,
+                                    modifier = Modifier.testTag("load-earlier-messages"),
+                                ) { Text(if (state.historyLoading) "正在加载更早记录…" else "加载更早记录") }
+                                if (state.historyError.isNotBlank())
+                                    Text(state.historyError, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
                     items(conversation, key = { it.id }) { entry ->
                         when (entry) {
                             is UiConversationEntry.MessageEntry ->

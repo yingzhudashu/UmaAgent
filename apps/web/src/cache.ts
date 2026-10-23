@@ -1,4 +1,4 @@
-import type { Session, SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
+import type { Session, SessionSnapshot } from "@uma-agent/protocol";
 
 const DB_NAME = "uma-agent-v7";
 const SNAPSHOTS = "session-snapshots";
@@ -121,9 +121,5 @@ export async function cacheCursor(sessionId: string, sequence: number): Promise<
   database.close();
 }
 export const cachedCursor = (sessionId: string) => get<number>(CURSORS, key(sessionId));
-export const cacheHistory = (sessionId: string, items: TranscriptItem[], activeBranchId?: string) =>
-  put(HISTORY, key(sessionKey(sessionId, activeBranchId)), items);
-export const cachedHistory = (sessionId: string, activeBranchId?: string) =>
-  get<TranscriptItem[]>(HISTORY, key(sessionKey(sessionId, activeBranchId)));
 export const cacheSessions = (sessions: Session[]) => put(SESSIONS, key("list"), sessions);
 export const cachedSessions = () => get<Session[]>(SESSIONS, key("list"));

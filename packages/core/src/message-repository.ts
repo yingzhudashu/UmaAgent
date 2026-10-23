@@ -40,7 +40,11 @@ export class MessageRepository {
     return values.map((value) => this.toTranscriptItem(value, attachments));
   }
 
-  listHistory(sessionId: string, beforeSequence?: number, limit = 100): SessionHistoryPage {
+  listHistory(
+    sessionId: string,
+    beforeSequence?: number,
+    limit = 100,
+  ): Omit<SessionHistoryPage, "responses" | "runs" | "activeBranchId" | "branchRevision"> {
     const bounded = Math.max(1, Math.min(500, limit));
     const page = this.visibleRows(sessionId, {
       ...(beforeSequence === undefined ? {} : { beforeSequence }),

@@ -22,10 +22,8 @@ import {
 } from "./areas/WorkspaceAreas.js";
 import {
   cacheCursor,
-  cachedHistory,
   cachedSessions,
   cachedSnapshot,
-  cacheHistory,
   cacheSessions,
   cacheSnapshot,
   clearCacheNamespace,
@@ -50,7 +48,12 @@ import { UnsavedChanges, useLeaveConfirmation } from "./components/UnsavedChange
 import { Login } from "./Login.js";
 import { requestErrorMessage } from "./request-error.js";
 import { buildConversationEntries } from "./responseTurns.js";
-import { applyDurableEvent, applyStreamingEvent, mergeSessionSnapshot } from "./streaming.js";
+import {
+  applyDurableEvent,
+  applyStreamingEvent,
+  mergeSessionHistoryPage,
+  mergeSessionSnapshot,
+} from "./streaming.js";
 import { useConversationDrafts } from "./useConversationDrafts.js";
 
 type SettingsArea =
@@ -132,10 +135,8 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
   const [cacheUnavailable, setCacheUnavailable] = useState(false);
   const cacheFailed = useCallback(() => setCacheUnavailable(true), []);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent>();
-  const [historical, setHistorical] = useState<TranscriptItem[]>([]);
-  const [historyHasMore, setHistoryHasMore] = useState<boolean>();
-  const [historyOwnerKey, setHistoryOwnerKey] = useState("");
   const historyLock = useRef(false);
+  const historyRequestRef = useRef(0);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [eventState, setEventState] = useState<EventConnectionState>(() => client.eventState());
   const [lastSyncAt, setLastSyncAt] = useState<number>();
@@ -264,25 +265,31 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
   });
   const selectedSession = sessions.data?.find((item) => item.id === selected);
   const activeBranchId = selectedSession?.activeBranchId;
-  const historyKey = `${selected ?? ""}:${activeBranchId ?? ""}`;
+  const historyKey = `${selected ?? ""}:${activeBranchId ?? ""}:${selectedSession?.branchRevision ?? 0}`;
   const historyKeyRef = useRef(historyKey);
   historyKeyRef.current = historyKey;
-  // 历史缓存读取是异步的；渲染时按会话和分支归属过滤，避免切换瞬间显示旧分支消息。
-  const visibleHistorical = historyOwnerKey === historyKey ? historical : [];
-  const visibleHistoryHasMore = historyOwnerKey === historyKey ? historyHasMore : undefined;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 会话或分支变化必须重置该作用域的分页锁。
+  useEffect(() => {
+    // 切换会话或分支后可立即翻页；旧请求的 finally 不能解除新请求的锁。
+    historyLock.current = false;
+    historyRequestRef.current++;
+    setHistoryLoading(false);
+  }, [historyKey]);
   const snapshot = useQuery({
     queryKey: ["snapshot", selected, activeBranchId],
     queryFn: async () => {
       const sessionId = selected as string;
       try {
         const received = await client.getSession(sessionId);
-        await cacheSnapshot(received).catch(cacheFailed);
+        const persisted = await cachedSnapshot(sessionId, activeBranchId).catch(() => undefined);
         // HTTP 快照可能晚于 WebSocket 增量返回；与重连快照使用相同游标规则，
         // 避免旧请求把已经显示的工具步骤或回复覆盖为空。
-        return mergeSessionSnapshot(
-          queryClient.getQueryData<SessionSnapshot>(["snapshot", sessionId, activeBranchId]),
+        const merged = mergeSessionSnapshot(
+          queryClient.getQueryData<SessionSnapshot>(["snapshot", sessionId, activeBranchId]) ?? persisted,
           received,
         );
+        await cacheSnapshot(merged).catch(cacheFailed);
+        return merged;
       } catch (error) {
         if (error instanceof UmaClientError && error.status === 401) throw error;
         const cached = await cachedSnapshot(sessionId, activeBranchId).catch(() => undefined);
@@ -371,89 +378,73 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
   useEffect(() => {
     if (!selected || selected === "undefined" || !snapshotReady) return;
     let unsubscribe: (() => void) | undefined;
-    let cancelled = false;
-    void cachedHistory(selected, activeBranchId)
-      .catch(() => undefined)
-      .then((cached) => {
-        if (cancelled) return;
-        setHistorical(cached ?? []);
-        setHistoryHasMore(undefined);
-        setHistoryOwnerKey(historyKey);
-        unsubscribe = client.subscribeSessions(
-          // 只有快照落入该分支的缓存后才订阅；提前消费事件会让无投影的增量静默丢失。
-          [
-            {
-              id: selected,
-              lastSequence:
-                queryClient.getQueryData<SessionSnapshot>(["snapshot", selected, activeBranchId])
-                  ?.snapshotSequence ?? 0,
-            },
-          ],
-          (event) => {
-            const transient = event.type === "message.delta" && "transient" in event && event.transient;
-            const durableSequence =
-              event.type === "session.snapshot"
-                ? (event.payload as SessionSnapshot).snapshotSequence
-                : event.sequence;
-            if (!transient) {
-              void cacheCursor(selected, durableSequence).catch(cacheFailed);
-              setSyncCursor(durableSequence);
-            }
-            setLastSyncAt(Date.now());
-            if (event.type === "approval.requested")
-              setApprovals((items) => [
-                ...items.filter((item) => item.id !== (event.payload as Approval).id),
-                event.payload as Approval,
-              ]);
-            if (event.type === "approval.resolved")
-              setApprovals((items) => items.filter((item) => item.id !== (event.payload as Approval).id));
-            if (event.type === "session.snapshot") {
-              const value = event.payload as SessionSnapshot;
-              const key = ["snapshot", selected, value.session.activeBranchId] as const;
-              const merged = mergeSessionSnapshot(queryClient.getQueryData<SessionSnapshot>(key), value);
-              queryClient.setQueryData(key, merged);
-              void cacheSnapshot(merged).catch(cacheFailed);
-              queryClient.setQueryData(["queue", selected], value.queue);
-            } else if (event.type === "message.delta") {
-              applyStreamingEvent(queryClient, selected, event, activeBranchId);
-            } else if (event.type === "queue.updated") {
-              void queryClient.invalidateQueries({ queryKey: ["queue", selected] });
-            } else {
-              applyDurableEvent(queryClient, selected, event, activeBranchId);
-              if (
-                event.type === "response.completed" ||
-                (event.type === "run.updated" &&
-                  ["completed", "failed", "cancelled", "interrupted"].includes(
-                    String((event.payload as { status?: string }).status),
-                  ))
-              ) {
-                const completed = queryClient.getQueryData<SessionSnapshot>([
-                  "snapshot",
-                  selected,
-                  activeBranchId,
-                ]);
-                if (completed) void cacheSnapshot(completed).catch(cacheFailed);
-              }
-              if (event.type === "run.updated")
-                void queryClient.invalidateQueries({ queryKey: ["queue", selected] });
-            }
-            if (event.type !== "message.delta" && event.type !== "queue.updated")
-              void queryClient.invalidateQueries({ queryKey: ["sessions"] });
-          },
-        );
-      });
+    unsubscribe = client.subscribeSessions(
+      // 只有快照落入该分支的缓存后才订阅；提前消费事件会让无投影的增量静默丢失。
+      [
+        {
+          id: selected,
+          lastSequence:
+            queryClient.getQueryData<SessionSnapshot>(["snapshot", selected, activeBranchId])
+              ?.snapshotSequence ?? 0,
+        },
+      ],
+      (event) => {
+        const transient = event.type === "message.delta" && "transient" in event && event.transient;
+        const durableSequence =
+          event.type === "session.snapshot"
+            ? (event.payload as SessionSnapshot).snapshotSequence
+            : event.sequence;
+        if (!transient) {
+          void cacheCursor(selected, durableSequence).catch(cacheFailed);
+          setSyncCursor(durableSequence);
+        }
+        setLastSyncAt(Date.now());
+        if (event.type === "approval.requested")
+          setApprovals((items) => [
+            ...items.filter((item) => item.id !== (event.payload as Approval).id),
+            event.payload as Approval,
+          ]);
+        if (event.type === "approval.resolved")
+          setApprovals((items) => items.filter((item) => item.id !== (event.payload as Approval).id));
+        if (event.type === "session.snapshot") {
+          const value = event.payload as SessionSnapshot;
+          const key = ["snapshot", selected, value.session.activeBranchId] as const;
+          const merged = mergeSessionSnapshot(queryClient.getQueryData<SessionSnapshot>(key), value);
+          queryClient.setQueryData(key, merged);
+          void cacheSnapshot(merged).catch(cacheFailed);
+          queryClient.setQueryData(["queue", selected], value.queue);
+        } else if (event.type === "message.delta") {
+          applyStreamingEvent(queryClient, selected, event, activeBranchId);
+        } else if (event.type === "queue.updated") {
+          void queryClient.invalidateQueries({ queryKey: ["queue", selected] });
+        } else {
+          applyDurableEvent(queryClient, selected, event, activeBranchId);
+          if (
+            event.type === "response.completed" ||
+            (event.type === "run.updated" &&
+              ["completed", "failed", "cancelled", "interrupted"].includes(
+                String((event.payload as { status?: string }).status),
+              ))
+          ) {
+            const completed = queryClient.getQueryData<SessionSnapshot>([
+              "snapshot",
+              selected,
+              activeBranchId,
+            ]);
+            if (completed) void cacheSnapshot(completed).catch(cacheFailed);
+          }
+          if (event.type === "run.updated")
+            void queryClient.invalidateQueries({ queryKey: ["queue", selected] });
+        }
+        if (event.type !== "message.delta" && event.type !== "queue.updated")
+          void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      },
+    );
     return () => {
-      cancelled = true;
       unsubscribe?.();
     };
-  }, [selected, activeBranchId, historyKey, queryClient, client, snapshotReady, cacheFailed]);
-  const transcript = useMemo(() => {
-    const items = [...visibleHistorical, ...(snapshot.data?.transcript ?? [])];
-    const unique = [...new Map(items.map((item) => [item.id, item])).values()].sort(
-      (a, b) => a.sequence - b.sequence,
-    );
-    return unique;
-  }, [visibleHistorical, snapshot.data?.transcript]);
+  }, [selected, activeBranchId, queryClient, client, snapshotReady, cacheFailed]);
+  const transcript = snapshot.data?.transcript ?? [];
   const conversationEntries = useMemo(
     () =>
       buildConversationEntries(transcript, snapshot.data?.responses ?? [], snapshot.data?.recentRuns ?? []),
@@ -530,8 +521,6 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
       setDestination("sessions");
       setInspectorSection(undefined);
       setSidebarOpen(false);
-      setHistorical([]);
-      setHistoryHasMore(undefined);
       setSyncCursor(undefined);
       setLastSyncAt(undefined);
       requestAnimationFrame(() => promptRef.current?.focus());
@@ -650,8 +639,6 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
       const result = await client.editMessage(item.id, text);
       // 编辑会话切换了活动分支；旧分页记录属于旧分支，必须立即丢弃，
       // 否则重新获取快照时会与新分支内容合并显示。
-      setHistorical([]);
-      setHistoryHasMore(undefined);
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       await queryClient.invalidateQueries({ queryKey: ["snapshot", sessionId] });
       await client.waitForRun(result.runId);
@@ -675,8 +662,6 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
     setLastSyncAt(undefined);
     setSyncCursor(undefined);
     setApprovals([]);
-    setHistorical([]);
-    setHistoryHasMore(undefined);
     setInspectorSection(undefined);
     setSettingsArea("session");
     setSidebarOpen(false);
@@ -841,7 +826,7 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
                 </button>
               </div>
             )}
-            {(visibleHistoryHasMore ?? snapshot.data?.history.hasMoreBefore) && (
+            {snapshot.data?.history.hasMoreBefore && (
               <button
                 type="button"
                 className="run-action"
@@ -850,14 +835,12 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
                   if (!selected || historyLock.current) return;
                   // Snapshot may include an older triggering question alongside a newer
                   // bounded page. Use the true page edge until explicit older pages load.
-                  const before =
-                    visibleHistorical[0]?.sequence ??
-                    snapshot.data?.history.oldestMessageSequence ??
-                    transcript[0]?.sequence;
+                  const before = snapshot.data?.history.oldestMessageSequence ?? transcript[0]?.sequence;
                   const area = transcriptRef.current;
                   const previousHeight = area?.scrollHeight ?? 0;
                   const previousTop = area?.scrollTop ?? 0;
                   const requestedHistoryKey = historyKey;
+                  const requestId = ++historyRequestRef.current;
                   historyLock.current = true;
                   setHistoryLoading(true);
                   setGlobalError("");
@@ -865,32 +848,47 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
                     .getSessionHistory(selected, before, 100)
                     .then((page) => {
                       if (
+                        requestId !== historyRequestRef.current ||
                         selected !== selectedForScrollRef.current ||
                         requestedHistoryKey !== historyKeyRef.current
                       )
                         return;
-                      const next = [...page.items, ...visibleHistorical];
-                      const unique = [...new Map(next.map((item) => [item.id, item])).values()].sort(
-                        (a, b) => a.sequence - b.sequence,
-                      );
-                      setHistorical(unique);
-                      setHistoryHasMore(page.hasMore);
-                      setHistoryOwnerKey(requestedHistoryKey);
-                      void cacheHistory(selected, unique, activeBranchId).catch(cacheFailed);
+                      const key = ["snapshot", selected, activeBranchId] as const;
+                      const current = queryClient.getQueryData<SessionSnapshot>(key);
+                      if (!current) return;
+                      const merged = mergeSessionHistoryPage(current, page);
+                      if (merged === current) {
+                        void snapshot.refetch();
+                        return;
+                      }
+                      queryClient.setQueryData(key, merged);
+                      void cacheSnapshot(merged).catch(cacheFailed);
                       requestAnimationFrame(() => {
-                        if (requestedHistoryKey !== historyKeyRef.current) return;
+                        if (
+                          requestId !== historyRequestRef.current ||
+                          requestedHistoryKey !== historyKeyRef.current
+                        )
+                          return;
                         const current = transcriptRef.current;
                         if (current) current.scrollTop = current.scrollHeight - previousHeight + previousTop;
                       });
                     })
                     .catch((error: unknown) => {
                       // 分页失败保留已有正文；旧会话的迟到错误不能污染当前页面。
-                      if (requestedHistoryKey === historyKeyRef.current)
+                      if (
+                        requestId === historyRequestRef.current &&
+                        requestedHistoryKey === historyKeyRef.current
+                      )
                         setGlobalError(requestErrorMessage(error));
                     })
                     .finally(() => {
-                      historyLock.current = false;
-                      setHistoryLoading(false);
+                      if (
+                        requestId === historyRequestRef.current &&
+                        requestedHistoryKey === historyKeyRef.current
+                      ) {
+                        historyLock.current = false;
+                        setHistoryLoading(false);
+                      }
                     });
                 }}
               >

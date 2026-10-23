@@ -1,6 +1,6 @@
 # UmaAgent 代码与文档审查
 
-当前合同：Core 1.3.0、Android 1.4.7（versionCode 21）、Protocol v16、业务schema 27。此前方案为Claude max初稿、GPT整理修订；本轮管理页定位、方案、实施及证据整理为GPT。前轮Claude max规划两次和最终复核一次均返回API525；本轮发布规划及复核各一次仍返回API525，未取得可读正文或可核验的返回模型；本地限定范围由GPT独立复核，Claude阶段未完成。请求模型/档位不代表取得模型正文或验收结论。最终实测及未验项统一见[发布验收](release-acceptance.md)。
+当前合同：Core 1.3.0、Android 1.4.8（versionCode 22）、Protocol v16、业务schema 27。此前方案为Claude max初稿、GPT整理修订；本轮管理页定位、方案、实施及证据整理为GPT。前轮Claude max规划两次和最终复核一次均返回API525；本轮发布规划及复核各一次仍返回API525，未取得可读正文或可核验的返回模型；本地限定范围由GPT独立复核，Claude阶段未完成。请求模型/档位不代表取得模型正文或验收结论。最终实测及未验项统一见[发布验收](release-acceptance.md)。
 
 ## 已证实并修复的问题
 
@@ -63,3 +63,7 @@ database.ts、runtime.ts、App.tsx、server/app.ts、client/index.ts 仍超过 9
 ## Linux 发布前补充审查
 
 合并远端已部署的会话记忆恢复与500k模型窗口模板，保留原有分支隔离和摘要恢复行为。Linux实测发现IPv6字面地址误入DNS查询，网页抓取改用现有依赖ipaddr.js统一分类；新增私网映射地址和公网IPv4/IPv6无网络夹具验证。工具测试用平台路径和通用echo命令，不再写死Windows结果。本机私有运行配置不参与版本模板单元测试，避免测试读取凭据并强迫用户修改配置。安全公告新增的body-parser和zod高危已按锁文件更新，审计及实际发布结果见发布验收。
+
+## 历史分页定向复核
+
+Web缺失历史Response/Run导致回答碎片化；Android缺失历史入口。改为服务端批量提供完整回答投影，两端单份快照合并，真实页游标不受补齐提问影响。会话、分支修订和请求代次隔离迟到回执，刷新及离线缓存保留已加载记录。未修改数据库格式、已有用户记录或现有视觉方案。GPT实施和证据整理，Claude本轮max规划API525无正文，max复核运行中。实际测试及发布状态见发布验收。

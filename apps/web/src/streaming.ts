@@ -5,6 +5,7 @@ import type {
   MessageDelta,
   Response,
   Run,
+  SessionHistoryPage,
   SessionSnapshot,
   TranscriptItem,
 } from "@uma-agent/protocol";
@@ -86,7 +87,7 @@ function mergeRun(runs: Run[], run: Run): Run[] {
   const next = runs.some((value) => value.id === run.id)
     ? runs.map((value) => (value.id === run.id ? run : value))
     : [...runs, run];
-  return next.sort((left, right) => left.createdAt - right.createdAt).slice(-20);
+  return next.sort((left, right) => left.createdAt - right.createdAt);
 }
 
 function mergeResponse(responses: Response[], response: Response): Response[] {
@@ -157,6 +158,35 @@ export function mergeSessionSnapshot(
     transcript: [...transcript.values()].sort((left, right) => left.sequence - right.sequence),
     recentRuns: [...recentRuns.values()].sort((left, right) => left.createdAt - right.createdAt),
     responses: mergeResponseLists(current.responses ?? [], incoming.responses ?? []),
+    history:
+      current.history.oldestMessageSequence > 0 &&
+      current.history.oldestMessageSequence <= incoming.history.oldestMessageSequence
+        ? current.history
+        : incoming.history,
+  };
+}
+
+/** 历史正文、回答卡片与运行信息必须作为同一页提交，离线缓存也保存完整投影。 */
+export function mergeSessionHistoryPage(current: SessionSnapshot, page: SessionHistoryPage): SessionSnapshot {
+  if (
+    current.session.id !== page.sessionId ||
+    current.session.activeBranchId !== page.activeBranchId ||
+    (current.session.branchRevision ?? 0) !== page.branchRevision
+  )
+    return current;
+  const transcript = new Map(page.items.map((item) => [item.id, item]));
+  for (const item of current.transcript) transcript.set(item.id, item);
+  const runs = new Map(page.runs.map((run) => [run.id, run]));
+  for (const run of current.recentRuns) {
+    const previous = runs.get(run.id);
+    if (!previous || run.updatedAt >= previous.updatedAt) runs.set(run.id, run);
+  }
+  return {
+    ...current,
+    transcript: [...transcript.values()].sort((a, b) => a.sequence - b.sequence),
+    recentRuns: [...runs.values()].sort((a, b) => a.createdAt - b.createdAt),
+    responses: mergeResponseLists(page.responses, current.responses ?? []),
+    history: { oldestMessageSequence: page.oldestSequence, hasMoreBefore: page.hasMore },
   };
 }
 

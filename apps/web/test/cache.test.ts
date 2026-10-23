@@ -4,9 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   cacheCursor,
   cachedCursor,
-  cachedHistory,
   cachedSnapshot,
-  cacheHistory,
   cacheSnapshot,
   clearCacheNamespace,
   setCacheNamespace,
@@ -86,7 +84,7 @@ describe("Web offline cache", () => {
       createdAt: 1,
       updatedAt: 1,
     };
-    await cacheHistory(id, [item]);
-    expect(await cachedHistory(id)).toEqual([item]);
+    await cacheSnapshot({ ...snapshot(id, 1), transcript: [item] });
+    expect((await cachedSnapshot(id))?.transcript).toEqual([item]);
   });
 });

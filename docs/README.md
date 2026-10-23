@@ -11,7 +11,7 @@
 - [工程边界与固定性能预算](engineering-baseline.md)
 - [MiniAgent 功能等价矩阵](miniagent-feature-matrix.md)
 
-Core 1.3.0，Android 1.4.7（versionCode 21；已完成本轮正式发布），Protocol v16，业务 SQLite schema 27。Trace 与资源样本单独保存在 telemetry.db。服务只接受当前 schema；旧 schema 不受支持，备份必须保留在原版本的隔离恢复目录中。生产及设备验收状态见[发布验收](release-acceptance.md)。
+Core 1.3.0，Android 1.4.8（versionCode 22；历史分页修复候选），Protocol v16，业务 SQLite schema 27。Trace 与资源样本单独保存在 telemetry.db。服务只接受当前 schema；旧 schema 不受支持，备份必须保留在原版本的隔离恢复目录中。生产及设备验收状态见[发布验收](release-acceptance.md)。
 
 仓库不跟踪 APK、截图、日志、覆盖率、测试结果或验收临时目录；这些过程性产物只保留在本机忽略目录或发布系统的证据存储中。当前 Trace 查询支持 Run/Trace、时间、状态、名称、服务和阶段筛选，权限过滤先于分页。
 

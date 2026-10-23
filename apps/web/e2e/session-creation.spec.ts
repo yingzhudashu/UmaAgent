@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, type Page, test } from "@playwright/test";
+import type { SessionSnapshot, TranscriptItem } from "@uma-agent/protocol";
 
 const api = "/api/v16";
 
@@ -362,3 +363,154 @@ test("history loading locks duplicate reads and exposes failures without discard
   await expect(page.getByRole("button", { name: "加载更早记录", exact: true })).toBeEnabled();
   await expect(page.getByRole("region", { name: "会话消息" })).toContainText("原有会话的消息");
 });
+
+test("late history errors do not unlock or overwrite another session request", async ({ page }) => {
+  await page.route(`**${api}/sessions/*/snapshot`, async (route) => {
+    const response = await route.fetch();
+    const value = await response.json();
+    await route.fulfill({
+      response,
+      json: { ...value, history: { oldestMessageSequence: 100, hasMoreBefore: true } },
+    });
+  });
+  const { session: old } = await openExistingSession(page);
+  const release: Array<() => void> = [];
+  let calls = 0;
+  await page.route(`**${api}/sessions/*/history?*`, async (route) => {
+    const index = calls++;
+    await new Promise<void>((done) => {
+      release[index] = done;
+    });
+    await route.fulfill({
+      status: 500,
+      json: { error: { code: "internal_error", message: index === 0 ? "旧会话错误" : "新会话错误" } },
+    });
+  });
+  await page.getByRole("button", { name: "加载更早记录", exact: true }).click();
+  await expect.poll(() => calls).toBe(1);
+  const created = page.waitForResponse(
+    (r) => r.url().endsWith(`${api}/sessions`) && r.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "新会话", exact: true }).click();
+  const next = await (await created).json();
+  expect(next.id).not.toBe(old.id);
+  await expect(page.getByRole("button", { name: "加载更早记录", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "加载更早记录", exact: true }).click();
+  await expect.poll(() => calls).toBe(2);
+  release[0]?.();
+  await expect(page.getByText("旧会话错误", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "正在加载更早记录…", exact: true })).toBeDisabled();
+  release[1]?.();
+  await expect(page.getByRole("alert")).toContainText("新会话错误");
+  await expect(page.getByRole("button", { name: "加载更早记录", exact: true })).toBeEnabled();
+});
+
+for (const width of [390, 1280]) {
+  test(`historical answers retain one collapsed step drawer across pages and reload at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    let base: SessionSnapshot;
+    await page.route("**/api/v16/sessions/*/snapshot", async (route) => {
+      const response = await route.fetch();
+      const value = (await response.json()) as SessionSnapshot;
+      base = value;
+      await route.fulfill({
+        response,
+        json: {
+          ...value,
+          snapshotSequence: 10000,
+          transcript: value.transcript.map((item: TranscriptItem) => ({
+            ...item,
+            sequence: item.sequence + 100,
+          })),
+          history: { oldestMessageSequence: 101, hasMoreBefore: true },
+        },
+      });
+    });
+    const { session } = await openExistingSession(page);
+    await expect(page.locator(".response-card")).toHaveCount(1);
+    const runId = randomUUID(),
+      responseId = randomUUID(),
+      questionId = randomUUID();
+    const question = {
+      id: questionId,
+      sequence: 1,
+      role: "user",
+      status: "complete",
+      content: "历史问题",
+      runId,
+      attachments: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const tool = {
+      ...question,
+      id: randomUUID(),
+      sequence: 2,
+      role: "tool",
+      name: "read",
+      content: "历史执行步骤正文",
+    };
+    const answer = {
+      ...question,
+      id: randomUUID(),
+      sequence: 3,
+      role: "assistant",
+      content: "历史完整答案第一段\n\n历史完整答案第二段",
+    };
+    const response = {
+      id: responseId,
+      sessionId: session.id,
+      messageId: questionId,
+      runId,
+      status: "completed",
+      content: answer.content,
+      activities: [],
+      attachments: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const requested: number[] = [];
+    await page.route(`**/api/v16/sessions/${session.id}/history?*`, async (route) => {
+      const before = Number(new URL(route.request().url()).searchParams.get("before"));
+      requested.push(before);
+      await route.fulfill({
+        json: {
+          sessionId: session.id,
+          activeBranchId: base.session.activeBranchId,
+          branchRevision: base.session.branchRevision ?? 0,
+          items: before === 101 ? [question, tool, answer] : [question],
+          responses: [response],
+          runs: [],
+          oldestSequence: before === 101 ? 2 : 1,
+          hasMore: before === 101,
+        },
+      });
+    });
+    await page.getByRole("button", { name: "加载更早记录", exact: true }).click();
+    const card = page.locator(".response-card").filter({ hasText: "历史完整答案第一段" });
+    await expect(card).toHaveCount(1);
+    await expect(card).toContainText("历史完整答案第二段");
+    const drawer = card.locator("details.response-steps");
+    await expect(drawer).not.toHaveAttribute("open", "");
+    await expect(card.getByText("历史执行步骤正文", { exact: true })).not.toBeVisible();
+    await drawer.locator(":scope > summary").click();
+    await card.locator("details.tool-details > summary").click();
+    await expect(card.getByText("历史执行步骤正文", { exact: true })).toBeVisible();
+    await drawer.locator(":scope > summary").click();
+    await page.getByRole("button", { name: "加载更早记录", exact: true }).click();
+    await expect(page.getByRole("button", { name: "加载更早记录", exact: true })).toHaveCount(0);
+    expect(requested).toEqual([101, 2]);
+    await expect(card).toHaveCount(1);
+    await page.reload();
+    await expect(page.locator(".response-card").filter({ hasText: "历史完整答案第一段" })).toHaveCount(1);
+    await expect(
+      page
+        .locator(".response-card")
+        .filter({ hasText: "历史完整答案第一段" })
+        .locator("details.response-steps"),
+    ).not.toHaveAttribute("open", "");
+    await expect(page.getByRole("button", { name: "加载更早记录", exact: true })).toHaveCount(0);
+  });
+}
