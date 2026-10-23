@@ -43,6 +43,7 @@ import type {
 } from "@uma-agent/protocol";
 import { type AgentEventEnvelope, type DurableAgentEventType, PROTOCOL_VERSION } from "@uma-agent/protocol";
 import { AuditEvaluationRepository } from "./audit-evaluation-repository.js";
+import { isUsableContextSummary } from "./context-summary.js";
 import {
   ftsQuery,
   integer,
@@ -874,10 +875,13 @@ export class UmaDatabase {
 
   getContextSummary(sessionId: string): ContextSummary | undefined {
     const value = row(
-      prepareStatement(this.db, "SELECT * FROM context_summaries WHERE session_id=?"),
+      prepareStatement(
+        this.db,
+        "SELECT c.* FROM context_summaries c JOIN sessions s ON s.id=c.session_id WHERE c.session_id=? AND c.branch_id IS s.active_branch_id",
+      ),
       sessionId,
     );
-    if (!value) return undefined;
+    if (!value || !isUsableContextSummary(text(value.content))) return undefined;
     return {
       sessionId,
       throughSequence: integer(value.through_sequence),
@@ -886,11 +890,20 @@ export class UmaDatabase {
     };
   }
 
-  putContextSummary(sessionId: string, throughSequence: number, content: string): ContextSummary {
+  putContextSummary(
+    sessionId: string,
+    throughSequence: number,
+    content: string,
+    expectedBranchId?: string,
+  ): ContextSummary {
+    if (!isUsableContextSummary(content)) throw new Error("Invalid context summary");
+    const branchId = this.getSession(sessionId).activeBranchId ?? null;
+    if (expectedBranchId !== undefined && expectedBranchId !== branchId)
+      throw new Error("Context branch changed during compaction");
     prepareStatement(
       this.db,
-      "INSERT INTO context_summaries(session_id,through_sequence,content,updated_at) VALUES(?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET through_sequence=excluded.through_sequence,content=excluded.content,updated_at=excluded.updated_at WHERE excluded.through_sequence > context_summaries.through_sequence",
-    ).run(sessionId, throughSequence, content, Date.now());
+      "INSERT INTO context_summaries(session_id,branch_id,through_sequence,content,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET branch_id=excluded.branch_id,through_sequence=excluded.through_sequence,content=excluded.content,updated_at=excluded.updated_at WHERE excluded.branch_id IS NOT context_summaries.branch_id OR excluded.through_sequence > context_summaries.through_sequence OR context_summaries.content LIKE '已有摘要：%' OR trim(context_summaries.content)=''",
+    ).run(sessionId, branchId, throughSequence, content, Date.now());
     return this.getContextSummary(sessionId) as ContextSummary;
   }
 

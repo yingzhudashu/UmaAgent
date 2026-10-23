@@ -113,7 +113,7 @@ describe("ContextManager", () => {
     mocks.generateSummary.mockResolvedValueOnce({ ok: true, value: "new summary" });
     const { manager, database } = fixture();
     const result = await manager.compact(session, entries, new AbortController().signal, true);
-    expect(database.putContextSummary).toHaveBeenCalledWith("session-1", 8, "new summary");
+    expect(database.putContextSummary).toHaveBeenCalledWith("session-1", 8, "new summary", undefined);
     expect(result.summary).toMatchObject({ throughSequence: 8, content: "new summary" });
     expect(result.messages).toHaveLength(3);
     expect(result.messages[0]?.role).toBe("compactionSummary");
@@ -199,6 +199,7 @@ describe("ContextManager", () => {
       "session-1",
       14,
       "summary with complete tool exchange",
+      undefined,
     );
     const summarized = mocks.generateSummary.mock.calls[0]?.[0] as AgentMessage[];
     expect(
@@ -322,17 +323,59 @@ describe("ContextManager", () => {
     ]);
   });
 
-  it("persists a bounded fallback when summary generation declines or throws", async () => {
+  it("keeps original dialogue and does not advance the summary on provider failure", async () => {
     mocks.generateSummary.mockResolvedValueOnce({ ok: false, error: "declined" });
     const first = fixture();
     expect(
       (await first.manager.compact(session, entries, new AbortController().signal, true)).messages,
-    ).toHaveLength(3);
+    ).toHaveLength(10);
+    expect(first.database.putContextSummary).not.toHaveBeenCalled();
     mocks.generateSummary.mockRejectedValueOnce(new Error("provider unavailable"));
     const second = fixture();
     expect(
       (await second.manager.compact(session, entries, new AbortController().signal, true)).messages,
-    ).toHaveLength(3);
+    ).toHaveLength(10);
+    expect(second.database.putContextSummary).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty summary without hiding any history", async () => {
+    mocks.generateSummary.mockResolvedValueOnce({ ok: true, value: "   " });
+    const { manager, database } = fixture();
+    const result = await manager.compact(session, entries, new AbortController().signal, true);
+    expect(result.messages).toHaveLength(10);
+    expect(database.putContextSummary).not.toHaveBeenCalled();
+  });
+
+  it("does not persist compaction after cancellation", async () => {
+    const controller = new AbortController();
+    mocks.generateSummary.mockImplementationOnce(async () => {
+      controller.abort();
+      return { ok: true, value: "aborted summary" };
+    });
+    const { manager, database } = fixture();
+    await expect(manager.compact(session, entries, controller.signal, true)).rejects.toThrow();
+    expect(database.putContextSummary).not.toHaveBeenCalled();
+  });
+
+  it("advances only through successful batches and keeps the failed batch", async () => {
+    mocks.generateSummary.mockResolvedValueOnce({ ok: true, value: "verified prefix" });
+    mocks.generateSummary.mockResolvedValueOnce({ ok: false, error: "provider unavailable" });
+    const history = Array.from({ length: 100 }, (_, index) =>
+      stored(index + 1, {
+        role: "user",
+        content: `message ${index + 1}`,
+        timestamp: index + 1,
+      }),
+    );
+    const { manager, database } = fixture();
+    const result = await manager.compact(session, history, new AbortController().signal, true, {
+      ...model,
+      contextWindow: 10_000,
+    });
+    expect(database.putContextSummary).toHaveBeenCalledWith("session-1", 80, "verified prefix", undefined);
+    expect(result.messages).toHaveLength(21);
+    expect(result.messages[1]?.content).toBe("message 81");
+    expect(result.messages.at(-1)?.content).toBe("message 100");
   });
 
   it("avoids a summary when nearly all messages must be retained", async () => {
