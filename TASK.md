@@ -1,38 +1,24 @@
-# UmaAgent 可用性审查与优化
+# UmaAgent 优化验收与正式发布
 
-## 目标与授权边界
+## 目标与授权
 
-保留功能、效果与历史用户数据，优化前后端性能、Trace、质量与文档，完成可靠验收。允许经证据评估后放宽验收范围；不增加migration、旧接口兼容层或供应商fallback。用户于2026-10-24明确授权：充分测试后部署服务器、发布所需应用，并提交推送所有本项目修改。允许必要服务重启和可恢复发布；不发送真实渠道消息，不使用历史用户会话测试。Claude只读规划/复核已授权。不得关闭其他模拟器；只操作任务AVD UmaAcceptance35 / emulator-5564。
+保留功能、效果和全部历史用户数据，优化性能、Trace、代码及中文文档。用户已授权充分测试后部署服务器、发布所需应用并提交推送；不加入migration、旧接口兼容层或供应商fallback。不得关闭其他模拟器；仅操作UmaAcceptance35/emulator-5564。本轮无真实渠道发送。
 
-## 当前已确认结果（2026-10-24）
+## 已完成（2026-10-24）
 
-- 原始HEAD d452fb23117205687e1d5d313abf6c8995ee2bb0，工作区未提交。此前Trace脱敏、事务内存上界、Web投影/分页、共享正文、文档Worker、Faux隔离、依赖审计与文档整改保留。
-- 复用未受影响的62文件404项、Web40/40、Faux6/6、固定性能原预算和10分钟Core稳定性证据；未冒充本轮重新全跑。
-- 原APK双栏37/37、离线恢复及40可见样本通过，正文p95 131.796778ms；结合前轮其他五组，六配置曾完整通过。最新管理页改动没有把旧APK全量结果冒充当前APK重跑。
-- 长循环复现后台回执线程3057更新状态、数据已更新但旧加载条未消失。UmaManagement.kt的perform和初始LaunchedEffect显式Main.immediate，网络仍用IO，取消和账号边界保持。调试阶段日志不写正文/凭据。
-- 最终双栏和手机两倍字号各160次切换通过，日期、用量、加载结束及回执主线程均核对；每组161次诊断HTTP200，退出无额外请求。性能与PSS原始窗口见quality-final-summary.json。未强制GC，不能外推四小时。
-- Profile草稿、资源失败表单和两倍字号CoreFlow各1/1通过。原10秒等待、250ms正文p95、700ms冻结帧、500ms构造及40正文样本不变。新增失败即刻取证，清单下限38。
-- 模拟器长时复用仍失败：关闭Vulkan没有解决qemu增长；请求swangle实际仍报告SwiftShader GLES。接受按配置冷启动的本地门禁，长时复用仍未通过，不归因为应用泄漏。
-- 本地限定验收通过；完整发布验收缺真实Provider、实体Android/TalkBack、Linux/Docker、四小时稳定性与真机100ms证据。没有生产写入、发布或后台续跑承诺。
+- 原始基线d452fb2；合并远端5427d95及8109671，保留线上记忆恢复。部署源码dc081e4；Core /opt/uma-agent/releases/20261023230821-dc081e4；Web /srv/www/robotclaw/releases/20261023231807-dc081e4；Android1.4.7(21) release 21-cb1e3c9。
+- 本地及Linux各63文件416通过1私有夹具跳过，覆盖率门槛通过；Web40/40，Faux6/6，Linux真实Provider一次成功且Trace6span。IPv6与跨平台问题修复；依赖公告高危已清零。
+- 正式Android单元/Lint/签名通过，20→21覆盖升级保留数据，最低支持20。全流程36/38，Launcher系统ANR遮挡的两项清除故障弹窗后2/2补测通过；正文p95 132.1404ms、强停恢复通过。
+- 最终固定性能原预算通过；保留13.23ms失败和停止专用模拟器后11.47ms复验记录。
+- Core/Web/API/字体/公网APK均已验收，旧APK与旧release保留。全体历史对象和1374文件保留；备份在隔离目录恢复及本地加密往返校验通过，无生产恢复/迁移。
+- Claude max规划533e3e34-bb93-4e8f-a51c-bb56ae22c2a2及复核ad405fe9-8dc2-46dc-a170-47b0cd9e5408均API525无正文。GPT独立复核，不冒充Claude通过。
 
-## 证据、复核与后续边界
+## 交付证据与边界
 
-- 结论：docs/release-acceptance.md；架构/文档审查：docs/code-review.md；Android合同：docs/android-design.zh-CN.md。
-- 新增主索引：artifacts/acceptance/usability-20261023/continuation/quality-final-summary.json；原始失败和资源对照仍在同目录，已扩展optimization-evidence-index.json。
-- 本轮Claude max规划两次和最终复核一次均返回API525，未取得可读正文或可核验的返回模型；本地限定范围由GPT独立复核，Claude阶段未完成。方案、实施和证据整理均为GPT。
-- 四角色仍为artifacts/acceptance/usability-20261023/MODIFIED_FILE.tar、DIFF_FILE.patch、VERIFICATION.txt、ROLLBACK.sh。BASELINE.tar原始SHA256 973dd7ba0736fcc4617ff8e2358d81dc0feef576354ea96b980bc9a5968b9134不变；finalize.mjs重新验证源码补丁、独立副本回滚、行为及正文回执。
-- 本轮继续发布验收：真实Provider使用隔离测试上下文，设备/平台未覆盖项必须如实记录。不得把本地通过写成已上线，也不重复已通过且未受影响的检查。
+主报告docs/release-acceptance.md；证据artifacts/acceptance/usability-20261023/release-20261024。沿用四角色和原BASELINE.tar，原始SHA256 973dd7ba0736fcc4617ff8e2358d81dc0feef576354ea96b980bc9a5968b9134。
 
-## 发布进行中（2026-10-24）
+Docker、实体Android/TalkBack、4小时及真机100ms未验；模拟器长时复用问题仍保留。无未批准后台任务或离线续跑承诺。最终文档提交与生产构建源码区分记录。
 
-- 新增明确授权：充分测试后生产部署、发布Android、提交与推送。
-- 当前服务器schema27/protocol16，3服务active、活跃Run为0；已取回1.4.6(20)正式APK，签名SHA256为86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d。
-- Android候选1.4.7(21)，最低支持保留20；无迁移、无历史数据清理。
-- 本轮覆盖率、构建、Web40/40、Faux6/6及固定性能预算通过。新公告发现body-parser和zod高危，已升级锁定依赖，官方审计0漏洞，正在复验。
-- 本轮Claude max规划operation 533e3e34-bb93-4e8f-a51c-bb56ae22c2a2返回API525，无正文；GPT继续。
-- GitHub HTTPS两次连接重置，正在检查可用既有连接；不更换远端、不关闭TLS校验。
+## 清理限制
 
-- 合并远端5427d95及8109671，保留已在线上的会话记忆恢复和Sol上下文扩展；仅TASK状态冲突，保留本轮状态并记录远端能力，源码自动合并。部署前复验context-manager与context-memory-recovery。
-
-- 发布前Linux实测暴露IPv6字面地址DNS误判和Windows专用测试，修复safeFetch地址分类及跨平台断言；崩溃恢复曾在共享服务器10秒超时，需独立复验，不降低原测试期限。
-- 正式Android 1.4.7(21)单元/Lint/构建通过；同证书覆盖20→21成功，隔离数据哈希保持，最低支持20。新版完整设备回归运行中。
+自动审批拒绝删除两个已验证的本地明文备份副本；已将备份目录和文件ACL限制为当前账户，未入Git。加密备份已完成，生产发布与恢复验证不受影响；该清理动作未完成。

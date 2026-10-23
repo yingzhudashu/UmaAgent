@@ -1,6 +1,6 @@
 # UmaAgent 代码与文档审查
 
-当前合同：Core 1.3.0、Android 1.4.7（versionCode 21）、Protocol v16、业务schema 27。此前方案为Claude max初稿、GPT整理修订；本轮管理页定位、方案、实施及证据整理为GPT。本轮Claude max规划两次和最终复核一次均返回API525，未取得可读正文或可核验的返回模型；本地限定范围由GPT独立复核，Claude阶段未完成。请求模型/档位不代表取得模型正文或验收结论。最终实测及未验项统一见[发布验收](release-acceptance.md)。
+当前合同：Core 1.3.0、Android 1.4.7（versionCode 21）、Protocol v16、业务schema 27。此前方案为Claude max初稿、GPT整理修订；本轮管理页定位、方案、实施及证据整理为GPT。前轮Claude max规划两次和最终复核一次均返回API525；本轮发布规划及复核各一次仍返回API525，未取得可读正文或可核验的返回模型；本地限定范围由GPT独立复核，Claude阶段未完成。请求模型/档位不代表取得模型正文或验收结论。最终实测及未验项统一见[发布验收](release-acceptance.md)。
 
 ## 已证实并修复的问题
 
