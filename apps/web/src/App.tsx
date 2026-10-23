@@ -135,6 +135,8 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
   const [historical, setHistorical] = useState<TranscriptItem[]>([]);
   const [historyHasMore, setHistoryHasMore] = useState<boolean>();
   const [historyOwnerKey, setHistoryOwnerKey] = useState("");
+  const historyLock = useRef(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [eventState, setEventState] = useState<EventConnectionState>(() => client.eventState());
   const [lastSyncAt, setLastSyncAt] = useState<number>();
   const [syncCursor, setSyncCursor] = useState<number>();
@@ -843,8 +845,9 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
               <button
                 type="button"
                 className="run-action"
+                disabled={historyLoading}
                 onClick={() => {
-                  if (!selected) return;
+                  if (!selected || historyLock.current) return;
                   // Snapshot may include an older triggering question alongside a newer
                   // bounded page. Use the true page edge until explicit older pages load.
                   const before =
@@ -855,28 +858,43 @@ function AppContent({ client, embedded = false, theme = "light" }: AppProps) {
                   const previousHeight = area?.scrollHeight ?? 0;
                   const previousTop = area?.scrollTop ?? 0;
                   const requestedHistoryKey = historyKey;
-                  void client.getSessionHistory(selected, before, 100).then((page) => {
-                    if (
-                      selected !== selectedForScrollRef.current ||
-                      requestedHistoryKey !== historyKeyRef.current
-                    )
-                      return;
-                    const next = [...page.items, ...visibleHistorical];
-                    const unique = [...new Map(next.map((item) => [item.id, item])).values()].sort(
-                      (a, b) => a.sequence - b.sequence,
-                    );
-                    setHistorical(unique);
-                    setHistoryHasMore(page.hasMore);
-                    setHistoryOwnerKey(requestedHistoryKey);
-                    void cacheHistory(selected, unique, activeBranchId).catch(cacheFailed);
-                    requestAnimationFrame(() => {
-                      const current = transcriptRef.current;
-                      if (current) current.scrollTop = current.scrollHeight - previousHeight + previousTop;
+                  historyLock.current = true;
+                  setHistoryLoading(true);
+                  setGlobalError("");
+                  void client
+                    .getSessionHistory(selected, before, 100)
+                    .then((page) => {
+                      if (
+                        selected !== selectedForScrollRef.current ||
+                        requestedHistoryKey !== historyKeyRef.current
+                      )
+                        return;
+                      const next = [...page.items, ...visibleHistorical];
+                      const unique = [...new Map(next.map((item) => [item.id, item])).values()].sort(
+                        (a, b) => a.sequence - b.sequence,
+                      );
+                      setHistorical(unique);
+                      setHistoryHasMore(page.hasMore);
+                      setHistoryOwnerKey(requestedHistoryKey);
+                      void cacheHistory(selected, unique, activeBranchId).catch(cacheFailed);
+                      requestAnimationFrame(() => {
+                        if (requestedHistoryKey !== historyKeyRef.current) return;
+                        const current = transcriptRef.current;
+                        if (current) current.scrollTop = current.scrollHeight - previousHeight + previousTop;
+                      });
+                    })
+                    .catch((error: unknown) => {
+                      // 分页失败保留已有正文；旧会话的迟到错误不能污染当前页面。
+                      if (requestedHistoryKey === historyKeyRef.current)
+                        setGlobalError(requestErrorMessage(error));
+                    })
+                    .finally(() => {
+                      historyLock.current = false;
+                      setHistoryLoading(false);
                     });
-                  });
                 }}
               >
-                加载更早记录
+                {historyLoading ? "正在加载更早记录…" : "加载更早记录"}
               </button>
             )}
             {!transcript.length && (

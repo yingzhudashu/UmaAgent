@@ -29,7 +29,6 @@ export default defineConfig({
       NODE_ENV: "production",
       UMA_FAUX_PORT: "33210",
       UMA_FAUX_STATE: fauxState,
-      UMA_FAUX_RESET_STATE: "1",
     },
   },
 });

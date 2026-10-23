@@ -172,3 +172,60 @@ describe("streaming snapshot projection", () => {
     expect(merged.transcript.map((item) => item.id)).not.toContain("old-assistant");
   });
 });
+
+it("does not regress a completed response when replay trails an HTTP snapshot", () => {
+  const client = new QueryClient();
+  const completed = snapshot();
+  completed.snapshotSequence = 12;
+  completed.responses = [{ ...response(12), status: "completed", content: "最终答案" }];
+  client.setQueryData(["snapshot", "session-1", undefined], completed);
+  applyDurableEvent(client, "session-1", durableEvent("response.started", response(2), 2));
+  applyDurableEvent(client, "session-1", durableEvent("response.updated", response(13), 12));
+  expect(client.getQueryData(["snapshot", "session-1", undefined])).toEqual(completed);
+  applyDurableEvent(
+    client,
+    "session-1",
+    durableEvent("response.updated", { ...response(13), status: "completed", content: "新答案" }, 13),
+  );
+  expect(
+    client.getQueryData<SessionSnapshot>(["snapshot", "session-1", undefined])?.responses?.[0]?.content,
+  ).toBe("新答案");
+  client.clear();
+});
+
+it("keeps the original projection for duplicate, missing and invalid deltas", () => {
+  let current = snapshot();
+  current.transcript.push(transcriptItem("你好，world"));
+  const original = current;
+  const client = {
+    setQueryData: (_key: unknown, update: (value: SessionSnapshot) => SessionSnapshot) => {
+      current = update(current);
+    },
+  } as unknown as QueryClient;
+  for (const payload of [
+    { messageId: "assistant-1", append: "你好，world", offset: 0, updatedAt: 2 },
+    { messageId: "assistant-1", append: "", offset: 8, updatedAt: 2 },
+    { messageId: "assistant-1", append: "gap", offset: 50, updatedAt: 2 },
+    { messageId: "assistant-1", append: "invalid", offset: -1, updatedAt: 2 },
+    { messageId: "absent", append: "unknown", offset: 0, updatedAt: 2 },
+  ]) {
+    applyStreamingEvent(client, "session-1", durableEvent("message.delta", payload, 0));
+    expect(current).toBe(original);
+  }
+  applyStreamingEvent(
+    client,
+    "session-1",
+    durableEvent(
+      "message.delta",
+      {
+        messageId: "assistant-1",
+        append: "world！ ",
+        offset: 3,
+        updatedAt: 3,
+      },
+      0,
+    ),
+  );
+  expect(current.transcript[1]?.content).toBe("你好，world！ ");
+  expect(current.transcript[0]).toBe(original.transcript[0]);
+});

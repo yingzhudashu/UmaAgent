@@ -73,9 +73,9 @@ Agent/command Run 使用统一状态：`queued → preflight → running/verifyi
 
 ## 5. 客户端投影与迟到回执
 
-每个会话投影携带 `sessionRevision`、`branchRevision` 和 `queueRevision`。写请求记录发起时三者；回执只有在账号、会话、分支和对象 ID 全部匹配时才能修改当前视图。收到更高版本快照时丢弃本地旧排序和旧分页游标，重新读取当前路径。
+当前会话包含 `activeBranchId`、`branchRevision` 和 `queueRevision`，快照另含 `snapshotSequence`；协议没有 `sessionRevision`。队列排序提交 `runIds` 与 `queueRevision`，编辑请求只提交 `text`，不能声称所有写入都携带统一版本字段。客户端按发起账号、会话、分支与对象 ID 隔离回执，持久投影忽略序号不大于当前快照游标的迟到事件。
 
-历史分页按 `branchRevision` 固定视图读取。上翻过程中发生编辑或分支切换，保留旧页作为“旧路径”临时阅读，但返回当前会话时必须重新定位活动路径末尾，不能把两条路径拼接。
+历史接口按请求时的活动分支和 `before` 游标读取，当前请求不提供固定 `branchRevision` 参数。Web 缓存按会话与分支分开，切换后不显示旧页，并拒绝不属于当前会话/分支的迟到分页及滚动回调；不会展示独立的“旧路径阅读”界面。分页期间禁止重复提交，失败保留已读消息并显示可重试错误。多次请求之间的并发分支变更不构成数据库级固定快照，应在分支同步后重新读取，不能宣称接口已提供固定版本分页。
 
 ## 6. 验收矩阵
 

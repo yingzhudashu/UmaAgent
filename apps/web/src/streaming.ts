@@ -20,17 +20,28 @@ export function applyStreamingEvent(
   if (typeof payload.messageId !== "string" || typeof payload.append !== "string") return;
   queryClient.setQueryData<SessionSnapshot>(["snapshot", sessionId, activeBranchId], (current) => {
     if (!current) return current;
+    const index = current.transcript.findIndex((item) => item.id === payload.messageId);
+    const item = current.transcript[index];
+    if (
+      !item ||
+      item.status !== "streaming" ||
+      !Number.isInteger(payload.offset) ||
+      payload.offset < 0 ||
+      payload.offset > item.content.length
+    )
+      return current;
+    const suffix = payload.append.slice(item.content.length - payload.offset);
+    // 重放和重复帧没有新增字符时保留对象引用，避免整份会话复制、比较和重渲染。
+    if (!suffix) return current;
+    const transcript = current.transcript.slice();
+    transcript[index] = {
+      ...item,
+      content: item.content + suffix,
+      updatedAt: Math.max(item.updatedAt, payload.updatedAt),
+    };
     return {
       ...current,
-      transcript: current.transcript.map((item) =>
-        item.id === payload.messageId && item.status === "streaming" && payload.offset <= item.content.length
-          ? {
-              ...item,
-              content: item.content + payload.append.slice(item.content.length - payload.offset),
-              updatedAt: payload.updatedAt,
-            }
-          : item,
-      ),
+      transcript,
     };
   });
 }
@@ -158,6 +169,9 @@ export function applyDurableEvent(
 ): void {
   if (event.type === "session.snapshot") return;
   updateSnapshot(queryClient, sessionId, activeBranchId, (current) => {
+    // HTTP 快照可能已包含这些回放事件；游标必须在投影边界判定，而不只依赖连接游标。
+    // 否则迟到的 run.updated 能把已经完成的运行重新标成执行中。
+    if (event.sequence <= current.snapshotSequence) return current;
     const next = { ...current, snapshotSequence: Math.max(current.snapshotSequence, event.sequence) };
     switch (event.type) {
       case "message.started":

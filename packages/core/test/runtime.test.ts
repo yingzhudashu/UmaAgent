@@ -1173,7 +1173,8 @@ describe("UmaRuntime preflight", () => {
     expect(copiedId).toBeTruthy();
     const sourceBytes = await readFile(runtime.getAttachmentPath(source.id));
     const copiedBytes = await readFile(runtime.getAttachmentPath(copiedId as string));
-    expect(copiedBytes).toEqual(sourceBytes);
+    // 原生逐字节比较避免覆盖率插桩遍历四十万个 Buffer 属性，同时保留完整内容校验。
+    expect(copiedBytes.equals(sourceBytes)).toBe(true);
     expect(runtime.getAttachment(copiedId as string)).toMatchObject({
       name: "large.txt",
       mimeType: "text/plain",

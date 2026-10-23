@@ -1,6 +1,6 @@
 # UmaAgent
 
-UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前 Core 版本为 `1.3.0`，Android 正式版本为 `1.4.4`（versionCode `18`，已正式发布），协议版本为 `16`，SQLite schema 为 `27`。当前正式环境与验收结果见[发布验收](docs/release-acceptance.md)。
+UmaAgent 是一个 TypeScript Agent 平台。Agent 核心、会话、模型凭据、工具和持久化运行在独立 Core Server；CLI、Web 和渠道 Adapter 通过同一 HTTP/WebSocket 客户端访问它。当前 Core 1.3.0，Android 1.4.7（versionCode 21；本轮待发布候选），Protocol v16，SQLite schema 27。当前正式环境与验收结果见[发布验收](docs/release-acceptance.md)。
 
 生产服务器部署请直接阅读 [服务器部署与验收](docs/deployment.md)；其他设计和质量文档见 [文档索引](docs/README.md)。
 
@@ -114,6 +114,7 @@ mounted.unmount()
 npm run dev:faux
 ```
 
+Faux 的数据库、工具工作区和技能目录位于同一个独立测试目录，已有 `state.db` 时拒绝启动，不提供破坏性重置开关。
 默认地址为 `http://127.0.0.1:3210`，Faux 入口会创建仅用于本地测试的管理员令牌，并允许同源 Web 与 `http://127.0.0.1:3211` Vite 开发端。可通过 `UMA_FAUX_PORT`、`UMA_FAUX_TOKEN`、`UMA_FAUX_STATE` 和逗号分隔的 `UMA_FAUX_WEB_ORIGINS` 覆盖；该入口只用于本地开发与测试。
 
 ## 配置
@@ -190,6 +191,10 @@ uma xianyu item <item-id>
 ```
 
 Android 工程位于 `android/`，应用 ID 为 `site.robotclaw.umaagent`；生产 Core 地址由构建配置注入。登录页可直接注册隔离账户；注册返回的个人访问令牌仅展示一次，复制成功或确认手动保存后继续，由 Android Keystore 加密保存。登录后提供对话、会话、任务、调度、资源和设置，管理员还可进入咸鱼工作台。手机使用底部导航和“更多”菜单，宽屏使用 Navigation Rail；支持跟随系统、浅色、深色三种品牌主题；离线阅读缓存并保留草稿，禁止远端写入。
+
+本地设备验收使用 `npm run test:android:e2e`；先设置 `UMA_ANDROID_DEVICE` 为专用模拟器序列号（仅连接一台模拟器时可省略）。命令构建 Debug 包，在隔离的 Faux 服务上先执行功能与强停离线恢复，再测量40次实际可见正文增量；任一阶段失败均返回非零。共享宿主下的模拟器回归上限为 p95≤250ms，100ms 仍是体验目标，冻结帧上限保持700ms；依据与尚未通过项见[发布验收](docs/release-acceptance.md)。证据保存到 `artifacts/acceptance/android-e2e-*`。该入口会安装测试包并临时调整模拟器软键盘设置，退出时恢复设置；不面向真实用户设备。尺寸和字号矩阵另见 [Android 设计与验收](docs/android-design.zh-CN.md)。
+
+验收先核对安装 APK 哈希，再从同一测试包发现用例并逐项核对执行终态；功能用例至少 37 项，性能用例必须为指定的 1 项。另行强停应用并关闭隔离服务后，核对新进程仍保留历史回复、草稿及离线状态。只允许明确记录的平板布局条件跳过，漏跑、重复、截断和其他跳过均失败。结果同时保存宿主可用内存、设备内存/CPU/显示/WebView 信息及开始结束时间；设备设置恢复失败同样失败并保留诊断目录。六配置矩阵逐组复用此完整流程。
 
 ### Android 发布与登录故障排查
 

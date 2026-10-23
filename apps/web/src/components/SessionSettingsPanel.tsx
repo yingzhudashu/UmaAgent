@@ -2,7 +2,7 @@ import type { UmaClient } from "@uma-agent/client";
 import type { AgentProfile, Health, OperationsReport, PublicConfig, Session } from "@uma-agent/protocol";
 import { ImagePlus, RotateCcw, Save } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import defaultAvatarUrl from "../assets/cat-avatar.png";
+import defaultAvatarUrl from "../assets/cat-avatar.webp";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { ExecutionSettings } from "./ExecutionSettings.js";
 import { useUnsavedForm } from "./UnsavedChanges.js";

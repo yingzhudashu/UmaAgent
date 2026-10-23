@@ -204,6 +204,11 @@ class MessageBodyTest {
         }
 
         assumeTrue("WebViewRenderProcess.terminate requires Android 10+", Build.VERSION.SDK_INT >= 29)
+        // renderer 句柄可能早于进程真正启动出现；先确认真实正文已被 JS 渲染，
+        // 再终止进程，避免 terminate() 返回 false 后错误等待退出回调。
+        compose.waitUntil(10_000) {
+            evaluate("document.body.textContent.includes('渲染进程退出后仍可阅读的回复')") == "true"
+        }
         compose.waitUntil(10_000) {
             compose.runOnUiThread {
                 if (body.get()?.webViewRenderProcess != null) rendererReady.set(1)
@@ -211,7 +216,7 @@ class MessageBodyTest {
             rendererReady.get() == 1
         }
         compose.runOnUiThread {
-            checkNotNull(body.get()?.webViewRenderProcess).terminate()
+            assertTrue("真实 renderer 必须接受终止请求", checkNotNull(body.get()?.webViewRenderProcess).terminate())
         }
         compose.waitUntil(10_000) { callbacks.get() == 1 }
         compose.onNodeWithText("渲染进程退出后仍可阅读的回复").assertIsDisplayed()

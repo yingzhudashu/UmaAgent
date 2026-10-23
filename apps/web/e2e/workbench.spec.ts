@@ -755,3 +755,13 @@ test("unsaved account Profile survives navigation and failed sends retain the dr
   await page.getByRole("button", { name: "核对会话记录" }).click();
   expect(writes).toBe(1);
 });
+
+test("faux workspaces stay inside the isolated test state", async ({ page }) => {
+  const result = await page.request.post("/api/v16/sessions", {
+    headers: { authorization: `Bearer ${ordinaryToken}` },
+    data: { title: "隔离目录验收" },
+  });
+  expect(result.ok()).toBe(true);
+  const session = await result.json();
+  expect(session.workspace).toMatch(/uma-e2e-.*[/\\]workspace[/\\]users[/\\]/);
+});

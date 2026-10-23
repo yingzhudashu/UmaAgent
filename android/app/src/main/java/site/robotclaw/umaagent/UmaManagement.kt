@@ -13,7 +13,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
 internal fun managementText(value: JsonElement?, key: String): String =
@@ -215,7 +217,11 @@ internal fun ManagementScreen(
                 val to = System.currentTimeMillis()
                 "${endpoint()}?from=${to - diagnosticDays * 86_400_000L}&to=$to"
             } else endpoint()
+        // 调试包只记录阶段与时长，不输出用户数据、请求参数或凭据。
+        val started = android.os.SystemClock.uptimeMillis()
+        if (BuildConfig.DEBUG) android.util.Log.d("UmaManagement", "read start page=$page days=$diagnosticDays")
         data = model.managementRequest(target)
+        if (BuildConfig.DEBUG) android.util.Log.d("UmaManagement", "read complete page=$page days=$diagnosticDays elapsedMs=${android.os.SystemClock.uptimeMillis() - started}")
         loaded = true
         if (page == "profile") {
             val remote = managementText(data, "content")
@@ -229,7 +235,10 @@ internal fun ManagementScreen(
         if (busy || state.offline) return
         busy = true
         error = ""
-        scope.launch {
+        // Recomposer 的协程调度器不保证所有环境均绑定主线程（例如测试调度器）。
+        // 网络读取仍由 API 的 IO 上下文执行，回执与 busy/data 的提交必须同处主线程，
+        // 防止懒列表在后台状态写入时观察到新数据与旧加载项并存的中间状态。
+        scope.launch(Dispatchers.Main.immediate) {
             try {
                 action()
             } catch (e: CancellationException) {
@@ -256,18 +265,20 @@ internal fun ManagementScreen(
                 }
         }
     LaunchedEffect(page) {
-        data = null
-        loaded = false
-        error = ""
-        busy = true
-        try {
-            refresh()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            error = e.message ?: "无法读取"
-        } finally {
-            busy = false
+        withContext(Dispatchers.Main.immediate) {
+            data = null
+            loaded = false
+            error = ""
+            busy = true
+            try {
+                refresh()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = e.message ?: "无法读取"
+            } finally {
+                busy = false
+            }
         }
     }
     BackHandler(detail != null) { detail = null }

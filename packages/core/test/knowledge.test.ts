@@ -2,11 +2,13 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EmbeddingService } from "../src/embedding.js";
 import { KnowledgeService } from "../src/knowledge.js";
 import { testDatabase } from "./test-database.js";
 
 const temporary: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const path of temporary.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
@@ -28,6 +30,8 @@ describe("KnowledgeService", () => {
     const single = await knowledge.index("single", join(workspace, "single.md"));
     expect(single.status).toBe("indexed");
     expect(knowledge.search("alpha")[0]?.filePath).toContain("single.md");
+    expect((await knowledge.searchSemantic("alpha"))[0]?.filePath).toContain("single.md");
+    expect(await knowledge.searchSemantic(" ")).toEqual([]);
 
     const directory = join(workspace, "docs");
     await mkdir(join(directory, "nested"), { recursive: true });
@@ -72,17 +76,18 @@ describe("KnowledgeService", () => {
     database.close();
   });
 
-  it("falls back to keyword search when the embedding provider is unavailable", async () => {
+  it("surfaces embedding failures instead of silently returning keyword-only results", async () => {
     const { workspace, state, database } = await fixture();
     await writeFile(join(workspace, "fallback.md"), "embedding outage keyword");
-    const embedding = { embed: vi.fn().mockRejectedValue(new Error("HTTP 401")), model: "test" };
-    const knowledge = new KnowledgeService(database, [workspace], state, embedding as never);
-    await knowledge.index("fallback", join(workspace, "fallback.md"));
-
+    // 保留真实服务接口与 hash，只替换供应商 I/O，避免部分假对象遗漏合同。
+    const embedding = new EmbeddingService();
+    vi.spyOn(embedding, "enabled", "get").mockReturnValue(true);
+    vi.spyOn(embedding, "embedBatch").mockImplementation(async (texts) => texts.map(() => [1, 0]));
+    vi.spyOn(embedding, "embed").mockRejectedValue(new Error("HTTP 401"));
+    const knowledge = new KnowledgeService(database, [workspace], state, embedding);
     try {
-      await expect(knowledge.searchSemantic("embedding outage")).resolves.toEqual([
-        expect.objectContaining({ filePath: join(workspace, "fallback.md") }),
-      ]);
+      await knowledge.index("fallback", join(workspace, "fallback.md"));
+      await expect(knowledge.searchSemantic("embedding outage")).rejects.toThrow("HTTP 401");
       expect(embedding.embed).toHaveBeenCalledOnce();
     } finally {
       database.close();

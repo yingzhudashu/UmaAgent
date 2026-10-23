@@ -328,3 +328,37 @@ test("pending creation and double submit cannot send to the previous session", a
   await expect(page.getByRole("region", { name: "会话消息" })).toContainText("创建完成后发送的草稿");
   expect(writes).toBe(1);
 });
+
+test("history loading locks duplicate reads and exposes failures without discarding messages", async ({
+  page,
+}) => {
+  await page.route("**/api/v16/sessions/*/snapshot", async (route) => {
+    const response = await route.fetch();
+    const value = await response.json();
+    value.history.hasMoreBefore = true;
+    await route.fulfill({ response, json: value });
+  });
+  await openExistingSession(page);
+  let release!: () => void;
+  let calls = 0;
+  const gate = new Promise<void>((done) => {
+    release = done;
+  });
+  await page.route("**/api/v16/sessions/*/history?*", async (route) => {
+    calls++;
+    await gate;
+    await route.fulfill({
+      status: 500,
+      json: { error: { code: "internal_error", message: "历史读取暂不可用" } },
+    });
+  });
+  await page.getByRole("button", { name: "加载更早记录", exact: true }).click();
+  const pending = page.getByRole("button", { name: "正在加载更早记录…", exact: true });
+  await expect(pending).toBeDisabled();
+  await pending.evaluate((button: HTMLButtonElement) => button.click());
+  expect(calls).toBe(1);
+  release();
+  await expect(page.getByRole("alert")).toContainText("历史读取暂不可用");
+  await expect(page.getByRole("button", { name: "加载更早记录", exact: true })).toBeEnabled();
+  await expect(page.getByRole("region", { name: "会话消息" })).toContainText("原有会话的消息");
+});

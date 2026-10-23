@@ -1,7 +1,7 @@
 import type { Response, ResponseStatus, Run, Session, TranscriptItem } from "@uma-agent/protocol";
 import { Check, ChevronRight, Copy, Download, FileText, LoaderCircle, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import defaultAvatarUrl from "../assets/cat-avatar.png";
+import defaultAvatarUrl from "../assets/cat-avatar.webp";
 import { Markdown } from "../Markdown.js";
 import { responseDisplayContent } from "../responseTurns.js";
 import { responseStatusLabels } from "../statusLabels.js";

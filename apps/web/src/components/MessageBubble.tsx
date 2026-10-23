@@ -1,7 +1,7 @@
 import type { Session, TranscriptItem } from "@uma-agent/protocol";
 import { Check, ChevronRight, Copy, Pencil, UserRound, X } from "lucide-react";
 import { useState } from "react";
-import defaultAvatarUrl from "../assets/cat-avatar.png";
+import defaultAvatarUrl from "../assets/cat-avatar.webp";
 import { Markdown } from "../Markdown.js";
 import { ActionMenu } from "./ActionMenu.js";
 import { useUnsavedForm } from "./UnsavedChanges.js";

@@ -66,3 +66,22 @@ it("settles flush and exposes failed writes after a worker cannot open its datab
   expect(writer.failures).toBe(2);
   await writer.release();
 });
+
+it("bounds a transaction while it is built and counts every rejected operation", async () => {
+  const { db, writer } = await fixture();
+  try {
+    writer.batch(() => {
+      for (let id = 0; id < 100_000; id++)
+        writer.enqueue("INSERT INTO events VALUES(?,?)", [id, "oversized"]);
+      // 只检查落库行数会漏掉构建期间的瞬时巨型数组。
+      expect(Reflect.get(writer, "group").length).toBeLessThanOrEqual(8192);
+    });
+    writer.enqueue("INSERT INTO events VALUES(?,?)", [100_001, "healthy"]);
+    await writer.flush();
+    expect(writer.failures).toBe(100_000);
+    expect(db.prepare("SELECT * FROM events").all()).toEqual([{ id: 100_001, value: "healthy" }]);
+  } finally {
+    await writer.release();
+    db.close();
+  }
+});

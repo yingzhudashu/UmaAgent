@@ -68,15 +68,11 @@ export class KnowledgeService {
   }
 
   async searchSemantic(query: string, limit = 5, ownerId?: string): Promise<KnowledgeSearchHit[]> {
-    let vector: number[] | undefined;
-    try {
-      vector = await this.embedding?.embed(query);
-    } catch {
-      // Embedding availability must not take the whole agent run down; keyword
-      // search remains useful while the external embedding service is repaired.
-      return this.search(query, limit, undefined, ownerId);
-    }
-    if (!vector) return this.search(query, limit, undefined, ownerId);
+    // 只有明确禁用语义检索才使用关键词；供应商失败必须可诊断，不能伪装成搜索成功。
+    if (!query.trim()) return [];
+    if (!this.embedding?.enabled) return this.search(query, limit, undefined, ownerId);
+    const vector = await this.embedding.embed(query);
+    if (!vector) throw new Error("Embedding provider returned no query vector");
     const semantic = this.database.searchKnowledgeSemantic(
       vector,
       Math.max(limit * 2, 10),

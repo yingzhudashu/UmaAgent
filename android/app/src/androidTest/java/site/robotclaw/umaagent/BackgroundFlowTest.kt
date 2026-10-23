@@ -36,7 +36,18 @@ class BackgroundFlowTest {
                 model.uiState.value.executionSettingsLoaded && !model.uiState.value.loading
             }
             val created = java.util.concurrent.atomic.AtomicBoolean(false)
-            compose.runOnUiThread { model.createSession("后台完成验收") { created.set(true) } }
+            var submitted = false
+            // 避免就绪等待结束后，异步快照刷新恰好重新禁用创建入口。
+            compose.waitUntil(10_000) {
+                compose.runOnUiThread {
+                    val state = model.uiState.value
+                    if (!submitted && !state.loading && !state.offline) {
+                        model.createSession("后台完成验收") { created.set(true) }
+                        submitted = true
+                    }
+                }
+                submitted
+            }
             compose.waitUntil(10_000) {
                 created.get() &&
                     model.uiState.value.conversation != null &&

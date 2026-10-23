@@ -98,12 +98,24 @@ class OfflineRecoveryTest {
 
         var model: UmaViewModel? = null
         var constructorDurationMs = 0L
+        var constructorCpuMs = 0.0
         try {
             compose.runOnUiThread {
                 val started = android.os.SystemClock.elapsedRealtime()
+                val cpuStarted = android.os.Debug.threadCpuTimeNanos()
                 model = UmaViewModel(app)
                 constructorDurationMs = android.os.SystemClock.elapsedRealtime() - started
+                constructorCpuMs = (android.os.Debug.threadCpuTimeNanos() - cpuStarted) / 1_000_000.0
             }
+            // 同时保留墙钟与主线程 CPU 时间，避免把调度停顿直接判成同步解析；原门槛不变。
+            java.io.File(app.cacheDir, "uma-startup-performance.json").writeText(
+                org.json.JSONObject()
+                    .put("constructorWallMs", constructorDurationMs)
+                    .put("constructorCpuMs", constructorCpuMs)
+                    .put("messages", count)
+                    .put("snapshotCharacters", snapshot.length)
+                    .toString(2)
+            )
             assertTrue(
                 "构造 ViewModel 不应在主线程解析近 11 MiB 的离线缓存（${constructorDurationMs}ms）",
                 constructorDurationMs < 500,

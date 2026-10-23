@@ -55,8 +55,9 @@ internal fun TraceDialog(
                     SelectionContainer { Text(traceId, style = MaterialTheme.typography.bodySmall) }
                     if (copyStatus.isNotBlank()) Text(copyStatus)
                 }
+                // 使用当前协议的 depth，最多显示四层，避免深链路挤出窄屏正文。
                 items(spans, key = { managementText(it, "spanId") }) { span ->
-                    Column(Modifier.padding(start = ((span["depth"]?.jsonPrimitive?.intOrNull ?: 0) * 12).dp)) {
+                    Column(Modifier.padding(start = ((span["depth"]?.jsonPrimitive?.intOrNull ?: 0).coerceIn(0, 4) * 12).dp)) {
                         Text(
                             span["name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                             style = MaterialTheme.typography.titleSmall,

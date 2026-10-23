@@ -1,6 +1,6 @@
 # UmaAgent 架构与质量约束
 
-当前 Core 1.3.0，Android 1.4.6（候选，versionCode 20，待发布；线上仍为 1.4.5），Protocol v16，HTTP `/api/v16`，业务 schema 27。接口与数据库只支持当前版本；旧数据库不受当前版本支持，服务启动拒绝版本不匹配的数据库，不执行迁移。正式环境和支持范围验收见[发布验收](release-acceptance.md)。
+当前 Core 1.3.0，Android 1.4.7（versionCode 21；本轮待发布候选），Protocol v16，HTTP `/api/v16`，业务 schema 27。接口与数据库只支持当前版本；旧数据库不受当前版本支持，服务启动拒绝版本不匹配的数据库，不执行迁移。正式环境和支持范围验收见[发布验收](release-acceptance.md)。
 
 ## 职责与事实源
 
@@ -24,7 +24,7 @@ Session、Run、Attachment、Memory、Task 和 Trace 查询必须按所有权隔
 
 Android 保留 Compose 页面、输入、列表和导航；正文使用本地 WebViewAssetLoader 加载共享 marked、DOMPurify、KaTeX。脚本只来自打包资源，正文先清洗，认证凭据不进入 WebView。外链、附件和图片操作由宿主处理。Web 正文模块按需加载，宽表格、代码和公式仅在块内滚动。页面规格与按钮去向见 [Android 设计](android-design.zh-CN.md) 和 [前端设计](frontend-design.zh-CN.md)。
 
-Android 流式状态按 4ms 窗口合并发布（上限预算 50ms），终态立即发布；共享正文渲染缓存有界，WebView 内的增量快速路径按实例保存前缀，并在 Markdown 语法、HTML、代码围栏或公式可能未闭合时回退完整清洗解析。草稿与快照分开存储，账号切换清理本地身份数据；上传回执只能回写发起账号与会话。历史阅读不强制滚动，靠近末尾才跟随。
+Android 流式状态按 16ms 窗口合并发布（上限预算 50ms），终态立即发布；共享正文渲染缓存有界，WebView 内的增量快速路径按实例保存前缀，并在 Markdown 语法、HTML、代码围栏或公式可能未闭合时回退完整清洗解析。草稿与快照分开存储，账号切换清理本地身份数据；上传回执只能回写发起账号与会话。历史阅读不强制滚动，靠近末尾才跟随。
 
 ## Trace 与资源生命周期
 

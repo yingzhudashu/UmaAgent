@@ -1,229 +1,100 @@
-# UmaAgent 当前发布验收
+# UmaAgent 当前审查与验收
 
-## 2026-10-22 Android 偶发闪退核查与 1.4.6 候选修复
+## 结论与范围（2026-10-24）
 
-- 当前可读的模拟器 crash-dropbox 记录中，native `SIGSEGV` 归属第三方输入法进程，不是 UmaAgent；该模拟器也出现 UmaAgent 1.4.5 debug 进程启动期 ANR（系统记为“未完成启动”，RSS 约 218 MiB，并伴随明显内存/CPU/IO 压力）。ANR trace 路径受 Android 权限保护无法读取，故不能据此确认用户设备闪退的真实原因；模拟器第三方输入法 crash 也不能归因于用户真机。
-- 可证实的应用风险及修复：1）最多 16 MiB 的离线缓存、凭据文件和快照解析原先在 ViewModel 初始化路径同步进行，缓存 JSON 体积展开后可能阻塞冷启动主线程；现改由 IO/Default dispatcher 读取和解析，并有约 11 MiB 缓存启动回归。2）Android WebView renderer 退出未处理会使会话正文宿主不可用；现通过 `onRenderProcessGone` 销毁失效 WebView 并降级成 Compose 纯文本。3）WebSocket 连接回调不再在主线程读取加密 PAT。
-- 实际验证：`MessageBodyTest#rendererProcessExitFallsBackToReadableTextInsteadOfCrashingTheScreen` 在 API 36 模拟器通过真实 `WebViewRenderProcess.terminate()` 终止 renderer，回调后正文仍显示且整个宿主应用存活；Android 定向 instrumentation 11/11（OfflineRecovery、MessageBody、ConversationLayout），包括约 11 MiB 离线缓存恢复与会话布局；`npm run check:android`、`npm run check`、`npm test -- --run --reporter=dot`（60 文件、392 项）及全 workspace `npm run build` 均通过。
-- Android 版本 1.4.6 / versionCode 20，仍是待正式签名构建与发布的候选。当前没有用户真机 crash 堆栈或可复现步骤，不能声称根因已被证实或闪退已完全根治；正式上线后的效果仍需真实设备日志观察。未部署服务端或发布 APK 的结论需以本节后续记录更新。
+本轮剩余问题的本地限定验收通过：修复管理页面回执跨线程提交造成的加载状态不一致，双栏及手机两倍字号各160次连续切换时间窗通过，Profile草稿恢复、资源失败表单、两倍字号完整业务链路均通过。这里的通过限于隔离Faux与专用模拟器；完整发布验收尚未完成，真实Provider、实体Android/TalkBack、Linux/Docker、四小时稳定性与真机100ms目标仍未验证。本轮没有部署、推送、生产重启或真实业务付费调用。
 
-## 2026-10-21 Native：历史摘要后的工具结果续接修复
+按用户“无法达成时评估后放松门槛”的授权，本地设备门禁接受按配置独立冷启动；模拟器长时复用仍作为未解决的环境限制保留，不把冷启动通过写成长时稳定性通过。增量p95≤250ms、冻结帧≤700ms、ViewModel构造≤500ms及管理页10秒等待均未提高，正文性能仍保留40个可见样本。时间窗回归的耗时包含滚动、点击与断言，不与正文增量250ms预算混算。
 
-- 生产会话“电感”在继续时失败于 Preflight classify，报错提示 Responses `function_call_output` 缺少匹配 `item_reference`。只读核查确认摘要边界为 sequence 760；其后 8 条 toolResult 对应的 assistant toolCall 已被压缩进摘要。该形状与 400 相符；网关内部 Chat Completions 到 Responses 的转换细节未直接观察。
-- Core 将此类孤立结果作为标注过的不可信历史数据传入，不再以工具结果 role 暴露；新生成摘要时切点和批次保持工具调用与结果完整。多工具、孤立结果、缺失结果、晚到结果及历史字符串消息均有回归覆盖。
-- 来源提交 `9506b92c4e2c389995e1c9e45d13ad75e7ea6d48`（保留在本地 master，未推送）；Native release `20261021142428-9506b92`。发布包 `artifacts/acceptance/responses-tool-context-20261021/20261021142428-9506b92.tar.gz`，SHA-256 `f4366c24ebfc2542932dc3b8116f0b0122172edb3f9e229933957c157e914a1d`，2,880,254 bytes。
-- 全量 Vitest（单 worker，降低 Windows shell fixture 与并发 CPU 竞争）59 文件/385 项通过；覆盖率 59 文件/385 项通过，Statements 82.25%、Branches 74.11%、Functions 77.03%、Lines 85.02%；`npm run check`、`npm run build` 均通过。隔离 Faux 评测器 6/6；对实际发布前数据库在线备份进行旧/新 release 历史转换探针，确认旧版生成 8 个孤立工具结果，修复版生成 8 个有标记的数据消息且保留所有结果块；未向模型 Provider 发送请求。
-- Native 候选通过依赖和 schema 27 校验，受保护 Promote 成功；生产 `/opt/uma-agent/current` 指向 `/opt/uma-agent/releases/20261021142428-9506b92`。在线备份 `/srv/backups/uma-agent/state-20261021142557.db`（332,853,248 bytes，root:root、0600）。部署后 Core/Browser Worker/Xianyu Adapter 均 active，live/ready HTTP 200；state.db 与备份 integrity 均为 ok、foreign key violations 0、active Run 0、started model call 0；发布后 error-priority journal 无记录。
-- 本轮仅 Native Core 服务端 release；没有 Web UI、协议、Android 或客户端改动，因此未发布 APK。当前仍未验证真实 Provider 调用成功率及后续真实流量效果。只读 Claude plan 等待超时，review operation 过期；Claude 复核未完成，实施、测试和部署均由 GPT 完成。
+本轮Claude max规划两次和最终复核一次均返回API525，未取得可读正文或可核验的返回模型；本地限定范围由GPT独立复核，Claude阶段未完成。方案、实施和证据整理均为GPT。
 
-## 2026-10-16 当前状态
+源基线为`d452fb23117205687e1d5d313abf6c8995ee2bb0`，工作目录`D:/AIhub/UmaAgent`。业务schema 27、Protocol v16未改变，没有新增migration、旧接口兼容层或供应商fallback。
 
-### 正式发布
+## 本轮故障定位与修复
 
-Core 与 Web 已从干净提交 `818cd0d96bcfc24c39f5fca5d57ade7c1b09014b` 正式发布到生产：Core release `20261016000741-818cd0d`，Web release `20261016000804-818cd0d`。Core 1.3.0、Protocol v16、业务 SQLite schema 27；生产发布前在线备份、受保护账号指纹、原子切换和 readiness 门禁通过。发布期间按正式流程重启 Core 以加载新 release；没有修改 Nginx，也没有发送真实业务消息。
+原先双栏`CoreFlowTest.loginPolicyAttachmentToolTraceAndDraft`在“最近7天”加载结束等待上超时，服务端约2.97ms返回200。原APK两次定点及一次37项完整复验均通过，但扩展循环再次复现，故没有将偶发通过视为根因消失。带取证的复现第25次失败：`quality-final-dual-logcat.txt`记录HTTP回执后在后台线程3057继续执行；语义树同时保留旧加载条、已更新日期和可用按钮。该证据证明测试/自定义调度环境中的状态提交竞争，不冒充真机复现。
 
-2026-10-16 只读线上复核确认：Core、Browser Worker、Xianyu Adapter、RobotClaw 和 Nginx 均 active；`/api/v16/health/live` 与 `/api/v16/health/ready` 均返回 200；公网 `/umaagent/` 在 390px 和 1280px 视口均挂载成功，公式字体加载正常；退役入口 `/app`、`/demo/`、`/enzo/`、`/enzoagent/`、`/enzoapp/` 均返回 404。Core 与公网 Embed 的 JS/CSS 哈希一致，分别为 `b028fc17b3b562a4be587b7edb44a89d6b44c61ad23d8787d33036efa708a13a` 和 `c7e5b563e6ece63e7e5f1b0d8abe9a551c7c0452942501a8ff3abb8e910f9ff2`。
+`UmaManagement.kt`的`perform`及初始`LaunchedEffect(page)`显式使用`Dispatchers.Main.immediate`，网络仍由API的IO上下文处理；回执、错误与busy/data提交回到同一主线程。页面和账号的原有取消边界保留。调试包增加仅含页面、天数和耗时的阶段日志，不写业务正文或凭据。
 
-生产数据库使用只读连接复核，未写入数据：`user_version=27`、`integrity_check=ok`、`foreign_key_check` 违规 0；本次摘要计数为 users 6、sessions 6、messages 1289、runs 127、attachments 54。历史用户数据、附件、workspace 和备份均保留，本轮没有执行迁移。
+`CoreFlowTest`保留原10秒条件，增加等待耗时及失败语义树；`ManagementRefreshTest`在同一页面连续切换160次，同时验证选中项、日期范围、数值用量和加载结束。测试销毁沿用项目已有的contentVisible方式，避免第二次setContent恢复旧页面并产生额外请求。`android-e2e.mjs`对失败方法立即保存限定系统日志、应用内存、帧数据和宿主可用内存；发现清单下限升至38，功能或清理失败仍使门禁失败。
 
-正式 APK 1.4.4（versionCode 18）已发布，release `18-818cd0d`。公网 `latest.json` 与 APK 元数据一致：APK 大小 `13,000,165` bytes，SHA-256 `9ed5d4b1273af2f5d7d8523ca7ba119a5fa97bbe5cbc643f61b8f5562832f711`；正式签名证书与线上旧包一致。公网下载后重新核对哈希和大小；API 36 模拟器完成安装、首次启动及强制停止后的冷启动。未连接实体设备，因此实体设备登录、真实消息和读屏专项仍未验收。
+## 最终针对性实测
 
-### Trace 修复与本地验收
+|配置|切换通过|诊断HTTP 200（含初始加载）|p95 ms|最大 ms|应用PSS MiB（起始→结束）|
+|---|---|---|---|---|---|
+|双栏|160/160|161|693|1756|169.78 → 181.86|
+|手机两倍字号|160/160|161|662|1251|172.79 → 180.72|
 
-本轮修改修复 WebSocket 升级后 HTTP Span 未结束、连接关闭终态缺失，以及外部 W3C 父 Span 被统计为本地孤儿的问题。连接 Span 在正常 close、服务关闭、异常 close/error 和应用清理时幂等结束，订阅和认证超时器随连接清理；Preflight Provider 失败/取消会结束阶段 Span。遥测树根按本地祖先计算并识别远端根，历史 Span 不回写。资源统计改为 SQLite 汇总，维持既有 CPU 时长加权、nearest-rank p95 和窗口峰值语义。
+每组恰好161次诊断读取，全部200，所有查询区间严格为1/7/30天；退出后无额外初始读取。回执日志均在主线程。PSS与CPU包含测试驱动开销，未强制GC；四组40样本窗口记录在`quality-final-summary.json`，仅说明这320次循环出现自然回收，不能外推四小时或永久无泄漏。
 
-`npm run check`、`npm run test:coverage`（59 文件、356 项；语句 82.13%、分支 74.24%、函数 76.78%、行 84.91%）、完整 workspace `npm run build`、`npm run build:web:embed`、`npm run check:android`、`npm run test:eval:faux`（6/6）、`npm run test:web:e2e`（38/38）、`npm run test:perf` 和前端设计规格 `python docs/frontend-design/validate.py` 均通过。最终代码独占性能：API P95 6.05 ms、事件分页 P95 1.33 ms、RSS 峰值 111,988,736 B、双库 WAL 峰值 2,249,584 B、CPU 核心等效平均/峰值 5.5274%/5.5274%、事件循环 P95 29.8012 ms；全部低于既有预算。与 Gradle/Eval 并行时曾出现一次 CPU 峰值超预算，停止并发后独占重跑通过，未更改负载、功能或预算。
+受影响回归：`ProfileRecoveryTest#restoredDraftSurvivesProfileReload`、`ResourceFormTest#failedDirectorySubmissionKeepsDraftAndCancelRequiresConfirmation`及两倍字号`CoreFlowTest#loginPolicyAttachmentToolTraceAndDraft`各1/1通过。最终APK哈希与每次实际命令、结果见`quality-final-summary.json`、`quality-regression-cold.json`和`VERIFICATION.txt`。没有重跑未受影响的Web及后端检查；没有把旧APK全量结果声称为当前APK全量重跑。
 
-`npm run test:soak:faux` 四小时终版通过：运行 14,403,552 ms，2,629 条消息，事件游标 31,584，基线 RSS 112,418,816 B，RSS 峰值 155,672,576 B，双库 WAL 峰值 2,723,384 B；资源预算、游标连续性和无重复调度检查均通过。必要数值已记入此处。`artifacts/acceptance/soak-1792073458235/` 中的 `result.json`、`samples.jsonl`、`server.log` 已逐个删除，仅留下空的 ignored 目录；执行环境拒绝删除该空目录，未尝试绕过限制，也未改动其他历史验收目录。
+## 六配置既有证据与环境边界
 
-### 前端复核与未验收边界
+下表为当前管理页修复前已取得的同应用APK和测试APK完整证据。双栏采用本轮原APK完整复验，其他五组复用前轮结果；随后管理页改动由上面的针对性回归覆盖。它不是六组同一连续会话，也不是最新APK六组重跑。
 
-Claude Opus 5.5 以请求 effort `max` 对 Web 前端进行了只读审美和交互复核，实际返回模型为 `claude-opus-5-5`，结论为**未发现确证的视觉缺陷或交互异常，不建议修改 UI**。复核读取设计令牌、响应式布局、Trace 面板、会话输入、消息卡片、队列、抽屉和操作菜单实现，并结合 Web E2E 38/38 与前端规格 31 页、82 项动作、149 张图、0 问题结果。结论仅覆盖代码和现有自动化证据；读屏器与实体移动设备专项仍未执行。
+|配置|功能成功/条件跳过/失败|强停离线恢复|可见样本|正文p95 ms|最大帧 ms|
+|---|---|---|---|---|---|
+|phone|36/1/0|通过|40/40|127.0904|66.9456|
+|phone200|36/1/0|通过|40/40|144.3767|51.0597|
+|narrow|36/1/0|通过|40/40|119.4051|38.7503|
+|tablet600|36/1/0|通过|40/40|124.5430|42.9356|
+|dual840|37/0/0|通过|40/40|131.7968|51.4139|
+|landscape200|36/1/0|通过|40/40|125.1237|35.6671|
 
-Claude Opus 5.5 对本次最终发布做了额外只读验收；工具返回的请求/模型字段分别报告 effort `max` 和 `claude-opus-5-5`，结论为**通过**。复核核对了版本契约、Trace 生命周期、SQLite 资源汇总、生产与 Android 发布证据、自动化测试和明确未验范围；没有要求修改生产代码。工具字段不能独立证明上游模型身份。
+该批应用APK SHA256为`ab1d50ca45900f0a9a9bfacb90dec15686e3d6ab2c138fd01c28ee86ff280acc`，测试APK为`9060f0e14bfb32744f3e145cf6152caf71e4c0f9777c415c8c165ab723cde739`。原始失败保留于`android-e2e-1792776208246`；双栏原APK复验在`android-e2e-1792777978746`，增强取证37项及加入新用例后的38项完整通过分别在`android-e2e-1792778329696`、`android-e2e-1792778640620`。后二者均在本次主线程修复之前，不能替代上面的最终修复验证。
 
-2026-10-16 前端细节优化补充：Web 回复卡片采用克制的轻量阴影；共享 Markdown 的行内代码使用当前主题底色和 2px/5px 内边距，代码块保留 1px 边界；Android 回复 Surface 增加 1dp 阴影，标题/标签使用明确字重。`npm run check`、`npm run check:android`、`npm run build:android:content`、`python docs/frontend-design/render.py`、`python docs/frontend-design/validate.py` 均通过；定向 Web E2E 16/16 通过。Android 36 AVD 上正文主题断言通过；独占 `BodyPerformanceTest` 在默认手机配置下通过，p95 71.65 ms、最大帧 19.03 ms。六配置矩阵的四种配置通过，840dp 和横屏 200% 字体样本分别 p95 116.99 ms、102.13 ms，略超 100 ms 增量门槛；最大帧未超过 700 ms。该测试输入不含代码块或回复卡片，且两项样本在连续 2GB AVD 矩阵下出现资源波动，尚不能归因于视觉样式；未降低门槛。实体 Android、读屏和真实 Provider 仍按下文范围保留。
+关闭模拟器Vulkan后完整双栏仍通过，正文p95 125.483ms，但qemu工作集仍增长至约9.57GB，不能据此宣称解决了环境内存问题。请求swangle后，实际启动日志仍声明SwiftShader GLES，因此没有把它当成独立ANGLE后端验收。应用进程PSS与宿主qemu工作集分别采样；宿主增长不等于应用泄漏。当前资源下保留按配置冷启动的本地范围，长时复用仍未通过。
 
-本地及 Faux 流程、当前 Windows Native/Web 与 Android API 36 模拟器范围已验收。真实 Provider smoke 两次均以 `provider_error: terminated`、0 token 失败；遵守不重放同类付费请求的约束，本轮没有再次调用，因此真实模型对话仍是阻塞项。Docker/Linux、Android 实体设备和读屏专项不在本轮设备范围内，均未标为已验收；真实闲鱼账号和消息链路也未执行。发布期间已按正式流程重启 Core；本轮只读复验未再次重启生产服务，历史用户数据库、附件、workspace 与备份均未由验收测试写入。
+本轮新增证据入口：`artifacts/acceptance/usability-20261023/continuation/quality-final-summary.json`。全部新增失败、成功、请求数和资源原始记录保留在同目录，并扩展既有`optimization-evidence-index.json`；不删除旧失败或拼接均值宣称普遍提速。
 
-**当前结论：Core/Web 生产发布与 Android 正式包上线验收通过；当前平台范围内的本地链路、模拟器安装/启动、浏览器挂载和性能稳定性验收通过。真实 Provider 对话及 Docker/Linux、实体设备、读屏仍有明确未验项。**
+## 已完成的项目整改
 
-## 前序过程记录：2026-10-15 Trace 生命周期与汇总修复
+- Trace完整脱敏Basic/Digest及整行多段Cookie；事务构建阶段即限制待写、在途和本组总量。
+- Web旧事件不倒退终态，重复增量不复制投影，历史分页有提交锁、归属校验和错误反馈。
+- 共享正文只解析新增完整片段，保持公式、图片失败状态、复制反馈和滚动位置；缓存有界且不截断正文。
+- 文档由真实Worker解析；启用语义检索后的供应商错误显式传播；Faux数据、工作区、技能隔离，拒绝重置既有数据库。
+- 官方依赖审计前轮归零，锁文件未再改变；无损头像缩小22.57%，像素一致。
+- 前后端设计、版本和协议文档已同步，重复Android布局过程稿已合并删除。详细文档逐份处理见[代码审查](code-review.md)。
 
-修复 WebSocket 握手 HTTP Span 在升级后仍保持 active 的问题；连接 Span 对正常关闭、服务关闭和异常 close code 分别记录终态，close/error 路径幂等结束 Span，服务关闭时先结束连接并清理订阅和认证定时器，再排空遥测 Worker。Preflight Provider 失败或取消时显式结束阶段 Span。新增的单测覆盖关闭状态映射、服务关闭实测和 Provider 失败，历史 Span 不回写、不删除。
+## 复用的验证证据
 
-外部 W3C `traceparent` 父 Span 是远端根，不计作本地孤儿。新入口记录 `trace.parent_remote`；查询分页树根沿本地祖先链识别远端根；旧 `server.http` 入口按既有入口语义计算，不执行历史数据更新。真实缺失的非入口本地父 Span 仍计入孤儿统计。
+|范围|最近已取得的证据与边界|
+|---|---|
+|单元/集成|62文件404项通过；覆盖率语句82.69%、分支74.37%、函数77.76%、行85.46%|
+|Web全链路|40/40；权限、同步、离线、发送/队列/历史、Trace、表单、字号与布局|
+|原生文档|DOCX、XLSX、PPTX、PDF真实Worker解析通过|
+|Faux|6/6；模拟模型与隔离数据，不代表真实Provider|
+|设计资料|31页、82项交互、149张图，静态校验通过；不冒充设备验证|
+|Core稳定性|602296ms、400条消息、游标4836；无断号/重复调度，RSS峰值115.34MiB，WAL峰值2521504bytes；只有10分钟|
 
-资源窗口汇总由 SQLite 执行，保持时长加权 CPU、nearest-rank event-loop p95、RSS/WAL/CPU 最大值定义，避免大规模采样被完整映射成 Node 对象和复制排序数组。没有放宽 WAL 或性能预算。此阶段先完成 Telemetry、HTTP telemetry、Server、Core runtime/model-calls 定向测试和 `npm run check`；最终覆盖率、构建、E2E、固定性能和 soak 结果见上方“2026-10-16 当前状态”。
+## 固定性能数据
 
-过程产物清理检查发现 ignored `artifacts` 下旧日志、截图、部署交付包和历史 acceptance 证据混存。随后已删除根目录 71 个旧过程文件、`artifacts/android-optimization/`、`artifacts/refactor/` 和 `artifacts/acceptance/runtime-unpack-final106/`；保留历史 acceptance 证据、`artifacts/delivery/`、Android production 目录、生产发布证据和 `users/`。真实 Provider 未重试，继续保留既有 `provider_error: terminated` 阻塞结论；此前该阶段未写生产服务和用户数据。
+同机 Windows、Node 24.15.0、16 逻辑核；每轮 1 会话、20 请求、240 个持久事件，正常 GC 和相同隔离目录策略。CPU 为单核等效百分比。预算：API p95≤12.8ms、事件 p95≤5.9ms、RSS≤180MiB、CPU 平均≤5.5653%/采样峰值≤5.568%、事件循环≤31.74ms、WAL≤3355443 bytes。没有改变负载或预算。
 
-## 前序候选：2026-10-15 Trace、前端与全链路复核
+|源码|轮次|API p95 ms|事件 p95 ms|RSS MiB|CPU 平均 %|CPU 峰值 %|事件循环 ms|WAL bytes|
+|---|---|---|---|---|---|---|---|---|
+|基线|1|8.29|2.57|106.12|2.727|3.336|30.85|2237224|
+|基线|2|8.69|2.58|106.12|2.380|3.073|30.78|2237224|
+|基线|3|12.36|3.67|108.56|3.120|4.008|30.81|2282544|
+|候选|1|11.76|4.09|106.44|3.654|3.654|26.25|2241344|
+|候选|2|10.45|3.93|106.70|4.155|4.155|27.41|2286664|
+|候选|3|9.57|5.08|106.98|3.336|3.336|28.32|2245464|
 
-本轮在不改变 Protocol v16、业务 schema 27 和历史用户数据的前提下，补充 Trace 按 `service`/`kind` 的服务端过滤，并验证过滤先于分页；非法状态、名称、服务和阶段查询会直接返回 400。遥测仍使用独立 telemetry.db、有限批量 Worker、脱敏和重启 `IncompleteSpan` 终结逻辑。已从 Git 删除历史 APK、截图和过程性 `artifacts` 文件；当前架构门禁禁止重新跟踪该类产物。真实用户目录未纳入 Git，也未被本轮测试写入。
+六次都通过预算；主机调度与采样窗口有波动，未证明 API 或 CPU 在所有场景普遍下降。确定性收益包括：一万次重复增量创建的新投影从 10000 降至 0；十万操作的超大事务不再保留十万个操作对象；100 次完整 HTML 前缀追加实验的解析字符量从 1226296 降至 12941（减少约 98.94%），DOM、原节点和复制反馈一致。该浏览器实验与 Android 绘制时延分别度量。
 
-### 前序候选阶段实际验收记录（2026-10-15）
+## 失败记录与结论限制
 
-| 项目 | 实测结果 |
-| --- | --- |
-| 静态检查 | `npm run check` 通过；架构检查扫描 224 个源码文件，文档契约覆盖 14 个 Markdown 文件；Biome 与 TypeScript 通过 |
-| 单元测试与覆盖率 | `npm run test:coverage`：59 个文件、350 项通过；语句 81.96%、分支 73.90%、函数 76.49%、行 84.73% |
-| 完整构建 | 本轮 `npm run build` 通过，包含 Web 生产包和各 Worker；`npm run build:web:embed` 通过，嵌入版 CSS 118.62 KiB、入口 JS 543.32 KiB |
-| Android 编译、Faux、Web E2E | 本轮 `npm run check:android` 通过；Faux 评测 6/6；完整 Web E2E 38/38，含 Trace 筛选、Enter/Space disclosure、结果播报、清除筛选和 320–2560px 窄屏布局回归 |
-| 前端设计 | 本轮 `render.py` 生成 31 页、82 项交互和 149 张图；`validate.py` 31 页、82 项动作、149 张图、0 问题。校验限于结构、链接、图稿及语义检查，不表示目标设备或逐像素验收 |
-| 固定性能 | 本轮单独运行 `npm run test:perf`：API P95 5.52 ms、事件分页 P95 1.94 ms、RSS 峰值 111,357,952 B、双库 WAL 峰值 2,253,704 B、CPU 核心等效平均/峰值 3.1129%/3.1129%、事件循环 P95 30.36 ms；均未越过预算 |
-| Faux soak | 通过；`artifacts/acceptance/soak-1791991525766/result.json`：运行 14,404,242 ms（约 4 小时）、2626 条消息、游标 31,548、RSS 峰值 153,202,688 B、双库 WAL 峰值 2,529,744 B；基线 RSS 112,005,120 B，增长约 36.8%，游标连续且没有重复调度 |
-| Trace 服务端筛选 | Server 路由在筛选前验证 Run 所属权，并校验必须有过滤条件、状态、长度及分页边界；Server/Telemetry 覆盖组合筛选、筛选后分页、无过滤/非法状态拒绝、账号/Run 子树隔离 |
-| 用户数据盘点 | `users/` 含 574 个空目录、未发现文件；项目根 `state/`、`backups/` 不存在；未读取或修改用户数据。忽略目录 `artifacts/acceptance/` 仍含历史证据与过程文件，未删除其中内容 |
-| 真实模型 | 本机已使用隔离配置显式运行 smoke；模型列表诊断 HTTP 200，但两次隔离流式请求均以 `provider_error: terminated` 失败且 0 token。按故障规则停止重复请求；真实模型主链路、评测、性能及 soak 未验收 |
+此前API36 host运行出现过p95 879.9881ms及758.491504ms冻结帧。本轮API36 host的phone200/平板仍超限，且出现对话框就绪超时；软件后端短测虽通过，完整键盘用例仍有焦点失败。API35 host完整运行同样出现大屏延迟、一次页面Activity销毁超时，以及一次ADB守护连接失败。因此没有继续抬高预算来覆盖这些问题，也没有把它们删除或算作成功。
 
-Web 的 Trace 面板当前按 Run 查询，提供 service、kind、status、name 和最近时间窗筛选，文本输入防抖后请求；阶段按服务端分页展示，带层级缩进、语义状态色、空结果、错误重试和复制反馈，并以 live region 播报结果。新增交互已由 Faux Web E2E 在桌面和 320–2560px 视口验证，前端规格与生成的设计索引已同步。读屏器专项、真实设备视觉验收仍未完成。
+关键失败证据：`artifacts/acceptance/android-matrix-20261023-223146`、`android-matrix-20261023-231018`、`android-matrix-20261023-234652`、`android-matrix-20261024-001145`。231018与234652两个中止矩阵有独立interrupted.json，未执行配置不算通过。系统桌面与系统界面也出现跳帧，但这只是相关证据，不能认定GPU是唯一根因。系统trace采集自身带来干扰且一次输出截断，不能据此作完整因果结论。
 
-当时验收对象：Core 1.3.0、旧版客户端源码 1.4.3（versionCode 17）、Protocol v16、HTTP `/api/v16`、业务 SQLite schema 27。以下章节保留当时的候选及历史部署事实；当前正式环境状态以本文开头的 2026-10-16 记录为准。
+API35＋SwiftShader六配置专项性能先取得p95 121.5–131.6ms、240/240可见、最大帧低于49ms；其后再执行上表完整验收。连续运行至双栏时模拟器宿主内存增长、ADB失去响应，中止记录和宿主内存快照保留在005442/interrupted.json及continuation/emulator-stall.json。环境变化包含系统镜像、图形后端、重启和构建资源限制，故只能确认这一明确环境和分段方式的结果，不证明所有硬件或API36问题已消失，也不证明真机达到100ms。
 
-## 前序候选结论（历史）
+## 数据保护、交付与剩余项
 
-**当时结论：本地和 Faux 验收通过；真实模型与 Android APK 发布仍有阻塞。** 该段记录了前序候选状态，已由本文开头的正式发布和当前支持范围验收更新。其余内容记录当时的 Windows Native Core、Web/PWA、数据隔离、Trace 和 Android 签名状态。
+没有连接或写入生产数据库、附件、Cookie和凭据。仓库users前轮清单为663个空目录、0文件；该检查不等于生产历史数据完整性验证。历史生产发布记录未本轮联网核实。所有Faux和回滚都使用自建夹具或副本；旧业务数据不做迁移、删除或兼容转换。
 
-真实模型脚本只使用隔离配置、临时 state、workspace、账号和令牌；失败后脚本清理临时目录，未写入历史用户数据。当前可复核的真实 Embedding 隔离 smoke 仍为两条输入、1024 维、315ms；它不能替代聊天模型验收。未启动闲鱼 Adapter，也未发送闲鱼消息。
+证据目录：`D:/AIhub/UmaAgent/artifacts/acceptance/usability-20261023`。四角色为MODIFIED_FILE.tar、DIFF_FILE.patch、VERIFICATION.txt、ROLLBACK.sh；BASELINE.tar为回滚脚本同目录原始基线。补丁须重建候选，独立副本回滚后源码哈希须等于基线；依赖恢复需要按原锁文件重新安装，源码回滚不修改node_modules。
 
-## 服务器部署结果
-
-2026-10-11 已使用提交 `3144b718f6d4` 完成生产 Native promote。release `20261011074257-3144b718f6d4` 通过依赖链接、Protocol v16/schema 27、包导入和保护用户指纹校验；脚本先创建在线备份，再原子切换 `/opt/uma-agent/current`。部署后 Core、Browser Worker 和 Xianyu Adapter 均为 active，`/api/v16/health/live` 与 `/api/v16/health/ready` 均返回 200，版本 1.3.0、Protocol 16。备份文件保留在服务器受保护目录，未进入仓库。
-
-2026-10-11 已将生产配置的 `default`、`reasoning`、`fast` 和 `vision` 角色统一切换为 `openai/gpt-6.1-sol`，并重启 Core 后通过 `/api/v16/health/ready`。停服前已创建在线数据库备份 `state-default-model-20261011111225.db`；随后在事务中将现有 6 个 session 更新为 `openai/gpt-6.1-sol`。更新后 schema 为 27，`integrity_check=ok`、外键检查为空，session 不匹配数为 0；users、sessions、messages、runs、attachments 行数保持为 6/6/1209/110/55，110 条历史 Run 的 `model_snapshot_json` 哈希保持不变。该变更只影响现有 session 的后续消息和新 Run，不改写历史运行快照、消息、附件或账号数据。
-
-同日针对网关不接受 GPT-6.1 Sol 的 reasoning effort `none`/`minimal` 发布 hotfix release `20261011120205-d6c3aae`。运行时将这两个等级声明为不支持，关闭思考时省略 reasoning 字段，`minimal` 由 Pi 收敛到最低可用 `low`，其余支持等级按用户选择发送。Native promote 创建备份 `state-20261011120919.db`，受保护用户指纹校验与 ready 检查通过；Core、Browser Worker、Xianyu Adapter 均 active。部署后只做了 readiness 和数据完整性核验，未额外发送真实模型 smoke 请求。最终数据库仍为 schema 27、`integrity_check=ok`、外键检查为空，7 个 session 全部指向 `openai/gpt-6.1-sol`。
-
-同一构建曾在 staging 尝试启动；因 staging 历史数据库仍是旧 schema，新版本按契约拒绝启动，脚本自动恢复原 staging release。该回滚未影响生产，也未执行任何运行时迁移；staging 后续应先恢复匹配当前 schema 27 的隔离备份再复测。
-
-历史记录（2026-10-11，当时发布版本）：修复了回复下方“审查/改进”操作：普通助手消息此前没有持久化指向对应用户消息的父链，质量 Run 因而找不到待审查问题并失败；新回复和澄清回复现在记录父消息，既有缺少父链的历史记录从活动分支最近的前序用户消息解析，无需数据迁移。Web 点击后立即显示提交/排队/执行状态，按 Run 终态显示错误；改进正文从质量历史读取，避免因结果消息不属于活动分支而空白。提交 `33415c4` 部署为 Native release `20261011135637-33415c4`，创建在线备份 `state-20261011140416.db`；Native promote、依赖和包导入检查、受保护用户指纹校验均通过，Core、Browser Worker、Xianyu Adapter 均 active，live/ready 均返回 200，schema 仍为 27。验收命令 `npm run check`、`npm run test:coverage`、`npm run build`、`npm run test:web:e2e` 均通过；Vitest 62 个文件/356 项，覆盖率语句 81.91%、分支 73.27%、函数 77.03%、行 84.67%，Web E2E 37/37。该版本功能已于 2026-10-12 从当前候选完整移除；本段只记录当时的发布事实。
-
-## 2026-10-12 助手回复审查/改进功能移除验收
-
-当前候选已从 Web、Android、CLI、Client SDK、Server API、Core Runtime 和 Protocol 中删除助手回复的审查/改进入口及执行链，并移除 UM-09 设计页、对应交互图和过期测试。系统管理员质量诊断、评测、记忆事实审核及 Skill 审查仍是独立能力，不在本次删除范围内。schema 维持 27，不做迁移；旧质量 Run 类型及质量记录表只保留为历史数据，不再提供新建入口。
-
-本次验证通过：`npm run check`、`npm run test:coverage`（59 文件/346 项）、`npm run build`、`npm run build:web:embed`、`npm run check:android`、`npm run test:eval:faux`（6/6）、`npm run test:perf`、`npm run test:web:e2e`（37/37）及 `python docs/frontend-design/validate.py`（31 页/82 动作/149 图/0 问题）。当前 20 请求性能结果为 API p95 5.84ms、事件分页 p95 1.58ms、RSS 112,246,784B、双库 WAL 2,224,864B、单核等效 CPU 平均/峰值 4.3437%、事件循环 p95 30.10ms，均低于现有门槛。Web E2E 断言助手回复不再出现审查、改进按钮；Server 测试断言旧 API 路径返回 404；Core 数据库测试确认历史 `review` Run 记录仍可读取。
-
-## 2026-10-12 生产部署与 Android 发布状态
-
-以下段落仅记录 2026-10-12 当时的部署状态，不代表现行版本；当前状态以本文开头的 2026-10-16 核验为准。
-
-Server release `20261012011000-d83395b` 已 promote 到 `/opt/uma-agent/current`。`deploy/promote-native-release.sh` 创建在线备份 `/srv/backups/uma-agent/state-20261011171654.db`，并通过 release 依赖/schema 检查、保护用户指纹前后对比和数据库完整性门禁。部署后 Core、Browser Worker、Xianyu Adapter 均为 active；`/api/v16/health/live` 与 `/api/v16/health/ready` 均返回 200，Protocol v16、schema 27。
-
-2026-10-12 最终复核确认 `/opt/uma-agent/current` 仍指向 `20261012011000-d83395b`；`uma-agent.service`、`uma-browser-worker.service`、`uma-xianyu-adapter.service` 均为 active，loopback live/ready 均返回 HTTP 200，响应版本为 Core 1.3.0、Protocol 16。无额外代码变更需要再次部署；本轮文档修订不改变已部署二进制。
-
-Android 源码移除回复审查/改进入口并通过 `npm run check:android`。本次另执行 `:app:assembleRelease`，构建成功但只生成 `app-release-unsigned.apk`；Gradle `signingReport` 的 release 配置为 `Config: null`，`apksigner` 无法验证 unsigned 产物。当前机器没有配置正式签名环境变量，服务器发布目录也未发现正式 keystore；依据[Android APK 发布规则](deployment.md#61-发布前置条件)，不能用 Debug 签名或新证书替代正式签名。
-
-生产 `/srv/www/robotclaw/app/latest.json` 仍指向 1.4.1（versionCode 15，release `15-3be11fc`）；`releases.json` 的最高历史版本为 1.4.3（versionCode 16，release `16-cf44345`）。当前源码已更新为 1.4.3（versionCode 17），但正式签名 keystore 尚未配置，无法生成可覆盖已安装版本的发布 APK；取得原正式 keystore 后仍须比较签名指纹、验证清单和 APK 哈希，再由获授权的发布流程原子发布。已安装客户端更新前仍会显示旧按钮；Server 当前代码已移除相应路由，自动化测试确认该 API 返回 404。实体 Android 设备尚未连接，正式 APK 发布前还须完成真实覆盖安装、登录、进程重启、历史读取和消息发送验收。当前 Android 发布结论为**阻塞**，未将 unsigned APK 上传或切换到线上。
-
-## 当前契约
-
-- 版本事实源为根目录 `RELEASE`、根 `package.json` 和 Android `app/build.gradle.kts`。
-- 业务数据库只接受 `PRAGMA user_version=27`；版本不匹配直接拒绝启动，不提供运行时兼容层或迁移工具。历史用户数据、草稿、附件、账号、渠道 Cookie 和正式备份必须保留在匹配版本的隔离恢复环境。
-- Trace 使用 W3C `traceparent` 贯穿 HTTP、队列、Run、模型、工具、MCP、Worker 和渠道。外部 `traceparent` 只作关联，不是授权凭据。
-- Trace 查询先完成账号和 Run 子树过滤，再分页；服务端返回 `depth`、`rootSpanId`、稳定 `nextOffset`。属性、事件和错误文本脱敏，不保存 prompt、模型正文、完整 URL、Cookie、Token 或原始工具参数。
-
-## 已通过门禁
-
-| 门禁 | 结果 | 证据或命令 |
-| --- | --- | --- |
-| 架构检查 | 通过（受控债务） | `npm run check:architecture` 通过；六个文件登记在尺寸基线，其中五个当前超过 900 行，CLI `main.ts` 为 894 行；超基线或未登记的大文件会失败 |
-| 文档契约检查 | 通过 | `npm run check:docs-contracts`；14 个 Markdown 文件、版本/schema/命令/本地链接一致 |
-| Biome 与 TypeScript | 通过 | `npm run check` |
-| 单元测试与覆盖率 | 通过 | 最终候选 `npm run test:coverage`；59 个文件、356 项，语句 82.13%、分支 74.24%、函数 76.78%、行 84.91% |
-| 完整构建 | 通过 | 当前候选 `npm run build`；所有 workspace 编译、Web 生产包及 Workers 构建通过 |
-| 嵌入 Web 构建 | 通过 | 当前候选 `npm run build:web:embed`；CSS 118.62 KiB，入口 JS 543.32 KiB |
-| Faux 评测 | 通过 | 当前候选 `npm run test:eval:faux`；6/6 |
-| Faux 四小时 soak | 通过 | 最终样本运行 14,403,552ms、2,629 条消息、游标 31,584、RSS 峰值 155,672,576B、双库 WAL 峰值 2,723,384B；完整指标见本文开头，临时采样目录因执行环境限制仍未清除 |
-| Web 全量 E2E | 通过 | 当前候选 `npm run test:web:e2e`；38/38，含 Trace 筛选、窄屏无溢出、助手回复菜单不再展示审查/改进的回归检查 |
-| Android JVM/instrumentation 编译 | 通过 | 当前候选 `npm run check:android`；Gradle Debug 单测与 instrumentation Kotlin 编译通过 |
-| 前端设计产物 | 通过 | 当前候选重新生成并校验；31 页面、82 动作、149 图、0 问题 |
-
-## Windows 固定性能
-
-环境为 Windows、Node v24.15.0、16 个逻辑核、正常 GC、完整 Trace、SQLite WAL/FULL synchronous、单 Session、20 请求。三轮均使用原预算，没有降低负载或关闭 Trace。
-
-| 轮次 | API p95 | 事件分页 p95 | RSS 峰值 | 双库 WAL 峰值 | CPU 单核等效平均/峰值 | 事件循环 p95 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 6.34 ms | 1.64 ms | 112,402,432 B | 2,216,624 B | 4.1063% / 4.1063% | 30.3331 ms |
-| 2 | 5.77 ms | 1.60 ms | 112,631,808 B | 2,228,984 B | 3.6255% / 3.6255% | 30.1375 ms |
-| 3 | 5.54 ms | 2.05 ms | 112,119,808 B | 2,212,504 B | 4.2561% / 4.2561% | 29.9643 ms |
-| 门槛 | ≤ 12.8 ms | ≤ 5.9 ms | ≤ 188,743,680 B | ≤ 3,355,443 B | ≤ 5.5653% / 5.568% | ≤ 31.74 ms |
-
-三轮固定性能均满足门槛。启动样本中的短时 CPU 采样不计入稳态结果；脚本只使用采样持续时间不少于 1 秒的资源样本。
-
-## Trace 与问题闭环
-
-当前实现已覆盖 HTTP 父链、排队等待、Run、模型、工具、审批、重试、取消、Worker、重启终态和遥测写入失败诊断。持久化查询使用递归祖先计算真实深度，分页不会因祖先跨页而改变缩进；未终结 Span 在服务重启时标记为 `IncompleteSpan`。TelemetryStore 使用有界批量 Worker、独立 telemetry.db、WAL 自动 checkpoint 和失败计数。相关回归包括脱敏、跨服务父链、分页树、循环/孤儿链、重启终态、权限隔离和写入故障。
-
-## Android 六配置矩阵
-
-证据目录为 `artifacts/acceptance/android-matrix-20261011-124744/`；API 36 模拟器、host GPU、旧版客户端 1.4.3 debug 包。六组功能与布局检查全部通过、截图无效项为 0，正文显示 p95 均低于 100ms，未出现超过 700ms 的冻结帧。
-
-| 配置 | 正文显示 p95 | 最大帧 | 结果 |
-| --- | ---: | ---: | --- |
-| phone | 84.47 ms | 35.86 ms | 通过 |
-| phone200 | 86.12 ms | 35.62 ms | 通过 |
-| narrow | 85.38 ms | 36.25 ms | 通过 |
-| tablet600 | 86.30 ms | 35.04 ms | 通过 |
-| dual840 | 94.29 ms | 35.56 ms | 通过 |
-| landscape200 | 82.80 ms | 35.58 ms | 通过 |
-
-六组最大帧均低于 700 ms。当前只连接模拟器，未连接实体 Android 设备；实体真机专项不影响当前模拟器支持范围，但在发布签名 APK 到实体设备前必须补做。未放宽 100 ms 门槛。
-
-## 未验收范围与目标环境适配
-
-| 项目 | 当前状态 | 何时必须补验 |
-| --- | --- | --- |
-| Docker Compose | 本机无 Docker CLI，Native 已通过 | 选择容器部署时 |
-| Linux Native/性能 | 当前 Windows 支持范围之外 | 部署到 Linux 时 |
-| Android 实体真机 | API 36 模拟器正式 APK 安装和冷启动通过；未连接实体机 | 发布签名 APK 到实体设备前 |
-| 大规模 Embedding 索引 | 小批量真实供应商 smoke 已通过 | 启用大规模知识库前 |
-| 外接键盘/读屏 | 未完成专项矩阵 | 宣布无障碍目标支持前 |
-| 真实闲鱼渠道 | 未连接真实账号，禁止真实消息 | 真实渠道上线前使用隔离账号 |
-| 真实 Provider 对话 | 两次隔离 smoke 均 `provider_error: terminated`、0 token；未重复请求 | Provider 通道恢复后再运行真实模型验收 |
-
-1. 实体 Android 真机尚未连接；API 36 模拟器矩阵覆盖 UI 与正文性能，正式包安装及冷启动也已通过。签名 APK 交付实体设备前执行更新、登录、进程重启、历史读取和消息发送。
-2. Docker CLI 当前不可用；Native 部署链路已通过，Compose 仅在选择容器部署时执行展开、镜像构建和健康检查。
-3. 真实 Embedding 两条输入隔离 smoke 已通过；大规模知识库索引吞吐和长时供应商限流样本未执行。启用大规模知识库前执行独立容量测试。
-4. Linux 完整性能矩阵、外接键盘/读屏专项尚未执行；它们是 Linux 或无障碍目标发布前的适配检查。真实闲鱼消息仍禁止发送，渠道仅可用隔离账号和模拟数据验收。
-5. `database.ts`、`runtime.ts`、`App.tsx`、Server `app.ts` 和 Client `index.ts` 超过 900 行；CLI `main.ts` 当前 894 行。六个文件都登记在尺寸基线中，后续职责拆分不作为本候选发布硬阻塞。
-
-## 唯一验收入口
-
-```text
-npm run check
-npm run test:coverage
-npm run build
-npm run build:web:embed
-npm run check:android
-npm run test:eval:faux
-npm run test:web:e2e
-npm run test:perf
-npm run test:soak:faux
-```
-
-真实 Provider 仅在显式设置 `UMA_REAL_API=1`、独立配置、state、workspace、账号和令牌后运行：
-
-```text
-npm run test:real:smoke
-npm run test:real:eval
-npm run test:real:perf
-npm run test:real:soak
-npm run test:real:embedding
-```
-
-设备矩阵入口为 `python scripts/android-device-matrix.py`。容器目标另执行 `docker compose -f docker-compose.yml -f deploy/docker-compose.production.yml config --quiet`。设计规格见[前端设计](frontend-design.zh-CN.md)，后端、部署、工程基线和代码审查中的版本与接口由 `npm run check:docs-contracts` 持续校验。
-
-
-
-## 2026-10-22 会话历史显示与 Android 阅读体验修复发布
-
-- 源码提交 `086cc28c7121d7f2913d5d6d18e96a99d1eec5de` 已推送至 UmaAgent `master`。发布入口 `release-uma-agent.ps1` 在匹配 lock、干净提交、正式备份、Native 候选依赖校验后完成原子 Promote；Core release `20261022084152-086cc28`。Web 静态 embed release `20261022084215-086cc28`。
-- 发布前 Vitest 59 文件/389 项通过，覆盖率 82.48% statements、74.19% branches、77.46% functions、85.20% lines；`npm run check`、全 workspace `npm run build`、`npm run build:web:embed`、Playwright 38/38 均通过。Faux 评测 6/6、性能基线通过证据见 `TASK.md`。
-- 正式包 1.4.5/versionCode 19 经 release unit tests、Lint、签名和 APK manifest 校验构建。线上旧包与新包 signer SHA-256 均为 `86d57c047055e3923c753a0a7abc10e493894b94072798c3865e275e1ffc506d`。发布 release `19-086cc28`；APK SHA-256 `ae3e8e3246dcecba14f928fafda0585e181f430d02c0752a429000186eedd182`，13,000,169 bytes。发布后公网 manifest 与下载 APK 的版本、SHA、大小一致，apksigner 验证通过；API 36 模拟器安装、首次启动及强制停止后的冷启动通过。
-- Android API 36 `ConversationLayoutTest` 5/5 通过。全量 `connectedDebugAndroidTest` 在 API 36 模拟器单设备串行运行两次，均报告相同 9 项非本次改动目标的测试失败（AvatarFlow、BackgroundFlow、BodyPerformance、CoreFlow、ProcessRecoverySeed、ProfileRecovery、ResourceForm、RunCancellation、TraceDialog，含超时/性能阈值/断言失败）；本次 `ConversationLayoutTest` 5/5 通过。全量仪器测试仍未通过，不将失败归因于本次历史滚动修复。实体 Android 设备和 TalkBack 未测试。
-- 生产验收：Core、Browser Worker、Xianyu Adapter active；公网 live/ready HTTP 200；线上 `/umaagent/` 390px/1280px 均成功挂载、公式字体加载；生产与发布前备份 SQLite `integrity_check=ok`、schema 27、外键违规 0；发布后 active Run 0。线上 release JS/CSS 清单哈希匹配 Core。备份 `/srv/backups/uma-agent/state-20261022084159.db`。未执行数据库迁移或发送真实 Provider 请求。
-- 未验收：真实 Provider 成功率/长期会话在真实流量中的效果、实体 Android 及 TalkBack；需在后续真实使用中观察。
-- Claude 只读复核已取得正文，但其中关于快照代码缺失、签名未配置的两点与当前源码/本机现场不符；GPT 已独立核实源码、签名连续性及线上验收，不将该复核错误前提当作事实。工具返回模型字段为网关声明。
+真实Provider/完整外部工具链需受控配置及具体调用授权；实体Android/TalkBack与Linux/Docker需对应设备环境。本机无Docker/WSL。四小时nightly、真实设备100ms及真实生产部署未验，不以模拟通过替代。

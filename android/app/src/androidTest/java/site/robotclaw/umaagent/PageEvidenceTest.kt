@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -12,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.cancel
 import kotlinx.serialization.json.*
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -85,48 +87,63 @@ class PageEvidenceTest {
             model = UmaViewModel(compose.activity.application)
             model.viewModelScope.coroutineContext.cancelChildren()
         }
-        compose.setContent {
-            UmaAgentTheme {
-                Surface(Modifier.fillMaxSize()) {
-                    AuthenticatedScreen(
-                        UmaUiState(
-                            tokenPresent = true,
-                            sessions = listOf(Session("visual", "手机阅读体验")),
-                            selectedSessionId = "visual",
-                            snapshot = snapshot,
-                        ),
-                        model,
-                    )
+        val contentVisible = mutableStateOf(true)
+        try {
+            compose.setContent {
+                if (!contentVisible.value) return@setContent
+                UmaAgentTheme {
+                    Surface(Modifier.fillMaxSize()) {
+                        AuthenticatedScreen(
+                            UmaUiState(
+                                tokenPresent = true,
+                                sessions = listOf(Session("visual", "手机阅读体验")),
+                                selectedSessionId = "visual",
+                                snapshot = snapshot,
+                            ),
+                            model,
+                        )
+                    }
                 }
             }
-        }
-        fun capture(name: String) {
+            fun capture(name: String) {
+                compose.waitForIdle()
+                val committed = java.util.concurrent.CountDownLatch(1)
+                compose.runOnUiThread {
+                    val view = compose.activity.window.decorView
+                    view.viewTreeObserver.registerFrameCommitCallback { committed.countDown() }
+                    view.invalidate()
+                }
+                assertTrue(committed.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                File(compose.activity.cacheDir, "uma-compare-$name.png").outputStream().use {
+                    androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+                        .uiAutomation
+                        .takeScreenshot()
+                        .compress(Bitmap.CompressFormat.PNG, 100, it)
+                }
+            }
+            // 正文 WebView 与字体加载异步完成，截图证据留出稳定时间；该等待不参与性能采样。
             compose.waitForIdle()
-            val committed = java.util.concurrent.CountDownLatch(1)
-            compose.runOnUiThread {
-                val view = compose.activity.window.decorView
-                view.viewTreeObserver.registerFrameCommitCallback { committed.countDown() }
-                view.invalidate()
+            Thread.sleep(1500)
+            compose.onNodeWithTag("conversation-messages").performScrollToIndex(0)
+            capture("chat")
+            compose.onNodeWithTag("navigation-sessions").performClick()
+            compose.onNodeWithTag("workspace-title").assertTextEquals("会话")
+            capture("sessions")
+            // 宽屏在侧栏直接提供设置；手机使用“更多”，两者都必须真实点击并检查同一页面。
+            if (compose.activity.resources.configuration.screenWidthDp >= 600)
+                compose.onNodeWithTag("navigation-settings").performScrollTo().performClick()
+            else {
+                compose.onNodeWithTag("navigation-more").performClick()
+                compose.onNodeWithText("设置").performClick()
             }
-            assertTrue(committed.await(5, java.util.concurrent.TimeUnit.SECONDS))
-            File(compose.activity.cacheDir, "uma-compare-$name.png").outputStream().use {
-                androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
-                    .uiAutomation
-                    .takeScreenshot()
-                    .compress(Bitmap.CompressFormat.PNG, 100, it)
-            }
+            compose.onNodeWithText("执行权限").assertIsDisplayed()
+            capture("settings")
+            // 先释放合成页面持有的 View，再让测试规则销毁 Activity。
+            compose.runOnIdle { contentVisible.value = false }
+            compose.waitForIdle()
+        } finally {
+            // 本夹具自行创建 ViewModel，不由 Activity 的 ViewModelStore 管理。
+            compose.runOnUiThread { model.viewModelScope.cancel() }
         }
-        // 正文 WebView 与字体加载异步完成，截图证据留出稳定时间；该等待不参与性能采样。
-        compose.waitForIdle()
-        Thread.sleep(1500)
-        compose.onNodeWithTag("conversation-messages").performScrollToIndex(0)
-        capture("chat")
-        compose.onNodeWithTag("navigation-sessions").performClick()
-        compose.onNodeWithTag("workspace-title").assertTextEquals("会话")
-        capture("sessions")
-        compose.onNodeWithTag("navigation-more").performClick()
-        compose.onNodeWithText("设置").performClick()
-        compose.onNodeWithText("执行权限").assertIsDisplayed()
-        capture("settings")
     }
 }

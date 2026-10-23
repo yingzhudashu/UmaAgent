@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import kotlinx.coroutines.cancel
+import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -32,6 +33,36 @@ class CoreFlowTest {
             model = UmaViewModel(app)
         }
         compose.setContent { UmaScreen(model) }
+        val managementWaits = mutableListOf<JsonElement>()
+        fun waitForManagementReady(stage: String) {
+            val started = android.os.SystemClock.elapsedRealtime()
+            var completed = false
+            try {
+                // 保留原来的 10 秒门槛和加载消失断言；附加证据不能代替成功条件。
+                compose.waitUntil(10_000) {
+                    compose.onAllNodesWithText("正在读取或处理…").fetchSemanticsNodes().isEmpty()
+                }
+                completed = true
+            } catch (failure: Throwable) {
+                try {
+                    File(compose.activity.cacheDir, "uma-management-failure.txt")
+                        .writeText(compose.onRoot(useUnmergedTree = true).printToString())
+                } catch (captureFailure: Throwable) {
+                    failure.addSuppressed(captureFailure)
+                }
+                throw failure
+            } finally {
+                managementWaits += buildJsonObject {
+                    put("stage", stage)
+                    put("elapsedMs", android.os.SystemClock.elapsedRealtime() - started)
+                    put("completed", completed)
+                    put("offline", model.uiState.value.offline)
+                    put("loading", model.uiState.value.loading)
+                }
+                File(compose.activity.cacheDir, "uma-management-waits.json")
+                    .writeText(JsonArray(managementWaits).toString())
+            }
+        }
         fun snapshot(name: String) {
             compose.waitForIdle()
             val committed = java.util.concurrent.CountDownLatch(1)
@@ -55,7 +86,9 @@ class CoreFlowTest {
                 .performTextInput(
                     "uma_pat_00000000-0000-4000-8000-000000000003_faux-user-3-token-012345678901234567890123"
                 )
-            compose.onNodeWithText("登录", useUnmergedTree = true).performClick()
+            // 大字号横屏和键盘展开时按钮可能在视口之外，先真实滚动到按钮再点击。
+            compose.onNodeWithText("登录", useUnmergedTree = true)
+                .performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
             compose.waitUntil(20_000) {
                 model.uiState.value.executionSettingsLoaded && !model.uiState.value.loading
             }
@@ -260,9 +293,7 @@ class CoreFlowTest {
                             .fetchSemanticsNodes()
                             .isNotEmpty()
                     }
-                compose.waitUntil(10_000) {
-                    compose.onAllNodesWithText("正在读取或处理…").fetchSemanticsNodes().isEmpty()
-                }
+                waitForManagementReady(key)
                 snapshot(key)
             }
             for ((label, key) in
@@ -289,9 +320,7 @@ class CoreFlowTest {
             }
             openPage("质量", "quality")
             compose.onNodeWithText("最近7天").performScrollTo().performClick()
-            compose.waitUntil(10_000) {
-                compose.onAllNodesWithText("正在读取或处理…").fetchSemanticsNodes().isEmpty()
-            }
+            waitForManagementReady("quality-seven-days")
             compose.onNodeWithText("最近7天").assertIsSelected()
             // 用量经过审计持久化后仍须为数值，不能被凭据脱敏规则误删。
             val usageNode = compose.onNodeWithText("模型平均耗时", substring = true).performScrollTo()

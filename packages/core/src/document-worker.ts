@@ -9,7 +9,9 @@ try {
     includeRawContent: false,
     ocr: false,
   });
-  parentPort?.postMessage({ ok: true, text: document.toText() });
+  // officeparser 8 使用异步格式导出；只发送纯文本，不传递 AST 或嵌套资源。
+  const text = await document.to("text");
+  parentPort?.postMessage({ ok: true, text: text.value });
 } catch (error) {
   parentPort?.postMessage({
     ok: false,

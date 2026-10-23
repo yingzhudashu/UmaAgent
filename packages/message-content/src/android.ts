@@ -57,7 +57,9 @@ root.addEventListener("click", (event) => {
     } else window.UmaBody.image(target.src);
   }
 });
-new ResizeObserver(() => window.UmaBody.height(root.getBoundingClientRect().height, messageRevision)).observe(
-  root,
-);
+// 根节点无边框和内边距，contentRect 就是宿主需要的正文高度。
+// 复用浏览器本轮布局的结果，避免在尺寸通知中再次查询几何信息。
+new ResizeObserver(([entry]) => {
+  if (entry) window.UmaBody.height(entry.contentRect.height, messageRevision);
+}).observe(root);
 window.UmaBody.ready();

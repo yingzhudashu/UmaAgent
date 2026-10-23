@@ -5,6 +5,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.viewModelScope
@@ -40,33 +42,33 @@ class ResourceFormTest {
                 val leave = remember { LeaveConfirmation() }
                 UmaAgentTheme {
                     CompositionLocalProvider(LocalLeaveConfirmation provides leave) {
-                        ManagementScreen(state, model)
+                        ManagementScreen(state, model, modifier = Modifier.testTag("resource-form-list"))
                         LeaveConfirmationDialog(leave)
                     }
                 }
             }
-            compose.waitUntil(10_000) {
-                compose.onAllNodesWithText("正在读取或处理…").fetchSemanticsNodes().isEmpty()
+            fun visible(matcher: SemanticsMatcher): SemanticsNodeInteraction {
+                // 横屏大字号时 LazyColumn 不组成离屏节点，必须由列表滚动查找，不能等待它凭空出现。
+                compose.onNodeWithTag("resource-form-list").performScrollToNode(matcher)
+                return compose.onNode(matcher)
             }
-            compose.onNodeWithText("添加服务器目录").performScrollTo().performClick()
+            visible(hasText("添加服务器目录")).assertIsEnabled().performClick()
             compose.onNodeWithText("添加服务器目录").assertIsNotEnabled()
-            compose.onNodeWithText("来源名称").performScrollTo().performTextReplacement("失败后保留名称")
-            compose
-                .onNode(hasSetTextAction() and hasText("服务器目录"))
-                .performScrollTo()
+            visible(hasText("来源名称")).performTextReplacement("失败后保留名称")
+            visible(hasSetTextAction() and hasText("服务器目录"))
                 .performTextReplacement("/outside-authorized-workspace/missing")
-            compose.onNodeWithText("提交").performScrollTo().performClick()
+            visible(hasText("提交")).performClick()
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithText("正在读取或处理…").fetchSemanticsNodes().isEmpty()
             }
-            compose.onNodeWithText("来源名称").performScrollTo().assertTextContains("失败后保留名称")
-            compose.onNodeWithText("取消").performScrollTo().performClick()
+            visible(hasText("来源名称")).assertTextContains("失败后保留名称")
+            visible(hasText("取消")).performClick()
             compose.onNodeWithText("放弃未保存内容？").assertIsDisplayed()
             compose.onNodeWithText("继续编辑").performClick()
-            compose.onNodeWithText("来源名称").performScrollTo().assertTextContains("失败后保留名称")
-            compose.onNodeWithText("取消").performScrollTo().performClick()
+            visible(hasText("来源名称")).assertTextContains("失败后保留名称")
+            visible(hasText("取消")).performClick()
             compose.onNodeWithText("放弃并离开").performClick()
-            compose.onNodeWithText("添加服务器目录").performScrollTo().assertIsEnabled()
+            visible(hasText("添加服务器目录")).assertIsEnabled()
         } finally {
             compose.runOnUiThread { model.viewModelScope.cancel() }
         }

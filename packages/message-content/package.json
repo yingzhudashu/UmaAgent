@@ -17,12 +17,12 @@
     "build:android": "vite build --config vite.android.config.ts"
   },
   "dependencies": {
-    "dompurify": "3.4.14",
+    "dompurify": "3.4.17",
     "marked": "18.0.10",
     "katex": "0.18.7"
   },
   "devDependencies": {
     "@types/katex": "0.16.8",
-    "vite": "8.2.1"
+    "vite": "8.3.5"
   }
 }

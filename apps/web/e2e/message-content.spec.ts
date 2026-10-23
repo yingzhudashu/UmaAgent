@@ -28,7 +28,7 @@ test("the packaged Android body renders math safely and preserves completed bloc
   });
   await page.addInitScript(() => {
     Reflect.set(window, "UmaBody", {
-      height: () => {},
+      height: (value: number) => Reflect.set(window, "bodyHeight", value),
       ready: () => {},
       copy: (value: string) => Reflect.set(window, "copied", value),
       attachment: (id: string) => Reflect.set(window, "attachment", id),
@@ -95,6 +95,80 @@ test("the packaged Android body renders math safely and preserves completed bloc
     await page.evaluate(() => Reflect.get(window, "copyBefore") === document.querySelector(".code-copy")),
   ).toBe(true);
   await expect(page.getByRole("button", { name: "复制失败，请选择文本复制" })).toBeVisible();
+  const appendStats = await page.evaluate(() => {
+    const update = Reflect.get(window, "updateMessage");
+    const theme = {
+      text: "#17212b",
+      background: "#ffffff",
+      link: "#365f45",
+      size: 16,
+      code: "#eeeeee",
+      border: "#aab5ad",
+    };
+    let text = "# 持久段落\n\n公式 $x^2$ 与 **强调**。";
+    update(text, theme);
+    const root = document.getElementById("message") as HTMLElement;
+    const heading = root.firstChild;
+    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+    if (!descriptor?.set) throw new Error("Browser innerHTML setter missing");
+    const setInnerHtml = descriptor.set;
+    let parsedCharacters = 0;
+    Object.defineProperty(HTMLTemplateElement.prototype, "innerHTML", {
+      configurable: true,
+      get: descriptor.get,
+      set(value: string) {
+        parsedCharacters += value.length;
+        setInnerHtml.call(this, value);
+      },
+    });
+    try {
+      for (let index = 0; index < 100; index++) {
+        text += `\n\n增量${index}`;
+        update(text, theme);
+      }
+    } finally {
+      Reflect.deleteProperty(HTMLTemplateElement.prototype, "innerHTML");
+    }
+    const html = root.innerHTML;
+    const retainedHeading = heading === root.firstChild;
+    update("重置", theme);
+    update(text, theme);
+    const sameAsCompleteRender = root.innerHTML === html;
+    root.replaceChildren();
+    update(text, theme);
+    const restoredAfterHostClear = root.innerHTML === html;
+    update("<div>保留</div>\n\n", theme);
+    const retainedBlock = root.firstChild;
+    update("<div>保留</div>\n\n\n", theme);
+    const expected = root.cloneNode(false) as HTMLElement;
+    expected.innerHTML = root.innerHTML;
+    const normalizedWhitespace = root.isEqualNode(expected) && root.firstChild === retainedBlock;
+    return {
+      parsedCharacters,
+      finalLength: html.length,
+      retainedHeading,
+      sameAsCompleteRender,
+      restoredAfterHostClear,
+      normalizedWhitespace,
+    };
+  });
+  expect(appendStats.parsedCharacters).toBeLessThan(appendStats.finalLength * 2);
+  expect(appendStats.retainedHeading).toBe(true);
+  expect(appendStats.sameAsCompleteRender).toBe(true);
+  expect(appendStats.restoredAfterHostClear).toBe(true);
+  expect(appendStats.normalizedWhitespace).toBe(true);
+  await render(`${content}\n\n新段落`);
+  // 宿主按高度回执布局；边框或内边距变化不能让回执遗漏正文尺寸。
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const root = document.getElementById("message") as HTMLElement;
+        return (
+          Math.ceil(Reflect.get(window, "bodyHeight")) === Math.ceil(root.getBoundingClientRect().height)
+        );
+      }),
+    )
+    .toBe(true);
   await testInfo.attach("shared-body-320.png", {
     body: await page.screenshot({ fullPage: true }),
     contentType: "image/png",

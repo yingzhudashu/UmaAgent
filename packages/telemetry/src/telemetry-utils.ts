@@ -8,8 +8,11 @@ const sensitive =
 const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
 // 错误文本中的结构化敏感值可能嵌套、换行或被截断；从敏感值起点截断，避免尾部泄露。
 const errorSecretPatterns = [
+  // 认证方案名不是秘密值本身：Basic/Digest 等必须连同凭据一起遮蔽。
+  /(\b(?:proxy-)?authorization\s*:\s*)[a-z][a-z0-9_-]*[ \t]+[^\r\n]+/gi,
   /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
-  /(\bcookie\s*:\s*)[^;\r\n]+/gi,
+  // Cookie 一行可包含多个分号分隔值；保守隐藏整行，不能泄漏后续会话凭据。
+  /(\bcookie\s*:\s*)[^\r\n]+/gi,
   /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|request[_-]?body|body)\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*|\[(?!REDACTED(?:_URL)?\])[\s\S]*|[^\s,;&}]+)/gi,
   /(["']?(?:authorization|cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token|prompt|completion|body)["']?\s*:\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\{[\s\S]*|\[(?!REDACTED(?:_URL)?\])[\s\S]*|[^\s,;&}]+)/gi,
   /([?&](?:api[_-]?key|access[_-]?token|password|secret|token)=)[^&#\s]*/gi,

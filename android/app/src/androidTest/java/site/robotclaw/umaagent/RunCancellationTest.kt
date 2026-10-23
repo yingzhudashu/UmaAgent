@@ -19,6 +19,18 @@ class RunCancellationTest {
     @Test
     fun stopStreamingThenSendAgain() {
         lateinit var model: UmaViewModel
+        fun sendWhenReady() {
+            var clicked = false
+            compose.waitUntil(10_000) {
+                compose.onNodeWithContentDescription("发送消息")
+                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { click ->
+                        // 与真实按钮走相同回调；同一次主线程分发中确认可发送，避免刷新禁用窗口。
+                        val state = model.uiState.value
+                        if (!clicked && !state.loading && !state.offline) clicked = click()
+                    }
+                clicked
+            }
+        }
         compose.runOnUiThread {
             val app = compose.activity.application
             PatStore(app).clear()
@@ -41,14 +53,23 @@ class RunCancellationTest {
                 model.uiState.value.conversation != null && !model.uiState.value.loading
             }
             compose.onNodeWithTag("conversation-input").performTextInput("FAUX_LARGE_REPLY")
-            compose.onNodeWithContentDescription("发送消息").performClick()
+            sendWhenReady()
             compose.waitUntil(15_000) {
                 model.uiState.value.conversation
                     .orEmpty()
                     .filterIsInstance<UiConversationEntry.ResponseEntry>()
                     .any { entry -> entry.items.any { it.content.contains("FAUX_LARGE_BEGIN") } }
             }
-            compose.onNodeWithContentDescription("停止运行").performClick()
+            var stopClicked = false
+            compose.waitUntil(10_000) {
+                compose.onNodeWithContentDescription("停止运行")
+                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { click ->
+                        // 与发送同样原子核对：按钮显示不代表当前仍可操作，拒绝的点击不能算已取消。
+                        val state = model.uiState.value
+                        if (!stopClicked && !state.offline && !state.cancelling) stopClicked = click()
+                    }
+                stopClicked
+            }
             compose.waitUntil(15_000) {
                 model.uiState.value.conversation
                     .orEmpty()
@@ -57,7 +78,7 @@ class RunCancellationTest {
             }
             assertEquals("", model.uiState.value.error)
             compose.onNodeWithTag("conversation-input").performTextInput("Reply with FAUX_DIRECT.")
-            compose.onNodeWithContentDescription("发送消息").performClick()
+            sendWhenReady()
             compose.waitUntil(20_000) {
                 model.uiState.value.conversation
                     .orEmpty()

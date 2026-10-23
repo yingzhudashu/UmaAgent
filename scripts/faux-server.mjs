@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
@@ -16,9 +17,11 @@ const webOrigins = (process.env.UMA_FAUX_WEB_ORIGINS ?? `http://127.0.0.1:${port
 const stateDir = process.env.UMA_FAUX_STATE
   ? resolve(process.env.UMA_FAUX_STATE)
   : await mkdtemp(join(tmpdir(), "uma-faux-"));
-if (process.env.UMA_FAUX_RESET_STATE === "1") {
-  await rm(stateDir, { recursive: true, force: true });
-}
+// 测试入口只接受新数据库目录，绝不根据环境变量删除调用者的既有数据。
+if (existsSync(join(stateDir, "state.db")))
+  throw new Error("Faux requires a fresh state directory; existing database was not modified.");
+const workspaceDir = join(stateDir, "workspace");
+await mkdir(workspaceDir, { recursive: true });
 // Faux 验收的两个数据库始终隔离，不能继承部署环境的 telemetry 目录。
 process.env.UMA_TELEMETRY_DIR = stateDir;
 
@@ -27,7 +30,7 @@ const config = {
     host: "127.0.0.1",
     port,
     stateDir,
-    workspaceRoots: [resolve(".")],
+    workspaceRoots: [workspaceDir],
     webOrigins,
     maxUploadBytes: 20 * 1024 * 1024,
   },
@@ -56,7 +59,7 @@ const config = {
     fast: { provider: "faux", id: "faux-1" },
     vision: { provider: "faux", id: "faux-1" },
   },
-  skillsDirs: [resolve(".uma-faux/skills")],
+  skillsDirs: [join(stateDir, "skills")],
   mcpServers: [],
   runtime: {
     maxParallelSessions: 4,

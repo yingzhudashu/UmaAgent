@@ -487,8 +487,10 @@ describe("TelemetryStore", () => {
       redactErrorMessage(
         'request failed: Authorization: Bearer abc.def; cookie: sid=private; api_key="secret-value" prompt="private prompt" https://example.test/?token=query-secret sk-test-secret-value',
       ),
-    ).toBe(
-      "request failed: Authorization: [REDACTED]; cookie: [REDACTED]; api_key=[REDACTED] prompt=[REDACTED] [REDACTED_URL] [REDACTED]",
+    ).toBe("request failed: Authorization: [REDACTED]");
+    // 认证值可能包含分号，整行都属于敏感边界；下一行独立诊断仍应保留。
+    expect(redactErrorMessage("Authorization: Digest username=private; response=private\nECONNRESET")).toBe(
+      "Authorization: [REDACTED]\nECONNRESET",
     );
     expect(redactErrorMessage("ECONNRESET while calling provider")).toBe("ECONNRESET while calling provider");
     for (const payload of [
@@ -699,4 +701,21 @@ describe("TelemetryStore", () => {
     ).toEqual({ count: 1, total_duration_ms: 1 });
     await store.close();
   });
+});
+
+it("redacts complete authentication headers and all cookie values", () => {
+  for (const header of [
+    "Authorization: Basic cHJpdmF0ZS1jcmVkZW50aWFs",
+    "Proxy-Authorization: Digest username=private-user, response=private-signature",
+    "Authorization: Digest username=private-first; response=private-tail",
+    "Cookie: sid=private-first; session=private-tail; csrf=private-third",
+    '"authorization": "Basic private-value"',
+    '"cookie": "sid=private-first; session=private-tail"',
+  ]) {
+    const output = redactErrorMessage(`ECONNRESET ${header}`);
+    expect(output).toContain("ECONNRESET");
+    expect(output).toContain("[REDACTED]");
+    expect(output).not.toMatch(/private|cHJpdmF0ZS/);
+    expect(redactErrorMessage(output)).toBe(output);
+  }
 });

@@ -10,6 +10,8 @@ export class SqlWriter {
   private queue: Operation[][] = [];
   private queuedCount = 0;
   private group: Operation[] | undefined;
+  private groupCount = 0;
+  private groupRejected = false;
   private timer: NodeJS.Timeout | undefined;
   private inFlight = 0;
   private sequence = 0;
@@ -50,7 +52,14 @@ export class SqlWriter {
   }
   enqueue(sql: string, args: Operation["args"]): void {
     if (this.group) {
-      this.group.push({ sql, args });
+      this.groupCount++;
+      // 构建事务时就限流；不能等 enqueueGroup 再丢弃已经占满堆的巨型数组。
+      // 超限后只计数，仍让调用者完成同步逻辑，最终整组丢弃而不写入半个事务。
+      if (!this.groupRejected && (this.dead || this.groupCount + this.queuedCount + this.inFlight > 8192)) {
+        this.groupRejected = true;
+        this.group = [];
+      }
+      if (!this.groupRejected) this.group.push({ sql, args });
       return;
     }
     this.enqueueGroup([{ sql, args }]);
@@ -61,9 +70,12 @@ export class SqlWriter {
     this.group = [];
     try {
       action();
-      this.enqueueGroup(this.group);
+      if (this.groupRejected) this.failures += this.groupCount;
+      else this.enqueueGroup(this.group);
     } finally {
       this.group = undefined;
+      this.groupCount = 0;
+      this.groupRejected = false;
     }
   }
   private enqueueGroup(operations: Operation[]): void {

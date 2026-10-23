@@ -1,31 +1,61 @@
-# UmaAgent 代码审查
+# UmaAgent 代码与文档审查
 
-当前契约为 Protocol v16、HTTP `/api/v16`、业务 schema 27。自动检查只验证其覆盖的规则，不代表全部代码已经逐行证明正确。当前验收结论统一见 [发布验收](release-acceptance.md)。
+当前合同：Core 1.3.0、Android 1.4.7（versionCode 21）、Protocol v16、业务schema 27。此前方案为Claude max初稿、GPT整理修订；本轮管理页定位、方案、实施及证据整理为GPT。本轮Claude max规划两次和最终复核一次均返回API525，未取得可读正文或可核验的返回模型；本地限定范围由GPT独立复核，Claude阶段未完成。请求模型/档位不代表取得模型正文或验收结论。最终实测及未验项统一见[发布验收](release-acceptance.md)。
 
-## 审查范围
+## 已证实并修复的问题
 
-|区域|检查重点|验证入口|
+|问题与代码位置|原行为|当前实现及验收依据|
 |---|---|---|
-|Core 与数据库|事务、分支可见性、分页、取消、审批策略、未知副作用恢复|Core 测试|
-|Server、Protocol、Client|严格 schema、v16 路由、所有权、offset、重连|Server/Protocol/Client 测试|
-|Telemetry|Worker 生命周期、有界队列、批量事务、flush、脱敏与隔离|Telemetry 与 Trace 测试|
-|Web|导航、菜单、设置、输入法、草稿、正文安全与响应式|Web 单测与 Playwright|
-|Android|Compose 层级、Insets、离线正文、草稿、字号与设备行为|JVM、instrumentation、截图与采样|
-|文档与部署|版本、命令、默认值、能力声明、备份和恢复|源码核对与设计检查|
+|telemetry-utils.ts / redactErrorMessage|Basic 只隐藏认证方案，Cookie 只隐藏首段，秘密可能留在错误尾部|完整隐藏认证值与整行 Cookie；保留前置错误分类；脱敏幂等、JSON 值与真实落库测试|
+|sql-writer.ts / enqueue、batch|整组入队前才检查容量，构建十万条操作时先保留十万对象|构建期间即限制排队+在途+本组总数；超限整组丢弃，只计数；其他事务继续持久化|
+|streaming.ts / applyDurableEvent|HTTP 已更新快照后，迟到 WS 回放可使终态倒退|在投影边界比较 snapshotSequence，旧事件不再覆盖当前状态；新事件照常生效|
+|streaming.ts / applyStreamingEvent|重复帧仍复制整个投影与 transcript 数组|只追加尚未出现的后缀；重复、未知消息、非法 offset 与缺口不分配新投影；有效字符及空格保真|
+|App.tsx / 历史分页|缺少错误反馈及提交锁，迟到滚动回调可能影响新分支|同步锁阻止重复提交；失败显示错误并保留正文；回执和滚动回调复核会话/分支归属；浏览器故障注入回归|
+|knowledge.ts / searchSemantic|Embedding 认证等错误被吞掉，悄悄降为关键词结果|启用语义检索后错误向调用方传播，缺失向量明确失败；仅明确禁用语义检索时选择关键词模式；空查询不访问供应商|
+|scripts/faux-server.mjs|数据库隔离而工具工作区仍指向仓库，重置变量可删除既有目录|state/workspace/skills 同属独立测试目录；既有 state.db 直接拒绝，不保留重置开关；字节保全及公开 API 工作区回归|
+|生产与开发依赖|官方审计检出生产 16 项告警，含 2 项严重|更新现有依赖及锁文件，完整官方审计归零；CI 强制审计。officeparser 8 使用当前异步导出 API，未添加旧 API 兼容|
+|Android TraceDialog 与设备夹具|深度显示未限制四层；Trace 用例缺失当前协议必需 depth，renderer 用例未确认进程启动便 terminate|按既有设计将 depth 限为 0–4，夹具提供真实 depth；实际 DOM 就绪后要求 terminate 返回 true；设备矩阵保存/恢复硬件键盘对应的软键盘设置|
+|Android 卡片间距测试|直接访问 LazyColumn 离屏节点，大字号横屏时把正常回收误判为卡片缺失|先滚动到相邻条目均已布局，核对同次布局的未裁切边界，再分别滚动验证两项可见、可达；不要求矮视口同时容纳两项完整内容；原始矩阵失败与补测分别留存|
+|Android 自适应页面测试|页面截图固定使用手机“更多”；资源表单和Trace直接查找离屏节点，登录按钮未先滚入视口；请求键盘时窗口尚未取得焦点|宽屏通过侧栏进入设置；资源与Trace由真实列表滚动到目标后继续完整业务断言；登录先滚动并检查可操作，键盘先检查窗口和输入框焦点。不降低数据、内容或生命周期断言|
+|Android 验收入口|仅检查数量下限或 OK 子串；尺寸矩阵只运行部分功能；同步等待 ADB 阻塞父进程读取 Faux 日志|统一发现清单与逐项终态判定，拒绝漏跑、重复、意外跳过及不完整结束；矩阵复用完整功能、恢复和性能入口；异步等待保留超时和输出上限|
+|进程恢复与测试提交时序|进程恢复仅准备缓存，未执行外部强停；就绪等待与创建、点击分属两次主线程调用，刷新可在中间重新锁定操作；测试辅助窗口跨阶段残留|强停并关闭隔离 Core 后验证新 PID、回复、草稿和离线状态；后台与恢复用例在同次主线程操作内判断并提交，取消用例同次检查可发送并调用真实按钮语义；阶段结束后隔离辅助包进程，保留原业务断言与超时|
+|Android 性能测量与设计数值|固定高度容器裁切末尾，DOM 存在不代表内容可见；文档误写流式窗口为4ms|正文改用无界列表项，40次增量均核对原生裁切区域内的末行，再等待绘制提交；实际窗口为16ms，文档及生成页面已同步，契约检查读取源码常量以防再次漂移。用户授权评估后，模拟器回归预算改250ms，100ms仍为体验目标；不改变500ms构造或700ms冻结帧门槛。新旧测量口径不能直接比较为产品提速|
+|共享正文 dom.ts / updateMessageElement|纯追加仍反复解析、比较包含旧公式和代码的完整 HTML|已清洗完整前缀且顶层节点归属一致时只解析新增片段；宿主清空/替换后重新校准；比较缓存有界，正文完整；真实浏览器验证完整渲染等价及复制/图片状态保留|
+|默认头像|2048×1696 PNG 传输 1162247 bytes|无损 WebP 899942 bytes，RGBA 逐像素相同，减少 262305 bytes；保持现有布局和视觉内容|
+|附件复制测试|覆盖率插桩下遍历大型 Buffer 属性导致超时|用原生 Buffer.equals 做完整逐字节断言，仍覆盖跨会话拒绝；未放宽超时和内容要求|
 
-## 实现不变量
+## 架构边界与审查依据
 
-- 账号策略更新与审计同事务；默认免审批不绕过权限和工作区边界。
-- 数据库只接受 schema 27；版本不匹配直接拒绝启动，备份必须保留在匹配版本的隔离恢复环境。
-- 历史先筛选再加载正文；步骤与附件批量查询；SQL 缓存有界且按连接隔离。
-- 临时增量不推进永久游标；持久终态覆盖临时内容。重连校准快照。
-- Android 上传结果回到发起会话草稿，旧账号回执不能污染新账号。创建任务或调度失败保留输入。
-- WebView 无凭据与文件访问能力；正文经过 DOMPurify，KaTeX 禁止可信命令。附件 URI 只转换链接目标，代码字面值保持原样。
-- 遥测事务失败整体回滚后隔离重试；故障累计计数，不改变业务结果。
-- Trace 查询在分页前执行用户过滤，复用 traceId 不能扩大权限。
-- Trace 支持按 service/kind 定位跨服务和阶段热点；查询不得无过滤扫描全库，active Span 不直接暴露，重启遗留 Span 必须标为 `IncompleteSpan`。
-- 遥测维护必须使用数据库内聚合，不能把长期历史 Span 全量读入应用堆；WAL、RSS、CPU 和事件循环样本必须能与 Trace 时间窗关联。
+Core 仍是唯一事实源；协议、通信、认证、业务编排、Repository、遥测和显示分工保留。采用 W3C trace context、OpenTelemetry、SQLite 事务、TanStack Query 投影和既有成熟文档/清洗库，未新增自制协议、通用配置层或预防性抽象。
 
-## 验证入口
+静态审计覆盖所有被 Git 跟踪及未忽略的 TS/TSX/JS/MJS 文件，列出 I/O、并发和凭据边界；这不是自动证明代码正确。人工重点核对事务与取消、模型重试、上下文、历史分支、Trace 权限/脱敏/Worker、前端投影/草稿/分页和文档解析。真实解析 Worker 使用独立成熟库生成的四种原生测试文件，不能以 mock 结果替代。
 
-执行 npm run audit:source、npm run check、npm run test:coverage、npm run build、npm run build:web:embed、npm run test:web:e2e、npm run test:eval:faux、npm run test:perf 和 npm run test:soak:faux。设备测试独立执行，不能以 JVM 或编译替代。真实模型测试使用隔离 state、workspace、用户和令牌，显式启用 UMA_REAL_API=1；不启动咸鱼 Adapter 或发送真实消息。未执行项必须明确标注。
+database.ts、runtime.ts、App.tsx、server/app.ts、client/index.ts 仍超过 900 行，已有尺寸门禁约束；没有为满足行数而压缩代码或拆出无职责空壳。全量分支覆盖率仍低于 80% 的长期目标；未排除生产源码或降低阈值。安全审计零告警仅代表本次公告库结果，不能证明不存在未知漏洞。
+
+## 文档逐份核对
+
+|文档|核对与处理|
+|---|---|
+|README.md|开发/部署入口、能力、API、配置及版本；纠正 Android 版本和 Faux 隔离描述|
+|CODEX-CONTEXT.md|补充稳定结构、阅读顺序、验证入口和数据保护边界；进度只留 TASK.md|
+|docs/README.md|补齐会话分支规范链接；当前版本与发布证据一致|
+|backend-design.zh-CN.md|执行、持久化、Trace、资源采样与性能预算；新增脱敏、事务内存上限、隔离和安全依赖约束|
+|frontend-design/spec.json、生成的 Markdown/HTML/SVG|逐页核对来源与交互合同，新增游标/重复增量/分页约束；生成文件与同一 spec 同步，静态校验不冒充设备验收|
+|android-design.zh-CN.md|Compose/WebView 职责、生命周期、草稿、布局、Insets 与设备验收；合并旧布局过程稿|
+|conversation-execution-recovery-design.zh-CN.md|对照 Protocol 与客户端纠正不存在的 sessionRevision、统一版本写入和固定版本历史分页声明；明确真实限制|
+|architecture-quality.md|模块边界、账号隔离、Trace 生命周期及尺寸门禁；纠正当前版本|
+|engineering-baseline.md|固定负载、CPU/RSS/WAL/事件循环定义及禁止放宽预算；纠正当前版本|
+|miniagent-feature-matrix.md|实现状态与参考能力对应；保留真实渠道与大规模知识库未验边界|
+|deployment.md|配置、服务、备份/恢复、发布/签名和真实 API 门禁；未执行生产命令，历史发布记录与本轮结果分开|
+|release-acceptance.md、TASK.md|替换重复的逐轮过程叙述，保留当前结论、必要历史发布事实、证据入口和剩余事项；历史完整正文仍可从 Git 获取|
+|android/RELEASE_NOTES.md|核对版本号、已记录发布产物和未证实的真机闪退边界；本轮未发新 APK|
+
+当前入口、设计与发布等 14 份 Markdown 的版本、命令和本地链接由 check-doc-contracts 逐行扫描；生成设计另由 render.py/validate.py 检查全部页面、交互及图稿。自动检查不能替代业务语义或真实设备审查；不得宣称全部源码及文档已经被形式化证明无缺陷。
+
+## 数据与清理
+
+2026-10-24继续优化：保留此前正文contentRect、按帧测量、键盘/取消/页面生命周期夹具修复。本轮复现管理页回执在后台线程提交导致的状态不一致，perform与初始读取固定主线程；增加320次日期/数值/加载一致性验证和失败即时取证，保留10秒及正文40样本原门槛。Profile、资源失败表单、两倍字号CoreFlow均通过。模拟器长期复用内存增长仍未解决，只接受按配置冷启动的本地范围，不外推真机、真实Provider或四小时稳定性。详见release-acceptance.md及quality-final-summary.json。
+
+不改变业务或遥测 schema，不增加 migration、旧路由或供应商 fallback，不写真实 state、附件、Cookie 和凭据。users 目录在测试前后以清单/哈希对照。Faux 和文档回归只用独立夹具。
+
+删除重复的 android-layout-optimization 过程稿，并将仍适用尺寸合并到 Android 设计；TASK 与发布验收不再堆叠历史过程记录。测试夹具属于可重复执行的测试输入。运行日志、截图、覆盖率、构建与回滚证据留在忽略目录，不进入产品源码或发布清单；不批量删除来源不明的历史发布备份。

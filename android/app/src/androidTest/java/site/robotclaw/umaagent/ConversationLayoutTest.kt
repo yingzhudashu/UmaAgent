@@ -7,16 +7,26 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.swipeDown
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -79,7 +89,15 @@ class ConversationLayoutTest {
     @Test
     fun realKeyboardKeepsComposerAboveIme() {
         openConversation()
-        compose.onNodeWithTag("conversation-input").performClick().performTextInput("保留草稿")
+        // 用真实触摸进入输入框；语义 click 不能证明窗口已取得系统输入焦点。
+        compose.onNodeWithTag("conversation-input").performTouchInput { click() }
+        // View 的焦点状态在 UI 线程读取，避免测试线程直接观察非线程安全的窗口字段。
+        compose.waitUntil(10_000) {
+            var focused = false
+            compose.runOnUiThread { focused = compose.activity.hasWindowFocus() }
+            focused
+        }
+        compose.onNodeWithTag("conversation-input").assertIsFocused().performTextInput("保留草稿")
         compose.runOnUiThread {
             WindowCompat.getInsetsController(
                     compose.activity.window,
@@ -242,10 +260,29 @@ class ConversationLayoutTest {
         state.value = state.value.copy(snapshot = responseTranscript(2, "简短的完整回答"))
         openConversation()
 
+        // 大字号横屏只能容纳少量内容；LazyColumn 不会保留完全离屏的卡片。
+        // 逐段回滚到相邻条目都已布局，比较同一次布局的未裁切边界。
+        // 矮视口放不下两项完整内容，因此分别滚动验证可达性，不要求它们同时完整显示。
+        val messages = compose.onNodeWithTag("conversation-messages")
+        val step = (messages.fetchSemanticsNode().boundsInRoot.height / 4f).coerceAtLeast(1f)
+        for (attempt in 0 until 20) {
+            if (
+                compose.onAllNodesWithTag("response-card-response-1:question-1").fetchSemanticsNodes().isNotEmpty() &&
+                    compose.onAllNodesWithText("随后提出的问题").fetchSemanticsNodes().isNotEmpty()
+            ) break
+            messages.performSemanticsAction(SemanticsActions.ScrollBy) { scroll -> scroll(0f, -step) }
+        }
         val responseCard = compose.onNodeWithTag("response-card-response-1:question-1")
-        val cardBounds = responseCard.fetchSemanticsNode().boundsInRoot
-        val nextQuestion = compose.onNodeWithText("随后提出的问题").fetchSemanticsNode().boundsInRoot
+        val following = compose.onNodeWithText("随后提出的问题")
+        val cardBounds = responseCard.getUnclippedBoundsInRoot()
+        val nextQuestion = following.getUnclippedBoundsInRoot()
+        assertTrue("相邻条目必须有实际布局高度", cardBounds.bottom > cardBounds.top && nextQuestion.bottom > nextQuestion.top)
         assertTrue("回复卡片与后续提问必须保持可见间隔", nextQuestion.top >= cardBounds.bottom)
+        messages.performScrollToNode(hasTestTag("response-card-response-1:question-1"))
+        compose.onNodeWithTag("response-card-response-1:question-1").assertIsDisplayed()
+        messages.performScrollToNode(hasText("随后提出的问题"))
+        compose.onNodeWithText("随后提出的问题").assertIsDisplayed()
+        evidence("response-spacing")
     }
 
     private fun transcript(count: Int, tail: String = "") = buildJsonObject {
