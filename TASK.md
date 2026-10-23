@@ -177,3 +177,21 @@ Claude Opus 5.5 以请求 effort `max` 完成只读发布复核并通过；复�
 - Core/Web/Android合同检查通过；与基线相比 Android、Protocol、Web UI无源码变更，无需新Android APK。
 - 发布前只读核查：生产三项服务active、活动Run0、窗口258000；霍尔旧摘要已推进到1077，仍为无分支归属的旧兜底摘要。正式发布需先备份、原子更新500k配置、经过受保护promote、发布匹配Web资源并执行线上验收。
 - 尚待：黑盒/性能/Web验收结束，最终Claude复核，代码提交推送、生产备份与配置/服务发布、线上记忆与数据完整性验收、发布结果回填。
+
+
+### 发布完成与线上验收
+
+- 部署代码提交：8109671691110795fe97ad05cbfdf90d9a792d29，已推送origin/master；本条为该代码的发布验收记录。
+- Core已切换到 /opt/uma-agent/releases/20261023073901-8109671；Web嵌入发布为 /srv/www/robotclaw/releases/20261023075736-8109671，其他宿主站点资产哈希保持一致。
+- 生产gpt-6.1-sol.contextWindow已原子更新为500000，配置权限保持root:umaagent 0640；原配置备份 /srv/backups/uma-agent/context-config-20261023075640.json。
+- 完整状态/工作区/配置备份 /srv/backups/uma-agent/uma-agent-20261023074751.tar.gz 已下载加密并解密比对SHA通过；保护门禁另建在线状态备份 /srv/backups/uma-agent/state-20261023075642.db。
+- 发布前：61个文件401项Vitest通过；覆盖率82.65%/74.37%/77.63%/85.45%；check、全工作区build、embed构建通过；Faux6/6；Web37项首次通过，缺失Android正文资源的1项在执行已有build:android:content后定向通过，测试正文未改。
+- 原始Windows固定性能预算在原版和候选上都失败；Linux服务器同端口隔离对照中，候选API P95 11.36ms、event P95 3.65ms、RSS119214080、WAL2278424均在原预算内。固定Windows CPU百分比参考在Linux两版本均未达到，未修改源码阈值也不声称原性能脚本全通过；同机每请求CPU耗时原37443.55us、候选36942.15us（下降约1.3%），按真实目标平台对照验收，无新增性能退化。
+- 真实上游大窗口请求实际输入470040 tokens、总470118 tokens，HTTP200且正确回忆开头校验码；没有因超时自动重复计费请求。
+- 线上霍尔只读回放在故意模拟provider失败时保留10/10历史用户消息，估算58728 tokens，窗口500000，不接纳旧脏摘要且0次写入，不修改用户会话记录。
+- 线上独立测试会话两轮真实模型调用均completed并正确记住口令，run快照contextWindow均为500000；临时测试会话已删除。
+- 最终Core/Browser Worker/Xianyu Adapter均active，live/ready正常；SQLite integrity=ok、schema27、FK0、activeRun0、临时验收会话0；公网390/1280px挂载及公式字体均通过。
+- Android现网仍为1.4.6/versionCode20/release20-99a0b09；无Android/Protocol/Web UI源代码变更，跨端合同通过，本次无需也未发布新APK。
+- Claude完成规划；前次源码复核通过。本次发布复核只返回通用欢迎语，无有效结论，未标为Claude通过；发布验收由GPT据实际测试完成。
+- 四角色与补充证据仍在同级 artifacts/context-memory-20261023；本地ROLLBACK.sh已演练，新增ROLLBACK-PRODUCTION.sh仅做语法验证并保留旧发布/配置备份，未对成功线上版本执行回滚。
+- 本次授权事项已完成，无必需剩余项；长期实际流量不作为已测试项目，也没有承诺聊天结束后继续监控。
