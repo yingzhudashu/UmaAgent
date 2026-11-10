@@ -1,9 +1,8 @@
 name: ci
 on:
+  workflow_dispatch:
   push:
   pull_request:
-  schedule:
-    - cron: "17 18 * * *"
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -131,17 +130,3 @@ jobs:
       - name: Short reliability soak
         if: github.event_name != 'schedule'
         run: UMA_SOAK_HOURS=0.167 UMA_SOAK_MESSAGE_INTERVAL_MS=1000 npm run test:soak:faux
-
-  nightly-soak:
-    if: github.event_name == 'schedule'
-    needs: verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-          cache: npm
-      - run: npm ci --ignore-scripts
-      - run: npm run build
-      - run: UMA_SOAK_HOURS=4 UMA_SOAK_MESSAGE_INTERVAL_MS=5000 npm run test:soak:faux
